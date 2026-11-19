@@ -1,0 +1,35 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 399
+stdout-length: 65
+stderr-length: 0
+==== SCRIPT ====
+run() { "$@"; }
+run eval 'echo E'; echo "st=$?"
+c=eval; $c 'echo x'; $c 'v=1'; echo "v=$v"
+$c 'g() { echo G; }'; g
+run eval 'h() { echo H; }'; h
+$c 'ea=(5 6)'; echo "ea=${ea[1]}"
+r() { $c 'return 3'; echo notreached; }; r; echo "r=$?"
+echo piped | run eval 'read p; echo "p=$p"'
+command eval 'echo ce'; builtin eval 'echo be'; b=builtin; $b eval 'echo bb'
+$c 'echo "$(echo inner)" \$HOME_NOT_SET_X'
+
+==== STDOUT ====
+E
+st=0
+x
+v=1
+G
+H
+ea=6
+r=3
+p=piped
+ce
+be
+bb
+inner $HOME_NOT_SET_X
+
+==== STDERR ====
+

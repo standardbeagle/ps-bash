@@ -1,0 +1,321 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 19526
+stdout-length: 856
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+run() { "$@"; }
+( run . ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo '.: not found through "$@"'
+( c=.; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo '.: not found through $c'
+( command . ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo '.: not found through command'
+echo 'checked .'
+( run : ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo ':: not found through "$@"'
+( c=:; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo ':: not found through $c'
+( command : ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo ':: not found through command'
+echo 'checked :'
+( run '[' ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo '[: not found through "$@"'
+( c='['; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo '[: not found through $c'
+( command '[' ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo '[: not found through command'
+echo 'checked ['
+( run alias ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'alias: not found through "$@"'
+( c=alias; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'alias: not found through $c'
+( command alias ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'alias: not found through command'
+echo 'checked alias'
+( run bg ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'bg: not found through "$@"'
+( c=bg; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'bg: not found through $c'
+( command bg ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'bg: not found through command'
+echo 'checked bg'
+( run bind ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'bind: not found through "$@"'
+( c=bind; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'bind: not found through $c'
+( command bind ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'bind: not found through command'
+echo 'checked bind'
+( run break ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'break: not found through "$@"'
+( c=break; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'break: not found through $c'
+( command break ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'break: not found through command'
+echo 'checked break'
+( run builtin ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'builtin: not found through "$@"'
+( c=builtin; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'builtin: not found through $c'
+( command builtin ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'builtin: not found through command'
+echo 'checked builtin'
+( run caller ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'caller: not found through "$@"'
+( c=caller; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'caller: not found through $c'
+( command caller ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'caller: not found through command'
+echo 'checked caller'
+( run cd ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'cd: not found through "$@"'
+( c=cd; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'cd: not found through $c'
+( command cd ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'cd: not found through command'
+echo 'checked cd'
+( run command ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'command: not found through "$@"'
+( c=command; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'command: not found through $c'
+( command command ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'command: not found through command'
+echo 'checked command'
+( run compgen ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'compgen: not found through "$@"'
+( c=compgen; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'compgen: not found through $c'
+( command compgen ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'compgen: not found through command'
+echo 'checked compgen'
+( run complete ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'complete: not found through "$@"'
+( c=complete; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'complete: not found through $c'
+( command complete ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'complete: not found through command'
+echo 'checked complete'
+( run compopt ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'compopt: not found through "$@"'
+( c=compopt; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'compopt: not found through $c'
+( command compopt ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'compopt: not found through command'
+echo 'checked compopt'
+( run continue ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'continue: not found through "$@"'
+( c=continue; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'continue: not found through $c'
+( command continue ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'continue: not found through command'
+echo 'checked continue'
+( run declare ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'declare: not found through "$@"'
+( c=declare; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'declare: not found through $c'
+( command declare ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'declare: not found through command'
+echo 'checked declare'
+( run dirs ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'dirs: not found through "$@"'
+( c=dirs; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'dirs: not found through $c'
+( command dirs ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'dirs: not found through command'
+echo 'checked dirs'
+( run disown ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'disown: not found through "$@"'
+( c=disown; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'disown: not found through $c'
+( command disown ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'disown: not found through command'
+echo 'checked disown'
+( run echo ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'echo: not found through "$@"'
+( c=echo; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'echo: not found through $c'
+( command echo ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'echo: not found through command'
+echo 'checked echo'
+( run enable ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'enable: not found through "$@"'
+( c=enable; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'enable: not found through $c'
+( command enable ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'enable: not found through command'
+echo 'checked enable'
+( run eval ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'eval: not found through "$@"'
+( c=eval; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'eval: not found through $c'
+( command eval ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'eval: not found through command'
+echo 'checked eval'
+( run exec ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'exec: not found through "$@"'
+( c=exec; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'exec: not found through $c'
+( command exec ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'exec: not found through command'
+echo 'checked exec'
+( run exit ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'exit: not found through "$@"'
+( c=exit; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'exit: not found through $c'
+( command exit ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'exit: not found through command'
+echo 'checked exit'
+( run export ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'export: not found through "$@"'
+( c=export; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'export: not found through $c'
+( command export ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'export: not found through command'
+echo 'checked export'
+( run false ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'false: not found through "$@"'
+( c=false; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'false: not found through $c'
+( command false ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'false: not found through command'
+echo 'checked false'
+( run fc -l ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'fc: not found through "$@"'
+( c=fc; $c -l ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'fc: not found through $c'
+( command fc -l ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'fc: not found through command'
+echo 'checked fc'
+( run fg ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'fg: not found through "$@"'
+( c=fg; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'fg: not found through $c'
+( command fg ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'fg: not found through command'
+echo 'checked fg'
+( run getopts ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'getopts: not found through "$@"'
+( c=getopts; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'getopts: not found through $c'
+( command getopts ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'getopts: not found through command'
+echo 'checked getopts'
+( run hash ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'hash: not found through "$@"'
+( c=hash; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'hash: not found through $c'
+( command hash ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'hash: not found through command'
+echo 'checked hash'
+( run help ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'help: not found through "$@"'
+( c=help; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'help: not found through $c'
+( command help ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'help: not found through command'
+echo 'checked help'
+( run history ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'history: not found through "$@"'
+( c=history; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'history: not found through $c'
+( command history ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'history: not found through command'
+echo 'checked history'
+( run jobs ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'jobs: not found through "$@"'
+( c=jobs; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'jobs: not found through $c'
+( command jobs ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'jobs: not found through command'
+echo 'checked jobs'
+( run kill ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'kill: not found through "$@"'
+( c=kill; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'kill: not found through $c'
+( command kill ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'kill: not found through command'
+echo 'checked kill'
+( run let ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'let: not found through "$@"'
+( c=let; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'let: not found through $c'
+( command let ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'let: not found through command'
+echo 'checked let'
+( run local ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'local: not found through "$@"'
+( c=local; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'local: not found through $c'
+( command local ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'local: not found through command'
+echo 'checked local'
+( run logout ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'logout: not found through "$@"'
+( c=logout; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'logout: not found through $c'
+( command logout ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'logout: not found through command'
+echo 'checked logout'
+( run mapfile ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'mapfile: not found through "$@"'
+( c=mapfile; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'mapfile: not found through $c'
+( command mapfile ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'mapfile: not found through command'
+echo 'checked mapfile'
+( run popd ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'popd: not found through "$@"'
+( c=popd; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'popd: not found through $c'
+( command popd ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'popd: not found through command'
+echo 'checked popd'
+( run printf ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'printf: not found through "$@"'
+( c=printf; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'printf: not found through $c'
+( command printf ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'printf: not found through command'
+echo 'checked printf'
+( run pushd ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'pushd: not found through "$@"'
+( c=pushd; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'pushd: not found through $c'
+( command pushd ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'pushd: not found through command'
+echo 'checked pushd'
+( run pwd ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'pwd: not found through "$@"'
+( c=pwd; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'pwd: not found through $c'
+( command pwd ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'pwd: not found through command'
+echo 'checked pwd'
+( run read ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'read: not found through "$@"'
+( c=read; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'read: not found through $c'
+( command read ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'read: not found through command'
+echo 'checked read'
+( run readarray ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'readarray: not found through "$@"'
+( c=readarray; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'readarray: not found through $c'
+( command readarray ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'readarray: not found through command'
+echo 'checked readarray'
+( run readonly ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'readonly: not found through "$@"'
+( c=readonly; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'readonly: not found through $c'
+( command readonly ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'readonly: not found through command'
+echo 'checked readonly'
+( run return ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'return: not found through "$@"'
+( c=return; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'return: not found through $c'
+( command return ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'return: not found through command'
+echo 'checked return'
+( run set ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'set: not found through "$@"'
+( c=set; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'set: not found through $c'
+( command set ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'set: not found through command'
+echo 'checked set'
+( run shift ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'shift: not found through "$@"'
+( c=shift; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'shift: not found through $c'
+( command shift ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'shift: not found through command'
+echo 'checked shift'
+( run shopt ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'shopt: not found through "$@"'
+( c=shopt; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'shopt: not found through $c'
+( command shopt ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'shopt: not found through command'
+echo 'checked shopt'
+( run source ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'source: not found through "$@"'
+( c=source; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'source: not found through $c'
+( command source ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'source: not found through command'
+echo 'checked source'
+( run suspend --help ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'suspend: not found through "$@"'
+( c=suspend; $c --help ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'suspend: not found through $c'
+( command suspend --help ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'suspend: not found through command'
+echo 'checked suspend'
+( run test ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'test: not found through "$@"'
+( c=test; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'test: not found through $c'
+( command test ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'test: not found through command'
+echo 'checked test'
+( run times ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'times: not found through "$@"'
+( c=times; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'times: not found through $c'
+( command times ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'times: not found through command'
+echo 'checked times'
+( run trap ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'trap: not found through "$@"'
+( c=trap; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'trap: not found through $c'
+( command trap ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'trap: not found through command'
+echo 'checked trap'
+( run true ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'true: not found through "$@"'
+( c=true; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'true: not found through $c'
+( command true ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'true: not found through command'
+echo 'checked true'
+( run type ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'type: not found through "$@"'
+( c=type; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'type: not found through $c'
+( command type ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'type: not found through command'
+echo 'checked type'
+( run typeset ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'typeset: not found through "$@"'
+( c=typeset; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'typeset: not found through $c'
+( command typeset ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'typeset: not found through command'
+echo 'checked typeset'
+( run ulimit ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'ulimit: not found through "$@"'
+( c=ulimit; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'ulimit: not found through $c'
+( command ulimit ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'ulimit: not found through command'
+echo 'checked ulimit'
+( run umask ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'umask: not found through "$@"'
+( c=umask; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'umask: not found through $c'
+( command umask ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'umask: not found through command'
+echo 'checked umask'
+( run unalias ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'unalias: not found through "$@"'
+( c=unalias; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'unalias: not found through $c'
+( command unalias ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'unalias: not found through command'
+echo 'checked unalias'
+( run unset ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'unset: not found through "$@"'
+( c=unset; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'unset: not found through $c'
+( command unset ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'unset: not found through command'
+echo 'checked unset'
+( run wait ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'wait: not found through "$@"'
+( c=wait; $c ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'wait: not found through $c'
+( command wait ) >/dev/null 2>&1 </dev/null; [ $? -eq 127 ] && echo 'wait: not found through command'
+echo 'checked wait'
+echo done
+
+==== STDOUT ====
+checked .
+checked :
+checked [
+checked alias
+checked bg
+checked bind
+checked break
+checked builtin
+checked caller
+checked cd
+checked command
+checked compgen
+checked complete
+checked compopt
+checked continue
+checked declare
+checked dirs
+checked disown
+checked echo
+checked enable
+checked eval
+checked exec
+checked exit
+checked export
+checked false
+checked fc
+checked fg
+checked getopts
+checked hash
+checked help
+checked history
+checked jobs
+checked kill
+checked let
+checked local
+checked logout
+checked mapfile
+checked popd
+checked printf
+checked pushd
+checked pwd
+checked read
+checked readarray
+checked readonly
+checked return
+checked set
+checked shift
+checked shopt
+checked source
+checked suspend
+checked test
+checked times
+checked trap
+checked true
+checked type
+checked typeset
+checked ulimit
+checked umask
+checked unalias
+checked unset
+checked wait
+done
+
+==== STDERR ====
+

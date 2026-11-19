@@ -203,8 +203,6 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
     /// rest is splatted as an array of strings, which PowerShell binds as positional ARGUMENTS (never as
     /// parameter tokens) — the same shape the transpiler's single-quoted flags have.
     /// </summary>
-    private static readonly HashSet<string> DeclarationBuiltins = new(StringComparer.Ordinal) { "export", "readonly", "local", "declare", "typeset" };
-
     /// <summary>The records as the bytes a program reads (<see cref="NativeStdinBridge.RecordBytes"/>), one byte[] each.</summary>
     private static List<object> NativeStdinBytes(List<object> records)
     {
@@ -221,22 +219,40 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
     {
         // command command x, command builtin x: the wrappers only bypass functions, so peel them.
         while (argv.Length > 1 && argv[0] is "command" or "builtin" && !argv[1].StartsWith('-')) argv = argv[1..];
-        // A declaration builtin has no cmdlet to resolve: run it as bash source (the operands are already expanded).
-        if (DeclarationBuiltins.Contains(argv[0]))
+        // A builtin the emitter implements (`command eval …`, `builtin set -- a`, `command exec cmd`) has no cmdlet to
+        // resolve: it runs as its static command, the operands already expanded (BashBuiltins.RunAsSource, the same
+        // runner Resolve-BashCommand uses for `$cmd`).
+        if (BashBuiltins.RunAsSource.Contains(argv[0]))
         {
-            var src = string.Join(' ', argv.Select(a => "'" + a.Replace("'", "'\\''") + "'"));
-            src = argv[0] + src[(argv[0].Length + 2)..];
-            var ps = PsBash.Core.Transpiler.BashTranspiler.TranspileWithMap(src, PsBash.Core.Transpiler.TranspileContext.Eval).PowerShell;
-            foreach (var o in InvokeCommand.InvokeScript(false, ScriptBlock.Create(ps), null, Array.Empty<object>())) WriteObject(o);
+            var callArgs = new object[argv.Length];
+            callArgs[0] = ScriptBlock.Create(PsBuild.BuiltinAsSourceScript(argv[0]));
+            for (int k = 1; k < argv.Length; k++) callArgs[k] = argv[k];
+            // Dot-sourced: the caller's scope, as the literal builtin runs (`command eval 'x=1'` sets x there). 2>&1 and
+            // re-written: the nested script's error stream is not this cmdlet's, so `command . 2>/dev/null` printed anyway.
+            const string asSource = "$__psbash_cr = $args[0]; $__psbash_ca = @($args | Select-Object -Skip 1); ";
+            var runner = ScriptBlock.Create(asSource + (_stdin.Count > 0 ? "$input | " : "") + ". $__psbash_cr @__psbash_ca 2>&1");
+            foreach (var o in InvokeCommand.InvokeScript(false, runner, _stdin.Count > 0 ? _stdin : null, callArgs))
+            {
+                if (o?.BaseObject is ErrorRecord er) FileSystemHelpers.WriteErrorRecord(this, er);
+                else WriteObject(o);
+            }
             return;
         }
         var name = argv[0];
+        // `command :`, `command false`, a bare `command builtin`: Resolve-BashCommand's own trivial blocks
+        // (BashBuiltins.CallStackBuiltins); there is no command of that name to find.
+        if (name is ":" or "true" or "builtin") { FileSystemHelpers.SetLastExitCode(this, 0); return; }
+        if (name == "false") { FileSystemHelpers.SetLastExitCode(this, 1); return; }
         CommandInfo? target = null;
         try
         {
+            // A builtin is its run-time command first (`command bind`, `command enable -n x`): Invoke-Bash<Name>, a cmdlet
+            // or a module function, which the bare name finds only when an alias maps it (BashBuiltins, the one table).
             var found = InvokeCommand.InvokeScript(
-                "param($n) Get-Command ([WildcardPattern]::Escape($n)) -CommandType Alias,Cmdlet,Application,ExternalScript " +
-                "-ErrorAction SilentlyContinue | Select-Object -First 1", name);
+                "param($n, $b) if ($b) { $f = Get-Command ('Invoke-Bash' + [WildcardPattern]::Escape($n)) -CommandType Cmdlet,Function " +
+                "-ErrorAction SilentlyContinue | Select-Object -First 1; if ($f) { return $f } }; " +
+                "Get-Command ([WildcardPattern]::Escape($n)) -CommandType Alias,Cmdlet,Application,ExternalScript " +
+                "-ErrorAction SilentlyContinue | Select-Object -First 1", name, BashBuiltins.Names.Contains(name) && name != "[");
             foreach (var r in found)
             {
                 if (r?.BaseObject is CommandInfo ci) { target = ci; break; }

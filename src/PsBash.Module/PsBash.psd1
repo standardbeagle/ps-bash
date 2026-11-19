@@ -122,6 +122,13 @@ FunctionsToExport = @(
     # binder sees them; also disambiguates -E (extended regex flag).
     'Invoke-BashGrep',
     'Invoke-BashWait',
+    'Invoke-BashBind',
+    'Invoke-BashCaller',
+    'Invoke-BashDisown',
+    'Invoke-BashEnable',
+    'Invoke-BashHelp',
+    'Invoke-BashLogout',
+    'Invoke-BashSuspend',
     'Invoke-BrowseAction',
     'Invoke-BrowseCommand',
     'Invoke-BrowseInteractive',

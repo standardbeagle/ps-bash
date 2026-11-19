@@ -496,6 +496,12 @@ public static class PsBuild
     public static string RunTimeLoopControl(string keyword, string warning) =>
         "$__psbash_lmv = $ExecutionContext.SessionState.PSVariable.GetValue('" + LoopModeVar + "'); "
         + "if ($__psbash_lmv -eq 1) { " + warning + " } elseif ($__psbash_lmv -eq 2) { " + SubshellExitThrow("0") + " } else { " + keyword + " }";
+    /// <summary><see cref="RunTimeLoopControl(string, string)"/> with bash's own warning (Resolve-BashCommand: <c>c=break; $c</c>).</summary>
+    public static string RunTimeLoopControl(string keyword) => RunTimeLoopControl(keyword, LoopControlWarning(keyword));
+
+    /// <summary>bash's warning for a <c>break</c>/<c>continue</c> with no loop in reach; the status is 0.</summary>
+    public static string LoopControlWarning(string keyword) =>
+        "Write-Error " + SingleQuote(keyword + ": only meaningful in a `for', `while', or `until' loop") + " -ErrorAction Continue; " + SetStatus(0);
 
     /// <summary>Wrap in a subexpression: <c>$(expr)</c>.</summary>
     public static string Subexpr(string expr) => "$(" + expr + ")";
@@ -1010,6 +1016,14 @@ public static class PsBuild
     public static string XtraceAssignment(string name, string valueExpr) =>
         "@{ n = " + SingleQuote(name) + "; v = " + valueExpr + " }";
 
+    /// <summary>
+    /// <c>local</c> with no operand: bash's error outside a function (status 1), else status 0. Decided at run time, so a
+    /// run-time <c>local</c> (<see cref="BuiltinAsSourceScript"/>) sees the caller's function. (bash also lists the
+    /// function's locals: the emitter does that only for locals it sees declared, PsEmitter.EmitLocalListing.)
+    /// </summary>
+    public static string BareLocal =>
+        "if ([PsBash.Cmdlets.VarFrameStack]::Current.Depth -eq 0) { " + ShellDiagnosticLine("'local: can only be used in a function'")
+        + "; " + SetStatus(1) + " } else { " + SetStatus(0) + " }";
     /// <summary>A shell diagnostic <paramref name="message"/> (a PowerShell string expression) with bash's source prefix, on stderr.</summary>
     public static string ShellDiagnosticLine(string message) =>
         "Write-Error -Message (" + DiagnosticPrefix + " + " + message + ") -ErrorAction Continue";
@@ -1244,6 +1258,90 @@ public static class PsBuild
     /// </summary>
     public static string EvalReturnCheck(bool inFunction) =>
         "if (" + EvalReturnVar + ") { " + (inFunction ? EvalReturnVar + " = $false; " : "") + "return }";
+
+    // ─────────────────────── pipefail / PIPESTATUS pipeline ────────────────────────
+
+    /// <summary>The slot array each stage of a <see cref="PipefailPipeline"/> writes its status into (Invoke-BashPipeStage -Slot).</summary>
+    public const string PipeStatusSlots = "$__pf";
+
+    /// <summary>
+    /// A pipeline whose stages (<paramref name="stages"/> of them, each an <c>Invoke-BashPipeStage -Slot $__pf</c>) report
+    /// their own status: PIPESTATUS is every stage's status, and under pipefail the status is the last stage that failed
+    /// (0 when none did). ONE pipeline element (<c>. { … }</c>: dot-sourced, so it runs in the current scope and its output
+    /// streams) valid wherever a pipeline is: a statement, an <c>&amp;&amp;</c>/<c>||</c> operand, a condition, inside
+    /// <c>$( )</c>. As the bare statement list it used to be (<c>$__pf = …; stages; …</c>), only its first statement, an
+    /// assignment, was the operand after <c>&amp;&amp;</c> and the whole script failed to parse ("Unexpected token '='").
+    /// </summary>
+    public static string PipefailPipeline(int stages, string stagesText) =>
+        ". { " + PipeStatusSlots + " = [int[]]::new(" + stages.ToString(System.Globalization.CultureInfo.InvariantCulture) + "); "
+        + stagesText + "; $global:PIPESTATUS = " + PipeStatusSlots + "; "
+        + "if ($global:__BashPipefail) { $global:LASTEXITCODE = 0; foreach ($__s in " + PipeStatusSlots + ") { if ($__s -ne 0) { $global:LASTEXITCODE = $__s } } } }";
+
+    /// <summary>One stage of a <see cref="PipefailPipeline"/>: <paramref name="stageBlock"/> run with its status kept in slot <paramref name="index"/>.</summary>
+    public static string PipefailStage(int index, string stageBlock) =>
+        "Invoke-BashPipeStage -Slot " + PipeStatusSlots + " -Index " + index.ToString(System.Globalization.CultureInfo.InvariantCulture) + " -Script { " + stageBlock + " }";
+
+    /// <summary>
+    /// The call head of a builtin the emitter implements, run at run time as its own static form with the words it gets
+    /// (<see cref="BuiltinAsSourceScript"/>): <c>set -o "$opt"</c>, whose option is known only then.
+    /// </summary>
+    public static string BuiltinAtRunTime(string name) =>
+        "& ([scriptblock]::Create([PsBash.Core.Parser.PsBuild, PsBash.Transpiler]::BuiltinAsSourceScript(" + SingleQuote(name) + ")))";
+
+    /// <summary>
+    /// A command whose name is known only at run time and whose form depends on it: <paramref name="whenNamed"/> when the
+    /// name (<paramref name="nameValue"/>, a string expression) is exactly <paramref name="name"/>, else
+    /// <paramref name="otherwise"/>. One pipeline element (dot-sourced: the caller's scope).
+    /// </summary>
+    public static string RunTimeNameBranch(string nameValue, string name, string whenNamed, string otherwise) =>
+        ". { if ([string](" + nameValue + ") -ceq " + SingleQuote(name) + ") { " + whenNamed + " } else { " + otherwise + " } }";
+
+    // ─────────────────────── bash text run at run time ────────────────────────
+
+    /// <summary>
+    /// Transpile the bash text in <c>$__psbash_eval_src</c> as eval text and run it here (Invoke-Expression: the
+    /// caller's scope), its lines counted from the call's own line. A syntax error in it is the command's own failure
+    /// (<c>ps-bash: LABEL: …</c>, status 2), not an exception out of the script. The ONE run-time runner of bash text:
+    /// a run-time <c>eval</c> (PsEmitter.EmitEval) and a builtin named at run time (<see cref="BuiltinAsSourceScript"/>).
+    /// </summary>
+    /// <param name="localsArg"><c>, [string[]]@(…)</c>: the calling function's <c>local</c> names, or <c>, $null</c>.</param>
+    /// <param name="label">The command named in a syntax-error diagnostic.</param>
+    public static string RunBashTextAtRunTime(string localsArg, string label) =>
+        "$__psbash_eval_pwsh = $null; try { $__psbash_eval_pwsh = [PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]::Transpile("
+        + "$__psbash_eval_src, [PsBash.Core.Transpiler.TranspileContext, PsBash.Transpiler]::Eval" + localsArg
+        + ", ($null -ne (Get-Variable -Name __BashStdIn -Scope Global -ValueOnly -ErrorAction SilentlyContinue))) } "
+        + "catch { Write-Error ('ps-bash: " + label + ": ' + $(if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message })) -ErrorAction Continue; $global:LASTEXITCODE = 2 }; "
+        + "if ($null -ne $__psbash_eval_pwsh) { " + EvalReturnVar + " = $false; " + EvalLinesScope("Invoke-Expression $__psbash_eval_pwsh") + " }";
+
+    /// <summary>
+    /// The body of the script block Resolve-BashCommand (and <c>command</c> / <c>builtin</c>) runs for a builtin named at
+    /// run time that the emitter implements (<see cref="BashBuiltins.RunAsSource"/>): its operands (<c>$args</c>) become
+    /// the static command <c>NAME 'op'…</c> (<see cref="BashBuiltins.SourceFor"/>), run through
+    /// <see cref="RunBashTextAtRunTime"/>, so <c>c=eval; $c 'x=1'</c> is exactly <c>eval 'x=1'</c>. Records piped into the
+    /// block become that command's stdin. Created unbound by the caller, it runs in the caller's session state.
+    /// The block is a scope of its own (<c>&amp;</c>), so a <c>local</c> it declares parks the caller's value
+    /// (<c>$__lsd_NAME</c>) here: <see cref="PublishParkedLocals"/> hands it to the bash function that called.
+    /// </summary>
+    public static string BuiltinAsSourceScript(string name)
+    {
+        var run = RunBashTextAtRunTime(", $null", name);
+        return "$__psbash_eval_src = [PsBash.Core.Parser.BashBuiltins, PsBash.Transpiler]::SourceFor(" + SingleQuote(name) + ", [string[]]$args); "
+            + "$__psbash_bsin = @(" + StageInput + "); "
+            + "try { if ($__psbash_bsin.Count -gt 0) { " + StdinScope(run, "__psbash_bsin_prev", "$__psbash_bsin") + " } else { " + run + " } } "
+            + "finally { " + PublishParkedLocals + " }";
+    }
+
+    /// <summary>
+    /// Move each <c>$__lsd_NAME</c> slot (a <c>local</c>'s parked caller value) parked in this scope up to the nearest bash
+    /// function's scope (the one holding <c>$__bp</c>, <see cref="FunctionPrologue"/>), whose end restores it. Run where a
+    /// <c>local</c> may have run in a scope of its own: <c>h() { c=local; $c v=7; }</c> leaked v past h.
+    /// </summary>
+    public const string PublishParkedLocals =
+        "foreach ($__psbash_lsd in @(Get-Variable -Name '__lsd_*' -Scope 0 -ErrorAction Ignore)) { "
+        + "for ($__psbash_s = 0; $__psbash_s -lt 64; $__psbash_s++) { "
+        + "try { $__psbash_fn = Get-Variable -Name __bp -Scope $__psbash_s -ErrorAction Ignore } catch { break }; if ($null -eq $__psbash_fn) { continue }; "
+        + "if ($__psbash_s -gt 0 -and $null -eq (Get-Variable -Name $__psbash_lsd.Name -Scope $__psbash_s -ValueOnly -ErrorAction Ignore)) { "
+        + "Set-Variable -Name $__psbash_lsd.Name -Value $__psbash_lsd.Value -Scope $__psbash_s }; break } }";
 
     // ─────────────────────── Null-safe pipeline text extraction ────────────────────────
 

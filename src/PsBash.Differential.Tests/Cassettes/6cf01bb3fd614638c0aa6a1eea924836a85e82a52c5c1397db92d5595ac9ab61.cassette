@@ -1,0 +1,31 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 399
+stdout-length: 41
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; printf 'a pipefail\nb\nc pipefail\n' > f
+set -o pipefail
+false | true && echo bad || echo ok1
+true && false | true; echo "and=$?"
+false | true || echo "or=$?"
+[ 1 ] && echo a | cat && echo b | cat
+if false | true; then echo bad; else echo ok2; fi
+while false | true; do break; done; echo "while=$?"
+! false | true; echo "neg=$?"
+{ false | true; } && echo bad3 || echo ok3
+
+==== STDOUT ====
+ok1
+and=1
+or=1
+a
+b
+ok2
+while=0
+neg=0
+ok3
+
+==== STDERR ====
+

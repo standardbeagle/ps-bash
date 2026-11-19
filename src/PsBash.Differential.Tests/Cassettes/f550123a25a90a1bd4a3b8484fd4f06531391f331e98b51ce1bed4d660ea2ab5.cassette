@@ -1,0 +1,27 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 1
+script-length: 320
+stdout-length: 61
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; printf 'a pipefail\nb\nc pipefail\n' > f
+grep -c pipefail f && echo y
+x=$(grep pipefail f | head -1); echo "x=$x"
+grep pipefail f | head -1 || echo no
+if grep pipefail f | head -1; then echo then; fi
+! grep pipefail f | head -1; echo "neg=$?"
+grep -n 'set -o pipefail' f && grep b f | head -1
+
+==== STDOUT ====
+2
+y
+x=a pipefail
+a pipefail
+a pipefail
+then
+a pipefail
+neg=1
+
+==== STDERR ====
+

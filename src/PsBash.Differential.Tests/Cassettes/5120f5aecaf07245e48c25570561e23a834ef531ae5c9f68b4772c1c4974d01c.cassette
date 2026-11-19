@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 232
+stdout-length: 25
+stderr-length: 0
+==== SCRIPT ====
+false | true; echo "off=$?"
+o=pipefail; set -o "$o"; false | true; echo "dyn=$?"
+set +o pipefail
+eval 'set -o pipefail'; false | true; echo "eval=$?"
+set +o pipefail
+run() { "$@"; }; run set -o pipefail; false | true; echo "run=$?"
+
+==== STDOUT ====
+off=0
+dyn=1
+eval=1
+run=1
+
+==== STDERR ====
+

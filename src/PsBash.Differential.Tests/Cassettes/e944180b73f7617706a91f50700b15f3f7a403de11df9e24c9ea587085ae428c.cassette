@@ -1,0 +1,33 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 519
+stdout-length: 104
+stderr-length: 0
+==== SCRIPT ====
+c=set; $c -- a b; echo "pos=$# $*"
+f() { local c=set; $c -- p q; echo "fpos=$# $*"; c=shift; $c; echo "fshift=$*"; }; f x y z; echo "after=$*"
+run() { "$@"; }; g() { run set -- in run; echo "g=$# $*"; }; g x
+command set -- one two three; echo "cmd=$#"
+h() { local c=local; $c lv=7; echo "in=$lv"; }; h; echo "out=${lv-unset}"
+c=export; $c ev=9; echo "ev=$ev"
+c=unset; $c ev; echo "ev=${ev-unset}"
+local 2>/dev/null; echo "bare=$?"; f2() { local >/dev/null; echo "fbare=$?"; run local >/dev/null; echo "rbare=$?"; }; f2
+
+==== STDOUT ====
+pos=2 a b
+fpos=2 p q
+fshift=q
+after=a b
+g=1 x
+cmd=3
+in=7
+out=unset
+ev=9
+ev=unset
+bare=1
+fbare=0
+rbare=0
+
+==== STDERR ====
+

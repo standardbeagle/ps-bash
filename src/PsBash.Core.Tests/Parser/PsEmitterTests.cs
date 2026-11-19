@@ -233,14 +233,15 @@ public class PsEmitterTests
     }
 
     // `… | eval "$c"` emitted eval's statement list as a bare pipeline element (the whole script failed to parse);
-    // it is now a block that turns the piped records into a stdin scope.
+    // it is now a block that turns the piped records into a stdin scope. (Run-time eval text may turn pipefail on, so
+    // there each stage is also an Invoke-BashPipeStage block: PsEmitter.CanSetPipefail.)
     [Theory]
     [InlineData("echo a | eval \"$c\" | wc -l")]
     [InlineData("echo a | eval 'x=1; echo $x'")]
     public void Transpile_EvalAsPipeStage_IsAStdinScopeBlock(string src)
     {
         var ps = PsEmitter.Transpile(src)!;
-        Assert.Contains("| & { $__psbash_stdin_prev = ", ps);
+        Assert.Contains("& { $__psbash_stdin_prev = ", ps);
         Assert.DoesNotContain("| $__psbash_eval_src", ps);
         Assert.DoesNotContain("| $env:x", ps);
     }
@@ -5981,15 +5982,16 @@ public class PsEmitterTests
     public void Transpile_WithoutNounset_PlainReadsAreUnchanged()
         => Assert.DoesNotContain("unbound variable", PsEmitter.Transpile("echo \"$a\""));
 
+    /// <summary>
+    /// `set -o "$option"` / `set "$flags"`: the option is known only at run time, so `set` runs then as its static form
+    /// (PsBuild.BuiltinAtRunTime, the runner of a builtin named at run time); it was refused before the script ran.
+    /// Behavior vs bash: Differential DynamicBuiltinDifferentialTests.XtraceNounset_TurnedOnThroughARunTimeWord.
+    /// </summary>
     [Theory]
     [InlineData("set \"$flags\"")]
     [InlineData("set -o \"$option\"")]
-    public void Transpile_SetUnsupportedSafetyOption_RefusesBeforeExecution(string bash)
-    {
-        var error = Assert.Throws<ParseException>(() => PsEmitter.Transpile(bash + "; echo unsafe"));
-        Assert.Equal("shell-option", error.Rule);
-        Assert.Contains("not supported", error.Message);
-    }
+    public void Transpile_SetRunTimeOptionWord_RunsSetAtRunTime(string bash)
+        => Assert.Contains(PsBuild.BuiltinAtRunTime("set") + " ", PsEmitter.Transpile(bash + "; echo after"));
 
     [Fact]
     public void Transpile_SetPositionalParameters_AllowsDynamicValuesAfterSeparator()

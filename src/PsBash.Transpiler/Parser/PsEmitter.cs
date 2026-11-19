@@ -1184,7 +1184,6 @@ public static partial class PsEmitter
         _errexitSetMode = _errexitMode && SetsErrexit(bash);
         _errtraceMode = _errexitMode && EnablesErrtrace(bash);
         _errexitExemptDepth = 0;
-        // Only a script that mentions pipefail pays for per-stage status capture (it also leaves the fused lane).
         var priorDefined = _definedFunctions;
         var priorAliasDefs = _aliasDefs; var priorAliasLine = _expandAliasesLine; var priorAliasStatic = _aliasStaticOnly; _aliasDefs = null; _aliasStaticOnly = false;
         var priorUnitFunctions = _unitFunctions;
@@ -1196,9 +1195,9 @@ public static partial class PsEmitter
         var priorRoot = _rootCommand; var priorDiscardInteractive = _discardInteractive; var priorLiveJobs = _liveJobs;
         _lineAbandonMode = priorFailglob || bash.Contains("failglob", StringComparison.Ordinal);
         var priorNounset = _nounsetMode;
-        _nounsetMode = priorNounset || InheritedNounset || bash.Contains("nounset", StringComparison.Ordinal)
-            || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bset\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*u");
-        _pipeStatusMode = bash.Contains("PIPESTATUS", StringComparison.Ordinal);
+        _nounsetMode = priorNounset || InheritedNounset;
+        var priorPipeStatus = _pipeStatusMode;
+        var priorNamesLoopControl = _namesLoopControl;
         var priorDynamicCode = _runsDynamicCode;
         _runsDynamicCode = priorDynamicCode || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\b(?:eval|source)\b|(?:^|[\s;&|(])\.\s+\S");
         var priorXtrace = _xtraceMode;
@@ -1214,8 +1213,8 @@ public static partial class PsEmitter
             || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\b(?:declare|typeset)\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*p")
             || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bexport\s*(?:-p\s*)?(?:[|;&)}]|\r?\n|$)");
         _trapMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\btrap\b");
-        _xtraceMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bset\s+(?:-[a-zA-Z]+\s+)*(?:-[a-zA-Z]*x|-o\s+xtrace)");
-        _pipefailMode = priorPipefail || InheritedPipefail || bash.Contains("pipefail", StringComparison.Ordinal) || bash.Contains("PIPESTATUS", StringComparison.Ordinal);
+        _xtraceMode = false;
+        _pipefailMode = priorPipefail || InheritedPipefail;
         var priorBashLineno = _bashLinenoMode;
         _bashLinenoMode = priorBashLineno || bash.Contains("BASH_LINENO", StringComparison.Ordinal);
         var trapSignal = TrapActionSignal;
@@ -1262,6 +1261,15 @@ public static partial class PsEmitter
             if (BashParser.SawBadSubstitution) _lineAbandonMode = true;
             _rootCommand = cmd;
             _canSetTrap = priorCanSetTrap || CanSetTrap(cmd);
+            // Only a unit that can turn pipefail on or reads PIPESTATUS pays for per-stage status capture (it also leaves the
+            // fused lane). Decided on the parsed commands: a quoted `grep pipefail f` turns nothing on (CanSetPipefail).
+            _pipeStatusMode = ReadsPipestatus(cmd);
+            // Static eval text is emitted inline under its caller's modes: `c=break; while :; do eval '$c'; done`.
+            _namesLoopControl = _namesLoopControl || NamesLoopControl(cmd);
+            _pipefailMode = _pipefailMode || _pipeStatusMode || CanSetPipefail(cmd);
+            // Likewise set -u and set -x, also through a word known only at run time (set -o "$o", c=set; $c -x).
+            _nounsetMode = _nounsetMode || CanSetNounset(cmd);
+            _xtraceMode = CanSetXtrace(cmd);
             _liveJobs = _context == TranspileContext.Eval ? null : CollectLiveJobs(cmd);
             _discardInteractive = _nounsetMode && bash.Contains("shopt -s psbash_interactive", StringComparison.Ordinal);
             string body = EmitBody(cmd);
@@ -1302,6 +1310,8 @@ public static partial class PsEmitter
             _runsDynamicCode = priorDynamicCode;
             _aliasDefs = priorAliasDefs; _expandAliasesLine = priorAliasLine; _aliasStaticOnly = priorAliasStatic;
             _xtraceMode = priorXtrace;
+            _pipeStatusMode = priorPipeStatus;
+            _namesLoopControl = priorNamesLoopControl;
             _trapMode = priorTrap;
             _canSetTrap = priorCanSetTrap;
             _debugTrapMode = priorDebugTrap;
@@ -1532,11 +1542,14 @@ public static partial class PsEmitter
     /// The <see cref="PsBuild.LoopModeVar"/> assignment for a call site that runs eval/source text: what a `break` at the
     /// top of that text does here. Empty at the top of eval/source text itself, which passes its caller's mode on.
     /// </summary>
-    private static string LoopModeForCallSite() =>
-        _loopLabels is { Count: > 0 } ? PsBuild.LoopModeSet(0)
-        : _loopBarrier == LoopBarrierKind.EndsSubshell ? PsBuild.LoopModeSet(2)
-        : LoopControlWarnsHere ? PsBuild.LoopModeSet(1)
-        : "";
+    private static string LoopModeForCallSite() => LoopModeAtCallSite() is var m and >= 0 ? PsBuild.LoopModeSet(m) : "";
+
+    /// <summary>What a <c>break</c> run from here does (<see cref="PsBuild.RunTimeLoopControl(string, string)"/>): 0 the keyword, 1 warn, 2 end the subshell; -1 the caller's mode.</summary>
+    private static int LoopModeAtCallSite() =>
+        _loopLabels is { Count: > 0 } ? 0
+        : _loopBarrier == LoopBarrierKind.EndsSubshell ? 2
+        : LoopControlWarnsHere ? 1
+        : -1;
 
     /// <summary>How many function bodies enclose the code being emitted; a definition inside one is global (bash has no function scope).</summary>
     [ThreadStatic]
@@ -1566,7 +1579,7 @@ public static partial class PsEmitter
             // PowerShell `break`/`continue` there ends the whole pipeline instead, or left the caller's loop.
             // `$( break )` / `<( break )` / a simple pipe stage inside a loop: bash's subshell keeps the loop level, so the
             // keyword ends that subshell with status 0 (the caught throw: the text need not be lexically in its block).
-            string warning = $"Write-Error {PsBuild.SingleQuote(keyword + ": only meaningful in a `for', `while', or `until' loop")} -ErrorAction Continue; {PsBuild.SetStatus(0)}";
+            string warning = PsBuild.LoopControlWarning(keyword);
             if (_loopBarrier == LoopBarrierKind.EndsSubshell)
                 return PsBuild.SubshellExitThrow("0");
             if (LoopControlWarnsHere)
@@ -2598,7 +2611,9 @@ public static partial class PsEmitter
             // A run-time eval (`eval "local $n"`, `local "$1"`) can declare locals whose names were unknown here: restore
             // every `$__lsd_*` slot it parked in this call. Only a body with such an eval pays for the scan. A sourced file
             // runs dot-sourced in this scope too: `main() { . ./lib.sh; }` with `local L=x` in lib.sh (it outlived main).
-            if (body.Contains("$__psbash_eval_src", StringComparison.Ordinal) || body.Contains("Invoke-BashSource", StringComparison.Ordinal))
+            if (body.Contains("$__psbash_eval_src", StringComparison.Ordinal) || body.Contains("Invoke-BashSource", StringComparison.Ordinal)
+                // `c=local; $c v=1`, `command local v`: a builtin named at run time runs as its static form (BashBuiltins.RunAsSource).
+                || body.Contains("Resolve-BashCommand", StringComparison.Ordinal) || body.Contains("Invoke-BashCommand", StringComparison.Ordinal))
                 body = "try { " + body + " } finally { foreach ($__psbLsdV in @(Get-Variable -Name '__lsd_*' -Scope 0 -ErrorAction SilentlyContinue)) "
                      // An unset caller value is removed (a $null handed to SetEnvironmentVariable arrived as "": set, empty).
                      + "{ if ($null -ne $__psbLsdV.Value) { $__psbLsdN = $__psbLsdV.Name.Substring(6); "
@@ -5076,6 +5091,8 @@ public static partial class PsEmitter
             && cmd.HereDocs.IsDefaultOrEmpty && _definedFunctions?.Contains("exec") != true
             && TryEmitExec(cmd with { EnvPairs = [] }, out var execResult))
             return execResult;
+        if (TryEmitRunTimeExecRedirect(cmd, out var runTimeExec))
+            return runTimeExec;
         // `echo hi {fd}>f`, `cmd {v}<<< w`: bash opens a descriptor of its own (10 up), stores its number in the variable
         // and leaves it open after the command; the command's own stdin and stdout are not touched (as for a group, see
         // ApplyCompoundRedirects). It was taken as a stdout redirect: the output went to f and the variable stayed unset.
@@ -6226,6 +6243,10 @@ public static partial class PsEmitter
         else if (cmd0 == "set" && cmd.Words.Length >= 2)
             specialResult = WithAllExport(cmd, EmitSet(cmd));
 
+        // A bare `local` reached PowerShell as the unknown command `local` (127), also through `run local`.
+        else if (cmd0 == "local" && cmd.Words.Length == 1)
+            specialResult = PsBuild.BareLocal;
+
         else if ((cmd0 == "source" || cmd0 == ".") && cmd.Words.Length == 1)
             specialResult = "Write-Error '" + cmd0 + ": filename argument required' -ErrorAction Continue; $global:LASTEXITCODE = 2";
 
@@ -6254,7 +6275,7 @@ public static partial class PsEmitter
             // cd / read / eval / readonly / set / source emit their own statement text, so the redirect
             // tail (`eval 'â€¦' >f`, `source rc 2>/dev/null`, `cd d >/dev/null`) was silently dropped.
             // Dot-source keeps their side effects (variables, functions, cwd) in the caller's scope.
-            result = cmd0 is "cd" or "read" or "eval" or "readonly" or "set" or "source" or "."
+            result = cmd0 is "cd" or "read" or "eval" or "readonly" or "set" or "source" or "." or "local"
                 && !cmd.Redirects.IsDefaultOrEmpty
                     ? PsBuild.WithRedirectTail(specialResult, tail => AppendRedirectTail(tail, cmd.Redirects))
                     : specialResult;
@@ -6606,12 +6627,18 @@ public static partial class PsEmitter
         for (int i = 0; i < literalArgs.Count && literalArgs[i] != "--"; i++)
         {
             var arg = literalArgs[i];
+            // `set -o "$opt"`, `set "$flags"`: the option is known only at run time, so `set` runs then, as its static
+            // form with the words it got (the same runner as `c=set; $c -o pipefail`, BashBuiltins.RunAsSource).
+            if (arg is null && argsOverride is null)
+                return EmitPassthrough(PsBuild.BuiltinAtRunTime("set"), cmd.Words.RemoveAt(0));
             if (arg is null)
                 throw new ParseException("set: dynamic shell options are not supported by ps-bash; use set -- for positional parameters", 1, 1, "shell-option");
             if (!arg.StartsWith('-') && !arg.StartsWith('+')) break;
             if (arg is "-o" or "+o")
             {
                 var name = literalArgs[++i];
+                if (name is null && argsOverride is null)
+                    return EmitPassthrough(PsBuild.BuiltinAtRunTime("set"), cmd.Words.RemoveAt(0));
                 if (name is not ("errexit" or "xtrace" or "pipefail" or "noglob"))
                     throw new ParseException($"set: option '{name ?? "dynamic name"}' is not supported by ps-bash", 1, 1, "shell-option");
                 continue;
@@ -6623,7 +6650,7 @@ public static partial class PsEmitter
         if (dashDashIdx >= 0)
         {
             // The `--` position comes from the ORIGINAL words: an inert/runtime option may have been dropped from literalArgs.
-            int dashWord = implicitDashDash ? -1 : cmd.Words.Select((w, k) => (w, k)).Skip(1).First(t => GetLiteralValue(t.w) == "--").k;
+            int dashWord = implicitDashDash ? -1 : cmd.Words.Select((w, k) => (w, k)).Skip(1).First(t => TryGetStaticArgValue(t.w) == "--").k;   // `set "--" a`: quoted, still the separator
             specialResult = EmitSetPositionals(cmd.Words.Skip(implicitDashDash ? 1 : dashWord + 1).ToList());
         }
         else
@@ -6757,7 +6784,7 @@ public static partial class PsEmitter
         // nothing no command runs and the status is the substitution's (+""+"true"+""+, $(false), $(exit 42)).
         if (cmd.EnvPairs.IsEmpty && cmd.Words.Length == 1 && cmd.Words[0].Parts.Length == 1
             && cmd.Words[0].Parts[0] is WordPart.CommandSub)
-            return "$__psbash_cs = " + EmitAssignmentValue(cmd.Words[0]) + "; if ($__psbash_cs) { $__psbash_cw = @(ConvertTo-BashWords $__psbash_cs); & (Resolve-BashCommand $__psbash_cw[0]) @($__psbash_cw | Select-Object -Skip 1) }";
+            return "$__psbash_cs = " + EmitAssignmentValue(cmd.Words[0]) + "; if ($__psbash_cs) { $__psbash_cw = @(ConvertTo-BashWords $__psbash_cs); & (Resolve-BashCommand $__psbash_cw[0]" + RunTimeNameLoopModeArg() + ") @($__psbash_cw | Select-Object -Skip 1) }";
 
         // Env-var prefix: VAR=value cmd â€” set VAR only for the duration of cmd,
         // then restore to its previous value to prevent leaking into the shell.
@@ -6870,7 +6897,7 @@ public static partial class PsEmitter
             for (int i = 1; i < cmd.Words.Length; i++)
                 extra.Append(' ').Append(QuoteGeneralArgIfNeeded(EmitWord(cmd.Words[i])));
             string wordsExpr = braceName ? "@(" + EmitArgWord(cmd.Words[0]) + ")" : EmitUnquotedSplitWordArray(cmd.Words[0]);
-            sb.Append("& { $__dyn = " + wordsExpr + "; if ($__dyn.Count -gt 0) { $__dynrest = @($__dyn | Select-Object -Skip 1); & (Resolve-BashCommand $__dyn[0]) @__dynrest" + extra + " } else { $global:LASTEXITCODE = 0 } }");
+            sb.Append("& { $__dyn = " + wordsExpr + "; if ($__dyn.Count -gt 0) { $__dynrest = @($__dyn | Select-Object -Skip 1); & (Resolve-BashCommand $__dyn[0]" + RunTimeNameLoopModeArg() + ") @__dynrest" + extra + " } else { $global:LASTEXITCODE = 0 } }");
             AppendRedirectTail(sb, cmd.Redirects);
             if (!cmd.EnvPairs.IsEmpty)
             {
@@ -6887,13 +6914,14 @@ public static partial class PsEmitter
             leading = "& (Resolve-BashCommand ";
             // `$SUDO rm f` / `CC='gcc -O2'; $CC -c x.c`: an unquoted name splits first. No word leaves the next one the
             // command (none at all: nothing runs, status 0); more than one makes the rest leading operands.
+            string loopArg = RunTimeNameLoopModeArg();
             commandWordText = cmdSubName
-                ? "-Words " + EmitUnquotedSplitWordArray(cmd.Words[0]) + " -KeepStatus)"
+                ? "-Words " + EmitUnquotedSplitWordArray(cmd.Words[0]) + " -KeepStatus" + loopArg + ")"
                 : affixName
-                ? "-Words " + EmitUnquotedSplitWordArray(cmd.Words[0]) + ")"
+                ? "-Words " + EmitUnquotedSplitWordArray(cmd.Words[0]) + loopArg + ")"
                 : IsPureUnquotedVarWord(cmd.Words[0])
-                ? "-Words " + EmitUnquotedVarSplitArray(cmd.Words[0]) + ")"
-                : commandWordText + ")";
+                ? "-Words " + EmitUnquotedVarSplitArray(cmd.Words[0]) + loopArg + ")"
+                : commandWordText + loopArg + ")";
         }
 
         // A script-defined function named like a mapped command (`cd() { …; }`, `seq() { …; }`): PowerShell resolves an
@@ -11659,10 +11687,9 @@ public static partial class PsEmitter
 
     /// <summary>
     /// A pipeline as an <c>&amp;&amp;</c> / <c>||</c> operand. A pipeline usually emits ONE PowerShell pipeline, which
-    /// stays bare so it keeps streaming. Under pipefail it emits a statement LIST (<c>$__pf = ...; stages; ...</c>), and
-    /// bare, only its first statement, an assignment, was the chain's operand: <c>set -o pipefail; a &amp;&amp; b | c</c>
-    /// was the parse error "Unexpected token '='" for the whole script (the Bash tool sets pipefail). A statement list
-    /// is wrapped in <c>$( ... )</c> like a compound operand (current scope, so PIPESTATUS still lands). Test:
+    /// stays bare so it keeps streaming; under pipefail it is still one element (<see cref="PsBuild.PipefailPipeline"/>).
+    /// A statement list (a negated pipeline: the status flip follows it) bare would make only its first statement the
+    /// chain's operand, so it is wrapped in <c>$( ... )</c> like a compound operand (current scope). Test:
     /// <see cref="PsBuild.IsStatementList"/> (quote/nesting aware), not a raw <c>;</c>, which every script block has.
     /// </summary>
     private static string ChainPipelineOperand(string pipelineText)
@@ -11955,15 +11982,14 @@ public static partial class PsEmitter
                     && System.Text.RegularExpressions.Regex.IsMatch(stageText, @"\s\d?>{1,2}[&\s]?\S"))
                     stageText = $"& {{ {PsBuild.ForwardStageInput(stageText)} }}";
                 sb.Length = stageStart;
-                sb.Append($"Invoke-BashPipeStage -Slot $__pf -Index {i} -Script {{ {stageText} }}");
+                sb.Append(PsBuild.PipefailStage(i, stageText));
             }
         }
 
         var body = sb.ToString();
         if (perStage)
             // The pipeline's status under pipefail: the last stage that failed (0 when none did).
-            body = $"$__pf = [int[]]::new({pipeline.Commands.Length}); {body}; $global:PIPESTATUS = $__pf; "
-                 + "if ($global:__BashPipefail) { $global:LASTEXITCODE = 0; foreach ($__s in $__pf) { if ($__s -ne 0) { $global:LASTEXITCODE = $__s } } }";
+            body = PsBuild.PipefailPipeline(pipeline.Commands.Length, body);
 
         // Fused lane: an all-mapped, terminal-bound, plain-`|` pipeline runs inside
         // Invoke-BashFusedPipeline so its output returns to the launcher in a few
@@ -13158,6 +13184,28 @@ public static partial class PsEmitter
             case "times":
                 result = EmitPassthrough("Invoke-BashTimes", args);
                 return true;
+            // Builtins a non-interactive shell here can only refuse or report (PsBash.psm1).
+            case "bind":
+                result = EmitPassthrough("Invoke-BashBind", args);
+                return true;
+            case "caller":
+                result = EmitPassthrough("Invoke-BashCaller", args);
+                return true;
+            case "disown":
+                result = EmitPassthrough("Invoke-BashDisown", args);
+                return true;
+            case "enable":
+                result = EmitPassthrough("Invoke-BashEnable", args);
+                return true;
+            case "help":
+                result = EmitPassthrough("Invoke-BashHelp", args);
+                return true;
+            case "logout":
+                result = EmitPassthrough("Invoke-BashLogout", args);
+                return true;
+            case "suspend":
+                result = EmitPassthrough("Invoke-BashSuspend", args);
+                return true;
             case "history":
                 result = EmitPassthrough("Invoke-BashHistory", args);
                 return true;
@@ -13598,12 +13646,8 @@ public static partial class PsEmitter
             // assembly-qualified â€” given the assembly name it loads the assembly
             // on demand. A bare [PsBash.Core.Transpiler.BashTranspiler] silently
             // failed to resolve there, so eval emitted empty output.
-            "$__psbash_eval_pwsh = $null; try { $__psbash_eval_pwsh = [PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]::Transpile($__psbash_eval_src, [PsBash.Core.Transpiler.TranspileContext, PsBash.Transpiler]::Eval"
-            + (EvalLocalNamesArg() is { Length: > 0 } evalLocals ? evalLocals : ", $null")
-            + ", ($null -ne (Get-Variable -Name __BashStdIn -Scope Global -ValueOnly -ErrorAction SilentlyContinue))) } " +
             // A syntax error in the eval text is eval's own failure (status 2), not an exception out of the surrounding script.
-            "catch { Write-Error ('ps-bash: eval: ' + $(if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message })) -ErrorAction Continue; $global:LASTEXITCODE = 2 }; " +
-            "if ($null -ne $__psbash_eval_pwsh) { " + PsBuild.EvalReturnVar + " = $false; " + PsBuild.EvalLinesScope("Invoke-Expression $__psbash_eval_pwsh") + " } " +
+            PsBuild.RunBashTextAtRunTime(EvalLocalNamesArg() is { Length: > 0 } evalLocals ? evalLocals : ", $null", "eval") + " " +
             "} finally { $global:__BashEvalDepth = $__psbash_eval_depth } " +
             // A `return` in the text left only the Invoke-Expression: in a function (or in eval text, passing it on)
             // it leaves here too. At the top of a script there is nothing to return from.

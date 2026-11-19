@@ -671,7 +671,7 @@ records become stdout TEXT, so an enclosing stage no longer reads them as stderr
 
 - `set -e` / `set -o errexit` -> `$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true` (+ create `$global:__BashErrexitSuppress` if absent)
 - `set +e` / `set +o errexit` -> `$ErrorActionPreference = 'Continue'; $global:__BashErrexit = $false`
-- `set -x` / `set -o xtrace` -> `Set-PSDebug -Trace 1`. In a script that mentions xtrace, each statement is preceded by
+- `set -x` / `set -o xtrace` -> `Set-PSDebug -Trace 1`. In a unit that can turn xtrace on (`PsEmitter.CanSetXtrace`), each statement is preceded by
   `Write-BashXtrace <fields>` (`PsEmitter.TryEmitXtrace`). The trace line shows the command's FIELDS after
   expansion.
   - A word the command splits (`IsUnquotedSplitWord`) is passed as the same `EmitUnquotedSplitWordArray` the command
@@ -683,10 +683,22 @@ records become stdout TEXT, so an enclosing stage no longer reads them as stderr
     goes untraced.
   - Also untraced: pipelines, array assignments, and the commands inside an eval.
   - Differential: `XtraceFieldsDifferentialTests`.
-- `set -u` / `set -o nounset` (any bundling) -> `$global:__BashNounset = $true`. A script that mentions nounset emits plain `$x` / `${x}` reads as a runtime check that throws `BashParamErrorException` ("x: unbound variable") when the flag is on and the variable is unset; `${x:-d}`-style forms and positional parameters are not checked. The check is per command string: a later `-c` does not inherit it.
+- `set -u` / `set -o nounset` (any bundling) -> `$global:__BashNounset = $true`. A unit that can turn nounset on (`PsEmitter.CanSetNounset`) emits plain `$x` / `${x}` reads as a runtime check that throws `BashParamErrorException` ("x: unbound variable") when the flag is on and the variable is unset; `${x:-d}`-style forms and positional parameters are not checked. The check is per command string: a later `-c` does not inherit it.
 - `set -C` / `set -o noclobber` -> `$global:__BashNoclobber`; `Invoke-BashRedirect` refuses a truncating `>` onto an existing file unless `-Force` (`>|`).
 - Combined flags (e.g., `set -euo pipefail`) are decomposed.
+- `set -o "$opt"` / `set "$flags"` (an option word known only at run time) runs `set` then, as its static form with
+  the words it got (`PsBuild.BuiltinAtRunTime`, the runner of a builtin named at run time, see "General fallback").
 
+**Invariant: a per-unit mode is decided on the parsed commands, never on the source text.** Whether a unit pays for
+per-stage pipeline status (`pipefail`, `PIPESTATUS`), xtrace lines or nounset checks is `PsEmitter.CanSetPipefail` /
+`ReadsPipestatus` / `CanSetXtrace` / `CanSetNounset` (`PsEmitter.ShellOptions.cs`, one predicate
+`CanSetShellOption`), the `CanSetTrap` pattern: an operand of `set` / `shopt` naming the option or known only at run
+time, a call of a function the unit defines or a run-time command name with such an operand, eval text, a trap action
+and an alias (static text parsed and judged the same way; text known only at run time counts for pipefail only, whose
+capture is cheap). Turning an option off (`set +o xtrace`, `+x`) never turns its mode on. A text scan for `pipefail` turned the mode on
+for `grep -c pipefail f && echo y`; a regex for `set -x` missed `c=set; $c -x`. Guards:
+`Core.Tests/PipefailModeEmitterTests`, Differential `PipefailPositionDifferentialTests`,
+`DynamicBuiltinDifferentialTests.XtraceNounset_TurnedOnThroughARunTimeWord`.
 **errexit checks** (`PsEmitter.EmitStatement`, `PsBuild.Errexit*`). Emitted only when the script itself
 contains `set -e`/`-o errexit` (`PsEmitter.EnablesErrexit`); every other script is byte-identical. Each
 command at STATEMENT position (`EmitBody`/`EmitCommandList`: script top level, if/loop/case/function/group/
@@ -785,6 +797,26 @@ stdin sink (it rejected `echo x | env`).
 Words are emitted in order via `EmitWord`, redirects appended via
 `EmitRedirect`.
 
+**A command named at run time** (`"$@"`, `$cmd`, `command NAME`, `builtin NAME`) is `& (Resolve-BashCommand …)`,
+looked up as bash does: function, builtin, PATH. **Invariant: one table, `BashBuiltins`, decides how a builtin runs
+when its name is known only then, and it agrees with the static emitter.** A builtin the emitter implements itself
+(`BashBuiltins.RunAsSource`: `eval`, `.`, `source`, `set`, `exec`, `exit`, `local`, `declare`, `export`, `alias`, …)
+runs as its own static form, transpiled at run time from its words in the caller's scope
+(`PsBuild.BuiltinAsSourceScript`, the same runner as `eval`); the call-stack builtins (`return`, `break`, `continue`,
+`:`, `true`, `false`, `builtin`) are handled in `Resolve-BashCommand`; every other builtin is the run-time command the
+static emitter reaches (`Invoke-Bash<Name>`). Before, the run-time lookup knew only the run-time commands, so
+`run() { "$@"; }; run eval 'echo E'` was 127. A run-time name with only redirections (`c=exec; $c 3>f`) emits both
+forms behind `PsBuild.RunTimeNameBranch` (`exec` makes them permanent), except in a pipe-target stage: a subshell,
+whose input reaches only the stage's own block. Guards: `Core.Tests/BuiltinDispatchGuardTests`
+(every name in exactly one group; the third group's static form is `Invoke-Bash<Name>`), Differential
+`DynamicBuiltinDifferentialTests.EveryBuiltin_NamedAtRunTime_IsFound` (the fixed bash 5.2 `compgen -b` list through
+`"$@"`, `$c` and `command`: never 127). `break`/`continue` named at run time do what loop control does at that call site: when the unit names either as
+data (`c=break`, `run continue`; `PsEmitter.NamesLoopControl`, decided on the parsed words) the lookup gets
+`-LoopMode` (the keyword in a loop, bash's warning with no loop in reach, the end of a subshell), else the mode
+eval/source text inherited (`PsBuild.RunTimeLoopControl`). A bare PowerShell `break` left any loop on the call stack
+and ended the whole script when there was none. A function body that names a command at run time restores the
+caller's `local` slots too (`PsBuild.PublishParkedLocals`: `h() { c=local; $c v=1; }` no longer leaks `v`).
+
 ### Unquoted variable word-splitting (RC-7)
 
 In bash, an **unquoted** parameter expansion (`$x`, not `"$x"`) undergoes word
@@ -880,6 +912,11 @@ general fallback path (`EmitSimple`) and the mapped passthrough path
    a save/set/restore script block that forwards `$input` (see "Env pairs"), and a stage that needs the
    RC-7 splat hoist forwards `$input` inside its block.
 3. Pipe operators: `|` emits as ` | `, `|&` emits as ` 2>&1 | `.
+   Under per-stage status (pipefail / `PIPESTATUS`) the pipeline is `PsBuild.PipefailPipeline` around
+   `PsBuild.PipefailStage` stages. **Invariant: it is ONE pipeline element** (a dot-sourced block: the caller's scope,
+   streaming output), so it is valid PowerShell in every position a pipeline stands in: after `&&`/`||`, in `$( )`, as a
+   condition, negated. The old `$__pf = [int[]]…; …` statement list was "Unexpected token '='" after `&&`. Guard:
+   `Host.Tests/PipefailParseabilityTests` (PowerShell's parser over a corpus of positions).
 4. A **compound** stage (`subshell` / `brace group` / loop / `if` / `case`) emits
    PowerShell *statements*, not a pipeable expression, so it is wrapped in
    `& { … }` (PowerShell rejects `foreach (…) {} | sort` with "An empty pipe

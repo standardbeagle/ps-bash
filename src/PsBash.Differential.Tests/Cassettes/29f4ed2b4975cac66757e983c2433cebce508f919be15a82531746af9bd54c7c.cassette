@@ -1,0 +1,34 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 436
+stdout-length: 77
+stderr-length: 0
+==== SCRIPT ====
+run() { "$@"; }
+c=break; for i in 1 2 3; do $c; echo "no$i"; done; echo "for=$i"
+k=continue; for i in 1 2; do $k; echo "no$i"; done; echo "cont=$i"
+for i in 1 2; do run break; echo "fn$i"; done 2>/dev/null; echo "fnst=$?"
+$c 2>/dev/null; echo "top=$?"
+( $c; echo inner ) 2>/dev/null; echo "sub=$?"
+for i in 1 2; do ( $c; echo "sub$i" ); done 2>/dev/null; echo "loopsub=$i"
+while :; do eval '$c'; echo noeval; done; echo evaled
+echo end
+
+==== STDOUT ====
+for=1
+cont=2
+fn1
+fn2
+fnst=0
+top=0
+inner
+sub=0
+sub1
+sub2
+loopsub=2
+evaled
+end
+
+==== STDERR ====
+

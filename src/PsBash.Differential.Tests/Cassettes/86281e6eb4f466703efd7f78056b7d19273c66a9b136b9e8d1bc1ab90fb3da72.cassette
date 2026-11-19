@@ -1,0 +1,36 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 562
+stdout-length: 66
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; printf 'a pipefail\nb\nc pipefail\n' > f
+set -o pipefail
+x=$(false | true); echo "sub=$?"
+y=$(echo hi | cat); echo "y=$y"
+echo "$(false | true; echo st=$?)"
+f() { false | true; }; f; echo "fn=$?"
+f2() { false | true && echo inner; }; f2 || echo "f2=$?"
+( false | true ); echo "sub2=$?"
+case x in x) false | true ;; esac; echo "case=$?"
+for i in 1; do false | true; done; echo "for=$?"
+z=$( (false | true) && echo yes || echo no ); echo "z=$z"
+echo pre | { false | true; echo "grp=$?"; }
+true | false | true; echo "ps=${PIPESTATUS[*]}"
+
+==== STDOUT ====
+sub=1
+y=hi
+st=1
+fn=1
+f2=1
+sub2=1
+case=1
+for=1
+z=no
+grp=1
+ps=0 1 0
+
+==== STDERR ====
+

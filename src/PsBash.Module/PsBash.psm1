@@ -322,7 +322,7 @@ function Write-BashXtrace {
 # function, then a builtin / ps-bash command (`false`, `true`, `echo`, `test` are not PowerShell commands of
 # those names), then whatever PowerShell can find (a program on PATH). Returns something `&` can call.
 function Resolve-BashCommand {
-    param([string]$Name, [object[]]$Words, [switch]$Fed, [switch]$KeepStatus)
+    param([string]$Name, [object[]]$Words, [switch]$Fed, [switch]$KeepStatus, [int]$LoopMode = -1)
     # A stale eval-return flag (an `eval return` at the top level leaves it) must not make the command about to run
     # look like a `return` to the check after it (PsEmitter.EmitStatement).
     $global:__BashEvalReturn = $false
@@ -335,9 +335,9 @@ function Resolve-BashCommand {
         # When nothing runs, the status is the last command substitution's, else 0. This runs before the operands
         # expand (their substitutions set it after); -KeepStatus: the words came from a substitution that already did.
         if ($w.Count -eq 0 -and -not $KeepStatus) { $global:LASTEXITCODE = 0 }
-        if (-not $Fed -and $w.Count -eq 1) { return Resolve-BashCommand -Name ([string]$w[0]) }
+        if (-not $Fed -and $w.Count -eq 1) { return Resolve-BashCommand -Name ([string]$w[0]) -LoopMode $LoopMode }
         $pre = foreach ($x in $w) { "'" + ([string]$x).Replace("'", "''") + "'" }
-        return [scriptblock]::Create('$__bw = @(' + ($pre -join ', ') + ') + @($args); $__bfed = ' + $(if ($Fed) { '$true' } else { '$false' }) + "`n" + $script:BashDynamicCommandBody)
+        return [scriptblock]::Create('$__bw = @(' + ($pre -join ', ') + ') + @($args); $__blm = ' + $LoopMode + '; $__bfed = ' + $(if ($Fed) { '$true' } else { '$false' }) + "`n" + $script:BashDynamicCommandBody)
     }
     if ($Name -eq '') {
         # `"$empty"` / `''` as a command: bash looks up the empty name and does not find it.
@@ -354,7 +354,16 @@ function Resolve-BashCommand {
     # A command word that came from an expansion (`$cmd`) is never alias-expanded in bash, and an alias runs here
     # as a global function of its name: skip that function, so `cmd=myalias; $cmd` is the command, or not found.
     $isAlias = $global:BashUserAliases -and $global:BashUserAliases.ContainsKey($Name)
-    if (-not $isAlias -and (Get-Command -Name ([WildcardPattern]::Escape($Name)) -CommandType Function -ErrorAction Ignore)) { return $Name }
+    # PowerShell's own function of a bash builtin's name (`help`) is not a bash function: `c=help; $c cd` ran PowerShell's
+    # help. A bash function always enters its variable frame (PsBuild.FunctionPrologue).
+    if (-not $isAlias -and ($__fn = Get-Command -Name ([WildcardPattern]::Escape($Name)) -CommandType Function -ErrorAction Ignore) -and
+        -not ([PsBash.Core.Parser.BashBuiltins, PsBash.Transpiler]::Names.Contains($Name) -and -not $__fn.Definition.Contains('[PsBash.Cmdlets.VarFrameStack]::EnterFunction()'))) { return $Name }
+    # A builtin the emitter implements (`eval`, `.`, `set`, `exec`, `local`, `exit`, ...; BashBuiltins.RunAsSource, the one
+    # table): run as the static command `NAME 'op'...`, transpiled and run here, so `c=eval; $c 'x=1'` is `eval 'x=1'`.
+    # The lookup by Get-Command alone said "eval: command not found" (and `set` reached PowerShell's Set-Variable).
+    if (($__bb = 'PsBash.Core.Parser.BashBuiltins, PsBash.Transpiler' -as [type]) -and $__bb::RunAsSource.Contains($Name)) {
+        return [scriptblock]::Create([PsBash.Core.Parser.PsBuild, PsBash.Transpiler]::BuiltinAsSourceScript($Name))
+    }
     switch -CaseSensitive ($Name) {
         'true'  { return { $global:LASTEXITCODE = 0 } }
         ':'     { return { $global:LASTEXITCODE = 0 } }
@@ -362,12 +371,15 @@ function Resolve-BashCommand {
         # `b=builtin; $b declare f=$x`: Invoke-BashCommand peels the wrapper and runs the rest past functions
         # (a declaration through the run-time eval, its operands already split).
         'builtin' { return { if ($args.Count -eq 0) { $global:LASTEXITCODE = 0 } else { $__psbash_argv = [string[]]$args; Invoke-BashCommand 'builtin' @__psbash_argv } } }
-        # `myvar=typeset; $myvar x=$x`: a declaration named at run time; its operands are ordinary (already split) words.
-        { $_ -cin 'declare', 'typeset', 'local', 'export', 'readonly' } { return [scriptblock]::Create("`$__psbash_argv = [string[]]`$args; Invoke-BashCommand '$Name' @__psbash_argv") }
-        # `b=break; $b`, `c=continue; $c`: a PowerShell break / continue leaves the nearest loop on the CALL stack, so
-        # run from this block it leaves the loop the command sits in (bash's loop keywords are dynamic too).
-        'break'    { return { break } }
-        'continue' { return { continue } }
+        # `b=break; $b`, `c=continue; $c`: what loop control does at the call site (-LoopMode, PsEmitter.NamesLoopControl:
+        # 0 the keyword, which leaves the loop the command sits in; 1 bash's warning, no loop in reach; 2 end the
+        # subshell) or, not given, the mode eval/source text inherited (PsBuild.RunTimeLoopControl). A bare `break`
+        # with no loop in reach ended the whole script.
+        { $_ -ceq 'break' -or $_ -ceq 'continue' } {
+            $__lc = [PsBash.Core.Parser.PsBuild, PsBash.Transpiler]::RunTimeLoopControl($Name)
+            if ($LoopMode -ge 0) { $__lc = [PsBash.Core.Parser.PsBuild, PsBash.Transpiler]::LoopModeSet($LoopMode) + $__lc }
+            return [scriptblock]::Create($__lc)
+        }
         # `r=return; $r 99`: the status, then the eval-return flag; the emitter checks it after a run-time command in
         # a function (PsEmitter.EmitStatement) and returns from there. At the top level there is nothing to return from.
         'return' {
@@ -385,18 +397,6 @@ function Resolve-BashCommand {
                 $global:__BashEvalReturn = $true
             }
         }
-        # `e=exit; $e 5`: as the literal exit (a word that is not a number is status 2).
-        'exit' {
-            return {
-                $st = if ($args.Count -gt 0) { [string]$args[0] } else { [string]$global:LASTEXITCODE }
-                if ($st -notmatch '^-?[0-9]+$') {
-                    Write-Error ('exit: ' + $st + ': numeric argument required') -ErrorAction Continue
-                    $st = '2'
-                }
-                $global:LASTEXITCODE = [int]((([long]$st % 256) + 256) % 256)
-                exit $global:LASTEXITCODE
-            }
-        }
     }
     $cmd = Get-Command -Name ('Invoke-Bash' + [WildcardPattern]::Escape($Name)) -CommandType Cmdlet, Function -ErrorAction Ignore
     if ($cmd) { return $cmd.Name }
@@ -410,27 +410,70 @@ function Resolve-BashCommand {
     }
     return $Name
 }
+
+# Builtins a non-interactive bash on this host can only refuse or report (bash 5.2's own messages and statuses), so
+# every `compgen -b` name is a command, also through `"$@"` (Resolve-BashCommand finds Invoke-Bash<Name>). There is no
+# line editor (bind), no job control (suspend), no login shell (logout) and no builtin help text (help names it only).
+function Write-BashBuiltinError([string]$Message, [int]$Status) {
+    Write-Error -Message $Message -ErrorAction Continue
+    $global:LASTEXITCODE = $Status
+}
+function Invoke-BashEnable {
+    $names = [PsBash.Core.Parser.BashBuiltins, PsBash.Transpiler]::Names
+    $ops = @($args | Where-Object { -not "$_".StartsWith('-') })
+    if ($ops.Count -eq 0) { foreach ($n in ($names | Sort-Object { $_ } -CaseSensitive)) { "enable $n" }; $global:LASTEXITCODE = 0; return }
+    $global:LASTEXITCODE = 0
+    foreach ($n in $ops) { if (-not $names.Contains("$n")) { Write-BashBuiltinError "enable: ${n}: not a shell builtin" 1 } }
+}
+function Invoke-BashCaller {
+    # Outside a function bash prints nothing and fails; ps-bash keeps no call frames to report from inside one either.
+    $global:LASTEXITCODE = 1
+}
+function Invoke-BashDisown {
+    $ids = @($args | Where-Object { -not "$_".StartsWith('-') })
+    if ($ids.Count -eq 0) { $ids = @('current') }
+    foreach ($id in $ids) { Write-BashBuiltinError "disown: ${id}: no such job" 1 }
+}
+function Invoke-BashBind {
+    Write-Error -Message 'bind: warning: line editing not enabled' -ErrorAction Continue
+    $global:LASTEXITCODE = 0
+}
+function Invoke-BashSuspend {
+    if ($args -contains '--help') { 'suspend: suspend [-f]'; '    Suspend shell execution.'; $global:LASTEXITCODE = 2; return }
+    Write-BashBuiltinError 'suspend: cannot suspend: no job control' 1
+}
+function Invoke-BashLogout { Write-BashBuiltinError "logout: not login shell: use ``exit'" 1 }
+function Invoke-BashHelp {
+    $names = [PsBash.Core.Parser.BashBuiltins, PsBash.Transpiler]::Names
+    $topics = @($args | Where-Object { -not "$_".StartsWith('-') })
+    $global:LASTEXITCODE = 0
+    foreach ($t in $topics) {
+        if ($names.Contains("$t")) { "${t}: bash builtin (ps-bash has no help text; see the bash manual)" }
+        else { Write-BashBuiltinError "help: no help topics match ``${t}'.  Try ``help help' or ``man -k ${t}' or ``info ${t}'." 1 }
+    }
+}
 # The rest of Resolve-BashCommand's -Words / -Fed block, given $__bw (every word: the command, then its operands) and
-# $__bfed. A user function reads stdin like a program; a ps-bash command reads it per StdinReaders, the rule the
+# $__bfed, $__blm (the -LoopMode). Its operands are $__bargs, never $__bp: that name marks a bash function's scope
+# (PsBuild.FunctionPrologue, found by PsBuild.PublishParkedLocals). A user function reads stdin like a program; a ps-bash command reads it per StdinReaders, the rule the
 # emitter applies to a literal command name. A command that does not read stdin is never piped to: a cmdlet with no
 # pipeline-input parameter fails to bind a record, and on an empty pipeline it never runs at all.
 $script:BashDynamicCommandBody = @'
 if ($__bw.Count -eq 0) { return }
 $__bn = [string]$__bw[0]
-$__bc = Resolve-BashCommand -Name $__bn
-$__bp = @($__bw | Select-Object -Skip 1)
+$__bc = Resolve-BashCommand -Name $__bn -LoopMode $__blm
+$__bargs = @($__bw | Select-Object -Skip 1)
 if ($__bfed -and $__bc -is [string] -and $__bc -ceq $__bn -and $__bn -ne '' -and
         (Get-Command -Name ([WildcardPattern]::Escape($__bn)) -CommandType Function -ErrorAction Ignore)) {
     # A function is not piped to: its readers take from the scope's cursor themselves, a line at a time, as when it is
     # called by name. Piped, it was handed EVERYTHING left (`c=f; { $c; $c; } < in` gave the second call nothing).
-    & $__bc @__bp
+    & $__bc @__bargs
 } elseif ($__bfed) {
-    $__bread = $(if ($__bsr = 'PsBash.Core.Parser.StdinReaders' -as [type]) { $__bsr::ShouldFeed($__bn, [string[]]$__bp) } else { $true })
+    $__bread = $(if ($__bsr = 'PsBash.Core.Parser.StdinReaders' -as [type]) { $__bsr::ShouldFeed($__bn, [string[]]$__bargs) } else { $true })
     if ($__bread) {
-        & { $__psbash_q = $global:__BashStdIn; $__psbash_r = $null; while ($__psbash_q -and $__psbash_q.TryDequeue([ref]$__psbash_r)) { $__psbash_r } } | & $__bc @__bp
-    } else { & $__bc @__bp }
-} elseif ($MyInvocation.ExpectingInput) { $input | & $__bc @__bp }
-else { & $__bc @__bp }
+        & { $__psbash_q = $global:__BashStdIn; $__psbash_r = $null; while ($__psbash_q -and $__psbash_q.TryDequeue([ref]$__psbash_r)) { $__psbash_r } } | & $__bc @__bargs
+    } else { & $__bc @__bargs }
+} elseif ($MyInvocation.ExpectingInput) { $input | & $__bc @__bargs }
+else { & $__bc @__bargs }
 '@
 
 # OPTIND starts at 1 (getopts reads it; scripts print it); the host setup script does the same before the first command.

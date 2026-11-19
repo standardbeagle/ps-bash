@@ -1,0 +1,31 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 378
+stdout-length: 107
+stderr-length: 0
+==== SCRIPT ====
+run() { "$@"; }
+( c=set; $c -x; echo traced; set +x ) 2>&1
+( o=xtrace; set -o "$o"; echo traced2; set +x ) 2>&1
+( run set -x; echo traced3 ) 2>&1
+( c=set; $c -u; echo "${nosuch_q}"; echo survived ) 2>/dev/null; echo "nu=$?"
+( o=nounset; set -o "$o"; echo "$nosuch_r"; echo survived ) 2>/dev/null; echo "nu2=$?"
+echo "set -x" | cat; echo 'set -u' >/dev/null; echo "$nosuch_s" ok
+
+==== STDOUT ====
++ echo traced
+traced
++ set +x
++ echo traced2
+traced2
++ set +x
++ echo traced3
+traced3
+nu=1
+nu2=1
+set -x
+ ok
+
+==== STDERR ====
+

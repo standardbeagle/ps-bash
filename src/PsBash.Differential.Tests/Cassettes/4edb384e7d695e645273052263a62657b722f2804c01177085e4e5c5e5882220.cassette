@@ -1,0 +1,40 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 559
+stdout-length: 114
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+echo 'echo dotted "$1"; sv=set' > d.sh
+c=.; $c ./d.sh arg1; echo "sv=$sv"
+run() { "$@"; }; run . ./d.sh arg2; run source ./d.sh arg3
+c=exec; ( $c echo execd; echo notreached ); echo "exec=$?"
+( run exec echo viaexec ); echo "rexec=$?"
+c=exit; ( $c 3; echo notreached ); echo "exit=$?"
+( run exit 4 ); echo "rexit=$?"
+( command exit 5 ); echo "cexit=$?"
+c=.; $c 2>/dev/null; echo "noarg=$?"
+c=exec; $c 3>fd3.txt; echo b >&3; cat fd3.txt
+run exec 4>fd4.txt; { echo c >&4; } 2>/dev/null; echo "run4=$?"
+c=echo; $c >o.txt; wc -c < o.txt
+
+==== STDOUT ====
+dotted arg1
+sv=set
+dotted arg2
+dotted arg3
+execd
+exec=0
+viaexec
+rexec=0
+exit=3
+rexit=4
+cexit=5
+noarg=2
+b
+run4=1
+1
+
+==== STDERR ====
+
