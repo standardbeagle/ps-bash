@@ -823,7 +823,10 @@ runs as its own static form, transpiled at run time from its words in the caller
 static emitter reaches (`Invoke-Bash<Name>`). Before, the run-time lookup knew only the run-time commands, so
 `run() { "$@"; }; run eval 'echo E'` was 127. A run-time name with only redirections (`c=exec; $c 3>f`) emits both
 forms behind `PsBuild.RunTimeNameBranch` (`exec` makes them permanent), except in a pipe-target stage: a subshell,
-whose input reaches only the stage's own block. Guards: `Core.Tests/BuiltinDispatchGuardTests`
+whose input reaches only the stage's own block. **A run-time name as a pipe stage** (`echo x | $c`) is resolved with
+`-Piped`: it gets the pipe only when it reads stdin (`StdinReaders.ShouldFeed`, the rule a literal name gets), otherwise the
+records are drained and it runs once; piped unconditionally, `c="seq 2"; echo x | $c` failed to bind the record and never ran
+(oracle `RuntimeCommandParityDifferentialTests.DynamicCommandName_Piped_RunsACommandThatDoesNotReadStdin`). Guards: `Core.Tests/BuiltinDispatchGuardTests`
 (every name in exactly one group; the third group's static form is `Invoke-Bash<Name>`), Differential
 `DynamicBuiltinDifferentialTests.EveryBuiltin_NamedAtRunTime_IsFound` (the fixed bash 5.2 `compgen -b` list through
 `"$@"`, `$c` and `command`: never 127). `break`/`continue` named at run time do what loop control does at that call site: when the unit names either as

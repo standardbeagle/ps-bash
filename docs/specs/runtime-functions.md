@@ -501,6 +501,15 @@ are not in BashFlagSpecs.json is still checked through its `OptSpecSet` (`Common
 - **gzip**: the `long_options[]` order is the ambiguity order (`--s` = '--stdout' '--silent' '--synchronous' '--suffix'); `-h/-H/-V/-L` info options (`-L` used to compress silently), `-m/-M` accepted, dangling `-S` an error, `-10` = `-1` then the invalid `-0`; `-Z/--lzw/-b/--bits` refused. gunzip/zcat aliases unchanged.
 - **tar**: every tar 1.35 long option is registered (per-letter `--X` oracle lists concatenated = argp order) so abbreviations and ambiguity match; everything not implemented is valid-but-unsupported. **Old-style first word** (`tar czf a.tgz d`, `xvf`, `cfC a.tar d f`) is normalised by `NormalizeOldStyle` before the scan (value letters `b C f F g H I K L N T V X` consume the following words in order; a bound direct-call decoy disables it). **`-C` is positional** and now works on create (`tar cf a.tar -C d f` archives `f`). Direct-call decoy `C` is `-c` when no mode is on the line, else `-C` with the first operand as DIR (Pester's `tar -xf $a -C $out`); from the transpiler every flag is single-quoted, so `-c` vs `-C` is case-exact.
 - **md5sum/sha1sum/sha256sum** (`ChecksumEngine`): silent wrong output fixed — the printed name was the resolved ABSOLUTE path (now as typed; `/` for `\` on Windows; POSIX names with `\`/newline are `\`-escaped like coreutils), `printf x | md5sum` hashed `x\n` (stdin is now `RecordStreamText`: exact bytes), `--tag` and `-z` (NUL, no newline) were missing. Check mode follows coreutils 9.4: text/binary/BSD-tag lists, per-algorithm hash length, blank and `#` lines skipped, improper lines counted (`--warn` per line, `--strict` fails), `FAILED open or read` plus the stderr cause, `WARNING:` summaries, `--ignore-missing`, `no properly formatted checksum lines found`, list from stdin. Option-combination errors in GNU wording (`--warn` only when verifying, `--tag`/`-b`/`-t`/`-z` with `-c`).
+**A flag the PowerShell binder rejects is a usage error with its status.** An unquoted `-O`/`-E`/`-I`/`-P`/`-W` is a
+prefix of two common parameters, so the binder fails the statement before the cmdlet runs (`tr -O a b`): nothing set
+the status, `$?` stayed 0, and the text was PowerShell's. The host reads the record as it is written, before the next
+statement (`SdkWorker` error drain), and applies `PsBash.Core.UsageErrors.BindingFailure`: a single letter is getopt's
+`CMD: invalid option -- 'O'` plus the usage hint, any other binding error keeps its text, and the status is the
+command's usage status (1; 2 for builtins, grep, diff, ls, sort, tar). Oracle
+`RuntimeCommandParityDifferentialTests.BinderRejectedFlag_IsAUsageErrorWithItsStatus`; mapping `Core.Tests/UsageErrorsTests`.
+Known gap: such a record escapes the statement's own redirections (`2>/dev/null`, `2>&1`, `$(…)`), a PowerShell rule.
+
 **Migrating a command:**
 
 1. Declare `static readonly string[]` valid-but-unsupported names (a `string[]` field keeps the

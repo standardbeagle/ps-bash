@@ -6946,7 +6946,9 @@ public static partial class PsEmitter
         }
         if (dynamicName)
         {
-            leading = "& (Resolve-BashCommand ";
+            // A pipe stage (`echo x | $c`): -Piped makes the run-time command take its input only when it reads stdin
+            // (StdinReaders.ShouldFeed); piped a record, a cmdlet with no pipeline-input parameter failed to bind it.
+            leading = _pipeStageFeedsInput ? "& (Resolve-BashCommand -Piped " : "& (Resolve-BashCommand ";
             // `$SUDO rm f` / `CC='gcc -O2'; $CC -c x.c`: an unquoted name splits first. No word leaves the next one the
             // command (none at all: nothing runs, status 0); more than one makes the rest leading operands.
             string loopArg = RunTimeNameLoopModeArg();

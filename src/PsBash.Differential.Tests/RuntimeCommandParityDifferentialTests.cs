@@ -38,6 +38,22 @@ public class RuntimeCommandParityDifferentialTests
         => Eq("for c in dirname basename mkdir rmdir rm readlink realpath sleep stat chmod comm join; do $c; echo \"$c rc=$?\"; done; "
             + "chmod 755; echo rc=$?; comm a; echo rc=$?; nohup; echo rc=$?; expr; echo rc=$?");
 
+    // tr -O / seq -O / date -O — class: an error PowerShell's parameter binder raises before any cmdlet runs (`-O` is
+    // ambiguous: -OutVariable / -OutBuffer) left the status 0 and printed PowerShell's text. Primitive:
+    // UsageErrors.BindingFailure, applied by the host as the record arrives (SdkWorker), before the next statement.
+    [SkippableFact]
+    public Task BinderRejectedFlag_IsAUsageErrorWithItsStatus()
+        => Eq("cd \"$(mktemp -d)\" || exit; echo a | tr -O a b; echo rc=$?; seq -O 3; echo rc=$?; date -O; echo rc=$?; "
+            + "if seq -O 3; then echo yes; else echo no; fi; seq -O 3 || echo failed; echo end");
+
+    // `echo x | $c` where $c names a command that does not read stdin — class: the run-time command name piped every
+    // record to a cmdlet with no pipeline-input parameter, so the binder refused it and the command never ran (status
+    // 0). Primitive: StdinReaders.ShouldFeed, the rule a literal name gets, in Resolve-BashCommand's piped branch too.
+    [SkippableFact]
+    public Task DynamicCommandName_Piped_RunsACommandThatDoesNotReadStdin()
+        => Eq("cd \"$(mktemp -d)\" || exit; c=\"seq 2\"; echo x | $c; echo rc=$?; c=\"wc -l\"; printf 'a\\nb\\n' | $c; "
+            + "c=mkdir; echo x | $c d; echo rc=$?; test -d d && echo made");
+
     // comm / base64 / uniq / split / basename / date / cp / sort / wc / diff — class: "extra operand" spelled per
     // command (ASCII quotes where GNU uses the locale's, no hint, basename without the operand). Primitive:
     // FileSystemHelpers.ExtraOperandMessage / WriteExtraOperand, quote style per tool (guard ExtraOperandGuardTests).

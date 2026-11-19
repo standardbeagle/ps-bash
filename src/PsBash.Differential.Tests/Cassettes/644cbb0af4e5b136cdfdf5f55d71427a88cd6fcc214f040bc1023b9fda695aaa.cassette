@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 154
+stdout-length: 21
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; c="seq 2"; echo x | $c; echo rc=$?; c="wc -l"; printf 'a\nb\n' | $c; c=mkdir; echo x | $c d; echo rc=$?; test -d d && echo made
+==== STDOUT ====
+1
+2
+rc=0
+2
+rc=0
+made
+
+==== STDERR ====
+

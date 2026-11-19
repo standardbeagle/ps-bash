@@ -656,26 +656,8 @@ internal static class FileSystemHelpers
         return UsageHint(cmd) is { } hint ? message + "\n" + hint : message;
     }
 
-    /// <summary>
-    /// What a tool prints after a usage error's first line (GNU coreutils: <c>Try 'CMD --help' for more
-    /// information.</c>). The other GNU tools word it their own way (oracle: Ubuntu 24.04). null = this ps-bash prints
-    /// no hint: sed / strings print their whole --help text, tree / rg word even the first line differently.
-    /// </summary>
-    internal static string? UsageHint(string cmd) => cmd switch
-    {
-        "diff" => "diff: Try 'diff --help' for more information.",
-        "gzip" or "gunzip" or "zcat" => $"Try `{cmd} --help' for more information.",
-        "tar" => "Try 'tar --help' or 'tar --usage' for more information.",
-        "grep" or "egrep" or "fgrep" => $"Usage: {cmd} [OPTION]... PATTERNS [FILE]...\nTry '{cmd} --help' for more information.",
-        "file" => "Usage: file [-bcCdEhikLlNnprsSvzZ0] [--apple] [--extension] [--mime-encoding]\n"
-            + "            [--mime-type] [-e <testname>] [-F <separator>]  [-f <namefile>]\n"
-            + "            [-m <magicfiles>] [-P <parameter=value>] [--exclude-quiet]\n"
-            + "            <file> ...\n"
-            + "       file -C [-m <magicfiles>]\n"
-            + "       file [--help]",
-        "sed" or "strings" or "tree" or "rg" => null,
-        _ => $"Try '{cmd} --help' for more information.",
-    };
+    /// <summary>What a tool prints after a usage error's first line: <see cref="PsBash.Core.UsageErrors.Hint"/>.</summary>
+    internal static string? UsageHint(string cmd) => PsBash.Core.UsageErrors.Hint(cmd);
 
     /// <summary>
     /// Act on a <c>--help</c> / <c>--version</c> the shared parser resolved from an ABBREVIATION

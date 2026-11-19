@@ -625,6 +625,11 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         // Same remove-as-you-drain discipline as stdout. The post-run command-not-found check needs
         // the LAST record, so remember it as it is delivered instead of re-reading the collection.
         System.Management.Automation.ErrorRecord? lastErrorRecord = null;
+        // A parameter-binding error fails its statement before any cmdlet runs, so nothing set the status: the shell
+        // saw $? = 0. Its record reaches this stream synchronously, before the next statement, so the status is set
+        // here (UsageErrors.BindingFailure). The handler runs on the pipeline thread, where SessionStateProxy refuses
+        // calls; the session's variable table, taken now while the runspace is idle, does not.
+        var sessionVariables = _ps.Runspace.SessionStateProxy.PSVariable;
         void DrainErrorStreamCore()
         {
             if (errorStream.Count == 0) return;
@@ -632,9 +637,19 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             {
                 lastErrorRecord = record;
                 FlushFormatBufferCore();
+                string text = record.ToString();
+                if (record.Exception is System.Management.Automation.ParameterBindingException binding)
+                {
+                    var (message, status) = PsBash.Core.UsageErrors.BindingFailure(
+                        record.InvocationInfo?.MyCommand?.Name ?? binding.CommandInvocation?.MyCommand?.Name,
+                        binding.ErrorId, binding.ParameterName, text);
+                    text = message;
+                    try { sessionVariables.Set("global:LASTEXITCODE", status); }
+                    catch (Exception) { /* the runspace is closing: no later statement reads it */ }
+                }
                 // The record's exact bytes: a line, or — `printf x >&2` — no newline at all
                 // (PsBash.Core.StderrRecord, the rule `2> f` and `2>&1` share).
-                deliverErrorBytes(PsBash.Core.StderrRecord.Payload(record.ToString(), record.TargetObject));
+                deliverErrorBytes(PsBash.Core.StderrRecord.Payload(text, record.TargetObject));
             }
         }
         EventHandler<System.Management.Automation.DataAddedEventArgs> onErrorAdded = (_, _) =>

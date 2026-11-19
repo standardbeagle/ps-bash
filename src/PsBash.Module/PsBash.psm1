@@ -338,20 +338,21 @@ function Write-BashXtrace {
 # function, then a builtin / ps-bash command (`false`, `true`, `echo`, `test` are not PowerShell commands of
 # those names), then whatever PowerShell can find (a program on PATH). Returns something `&` can call.
 function Resolve-BashCommand {
-    param([string]$Name, [object[]]$Words, [switch]$Fed, [switch]$KeepStatus, [int]$LoopMode = -1)
+    param([string]$Name, [object[]]$Words, [switch]$Fed, [switch]$Piped, [switch]$KeepStatus, [int]$LoopMode = -1)
     # A stale eval-return flag (an `eval return` at the top level leaves it) must not make the command about to run
     # look like a `return` to the check after it (PsEmitter.EmitStatement).
     $global:__BashEvalReturn = $false
-    if ($Fed -or $PSBoundParameters.ContainsKey('Words')) {
+    if ($Fed -or $Piped -or $PSBoundParameters.ContainsKey('Words')) {
         # -Words: an unquoted name (`$SUDO rm f`, `$CC -c x.c`) after word splitting. None: the next operand is the
         # command, and with no operand nothing runs. More than one: the rest lead the operands.
         # -Fed: the command is inside a compound command's stdin scope; it gets that stdin only if it reads stdin.
+        # -Piped: the command is a pipe stage (`echo x | $c`); it gets the pipe only if it reads stdin (the block's piped branch).
         # The block is created unbound so it runs in the caller's scope, as the resolved command itself would.
         $w = @(if ($PSBoundParameters.ContainsKey('Words')) { $Words } else { $Name })
         # When nothing runs, the status is the last command substitution's, else 0. This runs before the operands
         # expand (their substitutions set it after); -KeepStatus: the words came from a substitution that already did.
         if ($w.Count -eq 0 -and -not $KeepStatus) { $global:LASTEXITCODE = 0 }
-        if (-not $Fed -and $w.Count -eq 1) { return Resolve-BashCommand -Name ([string]$w[0]) -LoopMode $LoopMode }
+        if (-not $Fed -and -not $Piped -and $w.Count -eq 1) { return Resolve-BashCommand -Name ([string]$w[0]) -LoopMode $LoopMode }
         $pre = foreach ($x in $w) { "'" + ([string]$x).Replace("'", "''") + "'" }
         return [scriptblock]::Create('$__bw = @(' + ($pre -join ', ') + ') + @($args); $__blm = ' + $LoopMode + '; $__bfed = ' + $(if ($Fed) { '$true' } else { '$false' }) + "`n" + $script:BashDynamicCommandBody)
     }
@@ -479,7 +480,12 @@ if ($__bfed -and $__bc -is [string] -and $__bc -ceq $__bn -and $__bn -ne '' -and
     if ($__bread) {
         & { $__psbash_q = $global:__BashStdIn; $__psbash_r = $null; while ($__psbash_q -and $__psbash_q.TryDequeue([ref]$__psbash_r)) { $__psbash_r } } | & $__bc @__bargs
     } else { & $__bc @__bargs }
-} elseif ($MyInvocation.ExpectingInput) { $input | & $__bc @__bargs }
+} elseif ($MyInvocation.ExpectingInput) {
+    # Piped (`echo x | $c`): the same StdinReaders rule. A command that does not read stdin drains it and runs; piped a
+    # record, a cmdlet with no pipeline-input parameter failed to bind it and never ran (`c="seq 2"; echo x | $c`).
+    $__bread = $(if ($__bsr = 'PsBash.Core.Parser.StdinReaders' -as [type]) { $__bsr::ShouldFeed($__bn, [string[]]$__bargs) } else { $true })
+    if ($__bread) { $input | & $__bc @__bargs } else { $null = @($input); & $__bc @__bargs }
+}
 else { & $__bc @__bargs }
 '@
 

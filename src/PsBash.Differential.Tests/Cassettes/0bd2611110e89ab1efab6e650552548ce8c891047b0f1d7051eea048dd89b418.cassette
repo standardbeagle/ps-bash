@@ -1,0 +1,28 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 181
+stdout-length: 29
+stderr-length: 330
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; echo a | tr -O a b; echo rc=$?; seq -O 3; echo rc=$?; date -O; echo rc=$?; if seq -O 3; then echo yes; else echo no; fi; seq -O 3 || echo failed; echo end
+==== STDOUT ====
+rc=1
+rc=1
+rc=1
+no
+failed
+end
+
+==== STDERR ====
+tr: invalid option -- 'O'
+Try 'tr --help' for more information.
+seq: invalid option -- 'O'
+Try 'seq --help' for more information.
+date: invalid option -- 'O'
+Try 'date --help' for more information.
+seq: invalid option -- 'O'
+Try 'seq --help' for more information.
+seq: invalid option -- 'O'
+Try 'seq --help' for more information.
+
