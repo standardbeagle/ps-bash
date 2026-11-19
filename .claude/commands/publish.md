@@ -6,9 +6,9 @@ This is the single source for the release process (CLAUDE.md only points here).
 
 `publish.yml` runs on the tag push. `release`/`publish` need `test` (×3 OS) and
 `build-binaries` (×3). BLOCKING steps in `test`: **Pester** (`tests/PsBash.Tests.ps1`),
-**Core.Tests**, **Cmdlets.Tests** (advisory on macOS only, until the awk pipe-child crash is confirmed fixed),
+**Core.Tests**, **Cmdlets.Tests**,
 **Host.Tests**, **Differential.Tests** (cassette replay), and the short Shell safety/recovery tests. Advisory
-(`continue-on-error`): the broader **Shell.Tests**, the `Skip report` / quarantine steps, macOS Cmdlets. Check
+(`continue-on-error`): the broader **Shell.Tests**, the `Skip report` / quarantine steps. Check
 `.github/workflows/publish.yml` if unsure — this list drifts. If the gate fails, `publish`
 shows **skipped** and nothing reaches the feeds.
 
