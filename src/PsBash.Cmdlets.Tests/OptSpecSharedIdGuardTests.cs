@@ -20,6 +20,8 @@ public class OptSpecSharedIdGuardTests
     {
         // Same getopt val in GNU: abbreviation of either name is legal and never ambiguous between them.
         "InvokeBashColumnCommand.ColumnSpec keep-empty-lines: keep-empty-lines table-empty-lines",  // util-linux 'L'
+        "InvokeBashDateCommand.DateOptions R: rfc-email rfc-822 rfc-2822",     // oracle: date --rfc-8 / --rfc-2 accepted; --rfc ambiguous lists '--rfc-email' '--rfc-3339' only
+        "InvokeBashDateCommand.DateOptions u: uct utc universal",              // oracle: date --u accepted (one option)
         "InvokeBashGrepCommand.GrepSpec F: fixed-strings fixed-regexp",           // oracle: grep --fix a -> accepted
         "InvokeBashGrepCommand.GrepSpec color: color colour",                      // oracle: grep --colo a -> accepted
         "InvokeBashGrepCommand.GrepSpec quiet: quiet silent",

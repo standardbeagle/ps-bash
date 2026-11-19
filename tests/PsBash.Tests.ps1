@@ -6113,12 +6113,12 @@ Describe 'Invoke-BashGzip — compress files' {
 
     It 'exports gunzip alias' {
         $alias = Get-Alias -Name gunzip -Scope Global
-        $alias.Definition | Should -Be 'Invoke-BashGzip'
+        $alias.Definition | Should -Be 'Invoke-BashGunzip'   # its own cmdlet: the identity survives `& $c`
     }
 
     It 'exports zcat alias' {
         $alias = Get-Alias -Name zcat -Scope Global
-        $alias.Definition | Should -Be 'Invoke-BashGzip'
+        $alias.Definition | Should -Be 'Invoke-BashZcat'   # its own cmdlet: the identity survives `& $c`
     }
 }
 
@@ -6583,10 +6583,11 @@ Describe 'Invoke-BashWhich' {
         $errors.Count | Should -BeGreaterThan 0
     }
 
-    It 'errors with no arguments' {
+    It 'is a silent status 1 with no arguments (debianutils which)' {
         $result = Invoke-BashWhich 2>&1
         $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
-        $errors.Count | Should -BeGreaterThan 0
+        $errors.Count | Should -Be 0
+        $global:LASTEXITCODE | Should -Be 1
     }
 }
 
