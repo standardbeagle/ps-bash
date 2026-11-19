@@ -38,6 +38,17 @@ public class RuntimeCommandParityDifferentialTests
         => Eq("for c in dirname basename mkdir rmdir rm readlink realpath sleep stat chmod comm join; do $c; echo \"$c rc=$?\"; done; "
             + "chmod 755; echo rc=$?; comm a; echo rc=$?; nohup; echo rc=$?; expr; echo rc=$?");
 
+    // comm / base64 / uniq / split / basename / date / cp / sort / wc / diff — class: "extra operand" spelled per
+    // command (ASCII quotes where GNU uses the locale's, no hint, basename without the operand). Primitive:
+    // FileSystemHelpers.ExtraOperandMessage / WriteExtraOperand, quote style per tool (guard ExtraOperandGuardTests).
+    [SkippableFact]
+    public Task ExtraOperand_OneSpellingPerTool()
+        => Eq("cd \"$(mktemp -d)\"; echo a > a; echo b > b; mkdir d; "
+            + "comm a b c 2>&1; echo rc=$?; base64 a b 2>&1; echo rc=$?; uniq a b c 2>&1; echo rc=$?; split a x y 2>&1; echo rc=$?; "
+            + "basename a b c 2>&1; echo rc=$?; date +%Y extra 2>&1; echo rc=$?; seq 1 2 3 4 2>&1; echo rc=$?; "
+            + "cp -T a b c 2>&1; echo rc=$?; mv -T a b c 2>&1; echo rc=$?; ln -T a b c 2>&1; echo rc=$?; join a b c 2>&1; echo rc=$?; "
+            + "sort -c a b 2>&1; echo rc=$?; diff a b c 2>&1; echo rc=$?");
+
     [SkippableFact]
     public Task Dirname_GnuMdirName()
         => Eq("dirname a//b ''; dirname // /usr/bin/ sort; dirname -- a/b");

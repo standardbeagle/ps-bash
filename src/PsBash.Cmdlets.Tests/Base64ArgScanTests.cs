@@ -49,7 +49,7 @@ public class Base64ArgScanTests
     [InlineData("ERR base64: invalid wrap size: '-1'", "-w", "-1")]  // FIX
     [InlineData("ERR base64: invalid wrap size: '1K'", "-w", "1K")]
     [InlineData("ERR base64: invalid wrap size: ''", "-w", "")]
-    [InlineData("ERR base64: extra operand 'g'", "f", "g")]  // FIX (was: ignored)
+    [InlineData("ERR base64: extra operand ‘g’\nTry 'base64 --help' for more information.", "f", "g")]  // FIX (was: ignored)
     [InlineData("ERR base64: option requires an argument -- 'w'", "-w")]
     [InlineData("ERR base64: option '--wrap' requires an argument", "--wrap")]
     [InlineData("ERR base64: invalid option -- 'x'", "-x")]

@@ -127,7 +127,7 @@ public sealed class InvokeBashBasenameCommand : BashCmdlet
         {
             if (operands.Count > 2)
             {
-                FileSystemHelpers.WriteBashError(this, "basename: extra operand");
+                FileSystemHelpers.WriteExtraOperand(this, "basename", operands[2]);
                 return;
             }
             if (operands.Count == 2)

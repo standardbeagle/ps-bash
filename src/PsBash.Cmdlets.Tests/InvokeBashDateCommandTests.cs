@@ -247,11 +247,11 @@ public class InvokeBashDateCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Empty(r.Lines);
     }
 
-    // `date +%Y extra` -> "date: extra operand 'extra'" + the --help hint, status 1, no output.
+    // `date +%Y extra` -> "date: extra operand ‘extra’" + the --help hint, status 1, no output.
     [Fact]
     public void Date_SecondOperand_IsAnExtraOperand()
     {
-        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashDate '+%Y' extra").AssertFailed(1, "date: extra operand 'extra'");
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashDate '+%Y' extra").AssertFailed(1, "date: extra operand ‘extra’");
         Assert.Empty(r.Lines);
     }
 

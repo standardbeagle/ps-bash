@@ -180,7 +180,7 @@ public sealed class InvokeBashWcCommand : BashCmdlet
             w.Files0From = f0;
             if (w.Operands.Count > 0)
             {
-                w.Error = $"wc: extra operand '{w.Operands[0]}'\nfile operands cannot be combined with --files0-from\nTry 'wc --help' for more information.";
+                w.Error = FileSystemHelpers.ExtraOperandMessage("wc", w.Operands[0], why: "file operands cannot be combined with --files0-from");
             }
         }
         return w;

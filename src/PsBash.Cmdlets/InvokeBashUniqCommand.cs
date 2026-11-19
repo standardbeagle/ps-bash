@@ -182,7 +182,7 @@ public sealed class InvokeBashUniqCommand : BashCmdlet
                 }
                 if (u.Operands.Count == 2)
                 {
-                    u.Error = $"uniq: extra operand '{tok.Raw}'";
+                    u.Error = FileSystemHelpers.ExtraOperandMessage("uniq", tok.Raw);
                     return u;
                 }
                 u.Operands.Add(tok.Raw);

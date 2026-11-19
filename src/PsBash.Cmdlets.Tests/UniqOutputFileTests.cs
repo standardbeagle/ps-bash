@@ -94,7 +94,7 @@ public class UniqOutputFileTests : IDisposable, IClassFixture<SharedPwshFixture>
     [Fact]
     public void ThirdOperand_IsStillAnExtraOperandError()
     {
-        Run("Invoke-BashUniq in out third").AssertFailed(1, "extra operand 'third'");
+        Run("Invoke-BashUniq in out third").AssertFailed(1, "extra operand ‘third’", "Try 'uniq --help'");
         Assert.False(File.Exists(P("out")));
     }
 }

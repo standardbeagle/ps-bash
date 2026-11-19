@@ -114,7 +114,7 @@ public sealed class InvokeBashBase64Command : BashCmdlet
             if (!ok) { b.Error = $"base64: invalid wrap size: '{v}'"; return b; }
             b.Wrap = (int)n;
         }
-        if (b.Operands.Count > 1) b.Error = $"base64: extra operand '{b.Operands[1]}'";
+        if (b.Operands.Count > 1) b.Error = FileSystemHelpers.ExtraOperandMessage("base64", b.Operands[1]);
         return b;
     }
 

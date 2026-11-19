@@ -127,7 +127,7 @@ internal sealed class DiffPlan
         }
         if (plan.Operands.Count > 2)
         {
-            return $"diff: extra operand '{plan.Operands[2]}'" + TryHelp;
+            return FileSystemHelpers.ExtraOperandMessage("diff", plan.Operands[2]);
         }
 
         // The switch string: every argv element that is not an operand (nor the `--` marker), in order.

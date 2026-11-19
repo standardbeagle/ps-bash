@@ -218,8 +218,7 @@ public sealed class InvokeBashDateCommand : BashCmdlet
             }
             if (sawFormatOperand || setOperand != null)
             {
-                WriteBashError($"date: extra operand '{arg}'");
-                FileSystemHelpers.WriteStderr(this, "Try 'date --help' for more information.");
+                FileSystemHelpers.WriteExtraOperand(this, "date", arg);
                 return;
             }
             // The date it names is what an unprivileged GNU date prints after "cannot set date". REGRESSION: it

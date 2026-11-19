@@ -240,7 +240,7 @@ public sealed class InvokeBashMvCommand : BashCmdlet
             }
             if (plan.NoTargetDirectory && operands.Count > 2)
             {
-                FileSystemHelpers.WriteBashError(this, $"mv: extra operand '{operands[2]}'" + TryHelp);
+                FileSystemHelpers.WriteExtraOperand(this, "mv", operands[2]);
                 return;
             }
             destRaw = operands[^1];

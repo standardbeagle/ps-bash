@@ -610,17 +610,40 @@ internal static class FileSystemHelpers
     }
 
     /// <summary>
-    /// GNU's "extra operand" usage error as the tools that call <c>quote()</c> word it: <c>CMD: extra operand ‘X’</c>,
-    /// an optional explanation line (<paramref name="why"/>: tr's "Only one string may be given ..."), the usage hint,
-    /// status 1.
+    /// GNU's "extra operand" usage error (<see cref="ExtraOperandMessage"/>), status <paramref name="status"/> (1; sort
+    /// and diff 2).
     /// </summary>
-    public static void WriteExtraOperand(PSCmdlet cmdlet, string cmd, string operand, string? why = null)
+    public static void WriteExtraOperand(PSCmdlet cmdlet, string cmd, string operand, string? why = null, int status = 1)
     {
-        string message = $"{cmd}: extra operand {GnuQuote.Locale(operand)}";
-        if (why is not null) message += "\n" + why;
-        WriteBashError(cmdlet, UsageHint(cmd) is { } hint ? message + "\n" + hint : message);
-        SetLastExitCode(cmdlet, 1);
+        WriteBashError(cmdlet, ExtraOperandMessage(cmd, operand, why));
+        SetLastExitCode(cmdlet, status);
     }
+
+    /// <summary>
+    /// The text of GNU's "extra operand" usage error, the one spelling every command uses (guard
+    /// <c>ExtraOperandGuardTests</c>): <c>CMD: extra operand ‘X’</c>, then <paramref name="sameLine"/> on that line (sort
+    /// -c's " not allowed with -c"), an optional explanation line (<paramref name="why"/>: tr's "Only one string may be
+    /// given ..."), and the tool's usage hint unless <paramref name="hint"/> is false. The operand is quoted as the tool
+    /// quotes it (<see cref="QuotesExtraOperandForTheShell"/>). REGRESSION: comm, base64, uniq and split spelled it
+    /// themselves with ASCII quotes and no hint, date with ASCII quotes, basename named no operand at all.
+    /// </summary>
+    public static string ExtraOperandMessage(string cmd, string operand, string? why = null, string? sameLine = null, bool hint = true)
+    {
+        string quoted = QuotesExtraOperandForTheShell(cmd) ? GnuQuote.Always(operand) : GnuQuote.Locale(operand);
+        string message = $"{cmd}: extra operand {quoted}{sameLine}";
+        if (why is not null) message += "\n" + why;
+        if (hint && UsageHint(cmd) is { } usage) message += "\n" + usage;
+        return message;
+    }
+
+    /// <summary>
+    /// The tools whose "extra operand" quotes the operand for the shell (<c>quoteaf</c>: <c>'x'</c>, also under a UTF-8
+    /// locale) rather than with the locale's quotation marks (<c>quote()</c>: <c>‘x’</c>): GNU coreutils 9.4 cp, mv, ln,
+    /// install, join, sort and wc, and diffutils' diff (WSL Ubuntu-24.04, C.UTF-8).
+    /// </summary>
+    internal static bool QuotesExtraOperandForTheShell(string cmd)
+        => cmd is "cp" or "mv" or "ln" or "install" or "join" or "sort" or "wc" or "diff";
+
     /// <summary>
     /// The text of <see cref="WriteMissingOperand"/> for a pure plan that carries its error as a string: the
     /// first line (the operand after which one is missing quoted as gnulib <c>quote()</c>,

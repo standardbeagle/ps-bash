@@ -235,7 +235,7 @@ public sealed class InvokeBashSplitCommand : BashCmdlet
         }
         if (s.Operands.Count > 2)
         {
-            s.Error = $"split: extra operand '{s.Operands[2]}'";
+            s.Error = FileSystemHelpers.ExtraOperandMessage("split", s.Operands[2]);
             return s;
         }
         return s;

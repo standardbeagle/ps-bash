@@ -101,6 +101,14 @@ does not exist.
 | `file` | `file: cannot open 'path' (No such file or directory)` | 1 | File not found |
 | `base64` | `base64: path: message` | 1 | File not found |
 
+**Operand-count usage errors have one spelling each.** "missing operand" is
+`FileSystemHelpers.WriteMissingOperand` / `MissingOperandMessage` (`WriteMissingFileOperand` for the file tools);
+"extra operand" is `FileSystemHelpers.WriteExtraOperand` / `ExtraOperandMessage`: `CMD: extra operand ‘X’`, an
+optional explanation line, then the tool's usage hint, status 1 (sort, diff 2). The operand is quoted as GNU quotes it:
+the locale's marks (`quote()`) for most tools, ASCII `'X'` (`quoteaf`) for cp, mv, ln, install, join, sort, wc and diff
+(`QuotesExtraOperandForTheShell`). No cmdlet writes either literal itself (guards `MissingOperandGuardTests`,
+`ExtraOperandGuardTests`; oracle `RuntimeCommandParityDifferentialTests.ExtraOperand_OneSpellingPerTool`).
+
 ---
 
 ## 2. Global Error Infrastructure

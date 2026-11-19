@@ -245,7 +245,7 @@ public sealed class InvokeBashLnCommand : BashCmdlet
             }
             if (operands.Count > 2)
             {
-                FileSystemHelpers.WriteBashError(this, $"ln: extra operand '{operands[2]}'" + TryHelp);
+                FileSystemHelpers.WriteExtraOperand(this, "ln", operands[2]);
                 return;
             }
             pairs.Add((operands[0], operands[1]));

@@ -119,10 +119,10 @@ public class UniqArgScanTests
     [InlineData("----- m=none f=0 s=0 w=- ops=[+-1]", "+-1")]
     [InlineData("----- m=none f=0 s=0 w=- ops=[+99999999999999999999999]", "+99999999999999999999999")]  // > 64 bits: a file
     [InlineData("----- m=none f=0 s=0 w=- ops=[+1]", "--", "+1")]  // after `--` it is a file
-    [InlineData("ERR uniq: extra operand 'c'", "a", "b", "c")]
-    [InlineData("ERR uniq: extra operand 'c'", "-c", "a", "b", "c", "d")]
-    [InlineData("ERR uniq: extra operand 'c'", "--", "a", "b", "c")]
-    [InlineData("ERR uniq: extra operand 'c'", "a", "b", "+1", "c")]
+    [InlineData("ERR uniq: extra operand ‘c’\nTry 'uniq --help' for more information.", "a", "b", "c")]
+    [InlineData("ERR uniq: extra operand ‘c’\nTry 'uniq --help' for more information.", "-c", "a", "b", "c", "d")]
+    [InlineData("ERR uniq: extra operand ‘c’\nTry 'uniq --help' for more information.", "--", "a", "b", "c")]
+    [InlineData("ERR uniq: extra operand ‘c’\nTry 'uniq --help' for more information.", "a", "b", "+1", "c")]
     [InlineData("ERR uniq: option '--count' doesn't allow an argument", "--count=1")]  // FIX
     [InlineData("ERR uniq: option '--ignore-case' doesn't allow an argument", "--ignore-case=1")]
     [InlineData("ERR uniq: unrecognized option '--bogus'", "--bogus")]

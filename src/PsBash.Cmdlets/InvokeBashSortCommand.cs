@@ -233,11 +233,11 @@ public sealed class InvokeBashSortCommand : BashCmdlet
         }
 
         if (plan.Files0From is not null && s.Operands.Count > 0)
-            return Fail(s, $"sort: extra operand '{s.Operands[0]}'\nfile operands cannot be combined with --files0-from\nTry 'sort --help' for more information.", 2);
+            return Fail(s, FileSystemHelpers.ExtraOperandMessage("sort", s.Operands[0], why: "file operands cannot be combined with --files0-from"), 2);
         if (sawCheck && sawQuiet) return Fail(s, "sort: options '-cC' are incompatible", 2);
         s.CheckMode = sawQuiet ? 2 : sawCheck ? 1 : 0;
         if (s.CheckMode != 0 && s.Operands.Count > 1)
-            return Fail(s, $"sort: extra operand '{s.Operands[1]}' not allowed with -c", 2);
+            return Fail(s, FileSystemHelpers.ExtraOperandMessage("sort", s.Operands[1], sameLine: " not allowed with -c", hint: false), 2);
 
         // Effective key options: GNU gives a key with no ordering option (and no 'r') every global one.
         plan.Reverse = g.Reverse;

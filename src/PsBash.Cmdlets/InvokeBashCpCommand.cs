@@ -304,7 +304,7 @@ public sealed class InvokeBashCpCommand : BashCmdlet
         {
             if (operands.Count > 2)
             {
-                FileSystemHelpers.WriteBashError(this, $"cp: extra operand '{operands[2]}'" + TryHelp);
+                FileSystemHelpers.WriteExtraOperand(this, "cp", operands[2]);
                 return null;
             }
             return (new List<string> { operands[0] }, destRaw, false);

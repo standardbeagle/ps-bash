@@ -156,7 +156,7 @@ public sealed class InvokeBashCommCommand : BashCmdlet
         }
         if (operands.Count > 2)
         {
-            FileSystemHelpers.WriteBashError(this, $"comm: extra operand '{operands[2]}'");
+            FileSystemHelpers.WriteExtraOperand(this, "comm", operands[2]);
             return;
         }
         // First operand path: route through glob expansion for symmetry with

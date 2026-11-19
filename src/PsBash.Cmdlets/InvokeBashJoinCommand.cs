@@ -293,7 +293,7 @@ public sealed class InvokeBashJoinCommand : BashCmdlet
         }
         if (operands.Count > 2)
         {
-            FileSystemHelpers.WriteBashError(this, $"join: extra operand '{operands[2]}'");
+            FileSystemHelpers.WriteExtraOperand(this, "join", operands[2]);
             return;
         }
         if (operands[0] == "-" && operands[1] == "-")

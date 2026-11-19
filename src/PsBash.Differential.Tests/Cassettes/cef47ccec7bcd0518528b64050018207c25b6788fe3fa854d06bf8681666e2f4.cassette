@@ -1,0 +1,50 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 441
+stdout-length: 887
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"; echo a > a; echo b > b; mkdir d; comm a b c 2>&1; echo rc=$?; base64 a b 2>&1; echo rc=$?; uniq a b c 2>&1; echo rc=$?; split a x y 2>&1; echo rc=$?; basename a b c 2>&1; echo rc=$?; date +%Y extra 2>&1; echo rc=$?; seq 1 2 3 4 2>&1; echo rc=$?; cp -T a b c 2>&1; echo rc=$?; mv -T a b c 2>&1; echo rc=$?; ln -T a b c 2>&1; echo rc=$?; join a b c 2>&1; echo rc=$?; sort -c a b 2>&1; echo rc=$?; diff a b c 2>&1; echo rc=$?
+==== STDOUT ====
+comm: extra operand ‘c’
+Try 'comm --help' for more information.
+rc=1
+base64: extra operand ‘b’
+Try 'base64 --help' for more information.
+rc=1
+uniq: extra operand ‘c’
+Try 'uniq --help' for more information.
+rc=1
+split: extra operand ‘y’
+Try 'split --help' for more information.
+rc=1
+basename: extra operand ‘c’
+Try 'basename --help' for more information.
+rc=1
+date: extra operand ‘extra’
+Try 'date --help' for more information.
+rc=1
+seq: extra operand ‘4’
+Try 'seq --help' for more information.
+rc=1
+cp: extra operand 'c'
+Try 'cp --help' for more information.
+rc=1
+mv: extra operand 'c'
+Try 'mv --help' for more information.
+rc=1
+ln: extra operand 'c'
+Try 'ln --help' for more information.
+rc=1
+join: extra operand 'c'
+Try 'join --help' for more information.
+rc=1
+sort: extra operand 'b' not allowed with -c
+rc=2
+diff: extra operand 'c'
+diff: Try 'diff --help' for more information.
+rc=2
+
+==== STDERR ====
+
