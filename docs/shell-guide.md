@@ -523,8 +523,9 @@ Open bugs and gaps are tracked in [Known Issues](known-issues.md); every deliber
 from bash is listed in [Intentional Differences](specs/intentional-differences.md). The ones
 specific to the interactive shell:
 
-- **No `bind`.** The line editor is ps-bash's own, not GNU readline, so there are no readline
-  functions, keymaps or variables to list or rebind.
+- **`bind` changes nothing.** The line editor is ps-bash's own, not GNU readline, so there are
+  no readline functions, keymaps or variables to list or rebind. `bind` with any arguments
+  prints `bind: warning: line editing not enabled` and returns 0, as bash does in a script.
 - **No job control.** There is no `set -m`. `cmd &`, `wait` and `kill %1` work; a running
   command cannot be suspended with Ctrl+Z and resumed.
 - **Prompt escapes `\j`, `\!`, `\#`.** `\j` is always `0`; `\!` and `\#` are always `1`.

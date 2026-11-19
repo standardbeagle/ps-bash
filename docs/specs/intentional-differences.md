@@ -114,7 +114,7 @@ Spec XFAILs caused only by one of these carry the id `wontfix-interactive-<topic
 | Area | ps-bash | Why |
 |---|---|---|
 | Piped `bash -i` (`echo cmds \| bash -i`) | Replays the input one command per prompt: `PROMPT_COMMAND`, the `PS1`/`PS2` prompt and the echoed line on stderr, history and `!!` expansion, `${PS1}exit` at end of input. `$HISTFILE` is read and written only when the caller set it (never the launcher's default `~/.bash_history`), and an explicit `exit` ends the session without saving it | A piped session must not read or rewrite the user's own history file unless asked; the line editor (REPL) still serves a terminal, or `PSBASH_INTERACTIVE_REPL=1` |
-| `bind` (`wontfix-interactive-bind`) | Not a command: no `-p -P -v -V -q -s -S -x -X -r -m` | The line editor is ps-bash's own, not GNU readline: there are no readline functions, keymaps or variables to list or rebind |
+| `bind` (`wontfix-interactive-bind`) | Every form prints `bind: warning: line editing not enabled` and returns 0, as in a non-interactive bash; `-p -P -v -V -q -s -S -x -X -r -m` list or change nothing | The line editor is ps-bash's own, not GNU readline: there are no readline functions, keymaps or variables to list or rebind |
 | Prompt `\j`, `\!`, `\#` (`wontfix-interactive-prompt`) | `\j` is always `0`; `\!` and `\#` are always `1` | `\!` and `\#` need every executed command counted (and stored in history under `set -o history`); `\j` needs job control (`set -m`, `fg`) |
 | Process groups, sessions (`wontfix-interactive-job-control`) | No `set -m` job control; `ps -o pgid,sid,tpgid` has no Windows equivalent | Windows has Job Objects, not POSIX process groups or controlling terminals |
 

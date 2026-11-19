@@ -143,7 +143,7 @@ By default the input is split on blanks and newlines, as in GNU xargs; single qu
 
 Typed pipeline objects contribute their `BashText`.
 
-With no command, xargs runs `echo`. A bash command name that ps-bash implements (`rm`, `grep`, `basename`, ...) runs the ps-bash version; other names resolve to PowerShell commands or programs on `PATH`. `true` and `false` are among the commands xargs can run on every platform: `echo a | xargs false` exits 123.
+With no command, xargs runs `echo`. A bash command name that ps-bash implements (`rm`, `grep`, `basename`, ...) runs the ps-bash version; other names resolve to PowerShell commands or programs on `PATH`. xargs can run `true` and `false` on every platform: `echo a | xargs false` exits 123.
 
 ### Exit status
 

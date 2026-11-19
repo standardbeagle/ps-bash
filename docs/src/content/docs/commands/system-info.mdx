@@ -317,6 +317,7 @@ printenv [-0] [NAME]...
 
 - Output is sorted by name.
 - `-S`/`--split-string`, `-v`/`--debug`, and the signal options are refused with exit 125.
+- `env -C DIR pwd` prints the shell's directory. Programs and `ls` do run in DIR.
 
 ### Exit status
 
@@ -341,13 +342,13 @@ printenv [-0] [NAME]...
 ### Examples
 
 ```bash
-printenv HOME
+printenv PATH
 env LANG=C sort names.txt
 env | grep -c '^PS'
 ```
 
 ```powershell
-(printenv HOME).Value
+(printenv PATH).Value
 ```
 
 ---
@@ -534,7 +535,7 @@ Print system information.
 ### Syntax
 
 ```text
-uname [-asnrm]
+uname [OPTION]...
 ```
 
 On Linux and macOS, `uname` reports the host kernel, read with the `uname` system call, so `case $(uname -s) in Linux) ...` takes the Linux branch. On Windows it reports what Git for Windows (MSYS2) reports.
@@ -553,8 +554,8 @@ Flags can be bundled (`-sr`). On Linux and macOS the long forms (`--kernel-name`
 ### Differences from GNU
 
 - On Windows, the kernel name is `MINGW64_NT-...`, as in Git Bash. A script that tests `uname -s` takes its MINGW branch there.
-- `-v`, `-o`, `-p`, and `-i` written alone do not reach `uname`, because PowerShell reads them as its own parameters. `-v` is ignored, and the other three fail with a parameter error. This is listed in [Known issues](https://github.com/standardbeagle/ps-bash/blob/main/docs/known-issues.md).
-- An unknown option is not an error. On Windows it is ignored. On Linux and macOS `uname` prints nothing. GNU prints a usage error and exits 1.
+- `-v`, `-o`, `-p`, and `-i` written alone do not reach `uname`, because PowerShell reads them as its own parameters. `-v` is ignored, and the other three print a PowerShell parameter error instead of the field. This is listed in [Known issues](https://github.com/standardbeagle/ps-bash/blob/main/docs/known-issues.md).
+- An unknown option is not an error, and the status is 0. On Windows it is ignored. On Linux and macOS an unknown long option is ignored, and an unknown letter (`uname -x`) makes `uname` print nothing. GNU prints a usage error and exits 1.
 
 ```bash
 uname -s
@@ -770,7 +771,7 @@ On Linux and macOS, `tput` runs the system `tput` when there is one (falling bac
 | `smul` / `rmul`, `smso` / `rmso`, `sitm` / `ritm` | Underline, standout, and italic on / off |
 | `sgr0` | `ESC[0m` |
 | `setaf N` | `ESC[38;5;Nm` |
-| `setab N` | `ESC[4Nm` for N below 8, `ESC[48;5;Nm` from 16; for 8-15, `ESC[100m` to `ESC[107m` |
+| `setab N` | `ESC[4Nm` for 0-7, `ESC[100m` to `ESC[107m` for 8-15, `ESC[48;5;Nm` from 16 |
 | `cup ROW COL`, `home`, `el`, `ed` | Cursor position, home, clear to end of line, clear to end of screen |
 | `civis` / `cnorm` | Hide / show the cursor |
 | `longname` | `xterm with 256 colors` |
@@ -812,7 +813,7 @@ ping [-c COUNT | -n COUNT] [-W SECONDS] [-t] HOST
 | Flag | Description |
 |------|-------------|
 | `-c N`, `-n N` | Number of probes (default 4) |
-| `-W SECS` | Per-probe timeout (default 4) |
+| `-W SECS` | Per-probe timeout (default 4). Does not work in a script; see the difference below |
 | `-t` | Continuous mode, capped at 100 probes |
 
 Uses .NET's `Ping` class, not the system `ping`. Each line is `reply from ADDR: icmp_seq=N ttl=T time=MS ms` or `request timeout for icmp_seq N (STATUS)`. No summary is printed.
@@ -829,7 +830,7 @@ These are the statuses of Linux `ping`.
 
 ### Differences from Linux ping
 
-- `-W SECS` fails in a script with a PowerShell parameter error, because PowerShell reads `-W` as its own parameter. Without it the timeout is 4 seconds. This is listed in [Known issues](https://github.com/standardbeagle/ps-bash/blob/main/docs/known-issues.md).
+- `-W SECS` in a script prints a PowerShell parameter error and sends no probe, because PowerShell reads `-W` as its own parameter. The status is 0. Leave `-W` out; the timeout is then 4 seconds. This is listed in [Known issues](https://github.com/standardbeagle/ps-bash/blob/main/docs/known-issues.md).
 
 ### PingReply Properties
 

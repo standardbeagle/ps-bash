@@ -240,7 +240,7 @@ rmdir [OPTION]... DIRECTORY...
 
 Refused (exit 2): `--ignore-fail-on-non-empty`.
 
-`-p` stops at the operand's first component. It never removes a directory above the one you named, even an empty one. If a parent is not empty, `rmdir` reports it (`rmdir: failed to remove directory 'a': Directory not empty`) and exits 1.
+`-p` stops at the operand's first component. It never removes a directory above that component, even an empty one. If a parent is not empty, `rmdir` reports it (`rmdir: failed to remove directory 'a': Directory not empty`) and exits 1.
 
 ### Examples
 
@@ -453,7 +453,7 @@ mktemp [OPTION]... [TEMPLATE]
 | Flag | Description |
 |------|-------------|
 | `-d`, `--directory` | Create a directory instead of a file |
-| `-p DIR`, `--tmpdir[=DIR]` | Create the entry in DIR. Without DIR, use `$TMPDIR`, or the default directory when it is unset |
+| `-p DIR`, `--tmpdir[=DIR]` | Create the entry in DIR. `--tmpdir` with no DIR uses `$TMPDIR`, else the default directory |
 | `-t` | Create the entry in `$TMPDIR`, else the `-p` DIR, else the default directory |
 | `--suffix=SUFFIX` | Append SUFFIX to the name. The TEMPLATE must then end in `X` |
 | `-u`, `--dry-run` | Print a free name without creating anything |
@@ -463,7 +463,7 @@ mktemp [OPTION]... [TEMPLATE]
 
 - A TEMPLATE needs a run of at least three `X`. The last run is replaced with random letters and digits, one for each `X`: `mktemp app.XXXXXX` gives a name such as `app.lEqs45`. The default TEMPLATE is `tmp.XXXXXXXXXX`.
 - A TEMPLATE on its own is a path relative to the current directory, and may name a directory that exists: `mktemp build/app.XXXXXX`.
-- With no TEMPLATE, or with `-p`, `--tmpdir`, or `-t`, the entry goes into a directory: the DIR you gave, else `$TMPDIR`, else the default directory. `TMPDIR` must be exported.
+- With no TEMPLATE, or with `-p`, `--tmpdir`, or `-t`, the entry goes into the directory the table above names. With no TEMPLATE and no option, that is `$TMPDIR`, else the default directory. `TMPDIR` counts only when it is exported.
 - The default directory is the `ps-bash/proc-sub/` folder of the system temp directory.
 - Files are created exclusively (never adopting an existing path), and with owner-only permissions on Linux and macOS (0600 file, 0700 directory).
 - The printed name keeps the directory as typed (`sub/in.WihIn2`, or `C:/Users/you/AppData/Local/Temp/ps-bash/proc-sub/tmp.EjPBGsc3qo` for the default directory). The output object also has a `Path` property with the native path.
@@ -481,7 +481,7 @@ tmp=$(mktemp)
 dir=$(mktemp -d)
 work=$(mktemp -d build.XXXXXX)        # in the current directory
 log=$(mktemp --suffix=.log run.XXXXXX)
-export TMPDIR=$PWD/scratch            # later mktemp calls create their files in scratch/
+export TMPDIR=$PWD/scratch            # from here, mktemp and mktemp -t create files in scratch/
 trap 'rm -rf "$dir"' EXIT
 ```
 
