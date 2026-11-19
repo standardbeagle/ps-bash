@@ -12,6 +12,49 @@ public class ShellLanguageGapParserTests
 {
     private static string Emit(string bash) => PsEmitter.Transpile(bash) ?? "";
 
+    // --- `<>` read-write redirect -----------------------------------------------------------------
+
+    [Fact]
+    public void Lex_ReadWriteOperator_IsOneLessTokenWithItsFd()
+    {
+        var tokens = BashLexer.Tokenize("exec 5<> f");
+        Assert.Contains(tokens, t => t.Kind == BashTokenKind.IoNumber && t.Value == "5");
+        Assert.Contains(tokens, t => t.Kind == BashTokenKind.Less && t.Value == "<>");
+    }
+
+    [Fact]
+    public void Parse_ExecReadWrite_IsAReadWriteRedirect()
+    {
+        var cmd = Assert.IsType<Command.Simple>(BashParser.Parse("exec 5<> f"));
+        var r = Assert.Single(cmd.Redirects);
+        Assert.Equal(5, r.Fd);
+        Assert.True(r.ReadWrite);
+        Assert.Equal("<>", r.OpenOperator);
+    }
+
+    [Fact]
+    public void Transpile_ExecReadWrite_OpensTheDescriptorReadWrite()
+        => Assert.Equal("Invoke-BashExecFd 5 '<>' f", Emit("exec 5<> f"));
+
+    // --- select / coproc: not supported, said so -------------------------------------------------
+
+    [Fact]
+    public void Parse_SelectWithHereString_KeepsItsRedirect()
+    {
+        var sel = Assert.IsType<Command.Select>(BashParser.Parse("select x in a b; do echo $x; done <<< 2"));
+        Assert.Single(sel.Redirects);
+    }
+
+    [Theory]
+    [InlineData("select x in a b c; do echo $x; break; done <<< 2", "select")]
+    [InlineData("coproc cat", "coproc")]
+    public void Transpile_UnsupportedConstruct_SaysNotSupportedWithStatus2(string bash, string construct)
+        => Assert.Equal(PsBuild.NotSupported(construct), Emit(bash));
+
+    [Fact]
+    public void Transpile_SelectThenMoreCommands_KeepsTheRest()
+        => Assert.EndsWith("Invoke-BashEcho after", Emit("select x in a; do :; done; echo after"));
+
     // --- operators on special parameters ----------------------------------------------------------
 
     /// <summary>`${!:+pid}` was read as an indirect reference (`${!name}`) and emitted a broken command.</summary>

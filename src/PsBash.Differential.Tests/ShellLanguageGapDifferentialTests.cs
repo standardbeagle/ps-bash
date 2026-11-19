@@ -138,4 +138,12 @@ public class ShellLanguageGapDifferentialTests
         + "declare -A p=([\"sp ace\"]=s ['si ngle']=t); echo \"${p[sp ace]}\" \"${p[si ngle]}\" ${#p[@]}\n"
         + "for kk in \"${!m[@]}\"; do echo \"key<$kk>\"; done | sort\n"
         + "i=1; a=([$i]=x [2]=y); echo \"${a[@]}\"");
+
+    // --- Read-write descriptors (Redirect.ReadWrite -> BashFdTable "<>") -----------------------------
+
+    [SkippableFact]
+    public Task ExecReadWrite_ReadsAndWritesOneDescriptor() => Same(
+        "cd \"$(mktemp -d)\" || exit\necho hello > f\nexec 5<> f\nread -u 5 line; echo \"got=$line\"\nexec 5>&-\n"
+        + "exec 6<> new; echo made >&6; exec 6>&-; cat new\n"
+        + "printf 'abc\\n' > g; exec 7<>g; echo XY >&7; exec 7>&-; cat g");
 }

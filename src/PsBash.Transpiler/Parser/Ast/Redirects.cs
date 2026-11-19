@@ -15,6 +15,11 @@ namespace PsBash.Core.Parser.Ast;
 /// already-parsed body rides along on the redirect. <c>Target</c> is the raw word.
 /// </param>
 /// <param name="Force">True for <c>&gt;|</c>: a truncating write that <c>set -C</c> (noclobber) does not refuse.</param>
+/// <param name="ReadWrite">
+/// True for <c>&lt;&gt;</c> (<c>exec 5&lt;&gt; f</c>): the file is opened for reading AND writing, created when missing.
+/// <c>Op</c> is then <c>&lt;</c>, so every path that only reads through the descriptor treats it as an input redirect;
+/// <c>exec</c> opens the descriptor read-write (<see cref="OpenOperator"/>).
+/// </param>
 // NOTE: every parameter must keep a <param> tag. Documenting only SOME of them triggers
 // CS1573, which is a harmless warning locally but a hard ERROR in publish.yml's
 // build-binaries leg (/warnaserror) — it failed all three RIDs of the v0.10.23 attempt and
@@ -26,7 +31,12 @@ public sealed record Redirect(
     CompoundWord Target,
     string? FdVar = null,
     HereDoc? Here = null,
-    bool Force = false) : BashNode;
+    bool Force = false,
+    bool ReadWrite = false) : BashNode
+{
+    /// <summary>The operator a descriptor is opened with: <c>&lt;&gt;</c> for a read-write redirect, else <see cref="Op"/>.</summary>
+    public string OpenOperator => ReadWrite ? "<>" : Op;
+}
 
 /// <summary>
 /// A here-document redirect, e.g. <c>&lt;&lt;EOF\ntext\nEOF</c>.

@@ -1997,14 +1997,13 @@ public static partial class PsEmitter
     }
 
     /// <summary>
-    /// Degrades <c>select</c> (interactive menu loop) — which ps-bash does not
-    /// implement — to a PowerShell BLOCK comment rather than aborting the whole
-    /// transpile. A block comment (<c>&lt;# … #&gt;</c>) is inline-safe: unlike a
-    /// <c>#</c> line comment it does not swallow following <c>;</c>-joined
-    /// statements, so the rest of the script still transpiles.
+    /// <c>select</c> (the interactive menu loop) is not supported by ps-bash. It used to be dropped silently (a block
+    /// comment), so the loop body never ran and nothing said why; it now says so on stderr and the status is 2, as for
+    /// any other construct the shell cannot run. The rest of the script still transpiles and runs.
+    /// Spec: bash-feature-coverage.md (select, coproc).
     /// </summary>
     private static string EmitSelect(Command.Select sel)
-        => $"<# ps-bash: 'select {sel.Var}' menu loop is not supported (omitted) #>";
+        => PsBuild.NotSupported("select");
 
     private static string EmitForArith(Command.ForArith forArith)
     {
@@ -2837,7 +2836,7 @@ public static partial class PsEmitter
     private static string WithScopedHighFds(string command, List<Redirect> highFds)
     {
         if (highFds.Count == 0) return command;
-        var open = string.Join("; ", highFds.Select(r => $"Invoke-BashExecFd {r.Fd} {PsBuild.SingleQuote(r.Op)} {EmitArgWord(r.Target)}"));
+        var open = string.Join("; ", highFds.Select(r => $"Invoke-BashExecFd {r.Fd} {PsBuild.SingleQuote(r.OpenOperator)} {EmitArgWord(r.Target)}"));
         var close = string.Join("; ", highFds.Select(r => r.Fd).Distinct().Select(fd => $"Invoke-BashExecFd {fd} '>&' '-'"));
         return "& { " + open + "; try { " + command + " } finally { $__psbash_fdRc = $global:LASTEXITCODE; " + close
              + "; $global:LASTEXITCODE = $__psbash_fdRc } }";
@@ -5113,7 +5112,7 @@ public static partial class PsEmitter
             {
                 if (r.FdVar is not { } fdVar) continue;
                 string target = r.Here is { } fdHere ? "(" + EmitHereDocLiteral(fdHere) + ")" : EmitArgWord(r.Target);
-                opens.Add($"Invoke-BashExecFd -Variable {PsBuild.SingleQuote(fdVar)} -Operator {PsBuild.SingleQuote(r.Op)} -Target {target}");
+                opens.Add($"Invoke-BashExecFd -Variable {PsBuild.SingleQuote(fdVar)} -Operator {PsBuild.SingleQuote(r.OpenOperator)} -Target {target}");
             }
             var rest = cmd with { Redirects = [.. cmd.Redirects.Where(r => r.FdVar is null)] };
             return ". { " + string.Join("; ", opens) + "; " + EmitSimple(rest) + " }";
@@ -5969,8 +5968,8 @@ public static partial class PsEmitter
             // `exec N<&-` / `exec N>&-` close; `exec N>&M` duplicates; the rest open a file.
             // `exec {fd}>f`: the runtime picks the descriptor (10 up) and stores it in fd; `exec {fd}>&-` closes $fd.
             steps.Add(r.FdVar is { } fdVar
-                ? $"Invoke-BashExecFd -Variable {PsBuild.SingleQuote(fdVar)} -Operator {PsBuild.SingleQuote(r.Op)} -Target {EmitArgWord(r.Target)}"
-                : $"Invoke-BashExecFd {r.Fd} {PsBuild.SingleQuote(r.Op)} {EmitArgWord(r.Target)}");
+                ? $"Invoke-BashExecFd -Variable {PsBuild.SingleQuote(fdVar)} -Operator {PsBuild.SingleQuote(r.OpenOperator)} -Target {EmitArgWord(r.Target)}"
+                : $"Invoke-BashExecFd {r.Fd} {PsBuild.SingleQuote(r.OpenOperator)} {EmitArgWord(r.Target)}");
         }
         result = string.Join("; ", steps);
         return true;
@@ -6045,6 +6044,14 @@ public static partial class PsEmitter
 
         if (cmd0 == "exec" && cmd.HereDocs.IsDefaultOrEmpty && cmd.EnvPairs.IsEmpty)
             return TryEmitExec(cmd, out result);
+
+        // `coproc cmd`: a co-process with pipes both ways is not supported by design; say so (it was "coproc: command
+        // not found", which read like a missing program).
+        if (cmd0 == "coproc")
+        {
+            result = PsBuild.NotSupported("coproc");
+            return true;
+        }
 
         // `unset -n ref` removes the reference itself, so later reads of `ref` are plain again.
         if (cmd0 == "unset" && _namerefs is { Count: > 0 } && cmd.Words.Length >= 3
@@ -12631,7 +12638,7 @@ public static partial class PsEmitter
             if (redirect.FdVar is { } fdVar)
             {
                 string target = redirect.Here is { } fdHere ? "(" + EmitHereDocLiteral(fdHere) + ")" : EmitArgWord(redirect.Target);
-                namedFds.Add($"Invoke-BashExecFd -Variable {PsBuild.SingleQuote(fdVar)} -Operator {PsBuild.SingleQuote(redirect.Op)} -Target {target}");
+                namedFds.Add($"Invoke-BashExecFd -Variable {PsBuild.SingleQuote(fdVar)} -Operator {PsBuild.SingleQuote(redirect.OpenOperator)} -Target {target}");
                 continue;
             }
             // `<` file and `<<<` here-string both supply the group's stdin; the last

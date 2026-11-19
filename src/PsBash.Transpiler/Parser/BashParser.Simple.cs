@@ -952,7 +952,7 @@ public sealed partial class BashParser
         if (op == "<&" && fd is 1 or 2 && fdVar is null)
             op = ">&";
 
-        return new Redirect(op, fd, target, fdVar, Force: opToken.Value == ">|");
+        return new Redirect(op, fd, target, fdVar, Force: opToken.Value == ">|", ReadWrite: opToken.Value == "<>");
     }
 
     /// <summary>True for a <c>{varname}</c> named-fd prefix token (the lexer only

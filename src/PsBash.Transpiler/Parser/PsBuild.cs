@@ -772,6 +772,14 @@ public static class PsBuild
     public static string StderrLine(string message) =>
         "Write-Error -Message " + SingleQuote(message) + " -ErrorAction Continue";
 
+    /// <summary>
+    /// A shell construct ps-bash does not run by design (<c>select</c>, <c>coproc</c>): one line on stderr naming it, status 2.
+    /// The one wording for every such construct, so a script that hits one says what is missing instead of failing
+    /// later in some unrelated way (a dropped loop, <c>coproc: command not found</c>).
+    /// </summary>
+    public static string NotSupported(string construct) =>
+        StderrLine("bash: " + construct + ": not supported by ps-bash") + "; " + SetStatus(2);
+
     /// <summary>True while <c>set -o posix</c> is on (a remembered option of InvokeBashShoptCommand).</summary>
     public const string PosixOn = "[PsBash.Cmdlets.InvokeBashShoptCommand]::SetOptionOn('posix')";
 

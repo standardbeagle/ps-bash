@@ -1036,8 +1036,8 @@ public sealed partial class BashParser
     /// <summary>
     /// Parse <c>select var [in words]; do body; done</c> — identical grammar to
     /// for-in. ps-bash does not implement the interactive menu loop; we still
-    /// parse the full construct (so it does not abort the surrounding script's
-    /// transpile) and the emitter degrades it to a documented comment.
+    /// parse the full construct, trailing redirections included (so it does not abort the surrounding script's
+    /// transpile), and the emitter reports it as not supported when it runs.
     /// </summary>
     private Command ParseSelect()
     {
@@ -1067,7 +1067,7 @@ public sealed partial class BashParser
         var body = ParseCompoundBody("done");
         Expect("done");
 
-        return new Command.Select(varName, list.ToImmutable(), body);
+        return new Command.Select(varName, list.ToImmutable(), body, ParseTrailingRedirects());
     }
 
     private Command ParseForArith()

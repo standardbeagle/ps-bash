@@ -111,14 +111,15 @@ public abstract record Command : BashNode
     /// <summary>
     /// A <c>select</c> menu loop: <c>select x in a b c; do body; done</c> —
     /// identical grammar to <see cref="ForIn"/>. ps-bash does not implement the
-    /// interactive menu/REPL behavior; the emitter degrades it to a documented
-    /// comment (rather than aborting the whole transpile) so the surrounding
-    /// script still transpiles.
+    /// interactive menu/REPL behavior; the emitter reports it as not supported at run time (status 2) rather than
+    /// aborting the whole transpile, so the rest of the script still runs. <paramref name="Redirects"/> are the
+    /// redirections after <c>done</c> (<c>done &lt;&lt;&lt; 2</c>), parsed so they do not end the parse.
     /// </summary>
     public sealed record Select(
         string Var,
         ImmutableArray<CompoundWord> List,
-        Command Body) : Command;
+        Command Body,
+        ImmutableArray<Redirect> Redirects = default) : Command;
 
     /// <summary>
     /// A C-style arithmetic for loop: <c>for ((init; cond; step)); do body; done</c>.

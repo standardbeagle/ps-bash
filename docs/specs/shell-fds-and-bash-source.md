@@ -36,7 +36,7 @@ raw slice, so `${BASH_SOURCE[0]:-$0}` printed a literal `$0`. (`BashParser.Words
 | `exec 0/1/2…; rest` | the rest of the statement list runs under the redirections, as `{ rest; } >&2` (emitter, `PsEmitter.ExecRedirect.cs`). Gap: in a function body it ends with the function (bash keeps it for the caller). |
 | `exec 0/1/2…` with nothing after it (an interactive line), or `exec 1>&-` | **not supported**: message `exec: N: redirecting the shell's own stdin/stdout/stderr with exec is not supported`, status 1 |
 | `exec N>&1`, `exec N>&2` | N becomes a name for the shell's stdout / stderr (`exec 3>&1` + `cmd >&3`, as dotnet-install.sh does) |
-| `exec N<>file` | not supported (`<>` is not tokenized) |
+| `exec N<>file`, `{v}<>file` | opens N for reading AND writing, the file created when missing, one position for both (`Redirect.ReadWrite` -> `Invoke-BashExecFd N '<>'` -> `BashFdTable`); a device name is refused |
 
 Failure to open (`exec 3<missing`) writes `exec: missing: No such file or directory`, status 1, and the script goes on
 (bash does the same for a non-interactive shell without `set -e`).

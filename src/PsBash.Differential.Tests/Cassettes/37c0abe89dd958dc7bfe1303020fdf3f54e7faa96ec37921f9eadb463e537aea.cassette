@@ -1,0 +1,21 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 203
+stdout-length: 18
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+echo hello > f
+exec 5<> f
+read -u 5 line; echo "got=$line"
+exec 5>&-
+exec 6<> new; echo made >&6; exec 6>&-; cat new
+printf 'abc\n' > g; exec 7<>g; echo XY >&7; exec 7>&-; cat g
+==== STDOUT ====
+got=hello
+made
+XY
+
+==== STDERR ====
+

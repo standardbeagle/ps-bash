@@ -3875,23 +3875,22 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_Select_DegradesToBlockComment()
+    public void Transpile_Select_SaysNotSupported()
     {
         var result = PsEmitter.Transpile("select x in a b c; do echo $x; done");
 
-        Assert.Equal("<# ps-bash: 'select x' menu loop is not supported (omitted) #>", result);
+        Assert.Equal(PsBuild.NotSupported("select"), result);
     }
 
     [Fact]
     public void Transpile_SelectInScript_OtherStatementsStillEmit()
     {
-        // Degradation: select no longer aborts the whole transpile; the block
-        // comment is inline-safe so the surrounding commands still emit.
+        // select does not abort the whole transpile: it says it is not supported and the surrounding commands still emit.
         var result = PsEmitter.Transpile("echo before; select x in a; do echo $x; done; echo after");
 
         Assert.Contains("Invoke-BashEcho before", result);
         Assert.Contains("Invoke-BashEcho after", result);
-        Assert.Contains("<# ps-bash: 'select x'", result);
+        Assert.Contains(PsBuild.NotSupported("select"), result);
     }
 
     [Fact]

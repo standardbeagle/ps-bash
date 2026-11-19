@@ -25,7 +25,7 @@ internal static class BashFdTable
     private static readonly Dictionary<int, Handle> Fds = new();
 
     /// <summary>Open <paramref name="path"/> as <paramref name="fd"/> for <paramref name="op"/> (<c>&lt;</c>, <c>&gt;</c>,
-    /// <c>&gt;|</c>, <c>&gt;&gt;</c>). Any descriptor already there is closed first. Null on success, else the error text.</summary>
+    /// <c>&gt;|</c>, <c>&gt;&gt;</c>, <c>&lt;&gt;</c>). Any descriptor already there is closed first. Null on success, else the error text.</summary>
     public static string? Open(int fd, string path, string op)
     {
         if (fd < 3) return $"{fd}: redirecting the shell's own stdin/stdout/stderr with exec is not supported";
@@ -37,6 +37,8 @@ internal static class BashFdTable
             case ">":
             case ">|": mode = FileMode.Create; access = FileAccess.Write; break;
             case ">>": mode = FileMode.Append; access = FileAccess.Write; break;
+            // `exec 5<> f`: reading and writing through one descriptor, the file created when missing.
+            case "<>": mode = FileMode.OpenOrCreate; access = FileAccess.ReadWrite; break;
             default: return $"{op}: unsupported redirection";
         }
 
@@ -54,8 +56,15 @@ internal static class BashFdTable
         StreamWriter? writer = null;
         try
         {
+            if (access == FileAccess.ReadWrite)
+            {
+                if (kind != PsBash.Core.DeviceKind.None) return $"{PsBash.Core.BashPath.ToShell(path)}: cannot open a device for reading and writing";
+                fs = new FileStream(path, mode, access, FileShare.ReadWrite | FileShare.Delete);
+                // One file position, as one descriptor has: the writer writes where the stream is, flushed per write.
+                writer = new StreamWriter(fs, PsBash.Core.RawBytes.Encoding, 4096, leaveOpen: true) { AutoFlush = true };
+            }
             // A descriptor open for writing streams through the shared policy (RedirectFileWriter), as `> f` does.
-            if (access != FileAccess.Read)
+            else if (access != FileAccess.Read)
                 writer = RedirectFileWriter.OpenText(path, append: mode == FileMode.Append);
             else if (kind != PsBash.Core.DeviceKind.None)
                 fs = DeviceStreams.OpenRead(kind, deviceFd, path);
@@ -67,11 +76,9 @@ internal static class BashFdTable
         catch (UnauthorizedAccessException) { return $"{path}: Permission denied"; }
         catch (IOException ex) { return $"{path}: {ex.Message}"; }
 
-        var handle = new Handle { Stream = fs };
+        var handle = new Handle { Stream = fs, Writer = writer };
         if (fs is not null)
             handle.Reader = new StreamReader(fs, PsBash.Core.RawBytes.Encoding, false, 4096, leaveOpen: true);
-        else
-            handle.Writer = writer;
 
         lock (Gate)
         {

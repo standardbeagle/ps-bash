@@ -188,6 +188,15 @@ public static class BashLexer
 
                 // `>|` (force-clobber): a Great token whose text ">|" tells the parser to mark the
                 // redirect Force (it is a plain `>` except under noclobber).
+                // `<>` (`exec 5<> f`): open for reading and writing. A Less token whose text is `<>`; the parser marks
+                // the redirect ReadWrite.
+                if (c == '<' && c2 == '>')
+                {
+                    TryReclassifyIoNumber(tokens, pos);
+                    tokens.Add(new BashToken(BashTokenKind.Less, "<>", pos));
+                    pos += 2;
+                    continue;
+                }
                 if (c == '>' && c2 == '|')
                 {
                     TryReclassifyIoNumber(tokens, pos);
