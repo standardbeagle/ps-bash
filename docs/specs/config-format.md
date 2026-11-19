@@ -1,10 +1,18 @@
 # Config File Format Specification
 
-This document specifies the TOML configuration file format for the ps-bash interactive shell.
+**Status:** PLANNED — the config file system is not implemented. This document is a design specification.
 
-**Status:** PLANNED — The config file system is not yet implemented. This document is the design specification.
+> **Not implemented, and the format below is superseded.** No ps-bash code reads a config file (nothing in `src/`
+> opens `config.toml` or `config.kdl`); every setting has its built-in default, and `~/.psbashrc` plus `PSBASH_*`
+> environment variables are the only configuration today. The owner's format decision is **KDL** at
+> **`~/.psbash/config.kdl`**, not TOML. This document was written for TOML and has not been rewritten: read its
+> sections and keys (`history`, `completion`, `plugins`) as the planned settings, and its TOML syntax, the
+> `config.toml` file name and the Tomlyn library as obsolete. Other specs that show a `config.toml` snippet describe
+> the same planned settings.
 
-**Location:** `~/.psbash/config.toml`
+This document specifies the configuration file for the ps-bash interactive shell (drafted as TOML).
+
+**Location (planned):** `~/.psbash/config.kdl` (drafted below as `~/.psbash/config.toml`)
 
 ---
 
@@ -291,11 +299,11 @@ public static ShellConfig LoadConfig(string path)
 
 | Feature | Status |
 |---------|--------|
-| TOML config file | Not implemented |
+| Config file (KDL; drafted here as TOML) | Not implemented |
 | `[history]` section | Not implemented |
 | `[completion]` section | Not implemented |
 | `[plugins]` section | Not implemented |
-| Tomlyn integration | Not implemented |
+| Parser integration (a KDL parser; the Tomlyn text in §2 is obsolete) | Not implemented |
 | First-run config creation | Not implemented |
 
 This document serves as the specification for the implementation phase. See [plugin-architecture.md](./plugin-architecture.md) for the plugin system design.

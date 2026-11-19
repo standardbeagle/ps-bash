@@ -71,7 +71,7 @@ Navigate and search command history.
 | `Down Arrow` | Next command | Implemented | Returns to current input |
 | `Ctrl+P` | Previous command | Planned | Emacs-style (same as Up) |
 | `Ctrl+N` | Next command | Planned | Emacs-style (same as Down) |
-| `Ctrl+R` | Reverse search | Planned | Full-screen fuzzy search (P3) |
+| `Ctrl+R` | Reverse search | Implemented | `LineEditor.HandleCtrlRAsync` + `CtrlRSearch.cs` |
 | `Ctrl+S` | Forward search | Planned | Reverse direction of Ctrl+R |
 | `Alt+<` | First history entry | Planned | Jump to oldest command |
 | `Alt+>` | Last history entry | Planned | Jump to newest command |
@@ -92,7 +92,7 @@ pdftk document.pdf output doc.pdf
 markdown-toc README.md
 ```
 
-**Configuration:** Disable CWD filtering via `~/.psbash/config.toml`:
+**Configuration** (planned: no config file is read today, and the format will be KDL `~/.psbash/config.kdl` — see `config-format.md`): disable CWD filtering via `~/.psbash/config.toml`:
 
 ```toml
 [history]
@@ -271,7 +271,7 @@ $ git comm
 
 ## Configuration
 
-Keybindings can be customized via `~/.psbash/config.toml`:
+Keybindings can be customized via `~/.psbash/config.toml` (planned: no config file is read today, and the format will be KDL `~/.psbash/config.kdl` — see `config-format.md`):
 
 ```toml
 [keybindings]
@@ -300,7 +300,10 @@ cwd_filter = true
 | Control | 5 keys | 8 keys |
 | **Total** | **25 keys** | **32 keys** |
 
-**Progress:** P1 (LineEditor) complete; P3 (Ctrl+R), P4 (autosuggestions), P5 (flag completion) planned.
+**Progress:** P1 (LineEditor), P3 (Ctrl+R: `CtrlRSearch.cs`), P4 (autosuggestions: `Suggester.cs`, off with
+`PSBASH_NO_PREDICT=1`) and P5 (flag completion: `FlagSpecs` in `TabCompleter`, see `interactive-completion.md`) are
+built. The per-key Status columns and the counts above predate P3-P5 and were not re-audited key by key; the key
+dispatch in `src/PsBash.Host/Shell/LineEditor.cs` is the truth.
 
 ---
 

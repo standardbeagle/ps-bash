@@ -11,7 +11,7 @@ Nav starts at /CODE_MAP.md. Keep this index complete — a guard test fails on a
 - [compact-output.md](compact-output.md) — Compact Output Specification (opt-in bounded digest)
 - [compiled-plan-lane.md](compiled-plan-lane.md) — Compiled Plan Lane Specification (plan IR + decline contract)
 - [completion-providers.md](completion-providers.md) — Tab Completion Providers Specification
-- [config-format.md](config-format.md) — Config File Format Specification
+- [config-format.md](config-format.md) — Config File Format Specification (PLANNED, not implemented; format decision is KDL, `~/.psbash/config.kdl`)
 - [ctrlr-ui.md](ctrlr-ui.md) — Ctrl-R Full-Screen Search UI
 - [cwd-awareness.md](cwd-awareness.md) — CWD-Aware History Design
 - [design-decisions.md](design-decisions.md) — Design Decisions and Rationale
@@ -23,7 +23,7 @@ Nav starts at /CODE_MAP.md. Keep this index complete — a guard test fails on a
 - [history-store-interface.md](history-store-interface.md) — IHistoryStore Interface Specification
 - [host-lifecycle-contract.md](host-lifecycle-contract.md) — Host Lifecycle Metadata and Ownership Contract
 - [platform-dependencies.md](platform-dependencies.md) — Platform Dependencies (signals, struct stat, system tools, process info, ioctl: one home)
-- [spec-suite.md](spec-suite.md) — fast bash-conformance corpus + runner (DESIGN; in-host execution, executor-slot parallelism, absorbs overlapping tests)
+- [spec-suite.md](spec-suite.md) — fast bash-conformance corpus + runner (built: in-host execution, Oils + Differential corpus under `spec/`; not yet a release gate)
 - [spec-gaps.md](spec-gaps.md) — known bash divergences (XFAIL cases) in the spec corpus, grouped by area
 - [xfail-triage.md](xfail-triage.md) — XFAIL backlog by agent-relevance tier (agent-facing scripting first, interactive-only last)
 - [bash-feature-coverage.md](bash-feature-coverage.md) — measured bash-feature coverage (344-snippet probe vs bash 5.2): what matches, what is fixed, what is open

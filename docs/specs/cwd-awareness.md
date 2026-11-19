@@ -71,7 +71,7 @@ By default, history features use **CWD mode**:
 - **Autosuggestions** — Prefer exact CWD matches, fall back to global
 - **Ctrl-R** — Starts in CWD mode, toggleable to global via `Ctrl-G`
 
-Configuration:
+Configuration (planned: no config file is read today, and the format will be KDL `~/.psbash/config.kdl` — see `config-format.md`):
 
 ```toml
 [history]

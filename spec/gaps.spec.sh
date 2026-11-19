@@ -1,4 +1,5 @@
 ## Known ps-bash gaps from docs/specs/bash-feature-coverage.md. Each XFAIL is removed when its fix lands (an XPASS fails the suite).
+## Expectations are recorded from bash 5.2 (PSBASH_SPEC_RECORD=1), never hand-written.
 
 #### declare -n nameref
 x=1; declare -n r=x; r=5; echo $x

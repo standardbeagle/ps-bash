@@ -51,8 +51,12 @@ Scopes:
 `ShellExports.RemoveUnexported(childEnvironment)` removes from a child's environment block every entry that is the
 shell's own unexported variable (same name and value as the process environment; an entry the caller set for the
 child is kept). `BashVariableStore.ApplyTo(ProcessStartInfo)` calls it, and `ChildStdio.Start` calls that, so every
-child a cmdlet starts gets it: nested `sh` / `bash`, `timeout`, `find -exec`, `awk system()`, `nohup` (Windows:
+child a cmdlet starts gets it: nested `sh` / `bash`, `timeout`, `awk system()`, `nohup` (Windows:
 `ShellExports.WindowsEnvironmentBlock()` for `CreateProcessW`), a program whose stderr is merged (`Invoke-BashNative`).
+`find -exec prog` and `env prog` start the program by name: through `ChildStdio` (filtered) only when
+`InvokeBashNativeCommand.MergedProgramPath` answers, i.e. stderr is merged or the command runs in an in-process
+background job; otherwise PowerShell starts it and §7 applies. `env`'s own `NAME=v` / `-u` / `-i` take effect either way
+(they change the process environment around the run).
 The interactive shell's direct launch (`InteractiveShell.TryRunDirect`) and `CommandAssistProvider` call it too.
 
 ## 5. In-process views of the environment

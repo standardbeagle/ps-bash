@@ -137,7 +137,7 @@ When typing `git c` in `~/tmp` (no CWD matches):
 
 ### 3.3 CWD Filtering
 
-CWD filtering is controlled by the config file:
+CWD filtering is controlled by the config file (planned: no config file is read today, and the format will be KDL `~/.psbash/config.kdl` — see `config-format.md`):
 
 ```toml
 [history]
@@ -204,7 +204,7 @@ Idle typing → autosuggestions ON
 
 ### 5.1 Enable/Disable
 
-Control autosuggestions via `~/.psbash/config.toml`:
+Control autosuggestions via `~/.psbash/config.toml` (planned: no config file is read today, and the format will be KDL `~/.psbash/config.kdl` — see `config-format.md`):
 
 ```toml
 [completion]

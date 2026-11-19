@@ -1,6 +1,9 @@
 # Spec suite: a fast bash-conformance corpus and runner
 
-Status: DESIGN. Nothing below exists yet except the pieces named as existing.
+Status: BUILT, phases 0-4 of §7. `src/PsBash.Spec` (parser, judge, recorder, importer), `src/PsBash.Spec.Tests`
+(in-host executor, corpus tests) and the corpus `spec/` (`core`, `gaps`, `oils/`, `differential/`) exist. §1-§8 are the
+design as written before the build and keep its tense; what was built and measured is in "Phase 1 status", §9 and §10,
+which win where they differ. Not done: phase 5 (no CI workflow runs `Spec.Tests`; it is not a release gate).
 Goal: thousands of bash-behaviour cases that run on ps-bash in seconds, with expected output taken from real bash,
 that replace the existing process-per-test differential tests wherever they overlap.
 

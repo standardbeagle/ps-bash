@@ -28,9 +28,15 @@ Caveats: a few multi-line snippets were split imperfectly (several `var.*` ids h
 rows prove only that the construct does not crash; rows that print an absolute path differ by the Windows drive form
 (`C:/` vs `/`) and are not counted below as gaps.
 
-## Result (after the fixes listed below)
+## Result
 
-218 of 344 snippets are byte-identical to bash. The other 126 split as follows.
+First measurement (the run this document was written from): 218 of 344 snippets byte-identical to bash.
+
+Re-measured 2026-11-18 on `main` (354 snippet files as split from `snippets.txt`, each run as its own script,
+`res=$(bash "$f" 2>&1 </dev/null)`, in ps-bash and in bash 5.2): **301 of 354 byte-identical.** The other 53 are
+listed under "Open" below. The sourcing driver (`( . "$f" )`) does not finish on ps-bash: `help cd | head -1` ends
+the driver loop, and so does a later `set` snippet; that is a ps-bash bug in its own right, not a property of the
+snippets.
 
 ### Fixed by this work (each has an oracle test + cassette)
 
@@ -48,30 +54,42 @@ rows prove only that the construct does not crash; rows that print an absolute p
 | `getopts` | command not found; now a builtin with silent mode, clusters, `OPTIND`/`OPTARG` |
 | `"${a[@]}"` / `"$@"` beside other words | joined into one argument; now one argument per element (commands, `for` lists, array literals) |
 
-### Missing builtins (command not found)
+### Open (re-measured 2026-11-18)
 
-`bind builtin caller complete coproc disown enable fc help history-expansion (!!)
-logout select suspend ulimit`. (`getopts` was the one scripts use most; it is now implemented.)
+Missing builtins (command not found): `bind caller disown enable logout suspend`; `help` (not probed in isolation,
+see above). `coproc` and `select … done <<< word` are parse errors. Now present: `getopts ulimit complete compgen
+history fc builtin`, history expansion (`!!` stays literal in a script, as in bash).
 
-### Semantics gaps (the construct runs but differs)
+Semantics gaps (the construct runs but differs):
 
-- Arrays: sparse assignment (`a[3]=x` on an empty array; PowerShell arrays are dense), `declare -p`,
-  `"${a[@]/pat/rep}"`, `readarray -C`. (Associative-array literals, `${!m[@]}`, `${m[@]}` values, `unset a[i]` and `${m[$k]}` now work.)
-- Variables: `declare -n` across separate invocations or with a run-time target (a literal target within one script works), `declare -i` across separate invocations (within one script it works), `readonly` assignment from a later statement in a different invocation (within one script, assignment and `unset` of a readonly fail with status 1), `export -n`, `local` dynamic
-  scope, `${x@A}`, `${@}` with `IFS`, `set -u` unbound-variable error, (`${x:?msg}` in a subshell now ends only the subshell.)
-- Special variables still not provided: `BASHOPTS SHELLOPTS GROUPS DIRSTACK LINENO(in sourced) OPTIND(initial) TIMEFORMAT` (`PS4` reads as `+ ` by default). (`UID EUID OSTYPE HOSTTYPE MACHTYPE HOSTNAME BASHPID EPOCHSECONDS EPOCHREALTIME` are now provided; `OSTYPE` is `msys` on Windows.)
-  EPOCHSECONDS EPOCHREALTIME DIRSTACK LINENO(in sourced) OPTIND TIMEFORMAT` (`PS4` reads as `+ ` by default).
-- Builtins: `printf %q` and `%(...)T`, `read -d`, `set -o` listing, `set -x` trace output, `shift` error
-  status, `shopt -p`, `test -v`, `unalias` error, `trap` for DEBUG/RETURN/EXIT-ordering/signals (`trap ... ERR` now runs after a failing statement).
-- Pipelines: `pipefail`, `PIPESTATUS` (deferred on purpose, see the memory note), `time` formatting.
-- Redirection: `exec N>file` for fd 1/2, `/dev/fd/N`, `{var}>file`, `<>`, swapping `3>&1 1>&2 2>&3`.
-- Globbing: (`globstar` and `nocaseglob` now work; `failglob` already did. `set -f`/`set -o noglob` now work; `printf %q` and `%(fmt)T` are implemented.)
-- Misc: command-not-found status (127), `function-unset`, empty-command syntax errors, here-document into a function.
+- Arrays / parameters: `declare -A m=([x y]=1)` (a key with a blank), `${!:+word}` (an operator on `$!` emits a
+  broken command), `echo ${@:2:2} ${*: -1}` (binding error), `${n@a}` (empty).
+- Special variables not provided: `BASH_ALIASES DIRSTACK GROUPS PPID SHLVL`; `$IFS` reads empty before it is
+  assigned (splitting still uses the default); `( UID=5 )` gives no readonly error.
+- Traps: a `DEBUG` trap set and used on ONE line (`trap 'echo D' DEBUG; echo a`) does not run (multi-line scripts
+  do: `DebugTrapDifferentialTests`); `( trap 'echo err' ERR; false )` does not run the trap.
+- xtrace: `PS4` assigned in a subshell is not used (`( PS4='>> '; set -x; echo a )` traces with `+ `).
+- Pipelines: `nosuchcmd 2>&1 | head -1; echo ${PIPESTATUS[0]}` is 0 (bash 127); no `SIGPIPE` status 141
+  (`intentional-differences.md`).
+- Redirection: `exec 5<> f` is a parse error; `{ …; } 3>&1 1>&2 2>&3 | sort` orders the two lines differently.
+- Diagnostics text: shell messages other than "command not found" print `bash: ` or `ps-bash: ` where bash prints
+  `SCRIPT: line N: ` (readonly variable, unbound variable, `${x:?}`, `alias`/`type` not found, `no match`,
+  `Permission denied`, `cannot overwrite existing file`, redirect failures; `error-handling.md` §2.6); `1/0` lacks
+  `(error token is "0")`; `shift 2` past the end prints a message (bash is silent, status 1); an empty command's
+  syntax error has ps-bash's wording.
+- extglob without `shopt -s extglob` on an earlier line is accepted (bash: syntax error); see
+  `intentional-differences.md`.
+
+Fixed since the first measurement (were listed here as gaps, now byte-identical): `pipefail`, `PIPESTATUS`,
+`set -u` (apart from the message prefix), `set -x` trace, `set -o` listing, `shopt -p`, `test -v`, `printf %q` and
+`%(…)T`, `read -d`, `trap` for EXIT / RETURN / signals, sparse arrays, `declare -p`, `export -n`, `local` dynamic
+scope, `BASHOPTS SHELLOPTS LINENO OPTIND TIMEFORMAT`, `time` formatting, `exec N>file`, `/dev/fd/N`, `{var}>file`,
+`globstar`, `nocaseglob`, extglob pathname expansion, here-document into a function, `unset -f`.
 
 ### Windows-environment differences (not counted as bugs)
 
-Absolute paths print with a drive (`C:/`), `ln -s` needs a privilege, `timeout` resolves to `timeout.exe`, no `od`,
-no file mode bits (`Permission denied` on `./f`).
+Absolute paths print with a drive (`C:/`; `/tmp` is the Windows temp directory), `ln -s` needs a privilege, there are
+no file mode bits (`[ -x f ]` is true for any file, `./f` is `Permission denied`), `~+` and `OLDPWD` carry the drive.
 
 ## Next
 

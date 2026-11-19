@@ -463,7 +463,7 @@ public AtuinHistoryStore()
 
 ### 9.1 Config File Location
 
-`~/.psbash/config.toml`
+`~/.psbash/config.toml` (planned: no config file is read today, and the format will be KDL `~/.psbash/config.kdl` — see `config-format.md`)
 
 ### 9.2 Atuin Configuration
 

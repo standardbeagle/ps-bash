@@ -1,5 +1,11 @@
 # ps-bash Missing Flags Audit
 
+> **Historical snapshot (generated 2026-04-07, last updated 2026-06-11). Not maintained; do not use it to decide
+> whether a flag works.** Much of what it lists as missing or pending has since been implemented (jq, for one, is now
+> a full parser and evaluator, and many commands moved to the shared ordered option parser). The
+> current per-command flags are in `docs/specs/runtime-command-reference.md`; refused options and deliberate
+> differences are in `docs/specs/intentional-differences.md`; the code is `src/PsBash.Cmdlets/*Command.cs`.
+
 Generated: 2026-04-07
 Updated: 2026-06-11
 

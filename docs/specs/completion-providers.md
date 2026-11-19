@@ -2,7 +2,10 @@
 
 This document specifies the built-in tab completion providers for the ps-bash interactive shell. Completion providers implement `ICompletionProvider` and are queried when the user presses Tab to get suggestions for the current input.
 
-**Status:** PLANNED — FlagSpec, Path, and Command completion are partially implemented in `TabCompleter.cs`. History and Sequence completion are planned.
+**Status:** DESIGN, partly superseded. The `ICompletionProvider` types below were never built as types. Command, path
+and flag completion exist in `TabCompleter.cs` / `CompletionEngine.cs` (`interactive-completion.md` describes what
+runs); history and sequence candidates exist as inline suggestions (`Suggester.cs`, `SequenceSuggestion.cs`), not as
+Tab providers.
 
 ---
 
@@ -500,7 +503,7 @@ This is implemented in `LineEditor.HandleTab()`.
 | Provider | Status | Notes |
 |----------|--------|-------|
 | `CommandCompletionProvider` | Implemented | `TabCompleter.CompleteCommand()` |
-| `FlagSpecCompletionProvider` | Not implemented | `BashFlagSpecs` exists in runtime; needs C# bridge |
+| `FlagSpecCompletionProvider` | Implemented (not as this type) | `TabCompleter` reads `FlagSpecs.GetFlags` (embedded `BashFlagSpecs.json`) |
 | `VariableCompletionProvider` | Not implemented | Needs implementation |
 | `HistoryCompletionProvider` | Not implemented | Requires `HistoryStore` with CWD metadata |
 | `PathCompletionProvider` | Implemented | `TabCompleter.CompletePath()` |
@@ -518,7 +521,7 @@ This is implemented in `LineEditor.HandleTab()`.
 
 ## 6. Configuration
 
-Completion behavior is controlled via `~/.psbash/config.toml` (see `config-format.md`):
+Completion behavior is controlled via `~/.psbash/config.toml` (planned: no config file is read today, and the format will be KDL `~/.psbash/config.kdl` — see `config-format.md`):
 
 ```toml
 [completion]

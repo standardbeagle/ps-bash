@@ -1,6 +1,8 @@
 # Platform dependencies
 
-ps-bash ships win-x64, linux-x64/arm64 (glibc + musl) and osx-arm64. Every OS- or arch-dependent constant, struct
+ps-bash ships release archives for win-x64, linux-x64 and osx-arm64 only (the `publish.yml` build matrix; `install.sh`
+refuses any other RID). `Platform/` also answers for targets with no archive: linux-arm64, musl, osx-x64 (a build from
+source). Every OS- or arch-dependent constant, struct
 layout, probe and system tool path lives in ONE place: `src/PsBash.Transpiler/Platform/` (namespace
 `PsBash.Core.Platform`; the Transpiler assembly is referenced by Cmdlets, Core, Host and Shell). A call site asks
 `Platform/`; it never writes the fact down itself.

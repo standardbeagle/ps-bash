@@ -308,12 +308,7 @@ Press `Right` or `End` to accept the full suggestion, or keep typing to ignore i
 - Commands from your **current directory** are suggested first
 - Most recent commands are preferred when multiple matches exist
 - Suggestions are **disabled** when the tab completion menu is active
-- Configure via `~/.psbash/config.toml`:
-
-```toml
-[completion]
-autosuggestions = true   # Enable (default) or disable
-```
+- Turn off with `PSBASH_NO_PREDICT=1` in the environment (it also hides the flag panel). A config file is planned, not implemented.
 
 This is fish shell's most praised feature — it dramatically reduces typing for repeated commands. See [docs/specs/autosuggestions.md](specs/autosuggestions.md) for full details.
 

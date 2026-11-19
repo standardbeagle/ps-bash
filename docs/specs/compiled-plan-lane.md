@@ -271,6 +271,12 @@ statement out of the compiled lane.
 | Broken pipe (`yes \| head -n 3`) | hangs forever; skipped golden at `:198` | terminates. **Exit 141 is deliberately NOT synthesized** — the divergence stays documented | S13 |
 | Operand evaluation order | splat temps hoist to a prelude, so `x=5; echo $((x++)) $x` prints `5 5` | strict left-to-right: `5 6` | S14 |
 
+The "Today" column is the state when this spike was written. Since then, in the emitter lane: `PIPESTATUS` and
+`set -o pipefail` are implemented (`PsEmitter._pipefailMode`, `Invoke-BashPipeStage`; oracle tests
+`BashParityGapDifferentialTests.Pipefail_*`; bash's rule is the RIGHTMOST non-zero status, not the first), and
+`yes | head -n 3` terminates (status `0 0`, 141 not synthesized: `intentional-differences.md`). The two skips in
+`PipeDifferentialTests.cs` are left over from before.
+
 A plan node evaluates its operands in order, which is what makes S14 tractable here and not
 in the emitter — see `emitter-strategy.md` §4 for why the prelude hoist was originally left
 in place.

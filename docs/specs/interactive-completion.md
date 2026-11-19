@@ -81,7 +81,7 @@ map a bash cursor into transpiled PS, the engine **avoids mapping**:
 | P2 PS parameter understanding | done | parameter names + ValidateSet/enum values (introspection) |
 | P3 dynamic values via CompleteInput | done | `Register-ArgumentCompleter`, provider paths |
 | P4 unify flag specs | done | one canonical source for bash flags (§6) |
-| P5 bash `complete`/`compgen` | done (Tier 1) | static `-W` word lists (§7); `-F` Tier 2 deferred |
+| P5 bash `complete`/`compgen` | done (Tier 1) | static `-W` word lists (§7); `-F` Tier 2 deferred; `compgen`/`complete` script builtins |
 
 Tests: `PsBash.Host.Tests/Shell/CompletionEngineTests.cs` (engine logic, fake worker),
 `PsBash.Host.Tests/Shell/BashCompletionTests.cs` (P5 registry + engine integration),
@@ -113,7 +113,7 @@ reappears — do not reintroduce one (P4).
 `BashCompletionRegistry` implements bash programmable completion, **Tier 1** (static word lists):
 
 - **Register** — typing `complete -W '<words>' NAME...` at the prompt is intercepted by
-  `InteractiveShell` (like `alias`; there is no `complete` cmdlet to transpile to) and stored as
+  `InteractiveShell` (like `alias`, ahead of the transpiler) and stored as
   `NAME → word list`. `complete -r [NAME...]` removes (all when no NAME); bare `complete` / `-p`
   prints the specs.
 - **Consume** — when completing an **argument** of a registered command, `CompletionEngine`
@@ -125,9 +125,15 @@ Example: `complete -W 'start stop restart' svc` then `svc st`⇥ → `start`, `s
 
 **Tier 2 (deferred):** function-based completion (`complete -F func`, with `COMP_WORDS` /
 `COMP_CWORD` / `COMPREPLY`) is **not** implemented. A `-F` spec registers (so the line is consumed,
-not transpiled to a missing command) but contributes no candidates. Standalone `compgen` output and
-registering `complete` from a sourced rc file (the intercept is prompt-side only) are likewise out
-of scope. Tier 1 is the 80/20: `complete -W` covers the common "fixed sub-command/keyword list" case.
+not run as a script command) but contributes no candidates. Tier 1 is the 80/20: `complete -W` covers
+the common "fixed sub-command/keyword list" case.
+
+**In a script** (`-c`, a file, a sourced rc file) `complete` and `compgen` are builtins, separate from the
+line editor: `Invoke-BashComplete` stores and lists specs in the runspace (`complete`, `-p`, `-r`, `-D`/`-E`/`-I`;
+usage errors exit 2) and does not feed `BashCompletionRegistry`, so a `complete` in a sourced rc file does not
+change what Tab offers (the intercept is prompt-side only). `Invoke-BashCompgen` prints candidates
+(`-W WORDS -f -d -v -c -A KIND`, `[--] PREFIX`; status 1 when none match; `runtime-command-reference.md`);
+the line editor does not call it.
 
 Tests: `PsBash.Host.Tests/Shell/BashCompletionTests.cs` — registry parser (quoting, `-r`, `-F`
 no-candidates, multi-name) and engine integration (argument vs command position, worker-independent).

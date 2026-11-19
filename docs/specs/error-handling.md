@@ -197,8 +197,10 @@ The emitter translates `set` flags to PowerShell equivalents:
 | `set -C` / `set -o noclobber` | Supported | `>` onto an existing file: `cannot overwrite existing file`, status 1; `>|`/`>>` allowed |
 | `set -x` / `set -o xtrace` | `Set-PSDebug -Trace 1` | Print commands before execution |
 
-Combined flags are decomposed: `set -euo pipefail` extracts `-e`, `-u`, and
-ignores `pipefail` (not implemented). The emitter handles this in `EmitSimple`.
+Combined flags are decomposed: `set -euo pipefail` extracts `-e`, `-u` and
+`pipefail`. A script that mentions `pipefail` or `PIPESTATUS` is emitted in pipefail mode
+(`PsEmitter._pipefailMode`): every stage's status is recorded (`Invoke-BashPipeStage`) and
+`$global:PIPESTATUS` is set after the pipeline.
 
 ### 2.5 Errors that discard the input line
 
@@ -352,50 +354,57 @@ The helpers rely on .NET `System.IO.File` methods which handle:
 **Bash**: Byte-stream pipes. `set -o pipefail` makes the pipeline return the
 rightmost non-zero exit code. `$PIPESTATUS` array holds per-command exit codes.
 
-**ps-bash**: PowerShell object pipelines. Each command runs independently. No
-`pipefail` implementation. `$PIPESTATUS` is not available. Only the last
-command's exit code is reported.
+**ps-bash**: PowerShell object pipelines, with bash's status rules on top:
+`${PIPESTATUS[@]}` holds every stage's status (`false | true | (exit 3)` gives
+`1 0 3`; a plain command records its own), and under `set -o pipefail` a failing
+stage fails the pipeline (`set -o pipefail; false | true; echo $?` is `1`). Oracle
+tests: `BashParityGapDifferentialTests.Pipefail_*`, `spec/oils/pipeline.spec.sh`.
+One difference remains: no stage dies of `SIGPIPE`, so a writer whose reader
+left reports 0, not 141 (`yes | head -1` gives `0 0`; see
+`intentional-differences.md`).
 
 ### 4.2 Pipeline Negation
 
 **Bash**: `! pipeline` inverts the exit code (0 becomes 1, non-zero becomes 0).
 `$?` reflects the negated result.
 
-**ps-bash**: The parser produces a `Pipeline` node with `Negated=true`. The
-emitter prefixes with `!`, but PowerShell's `$?` tracks command success/failure
-differently than bash's integer exit code inversion.
+**ps-bash**: Same. The parser produces a `Pipeline` node with `Negated=true` and
+the emitter inverts the recorded status: `! true; echo $?` is `1`, `! false;
+echo $?` is `0`.
 
 ### 4.3 Subshell Isolation
 
 **Bash**: `( commands )` forks a subprocess. Variable changes, directory changes,
 and traps inside the subshell do not affect the parent.
 
-**ps-bash**: `( commands )` runs in the same process via a `& { }` scriptblock.
-Variable assignments inside `$( )` and `( )` leak to the parent scope. Directory
-changes persist.
+**ps-bash**: `( commands )` and `$( )` run in the same process, with the shell
+state saved before and restored after (`BashShellState.Save` / `Restore`).
+`x=1; (x=2; cd /); echo $x` prints `1` and the directory is unchanged;
+`(exit 3); echo $?` prints `3` and the script goes on.
 
 ### 4.4 Signal Handling
 
 **Bash**: `trap 'action' SIGNAL` handles `EXIT`, `ERR`, `INT`, `TERM`, `HUP`,
 `QUIT`, `PIPE`, and others.
 
-**ps-bash**: `Invoke-BashTrap` supports:
-- `EXIT` -- registers via `Register-EngineEvent PowerShell.Exiting`
-- `ERR` -- stores the action in `$script:BashTrapHandlers` and sets
-  `$global:__BashTrapERR`
-- All other signals -- stored but not wired to actual OS signals
-
-There are no equivalents for `SIGTERM`, `SIGINT`, `SIGHUP`, `SIGPIPE`, etc.
-`Ctrl+C` handling is managed by PowerShell's own `[Console]::CancelKeyPress`
-event, not by `trap INT`.
+**ps-bash**: `trap` handles `EXIT`, `ERR`, `RETURN`, `DEBUG` (before each simple
+command; `DebugTrapDifferentialTests`) and signal names. A signal
+trap runs when the shell is signalled (`trap 'echo got' USR1; kill -USR1
+$BASHPID` prints `got`); a signal to a ps-bash shell is delivered as a message
+to the script its host runs, not as an OS signal (`background-jobs.md`,
+`intentional-differences.md`). Signal numbers are bash's Linux numbers on every
+OS (`kill -l`, `trap -l`, a `128+N` status; `Platform/OsSignals.cs`,
+`platform-dependencies.md` §Signals). `SIGPIPE` is never raised (§4.1).
 
 ### 4.5 Background Jobs
 
 **Bash**: `command &` runs in the background. `wait` blocks until completion.
 `$!` holds the PID.
 
-**ps-bash**: Not implemented. `&` is parsed as the `Amp` token but the emitter
-does not produce background job syntax. `wait` is not mapped.
+**ps-bash**: Implemented: `cmd &`, `$!`, `wait` (`sleep 0 & wait $!; echo $?`
+is `0`), `jobs`, `fg`, `bg`, `kill %N`. A job runs in the host in its own
+runspace, or in its own host process with `PSBASH_BG_MODE=process`. The design,
+its limits and live job output are in `background-jobs.md`.
 
 ### 4.6 Process Substitution
 
@@ -434,8 +443,8 @@ PowerShell.
 **Bash**: `exit N` terminates the current shell (or subshell). `return N`
 returns from a function or sourced script.
 
-**ps-bash**: `exit N` is emitted as `exit N`, which in PowerShell terminates the
-entire process (or runspace). There is no subshell boundary to contain it.
+**ps-bash**: `exit N` ends the script with status N. Inside `( )`, `$( )` or a
+compound pipe stage it ends only that scope, as in bash (`(exit 3); echo $?` is `3`).
 `return` works within functions but has different scoping behavior when called
 from dot-sourced scripts.
 

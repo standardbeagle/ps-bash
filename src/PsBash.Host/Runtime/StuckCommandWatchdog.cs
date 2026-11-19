@@ -3,11 +3,12 @@ using PsBash.Host.Server;
 namespace PsBash.Host.Runtime;
 
 /// <summary>
-/// Backstop for a command that cannot be stopped. Commands run one at a time under the host's
-/// process-wide exec gate (env vars and cwd are process-global), so a command that ignores
+/// Backstop for a command that cannot be stopped. A host runs one command at a time under its
+/// execution lease (<c>HostServer</c>; env vars and cwd are process-global), so a command that ignores
 /// PowerShell's Stop — a cmdlet spinning inside a .NET call — after its launcher left would hold the
-/// gate forever: the shared daemon stays alive but every later command on it hangs, and nothing
-/// reports why. When a command's cancellation fires and it has still not returned after
+/// lease forever: the shared daemon stays alive but answers busy to every later command (which spills
+/// to another executor slot) and hangs every request that waits for the lease (queries, completion),
+/// and nothing reports why. When a command's cancellation fires and it has still not returned after
 /// <see cref="Grace"/>, the host is poisoned: it logs the reason and exits, so launchers see "host
 /// process exited" (and respawn a fresh host) instead of hanging.
 /// <para>Enabled only for the shared framed-IPC daemon (<see cref="Enabled"/>): an interactive shell or
