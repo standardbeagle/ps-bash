@@ -917,17 +917,14 @@ public sealed class InvokeBashFindCommand : PSCmdlet
         var boxed = new object[argv.Count];
         for (int k = 0; k < argv.Count; k++) boxed[k] = argv[k];
 
-        string? prevCwd = null;
-        string? prevLoc = null;
+        ChildDirectory? childDir = null;
         try
         {
             if (workDir is not null)
             {
-                prevLoc = SessionState.Path.CurrentFileSystemLocation.Path;
-                prevCwd = Environment.CurrentDirectory;
-                string target = Path.GetFullPath(workDir.Length == 0 ? "/" : workDir, prevLoc);
-                SessionState.Path.SetLocation(target);
-                Environment.CurrentDirectory = target;
+                // -execdir: the command runs in the entry's directory, `pwd` included (ChildDirectory).
+                string here = SessionState.Path.CurrentFileSystemLocation.Path;
+                childDir = ChildDirectory.Enter(this, Path.GetFullPath(workDir.Length == 0 ? "/" : workDir, here));
             }
             SessionState.PSVariable.Set("global:LASTEXITCODE", 0);
             // `find -exec prog {} \; 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4).
@@ -952,11 +949,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
         }
         finally
         {
-            if (prevLoc is not null)
-            {
-                try { SessionState.Path.SetLocation(prevLoc); } catch { /* best-effort */ }
-                try { Environment.CurrentDirectory = prevCwd!; } catch { /* best-effort */ }
-            }
+            childDir?.Dispose();
         }
     }
 

@@ -69,6 +69,7 @@ public class ShellVariableStorageGuardTests
         ["BashShellState.cs|BashRuntime.SubshellDepthVariable"] = "the subshell depth ($BASH_SUBSHELL) mark's own constant",
         ["ErrTrapInheritance.cs|TrapVariable"] = "the ERR trap's own constant (__BashTrapERR), put aside on scope entry",
         ["ErrTrapInheritance.cs|ErrtraceVariable"] = "the set -E flag's own constant (__BashErrtrace)",
+        ["ChildDirectory.cs|LogicalCwd"] = "the logical cwd's own constant (__PsBashCwd, what pwd prints), moved for one child and restored",
     };
 
     private const string Primitive = "BashVariableLookup.cs";

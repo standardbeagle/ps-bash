@@ -183,7 +183,7 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
         // The assignments are the command's environment: exported for it, whatever the names' attributes are.
         var assigned = assignments.Select(a => a.Name).ToArray();
         var wasExported = PsBash.Core.ShellExports.BeginTemp(assigned);
-        bool pushed = false;
+        ChildDirectory? childDir = null;
         try
         {
             if (chdir is not null)
@@ -191,13 +191,11 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
                 var target = FileSystemHelpers.ProviderPath(this, chdir);
                 if (!Directory.Exists(target))
                 {
-                    FileSystemHelpers.WriteBashError(this, $"env: cannot change directory to {GnuQuote.Locale(chdir)}: No such file or directory");
+                    FileSystemHelpers.WriteBashError(this, $"env: cannot change directory to {GnuQuote.Always(chdir)}: No such file or directory");
                     FileSystemHelpers.SetLastExitCode(this, 125);
                     return;
                 }
-                SessionState.Path.PushCurrentLocation("psbash-env");
-                SessionState.Path.SetLocation(WildcardPattern.Escape(target));
-                pushed = true;
+                childDir = ChildDirectory.Enter(this, target);
             }
             if (ignoreEnv)
             {
@@ -255,7 +253,7 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
                 BashVariableStore.Set(saved[k].Name, saved[k].Old);
             }
             PsBash.Core.ShellExports.EndTemp(assigned, wasExported);
-            if (pushed) SessionState.Path.PopLocation("psbash-env");
+            childDir?.Dispose();
         }
     }
 

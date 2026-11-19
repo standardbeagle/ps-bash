@@ -1,0 +1,28 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 308
+stdout-length: 34
+stderr-length: 68
+==== SCRIPT ====
+cd "$(mktemp -d)"
+mkdir -p sub/in && touch sub/in/x
+basename "$(env -C sub pwd)"
+env -C sub ls
+env --chdir=sub/in pwd | sed 's|.*/||'
+env -C nosuch pwd; echo "rc=$?"
+find . -name x -execdir pwd \; | sed 's|.*/||'
+[ "$(env -C sub printenv PWD)" = "$PWD" ] && echo 'PWD kept'
+[ "$(pwd)" = "$PWD" ] && echo back
+==== STDOUT ====
+sub
+in
+in
+rc=125
+in
+PWD kept
+back
+
+==== STDERR ====
+env: cannot change directory to 'nosuch': No such file or directory
+
