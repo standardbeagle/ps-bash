@@ -301,6 +301,44 @@ public class ArgParserTests
             p.Error.Value.Message("x"));
     }
 
+    // LongOptionAliases (hand-scanned awk/xargs/timeout): `--name=V` and `--name V` both become the joined short form.
+    [Theory]
+    [InlineData(new[] { "--file=p.awk" }, "-fp.awk", 0)]
+    [InlineData(new[] { "--file", "p.awk" }, "-fp.awk", 1)]
+    [InlineData(new[] { "--file=" }, "-f", 0)]
+    [InlineData(new[] { "--file" }, null, 0)]
+    [InlineData(new[] { "--opt" }, "-o1", 0)]
+    [InlineData(new[] { "--opt=7" }, "-o7", 0)]
+    [InlineData(new[] { "--files=x" }, null, 0)]
+    [InlineData(new[] { "-f" }, null, 0)]
+    public void LongOptionAliases_Join_BothSpellings(string[] argv, string? joined, int next)
+    {
+        LongOptionAlias[] table = { new("--file", 'f'), new("--opt", 'o', Required: false, BareValue: "1") };
+        int i = 0;
+        Assert.Equal(joined, LongOptionAliases.Join(argv, ref i, table));
+        Assert.Equal(next, i);
+    }
+
+    // glibc getopt_long lists the first match plus each match that is a DIFFERENT option: GNU date `--rfc` prints
+    // "possibilities: '--rfc-email' '--rfc-3339'" although --rfc-822/--rfc-2822 (synonyms of --rfc-email) match too.
+    [Fact]
+    public void Abbrev_AmbiguousCandidates_DropSynonymsOfTheFirstMatch()
+    {
+        var spec = new OptSpecSet(
+            new[]
+            {
+                new OptSpec("R", 'R', "rfc-email"),
+                new OptSpec("R", '\0', "rfc-822"),
+                new OptSpec("R", '\0', "rfc-2822"),
+                new OptSpec("rfc-3339", '\0', "rfc-3339", OptKind.Value),
+            },
+            allowAbbrev: true);
+        Assert.Equal(
+            "x: option '--rfc' is ambiguous; possibilities: '--rfc-email' '--rfc-3339'",
+            ArgParser.Parse(new[] { "--rfc" }, spec).Error!.Value.Message("x"));
+        Assert.Equal("R", ArgParser.Parse(new[] { "--rfc-8" }, spec).Tokens[0].OptId);
+    }
+
     [Fact]
     public void Abbrev_AmbiguousCandidates_FollowLongOptionOrder_NotAlphabetical()
     {

@@ -31,6 +31,81 @@ public class InvokeBashDateCommandTests : IClassFixture<SharedPwshFixture>
         return result.Select(o => o?.ToString() ?? "").ToArray();
     }
 
+    // Oracle (coreutils 9.4, `date -u -d @1709647629 OPT`). REGRESSION: every one of these options was silently
+    // ignored and the default `Tue Mar  5 ...` format printed.
+    [Theory]
+    [InlineData("'-I'", "2024-03-05")]
+    [InlineData("'-Idate'", "2024-03-05")]
+    [InlineData("'-Ihours'", "2024-03-05T14+00:00")]
+    [InlineData("'-Iminutes'", "2024-03-05T14:07+00:00")]
+    [InlineData("'-Iseconds'", "2024-03-05T14:07:09+00:00")]
+    [InlineData("'-Is'", "2024-03-05T14:07:09+00:00")]
+    [InlineData("'-Ins'", "2024-03-05T14:07:09,000000000+00:00")]
+    [InlineData("'--iso-8601'", "2024-03-05")]
+    [InlineData("'--iso-8601=seconds'", "2024-03-05T14:07:09+00:00")]
+    [InlineData("'--iso=m'", "2024-03-05T14:07+00:00")]
+    [InlineData("'-R'", "Tue, 05 Mar 2024 14:07:09 +0000")]
+    [InlineData("'--rfc-email'", "Tue, 05 Mar 2024 14:07:09 +0000")]
+    [InlineData("'--rfc-2822'", "Tue, 05 Mar 2024 14:07:09 +0000")]
+    [InlineData("'--rfc-3339=date'", "2024-03-05")]
+    [InlineData("'--rfc-3339=seconds'", "2024-03-05 14:07:09+00:00")]
+    [InlineData("'--rfc-3339' ns", "2024-03-05 14:07:09.000000000+00:00")]
+    [InlineData("'-uR'", "Tue, 05 Mar 2024 14:07:09 +0000")]
+    public void Date_OutputFormatOptions_MatchGnu(string option, string expected)
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(),
+            $"(Invoke-BashDate '-u' '-d' '@1709647629' {option}).BashText").AssertSuccess();
+        Assert.Equal(new[] { expected }, r.Lines);
+    }
+
+    [Theory]
+    [InlineData("'-Ifoo'", "date: invalid argument 'foo' for '--iso-8601'", "  - 'ns'")]
+    [InlineData("'-IH'", "date: invalid argument 'H' for '--iso-8601'", "  - 'hours'")]
+    [InlineData("'--rfc-3339=x'", "date: invalid argument 'x' for '--rfc-3339'", "  - 'seconds'")]
+    [InlineData("'--rfc-3339'", "date: option '--rfc-3339' requires an argument", "Try 'date --help'")]
+    [InlineData("'--rfc' ", "date: option '--rfc' is ambiguous; possibilities: '--rfc-email' '--rfc-3339'", "Try 'date --help'")]
+    [InlineData("'-I' '+%Y'", "date: multiple output formats specified", "")]
+    [InlineData("'-R' '-I'", "date: multiple output formats specified", "")]
+    [InlineData("'-Q'", "date: invalid option -- 'Q'", "Try 'date --help'")]
+    [InlineData("'--bogus'", "date: unrecognized option '--bogus'", "Try 'date --help'")]
+    public void Date_BadOutputFormatOption_IsAUsageError(string option, string message, string detail)
+        => CmdResult.Run(_fixture.AcquireFresh(), $"Invoke-BashDate '-u' '-d' '@0' {option}").AssertFailed(1, message, detail);
+
+    // -I collides with the -Information* common parameters: a DIRECT bare `-I` binds the decoy (Pester calls cmdlets
+    // directly; the transpiler quotes nothing for date).
+    [Fact]
+    public void Date_DirectBareDashI_IsTheIsoDate()
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "(Invoke-BashDate -u -D '@0' -I).BashText").AssertSuccess();
+        Assert.Equal(new[] { "1970-01-01" }, r.Lines);
+    }
+
+    [Fact]
+    public void Date_SetOption_IsRefusedButPrintsTheDateItWouldSet()
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "(Invoke-BashDate '-u' '--set=@0' '-I').BashText")
+            .AssertFailed(1, "date: cannot set date: Operation not permitted");
+        Assert.Equal(new[] { "1970-01-01" }, r.Lines);
+    }
+
+    [Theory]
+    [InlineData("I", null, "%Y-%m-%d")]
+    [InlineData("I", "hours", "%Y-%m-%dT%H%:z")]
+    [InlineData("I", "n", "%Y-%m-%dT%H:%M:%S,%N%:z")]
+    [InlineData("rfc-3339", "s", "%Y-%m-%d %H:%M:%S%:z")]
+    [InlineData("R", null, "%a, %d %b %Y %H:%M:%S %z")]
+    public void TryOutputFormat_MapsEachOptionToOneStrftimeFormat(string id, string? spec, string format)
+    {
+        Assert.True(InvokeBashDateCommand.TryOutputFormat(id, spec, out var f, out _));
+        Assert.Equal(format, f);
+    }
+
+    [Fact]
+    public void ConvertDateFormat_ColonZ_IsTheOffsetWithAColon()
+        => Assert.Equal("+05:30 -03:00",
+            InvokeBashDateCommand.ConvertDateFormat(new DateTimeOffset(2024, 3, 5, 0, 0, 0, TimeSpan.FromMinutes(330)), "%:z")
+            + " " + InvokeBashDateCommand.ConvertDateFormat(new DateTimeOffset(2024, 3, 5, 0, 0, 0, TimeSpan.FromHours(-3)), "%:z"));
+
     [Fact]
     public void Date_NoArgs_EmitsTypedOutput()
     {

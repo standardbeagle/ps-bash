@@ -87,10 +87,14 @@ public static class ArgParser
             if (hits.Count == 0)
                 return new ArgError(ArgErrorKind.Unrecognized, arg, '\0', argIndex);
 
-            // getopt_long: several candidates are NOT ambiguous when they all name the same option
-            // (grep --colo = color/colour, --fixed = fixed-regexp/fixed-strings).
-            if (hits.Count > 1 && SameOption(spec, hits))
-                hits.RemoveRange(1, hits.Count - 1);
+            // getopt_long: a candidate naming the same option as the FIRST one is not a second possibility
+            // (grep --colo = color/colour, --fixed = fixed-regexp/fixed-strings; date --rfc lists
+            // '--rfc-email' '--rfc-3339', not its synonyms --rfc-822/--rfc-2822). Only the others are listed.
+            if (hits.Count > 1)
+            {
+                for (int k = hits.Count - 1; k >= 1; k--)
+                    if (SameOption(spec, hits[0], hits[k])) hits.RemoveAt(k);
+            }
 
             if (hits.Count > 1)
             {
@@ -132,15 +136,8 @@ public static class ArgParser
         }
     }
 
-    private static bool SameOption(OptSpecSet spec, List<string> names)
-    {
-        if (!spec.TryGetLong(names[0], out var first)) return false;
-        for (int k = 1; k < names.Count; k++)
-        {
-            if (!spec.TryGetLong(names[k], out var o) || o.Id != first.Id || o.Kind != first.Kind) return false;
-        }
-        return true;
-    }
+    private static bool SameOption(OptSpecSet spec, string a, string b)
+        => spec.TryGetLong(a, out var x) && spec.TryGetLong(b, out var y) && x.Id == y.Id && x.Kind == y.Kind;
 
     private static ArgError? ParseShortBundle(
         ReadOnlySpan<string> argv, ref int i, string arg, OptSpecSet spec, List<ArgToken> tokens)

@@ -306,6 +306,18 @@
       "desc": "reference file"
     },
     {
+      "flag": "-I",
+      "desc": "ISO 8601 output [=date|hours|minutes|seconds|ns]"
+    },
+    {
+      "flag": "-R",
+      "desc": "RFC 5322 (email) output"
+    },
+    {
+      "flag": "--rfc-3339",
+      "desc": "RFC 3339 output (date|seconds|ns)"
+    },
+    {
       "flag": "+FORMAT",
       "desc": "output format"
     }
