@@ -9,9 +9,9 @@ namespace PsBash.Cmdlets;
 /// <para><b>The numbering column must match the cmdlet byte-for-byte</b>, so width, padding
 /// style, separator, start, and increment are ports of
 /// <c>InvokeBashNlCommand.EmitNumbered</c>: default width 6 right-aligned, a tab separator,
-/// and — the easy-to-miss one — under the default <c>-b t</c> an EMPTY line is emitted BARE
-/// (no number, no separator) and does NOT consume a number, while under <c>-b n</c> the blank
-/// number field plus the separator are still printed.</para>
+/// and — the easy-to-miss one — an unnumbered line (an EMPTY one under the default <c>-b t</c>, every
+/// one under <c>-b n</c>) takes no number and is prefixed by blanks for the number field and the
+/// separator (<see cref="InvokeBashNlCommand.UnnumberedPrefix"/>, shared with the cmdlet).</para>
 ///
 /// <para><b>Certified argv subset:</b> every argv the cmdlet accepts with no file operands. The
 /// cmdlet's own <see cref="InvokeBashNlCommand.Plan"/> resolves and VALIDATES the argv for both
@@ -56,16 +56,11 @@ internal sealed class NlStage : ILineStreamStage
         {
             foreach (var line in LineStreamRecord.SubLines(item))
             {
-                if (_numberNone)
+                // Unnumbered (`-b n`, or empty under `-b t`): GNU's blank prefix, no number taken — the cmdlet's rule.
+                if (InvokeBashNlCommand.IsUnnumbered(_numberNone, _numberAll, line))
                 {
-                    blankNum ??= new string(' ', _width);
-                    yield return BashRuntime.NormalizeBashText(blankNum + _sep + line);
-                    continue;
-                }
-                // Default (-b t): an empty line is emitted BARE and does not take a number.
-                if (!_numberAll && line.Length == 0)
-                {
-                    yield return string.Empty;
+                    blankNum ??= InvokeBashNlCommand.UnnumberedPrefix(_width, _sep);
+                    yield return BashRuntime.NormalizeBashText(blankNum + line);
                     continue;
                 }
 

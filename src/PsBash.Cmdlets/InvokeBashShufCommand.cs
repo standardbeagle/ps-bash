@@ -281,10 +281,12 @@ public sealed class InvokeBashShufCommand : PSCmdlet
                         items.Add(line);
                     }
                 }
-                catch
+                catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex))
                 {
-                    // Oracle uses `-ErrorAction SilentlyContinue` — no
-                    // emission, no items added.
+                    // GNU: `shuf: NAME: No such file or directory`, status 1, nothing shuffled (was silent, 0).
+                    FileSystemHelpers.WriteBashError(this,
+                        $"shuf: {GnuQuote.IfNeeded(inputFile)}: {FileSystemHelpers.ReadErrorMessage(ex, filePath)}");
+                    return;
                 }
             }
         }

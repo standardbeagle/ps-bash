@@ -120,7 +120,7 @@ public sealed class InvokeBashMkdirCommand : PSCmdlet
 
         if (operands.Count == 0)
         {
-            FileSystemHelpers.WriteBashError(this, "mkdir: missing operand");
+            FileSystemHelpers.WriteMissingOperand(this, "mkdir");
             return;
         }
 
@@ -156,9 +156,20 @@ public sealed class InvokeBashMkdirCommand : PSCmdlet
 
             try
             {
-                // Directory.CreateDirectory handles both the -p (create chain)
-                // and the no-flag (parent exists) cases — it's a no-op on
-                // existing dirs which we already filtered above.
+                // -p: the missing ancestors first, each named as typed in its verbose line (GNU mkancesdirs:
+                // `mkdir -pv a/b/c` prints 'a', 'a/b', 'a/b/c'). OperandChain is pure text over the operand.
+                if (parents)
+                {
+                    var chain = OperandChain.CreationChain(dir);
+                    for (int k = 0; k < chain.Count - 1; k++)
+                    {
+                        var ancestor = FileSystemHelpers.ProviderPath(this, chain[k]);
+                        if (Directory.Exists(ancestor)) continue;
+                        Directory.CreateDirectory(ancestor);
+                        if (verbose)
+                            WriteObject(BashRuntime.NewBashObject($"mkdir: created directory '{BashPath.ToShell(chain[k])}'\n"));
+                    }
+                }
                 Directory.CreateDirectory(absolute);
                 // Only the FINAL directory gets the mode, even with -p (intermediates keep the umask
                 // default, as in GNU).

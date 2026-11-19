@@ -122,18 +122,17 @@ public class InvokeBashTacCommandTests : IDisposable, IClassFixture<SharedPwshFi
     [Fact]
     public void Tac_SeparatorFlag_DashS_ReversesChunks()
     {
-        // Oracle: $lines joined by `n then split on separator, chunks
-        // reversed. For pipeline input "A:B:C", joined is "A:B:C", split on
-        // ":" → ["A","B","C"], reversed → ["C","B","A"].
+        // GNU (`echo A:B:C | tac -s :`): records END with the separator — "A:" "B:" "C\n" — reversed and
+        // concatenated exactly: "C\nB:A:" (no newline added).
         var lines = RunLines("'A:B:C' | Invoke-BashTac -s ':'");
-        Assert.Equal(new[] { "C", "B", "A" }, lines);
+        Assert.Equal("C\nB:A:", string.Join("\n", lines));
     }
 
     [Fact]
     public void Tac_SeparatorFlag_LongForm_ReversesChunks()
     {
         var lines = RunLines("'X|Y|Z' | Invoke-BashTac --separator=`|");
-        Assert.Equal(new[] { "Z", "Y", "X" }, lines);
+        Assert.Equal("Z\nY|X|", string.Join("\n", lines));
     }
 
     [Fact]

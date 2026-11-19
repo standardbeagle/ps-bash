@@ -163,8 +163,23 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     {
         var leaf = Path.Combine(_tmpRoot, "x", "y", "z");
         Directory.CreateDirectory(leaf);
-        Ok($"Invoke-BashRmdir -p {Q(leaf)}");
+        // Relative, as GNU walks only the components the operand names (an absolute one climbs to the first
+        // non-empty ancestor and fails there, status 1).
+        Ok($"Set-Location {Q(_tmpRoot)}; Invoke-BashRmdir -p x/y/z");
         Assert.False(Directory.Exists(Path.Combine(_tmpRoot, "x")));
+        Assert.True(Directory.Exists(_tmpRoot));
+    }
+
+    // REGRESSION (Windows): an operand typed with `\` had no parents to walk, so `rmdir -p C:\t\x\y` removed only y.
+    [Fact]
+    public void Rmdir_WithP_AbsoluteBackslashOperand_ClimbsToTheFirstNonEmptyAncestor()
+    {
+        var leaf = Path.Combine(_tmpRoot, "bx", "by");
+        Directory.CreateDirectory(leaf);
+        File.WriteAllText(Path.Combine(_tmpRoot, "keep"), "k");
+        Fail($"Invoke-BashRmdir -p {Q(leaf)}", 1, "Directory not empty");
+        Assert.False(Directory.Exists(Path.Combine(_tmpRoot, "bx")));
+        Assert.True(Directory.Exists(_tmpRoot));
     }
 
     // ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç cp ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç

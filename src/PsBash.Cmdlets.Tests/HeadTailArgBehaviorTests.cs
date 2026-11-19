@@ -208,8 +208,9 @@ public class HeadTailArgBehaviorTests : IClassFixture<SharedPwshFixture>, IDispo
     public void Tac_JoinedAbbreviatedAndDanglingSeparator()
     {
         // GNU: -sX / --sep X are the separator (were: file operands); a dangling -s is a usage error.
-        Assert.Equal(new[] { "c", "b", "a" }, Run("'a,b,c' | Invoke-BashTac '-s,'" + Text).AssertSuccess().Lines);
-        Assert.Equal(new[] { "c", "b", "a" }, Run("'a,b,c' | Invoke-BashTac '--sep' ','" + Text).AssertSuccess().Lines);
+        // GNU records END with SEP: "a,b,c\n" is "a," "b," "c\n" → "c\nb,a," (oracle: `echo a,b,c | tac -s,`).
+        Assert.Equal("c\nb,a,", string.Join("\n", Run("'a,b,c' | Invoke-BashTac '-s,'" + Text).AssertSuccess().Lines));
+        Assert.Equal("c\nb,a,", string.Join("\n", Run("'a,b,c' | Invoke-BashTac '--sep' ','" + Text).AssertSuccess().Lines));
         Run("'a' | Invoke-BashTac '-s'").AssertFailed(1, "option requires an argument -- 's'");
         Run("'a' | Invoke-BashTac '-b'").AssertFailed(2, "not supported");
         Run("'a' | Invoke-BashTac '--bogus'").AssertFailed(1, "unrecognized option '--bogus'");

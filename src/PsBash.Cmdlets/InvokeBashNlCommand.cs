@@ -217,7 +217,7 @@ public sealed class InvokeBashNlCommand : PSCmdlet
     // Numbering counter — instance state so a streamed stdin run and any
     // trailing file reads number continuously.
     private int _lineNum;
-    private string? _blankNum;   // cached `-b n` blank number field (width is fixed post-parse)
+    private string? _blankNum;   // cached unnumbered-line prefix: width + separator blanks (fixed post-parse)
 
     private NlArgs? _plan;
 
@@ -253,22 +253,25 @@ public sealed class InvokeBashNlCommand : PSCmdlet
         _lineNum = _start - _incr;
         _suppressStdin = plan.Declined || _operands.Count > 0;
     }
+    /// <summary>A line nl does not number: every line under <c>-b n</c>, an empty one under the default <c>-b t</c>.
+    /// Shared with the fused lane's <c>NlStage</c> (one rule for both).</summary>
+    internal static bool IsUnnumbered(bool numberNone, bool numberAll, string line)
+        => numberNone || (!numberAll && line.Length == 0);
+
+    /// <summary>GNU <c>print_no_line_fmt</c>: blanks for the number field AND the separator.</summary>
+    internal static string UnnumberedPrefix(int width, string sep) => new(' ', width + sep.Length);
+
     private void EmitNumbered(string line)
     {
-        // -b n: never number; GNU still prints the blank number field + separator.
-        if (_numberNone)
+        // An unnumbered line (`-b n`, or an empty line under the default `-b t`) is GNU's no_line_fmt: as many
+        // blanks as the number field AND the separator (`printf 'a\n\nb\n' | nl` prints 7 blanks on line 2), then
+        // the text. ONE prefix for both cases.
+        if (IsUnnumbered(_numberNone, _numberAll, line))
         {
-            _blankNum ??= new string(' ', _width);
-            WriteObject(BashRuntime.NewBashObject(_blankNum + _sep + line));
+            _blankNum ??= UnnumberedPrefix(_width, _sep);
+            WriteObject(BashRuntime.NewBashObject(_blankNum + line));
             return;
         }
-        // Default (-b t): empty lines are unnumbered (bare empty — oracle parity).
-        if (!_numberAll && line.Length == 0)
-        {
-            WriteObject(BashRuntime.NewBashObject(string.Empty));
-            return;
-        }
-
         _lineNum += _incr;
         string num = _style switch
         {

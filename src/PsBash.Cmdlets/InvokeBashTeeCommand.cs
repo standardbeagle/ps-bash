@@ -93,6 +93,15 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
 
     private readonly List<(string Display, RedirectFileWriter Stream)> _sinks = new();
     private bool _done;
+    // An operand tee could not open or write: status 1 at the END. Set only in BeginProcessing it was lost — the
+    // upstream stage (`echo x | tee /no/such/f`) runs after it and resets $LASTEXITCODE to 0. Same latch as cat.
+    private bool _hadError;
+
+    private void Fail(string message)
+    {
+        _hadError = true;
+        FileSystemHelpers.WriteBashError(this, message);
+    }
 
     protected override void BeginProcessing()
     {
@@ -132,7 +141,7 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
             if (DevicePath.IsDevice(rawPath))
             {
                 try { _sinks.Add((rawPath, RedirectFileWriter.OpenFile(rawPath, append, this))); }
-                catch (IOException ex) { FileSystemHelpers.WriteBashError(this, $"tee: {rawPath}: {ex.Message}"); }
+                catch (IOException ex) { Fail($"tee: {rawPath}: {ex.Message}"); }
                 continue;
             }
 
@@ -146,8 +155,12 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
 
                 if (!string.IsNullOrEmpty(parentDir) && !Directory.Exists(parentDir))
                 {
-                    FileSystemHelpers.WriteBashError(
-                        this, $"tee: {normalized}: No such file or directory");
+                    Fail($"tee: {normalized}: No such file or directory");
+                    continue;
+                }
+                if (Directory.Exists(filePath))
+                {
+                    Fail($"tee: {normalized}: Is a directory");
                     continue;
                 }
 
@@ -159,8 +172,7 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
                 catch (Exception ex)
                 {
                     if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                    FileSystemHelpers.WriteBashError(
-                        this, $"tee: {normalized}: {ex.Message}");
+                    Fail($"tee: {normalized}: {ex.Message}");
                 }
             }
         }
@@ -185,7 +197,7 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
                 catch (Exception ex)
                 {
                     if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                    FileSystemHelpers.WriteBashError(this, $"tee: {display}: {ex.Message}");
+                    Fail($"tee: {display}: {ex.Message}");
                     try { stream.Dispose(); } catch { /* best-effort */ }
                     _sinks.RemoveAt(i);
                 }
@@ -197,7 +209,11 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
         WriteObject(InputObject);
     }
 
-    protected override void EndProcessing() => CloseSinks();
+    protected override void EndProcessing()
+    {
+        CloseSinks();
+        if (_hadError) FileSystemHelpers.SetLastExitCode(this, 1);
+    }
 
     protected override void StopProcessing() => CloseSinks();
 

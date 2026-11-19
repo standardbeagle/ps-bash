@@ -213,25 +213,18 @@ public sealed class InvokeBashInstallCommand : PSCmdlet
             foreach (var dir in operands)
             {
                 var abs = FileSystemHelpers.ProviderPath(this, dir);
-                if (!Directory.Exists(abs) && !File.Exists(abs))
+                if (Directory.Exists(abs) || File.Exists(abs)) continue;
+                try
                 {
-                    try
-                    {
-                        Directory.CreateDirectory(abs);
-                    }
-                    catch (Exception ex)
-                    {
-                        if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                        FileSystemHelpers.WriteBashError(this,
-                            $"install: cannot create directory '{dir}': {ex.Message}");
-                        FileSystemHelpers.SetLastExitCode(this, 1);
-                        continue;
-                    }
-                    if (verbose)
-                    {
-                        WriteObject(BashRuntime.NewBashObject(
-                            $"install: creating directory '{BashPath.ToShell(dir)}'\n"));
-                    }
+                    // Every missing directory of the chain, named as typed (`install -v -d a/b` prints 'a', 'a/b').
+                    CreateChain(dir, verbose);
+                }
+                catch (Exception ex)
+                {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                    FileSystemHelpers.WriteBashError(this,
+                        $"install: cannot create directory '{dir}': {ex.Message}");
+                    FileSystemHelpers.SetLastExitCode(this, 1);
                 }
             }
             return;
@@ -259,12 +252,16 @@ public sealed class InvokeBashInstallCommand : PSCmdlet
             sourceOperands = operands.GetRange(0, operands.Count - 1);
         }
 
+        // Each source with the name GNU's verbose line shows: the operand as typed (a glob's matches as found).
         var sources = new List<string>();
+        var sourceNames = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var s in sourceOperands)
         {
-            foreach (var expanded in FileSystemHelpers.ResolveOperandPaths(this, s))
+            var expandedList = FileSystemHelpers.ResolveOperandPaths(this, s).ToList();
+            foreach (var expanded in expandedList)
             {
                 sources.Add(expanded);
+                sourceNames[expanded] = expandedList.Count == 1 ? s : DisplayName(expanded);
             }
         }
 
@@ -273,19 +270,14 @@ public sealed class InvokeBashInstallCommand : PSCmdlet
         // -D / dBit on the copy path → create leading components of dest.
         if (dBit)
         {
-            string? destParent = targetDir != null
-                ? destAbs
-                : Path.GetDirectoryName(destAbs);
-            if (!string.IsNullOrEmpty(destParent) && !Directory.Exists(destParent))
+            string destParentTyped = targetDir ?? InvokeBashDirnameCommand.DirectoryPart(destRaw);
+            string destParent = FileSystemHelpers.ProviderPath(this, destParentTyped);
+            if (!Directory.Exists(destParent))
             {
                 try
                 {
-                    Directory.CreateDirectory(destParent);
-                    if (verbose)
-                    {
-                        WriteObject(BashRuntime.NewBashObject(
-                            $"install: creating directory '{BashPath.ToShell(destParent)}'\n"));
-                    }
+                    // `install -v -D s dd/ee/ff` names 'dd', 'dd/ee' as typed, then the copy.
+                    CreateChain(destParentTyped, verbose);
                 }
                 catch (Exception ex)
                 {
@@ -320,11 +312,13 @@ public sealed class InvokeBashInstallCommand : PSCmdlet
             }
 
             string targetPath = destAbs;
+            string targetName = destRaw;
             if (destIsExistingDir)
             {
                 var basename = Path.GetFileName(src.TrimEnd(
                     Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
                 targetPath = Path.Combine(destAbs, basename);
+                targetName = destRaw.TrimEnd('/', '\\') + "/" + basename;
             }
 
             // Ensure the immediate parent dir exists. The oracle did this
@@ -427,10 +421,31 @@ public sealed class InvokeBashInstallCommand : PSCmdlet
             if (verbose)
             {
                 WriteObject(BashRuntime.NewBashObject(
-                    $"'{BashPath.ToShell(src)}' -> '{BashPath.ToShell(targetPath)}'\n"));
+                    $"'{BashPath.ToShell(sourceNames[src])}' -> '{BashPath.ToShell(targetName)}'\n"));
             }
         }
 
         if (hadError) FileSystemHelpers.SetLastExitCode(this, 1);
+    }
+
+    /// <summary>Creates each missing directory of <paramref name="typed"/>'s chain (<see cref="OperandChain"/>), GNU's verbose line per one.</summary>
+    private void CreateChain(string typed, bool verbose)
+    {
+        foreach (var step in OperandChain.CreationChain(typed))
+        {
+            var abs = FileSystemHelpers.ProviderPath(this, step);
+            if (Directory.Exists(abs)) continue;
+            Directory.CreateDirectory(abs);
+            if (verbose)
+                WriteObject(BashRuntime.NewBashObject($"install: creating directory '{BashPath.ToShell(step)}'\n"));
+        }
+    }
+
+    /// <summary>A glob match as the script would name it: relative to the working directory when below it.</summary>
+    private string DisplayName(string resolved)
+    {
+        string cwd = SessionState.Path.CurrentFileSystemLocation.ProviderPath;
+        string rel = Path.GetRelativePath(cwd, resolved);
+        return rel.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(rel) ? resolved : rel;
     }
 }

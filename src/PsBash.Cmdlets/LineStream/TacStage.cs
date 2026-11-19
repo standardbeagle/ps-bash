@@ -18,23 +18,18 @@ namespace PsBash.Cmdlets;
 /// time, and a <c>head</c> BEFORE the tac still stops its own producer.</item>
 /// </list>
 ///
-/// <para><b>Certified argv subset:</b> every argv the cmdlet accepts with no file operands —
-/// nothing at all, or <c>-s SEP</c> / <c>-sSEP</c> / <c>--separator=SEP</c> (and unique-prefix
-/// abbreviations). The cmdlet's own <see cref="InvokeBashTacCommand.Plan"/> resolves the argv for both
-/// lanes. DECLINED: file operands (file mode), <c>-r</c>/<c>--regex</c> and <c>-b</c>/<c>--before</c>
+/// <para><b>Certified argv subset:</b> no options and no file operands. The cmdlet's own
+/// <see cref="InvokeBashTacCommand.Plan"/> resolves the argv for both lanes. DECLINED: <c>-s SEP</c> in every
+/// spelling (separator-terminated records, exact bytes: <see cref="InvokeBashTacCommand.ReverseRecords"/>),
+/// file operands (file mode), <c>-r</c>/<c>--regex</c> and <c>-b</c>/<c>--before</c>
 /// (valid-but-unsupported — the cmdlet owns the refusal text and its exit code), <c>--help</c> /
 /// <c>--version</c>, a dangling <c>-s</c>, and every other flag.</para>
 ///
-/// <para>Parity oracle is <see cref="InvokeBashTacCommand"/>: an EMPTY <c>-s</c> value falls
-/// through to the plain reverse branch (PowerShell's <c>if ($separator)</c> is false for the
-/// empty string), and the separator path joins every line with <c>\n</c> first, splits the
-/// whole text on SEP, and reverses the CHUNKS — not the lines. Both are ported as-is.</para>
+/// <para>Parity oracle is <see cref="InvokeBashTacCommand"/>.</para>
 /// </summary>
 internal sealed class TacStage : ILineStreamStage
 {
-    private readonly string? _separator;
-
-    private TacStage(string? separator) { _separator = separator; }
+    private TacStage() { }
 
     /// <summary>The certified subset has no non-zero exit path (a file-read failure is file
     /// mode, which is declined).</summary>
@@ -46,7 +41,10 @@ internal sealed class TacStage : ILineStreamStage
         // an argv the cmdlet would reject or read differently. File operands (file mode) decline.
         var plan = InvokeBashTacCommand.Plan(argv);
         if (plan.Declined || plan.Operands.Count > 0) return null;
-        return new TacStage(plan.Separator);
+        // -s SEP: GNU records END with SEP and the output is exact bytes (no newline added), which a line lane
+        // cannot carry — the cmdlet's InvokeBashTacCommand.ReverseRecords owns it (one implementation).
+        if (plan.Separator is not null) return null;
+        return new TacStage();
     }
     public IEnumerable<string> Run(IEnumerable<string> input)
     {
@@ -57,14 +55,6 @@ internal sealed class TacStage : ILineStreamStage
             foreach (var subLine in LineStreamRecord.SubLines(item)) lines.Add(subLine);
         }
 
-        if (_separator is { Length: > 0 })
-        {
-            // Oracle path: join with \n, split on SEP, reverse the CHUNKS.
-            var chunks = string.Join("\n", lines).Split(new[] { _separator }, StringSplitOptions.None);
-            Array.Reverse(chunks);
-            foreach (var chunk in chunks) yield return BashRuntime.NormalizeBashText(chunk);
-            yield break;
-        }
 
         lines.Reverse();
         foreach (var line in lines) yield return BashRuntime.NormalizeBashText(line);

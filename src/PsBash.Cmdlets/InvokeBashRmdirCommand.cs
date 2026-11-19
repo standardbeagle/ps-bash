@@ -19,8 +19,8 @@ namespace PsBash.Cmdlets;
 /// <item>Target is a file → "Not a directory" error and $LASTEXITCODE=1.</item>
 /// <item>Target is a non-empty directory → "Directory not empty" error and
 /// $LASTEXITCODE=1.</item>
-/// <item>With <c>-p</c>, after the leaf is removed, walk parent dirs upward
-/// and remove each one that is empty. Stop on the first non-empty.</item>
+/// <item>With <c>-p</c>, after the leaf is removed, remove the ancestors the operand's own text
+/// names (<see cref="OperandChain.RemovalParents"/>); the first failure is an error and stops.</item>
 /// </list>
 /// <para>
 /// <b>Argv</b> is parsed by the shared ordered parser (<see cref="ArgParser"/>, spec
@@ -96,7 +96,7 @@ public sealed class InvokeBashRmdirCommand : PSCmdlet
 
         if (operands.Count == 0)
         {
-            FileSystemHelpers.WriteBashError(this, "rmdir: missing operand");
+            FileSystemHelpers.WriteMissingOperand(this, "rmdir");
             return;
         }
 
@@ -104,79 +104,61 @@ public sealed class InvokeBashRmdirCommand : PSCmdlet
 
         foreach (var dir in operands)
         {
-            var absolute = FileSystemHelpers.ProviderPath(this, dir);
-
-            if (!Directory.Exists(absolute))
+            // GNU names each attempt BEFORE it (`rmdir: removing directory, 'X'`), the operand first.
+            if (verbose) Removing(dir);
+            if (TryRemove(dir) is { } why)
             {
-                if (File.Exists(absolute))
-                {
-                    FileSystemHelpers.WriteBashError(this,
-                        $"rmdir: failed to remove '{dir}': Not a directory");
-                }
-                else
-                {
-                    FileSystemHelpers.WriteBashError(this,
-                        $"rmdir: failed to remove '{dir}': No such file or directory");
-                }
+                FileSystemHelpers.WriteBashError(this, $"rmdir: failed to remove '{dir}': {why}");
                 hadError = true;
                 continue;
             }
 
-            try
+            if (!removeParents) continue;
+            // -p: the ancestors the operand's OWN text names (`a/x//y/` → `a/x`, `a`), never the absolute
+            // parents above it; the first that cannot go stops the walk with an error (GNU remove_parents).
+            foreach (var parent in OperandChain.RemovalParents(dir))
             {
-                if (HasAnyEntries(absolute))
+                if (verbose) Removing(parent);
+                if (TryRemove(parent) is { } pwhy)
                 {
-                    FileSystemHelpers.WriteBashError(this,
-                        $"rmdir: failed to remove '{dir}': Directory not empty");
+                    FileSystemHelpers.WriteBashError(this, $"rmdir: failed to remove directory '{parent}': {pwhy}");
                     hadError = true;
-                    continue;
-                }
-
-                // Non-recursive (rmdir removes only empty dirs), but a read-only
-                // attribute still makes Directory.Delete throw on Windows. Clear it
-                // first — mirrors find's non-recursive dir delete (os-interface rule).
-                FileSystemHelpers.ClearReadOnly(absolute);
-                Directory.Delete(absolute);
-            }
-            catch (Exception ex)
-            {
-                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                FileSystemHelpers.WriteBashError(this,
-                    $"rmdir: failed to remove '{dir}': {ex.Message}");
-                hadError = true;
-                continue;
-            }
-
-            if (verbose)
-            {
-                WriteObject(BashRuntime.NewBashObject(
-                    $"rmdir: removing directory, '{BashPath.ToShell(dir)}'\n"));
-            }
-
-            if (removeParents)
-            {
-                var parent = Path.GetDirectoryName(absolute);
-                while (!string.IsNullOrEmpty(parent) && Directory.Exists(parent))
-                {
-                    if (HasAnyEntries(parent)) break;
-
-                    if (verbose)
-                    {
-                        WriteObject(BashRuntime.NewBashObject(
-                            $"rmdir: removing directory, '{BashPath.ToShell(parent)}'\n"));
-                    }
-                    try { FileSystemHelpers.ClearReadOnly(parent); Directory.Delete(parent); }
-                    catch { break; }
-                    parent = Path.GetDirectoryName(parent);
+                    break;
                 }
             }
         }
-
         if (hadError) FileSystemHelpers.SetLastExitCode(this, 1);
     }
 
-    // EnumerateFileSystemEntries returns hidden + system entries by default
-    // on Windows, matching the psm1 oracle's Get-ChildItem -Force semantics.
+    private void Removing(string typed)
+        => WriteObject(BashRuntime.NewBashObject($"rmdir: removing directory, '{BashPath.ToShell(typed)}'\n"));
+
+    /// <summary>Removes the empty directory <paramref name="typed"/>; null on success, else GNU's reason text.</summary>
+    private string? TryRemove(string typed)
+    {
+        // rmdir(".") is EINVAL; never hand "." to Directory.Delete (it would remove the working directory).
+        string trimmed = typed.TrimEnd('/');
+        if (trimmed == "." || trimmed.EndsWith("/.", StringComparison.Ordinal)) return "Invalid argument";
+        var absolute = FileSystemHelpers.ProviderPath(this, typed);
+        if (!Directory.Exists(absolute))
+            return File.Exists(absolute) ? "Not a directory" : "No such file or directory";
+        try
+        {
+            if (HasAnyEntries(absolute)) return "Directory not empty";
+            // Non-recursive (rmdir removes only empty dirs), but a read-only attribute still makes
+            // Directory.Delete throw on Windows. Clear it first (os-interface rule).
+            FileSystemHelpers.ClearReadOnly(absolute);
+            Directory.Delete(absolute);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+            return FileSystemHelpers.ReadErrorMessage(ex, absolute);
+        }
+    }
+
+    // EnumerateFileSystemEntries returns hidden + system entries by default    // on Windows, matching the psm1 oracle's Get-ChildItem -Force semantics.
     private static bool HasAnyEntries(string dir)
     {
         using var e = Directory.EnumerateFileSystemEntries(dir).GetEnumerator();

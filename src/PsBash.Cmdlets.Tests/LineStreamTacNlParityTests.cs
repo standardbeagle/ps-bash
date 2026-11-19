@@ -42,20 +42,17 @@ public class LineStreamTacNlParityTests : LineStreamParityHarness
     public void TacCore_Unicode_MatchesCmdlet()
         => AssertTac(Array.Empty<string>(), new[] { "café", "naïve", "🚀 rocket" });
 
-    [Fact]
-    public void TacCore_Separator_MatchesCmdlet()
-        => AssertTac(new[] { "-s", "," }, new[] { "a,b,c", "d,e" });
-
-    [Fact]
-    public void TacCore_LongSeparator_MatchesCmdlet()
-        => AssertTac(new[] { "--separator=," }, new[] { "a,b,c", "d,e" });
-
+    // `-s SEP` is NOT certified: GNU's records END with SEP and the output is exact bytes (`printf 'a,b' | tac -s ,`
+    // is "ba,", no newline), which a line lane cannot carry. The cmdlet's ReverseRecords is the one implementation.
     [Theory]
-    [InlineData("-s,")]                   // joined value: certified now that the cmdlet parses it too
-    [InlineData("--sep=,")]               // unique-prefix abbreviation
+    [InlineData("-s ,")]
+    [InlineData("--separator=,")]
+    [InlineData("-s,")]
+    [InlineData("--sep=,")]
     [InlineData("--sep ,")]
-    public void TacCore_JoinedAndAbbreviatedSeparator_MatchCmdlet(string flags)
-        => AssertTac(Split(flags), new[] { "a,b,c", "d,e" });
+    public void TacCore_Separator_DeclinesToTheCmdlet(string flags)
+        => Assert.False(LineStreamRegistry.TryCreate("tac", Split(flags), out _),
+            $"tac core must leave '{flags}' to the cmdlet (separator-terminated records, exact bytes)");
 
     [Fact]
     public void TacCore_IsBlocking_BuffersWholeInput()

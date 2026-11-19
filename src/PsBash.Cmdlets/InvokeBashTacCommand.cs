@@ -175,7 +175,7 @@ public sealed class InvokeBashTacCommand : PSCmdlet
                 }
             }
         }
-        else
+        else if (separator == null)
         {
             // File mode — read each operand (glob-expanded), split on \n.
             foreach (var raw in operands)
@@ -201,34 +201,30 @@ public sealed class InvokeBashTacCommand : PSCmdlet
 
         if (separator != null)
         {
-            // Join everything with \n, split on the user-supplied separator,
-            // reverse the chunks, emit each. Matches the oracle's
-            // ($lines -join "`n").Split($separator) + [Array]::Reverse path.
-            string all = string.Join("\n", lines);
-            // String.Split(string) requires a non-empty separator on .NET; an
-            // empty -s SEP value is undefined in GNU tac (in practice it errors
-            // out). Mirror the oracle which falls through to the no-separator
-            // branch on an empty string (PowerShell `if ($separator)` is false
-            // for empty string).
-            if (separator.Length == 0)
-            {
-                lines.Reverse();
-                foreach (var line in lines)
-                {
-                    WriteObject(BashRuntime.NewBashObject(line));
-                }
-            }
+            // -s SEP: records END with SEP (attached after), each source is reversed on its own and written as
+            // exact bytes — `printf 'a,b,c' | tac -s ,` is `cb,a,`, the unterminated last record first.
+            var sources = new List<string>();
+            if (operands.Count == 0) sources.Add(BashRuntime.RecordStreamText(_pipeline));
             else
             {
-                var chunks = all.Split(new[] { separator }, StringSplitOptions.None);
-                Array.Reverse(chunks);
-                foreach (var chunk in chunks)
-                {
-                    WriteObject(BashRuntime.NewBashObject(chunk));
-                }
+                foreach (var raw in operands)
+                    foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
+                    {
+                        try { sources.Add(BashFileSystem.ReadAllText(filePath)); }
+                        catch (Exception ex)
+                        {
+                            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                            WriteReadError(filePath, ex);
+                            hadError = true;
+                        }
+                    }
             }
-        }
-        else if (pipelineRecords.Count > 0)
+            foreach (var text in sources)
+            {
+                string reversed = ReverseRecords(text, separator);
+                if (reversed.Length > 0) WriteObject(BashRuntime.BytesRecord(reversed));
+            }
+        }        else if (pipelineRecords.Count > 0)
         {
             for (int r = pipelineRecords.Count - 1; r >= 0; r--)
                 WriteObject(pipelineRecords[r]);
@@ -253,5 +249,25 @@ public sealed class InvokeBashTacCommand : PSCmdlet
         // GNU: tac: failed to open 'x' for reading: No such file or directory
         FileSystemHelpers.WriteBashError(this,
             $"tac: failed to open '{BashPath.ToShell(path)}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
+    }
+
+    /// <summary>
+    /// GNU <c>tac -s SEP</c> over one source: split into records that each END with <paramref name="sep"/> (the
+    /// last may lack it), reverse their order, concatenate exactly. An empty SEP matches nothing: one record.
+    /// </summary>
+    internal static string ReverseRecords(string text, string sep)
+    {
+        if (sep.Length == 0 || text.Length == 0) return text;
+        var records = new List<string>();
+        int start = 0;
+        while (start < text.Length)
+        {
+            int hit = text.IndexOf(sep, start, StringComparison.Ordinal);
+            int end = hit < 0 ? text.Length : hit + sep.Length;
+            records.Add(text.Substring(start, end - start));
+            start = end;
+        }
+        records.Reverse();
+        return string.Concat(records);
     }
 }

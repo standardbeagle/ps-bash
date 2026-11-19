@@ -72,13 +72,13 @@ public class InvokeBashNlCommandTests : IDisposable, IClassFixture<SharedPwshFix
         var file = Path.Combine(_tmpDir, "blanks.txt");
         File.WriteAllText(file, "one\n\ntwo\n\nthree\n");
         var lines = RunLines($"Invoke-BashNl '{file.Replace("'", "''")}'");
-        // Default: empty lines emit a bare empty line (unnumbered); numbering
-        // only advances on non-empty lines.
+        // Default: an empty line is unnumbered and prefixed by width + separator blanks (GNU print_no_line_fmt:
+        // `printf 'a\n\nb\n' | nl | od -c` shows 7 spaces); numbering only advances on non-empty lines.
         Assert.Equal(new[] {
             "     1\tone",
-            "",
+            "       ",
             "     2\ttwo",
-            "",
+            "       ",
             "     3\tthree",
         }, lines);
     }
