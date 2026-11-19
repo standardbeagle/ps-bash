@@ -8,7 +8,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsDiagnostic.Test, "BashSyntax")]
 [OutputType(typeof(bool))]
-public sealed class TestBashSyntaxCommand : PSCmdlet
+public sealed class TestBashSyntaxCommand : BashCmdlet
 {
     [Parameter(Position = 0, Mandatory = true, ValueFromPipeline = true)]
     public string? Source { get; set; }

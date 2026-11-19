@@ -10,7 +10,7 @@ namespace PsBash.Cmdlets;
 /// <see cref="Slot"/>[<see cref="Index"/>]. The emitter folds the slots after the pipeline.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashPipeStage")]
-public sealed class InvokeBashPipeStageCommand : PSCmdlet
+public sealed class InvokeBashPipeStageCommand : BashCmdlet
 {
     /// <summary>The stage, as a script block holding one pipeline.</summary>
     [Parameter(Mandatory = true, Position = 0)]

@@ -56,7 +56,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashExpand")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashExpandCommand : PSCmdlet
+public sealed class InvokeBashExpandCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

@@ -57,7 +57,7 @@ namespace PsBash.Cmdlets;
 [Cmdlet(VerbsLifecycle.Invoke, "BashSed")]
 [OutputType(typeof(PSObject))]
 [OutputType(typeof(string))]
-public sealed class InvokeBashSedCommand : PSCmdlet
+public sealed class InvokeBashSedCommand : BashCmdlet
 {
     /// <summary>
     /// The bash <c>-e</c> (script expression) value-bearing flag — declared
@@ -428,7 +428,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         if (!BuildProgram(expressions, plan.Extended, out var commands, out string? buildError, out int buildCode))
         {
             EmitError(buildError!);
-            SessionState.PSVariable.Set("global:LASTEXITCODE", buildCode);
+            FileSystemHelpers.SetLastExitCode(this, buildCode);
             return;
         }
 
@@ -1386,7 +1386,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         if (cmd == null && err != null)
         {
             EmitError(err);
-            SessionState.PSVariable.Set("global:LASTEXITCODE", code);
+            FileSystemHelpers.SetLastExitCode(this, code);
         }
         return cmd;
     }

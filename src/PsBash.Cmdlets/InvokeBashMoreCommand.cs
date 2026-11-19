@@ -25,7 +25,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashMore")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashMoreCommand : PSCmdlet
+public sealed class InvokeBashMoreCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

@@ -44,7 +44,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashBrowse")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashBrowseCommand : PSCmdlet
+public sealed class InvokeBashBrowseCommand : BashCmdlet
 {
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }

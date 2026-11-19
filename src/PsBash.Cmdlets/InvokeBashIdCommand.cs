@@ -37,7 +37,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashId")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashIdCommand : PSCmdlet
+public sealed class InvokeBashIdCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

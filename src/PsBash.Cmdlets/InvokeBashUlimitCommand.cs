@@ -11,7 +11,7 @@ namespace PsBash.Cmdlets;
 /// "limit out of range". Each failure is status 1 and changes nothing.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashUlimit")]
-public sealed class InvokeBashUlimitCommand : PSCmdlet
+public sealed class InvokeBashUlimitCommand : BashCmdlet
 {
     private const long Unlimited = long.MaxValue;
 

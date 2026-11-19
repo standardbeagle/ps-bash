@@ -52,7 +52,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashFold")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashFoldCommand : PSCmdlet
+public sealed class InvokeBashFoldCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

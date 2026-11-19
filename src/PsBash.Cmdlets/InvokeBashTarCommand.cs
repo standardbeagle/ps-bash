@@ -63,7 +63,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashTar")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashTarCommand : PSCmdlet
+public sealed class InvokeBashTarCommand : BashCmdlet
 {
     private const string OptCreate = "create", OptExtract = "extract", OptList = "list", OptVerbose = "verbose",
         OptGzip = "gzip", OptKeep = "keep", OptAuto = "auto", OptStdout = "stdout", OptFile = "file",

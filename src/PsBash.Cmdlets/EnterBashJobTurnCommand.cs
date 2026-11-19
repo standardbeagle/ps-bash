@@ -11,7 +11,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsCommon.Enter, "BashJobTurn")]
 [OutputType(typeof(void))]
-public sealed class EnterBashJobTurnCommand : PSCmdlet
+public sealed class EnterBashJobTurnCommand : BashCmdlet
 {
     /// <summary>The job's turn (<see cref="BashJobRunspaces.JobTurn"/>), or null.</summary>
     [Parameter(Position = 0)]

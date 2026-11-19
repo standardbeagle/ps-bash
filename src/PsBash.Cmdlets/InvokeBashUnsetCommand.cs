@@ -30,7 +30,7 @@ namespace PsBash.Cmdlets;
 /// No stdout output (variable side-effect only).
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashUnset")]
-public sealed class InvokeBashUnsetCommand : PSCmdlet
+public sealed class InvokeBashUnsetCommand : BashCmdlet
 {
     /// <summary>
     /// <c>-v</c> — variable mode (default). Declared explicitly because the

@@ -56,7 +56,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashBase64")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashBase64Command : PSCmdlet
+public sealed class InvokeBashBase64Command : BashCmdlet
 {
     private const string OptDecode = "decode", OptIgnore = "ignore", OptWrap = "wrap";
 

@@ -23,7 +23,7 @@ namespace PsBash.Cmdlets;
 /// which preserves the oracle's exit-code contract.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashShift")]
-public sealed class InvokeBashShiftCommand : PSCmdlet
+public sealed class InvokeBashShiftCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

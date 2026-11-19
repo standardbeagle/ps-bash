@@ -32,7 +32,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashTrap")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashTrapCommand : PSCmdlet
+public sealed class InvokeBashTrapCommand : BashCmdlet
 {
     /// <summary>
     /// <c>-p</c> print. Declared explicitly because the bare token prefix-

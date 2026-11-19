@@ -53,7 +53,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashXargs")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashXargsCommand : PSCmdlet
+public sealed class InvokeBashXargsCommand : BashCmdlet
 {
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }

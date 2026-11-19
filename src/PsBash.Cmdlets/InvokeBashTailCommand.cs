@@ -46,7 +46,7 @@ namespace PsBash.Cmdlets;
 [Cmdlet(VerbsLifecycle.Invoke, "BashTail")]
 [OutputType(typeof(PSObject))]
 [OutputType(typeof(string))]
-public sealed class InvokeBashTailCommand : PSCmdlet
+public sealed class InvokeBashTailCommand : BashCmdlet
 {
     // -c VALUE prefix-collides with -Confirm under PowerShell's
     // case-insensitive binder; without an explicit declaration the bare

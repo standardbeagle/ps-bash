@@ -51,7 +51,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashLs")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashLsCommand : PSCmdlet
+public sealed class InvokeBashLsCommand : BashCmdlet
 {
     /// <summary>
     /// The bash <c>-a</c> / <c>-A</c> (show hidden) switch — declared
@@ -939,7 +939,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
 
         if (hadError)
         {
-            SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
+            FileSystemHelpers.SetLastExitCode(this, 2);
         }
     }
 

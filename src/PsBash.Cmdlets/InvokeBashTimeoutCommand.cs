@@ -13,7 +13,7 @@ namespace PsBash.Cmdlets;
 /// <c>-s SIGNAL</c>, <c>-k DURATION</c> and <c>--foreground</c> are accepted; Windows has one way to stop a process.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashTimeout")]
-public sealed class InvokeBashTimeoutCommand : PSCmdlet
+public sealed class InvokeBashTimeoutCommand : BashCmdlet
 {
     /// <summary>Decoy for a direct bare <c>-v</c> (prefix of the common parameter -Verbose).</summary>
     [Parameter]

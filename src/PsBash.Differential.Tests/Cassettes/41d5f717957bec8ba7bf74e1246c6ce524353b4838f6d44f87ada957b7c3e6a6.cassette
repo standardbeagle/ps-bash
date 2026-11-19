@@ -1,0 +1,28 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 684
+stdout-length: 158
+stderr-length: 0
+==== SCRIPT ====
+for c in grep sed tail tee mkdir rmdir touch date readlink realpath chmod sleep uname mktemp tr printf; do case $c in grep) echo x | grep --bogus ;; sed) echo x | sed --bogus ;; tail) echo x | tail --bogus ;; tee) echo x | tee --bogus ;; mkdir) echo x | mkdir --bogus ;; rmdir) echo x | rmdir --bogus ;; touch) echo x | touch --bogus ;; date) echo x | date --bogus ;; readlink) echo x | readlink --bogus ;; realpath) echo x | realpath --bogus ;; chmod) echo x | chmod --bogus ;; sleep) echo x | sleep --bogus ;; uname) echo x | uname --bogus ;; mktemp) echo x | mktemp --bogus ;; tr) echo x | tr --bogus ;; printf) echo x | printf --bogus ;; esac >/dev/null 2>&1; echo "$c s=$?"; done
+==== STDOUT ====
+grep s=2
+sed s=1
+tail s=1
+tee s=1
+mkdir s=1
+rmdir s=1
+touch s=1
+date s=1
+readlink s=1
+realpath s=1
+chmod s=1
+sleep s=1
+uname s=1
+mktemp s=1
+tr s=1
+printf s=2
+
+==== STDERR ====
+

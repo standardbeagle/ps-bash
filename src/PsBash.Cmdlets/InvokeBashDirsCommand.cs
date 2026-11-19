@@ -24,7 +24,7 @@ namespace PsBash.Cmdlets;
 /// <c>-v</c> vs <c>-Verbose</c> → <c>V</c>.</para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashDirs")]
-public sealed class InvokeBashDirsCommand : PSCmdlet
+public sealed class InvokeBashDirsCommand : BashCmdlet
 {
     [Parameter]
     public SwitchParameter C { get; set; }

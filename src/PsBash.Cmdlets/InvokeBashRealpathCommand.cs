@@ -15,7 +15,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashRealpath")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashRealpathCommand : PSCmdlet
+public sealed class InvokeBashRealpathCommand : BashCmdlet
 {
     /// <summary>Decoy: a direct call's bare <c>-e</c> is ambiguous between <c>-ErrorAction</c>/<c>-ErrorVariable</c>.</summary>
     [Parameter] public SwitchParameter e { get; set; }

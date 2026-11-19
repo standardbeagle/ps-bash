@@ -48,7 +48,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashLn")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashLnCommand : PSCmdlet
+public sealed class InvokeBashLnCommand : BashCmdlet
 {
     [Parameter] public SwitchParameter v { get; set; }
 

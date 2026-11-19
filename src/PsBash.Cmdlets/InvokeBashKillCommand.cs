@@ -17,7 +17,7 @@ namespace PsBash.Cmdlets;
 /// the <see cref="PIPE"/> decoy is for DIRECT calls (<c>Invoke-BashKill -PIPE $pid</c>) and is re-injected first.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashKill")]
-public sealed class InvokeBashKillCommand : PSCmdlet
+public sealed class InvokeBashKillCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

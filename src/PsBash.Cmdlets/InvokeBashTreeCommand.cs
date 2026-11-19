@@ -46,7 +46,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashTree")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashTreeCommand : PSCmdlet
+public sealed class InvokeBashTreeCommand : BashCmdlet
 {
     /// <summary>The bash <c>-d</c> (directories only) switch.</summary>
     [Parameter]

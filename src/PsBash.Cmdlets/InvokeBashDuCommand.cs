@@ -40,7 +40,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashDu")]
 [OutputType("PsBash.DuEntry")]
-public sealed class InvokeBashDuCommand : PSCmdlet
+public sealed class InvokeBashDuCommand : BashCmdlet
 {
     /// <summary>The bash <c>-d N</c> (max depth) value flag (decoy for direct calls; re-injected as <c>-d N</c>).</summary>
     [Parameter]

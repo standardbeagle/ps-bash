@@ -111,7 +111,7 @@ internal static class ShellSignalTraps
 /// command: only emitted code calls it.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashPendingSignals")]
-public sealed class InvokeBashPendingSignalsCommand : PSCmdlet
+public sealed class InvokeBashPendingSignalsCommand : BashCmdlet
 {
     // A trap action is itself a list of statements, and may poll: a signal that arrives while a trap runs waits for it.
     [ThreadStatic] private static bool _running;
@@ -133,6 +133,6 @@ public sealed class InvokeBashPendingSignalsCommand : PSCmdlet
             }
         }
         finally { _running = false; }
-        SessionState.PSVariable.Set("global:LASTEXITCODE", status);
+        SessionState.PSVariable.Set("global:LASTEXITCODE", status); // the status from before the traps, not this cmdlet's own
     }
 }

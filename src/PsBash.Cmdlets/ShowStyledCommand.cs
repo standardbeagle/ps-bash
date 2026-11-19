@@ -20,7 +20,7 @@ namespace PsBash.Cmdlets;
 /// </remarks>
 [Cmdlet(VerbsCommon.Show, "Styled")]
 [OutputType(typeof(string))]
-public sealed class ShowStyledCommand : PSCmdlet
+public sealed class ShowStyledCommand : BashCmdlet
 {
     /// <summary>The stylesheet name (<c>fs</c>, <c>procsvc</c>, <c>object</c>, <c>error</c>, …), inline CSS, or a .pcss/.css path. Omitted → auto-picked from the first row's kind.</summary>
     [Parameter(Position = 0)]

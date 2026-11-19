@@ -11,7 +11,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashTestInt")]
 [OutputType(typeof(long))]
-public sealed class InvokeBashTestIntCommand : PSCmdlet
+public sealed class InvokeBashTestIntCommand : BashCmdlet
 {
     [Parameter(Position = 0, ValueFromPipeline = true)]
     [AllowNull]

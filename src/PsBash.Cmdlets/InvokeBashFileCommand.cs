@@ -42,7 +42,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashFile")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashFileCommand : PSCmdlet
+public sealed class InvokeBashFileCommand : BashCmdlet
 {
     private const string OptBrief = "brief", OptMime = "mime", OptMimeType = "mime-type",
         OptMimeEnc = "mime-encoding", OptFollow = "dereference", OptNoFollow = "no-dereference",

@@ -20,7 +20,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashWhoami")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashWhoamiCommand : PSCmdlet
+public sealed class InvokeBashWhoamiCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

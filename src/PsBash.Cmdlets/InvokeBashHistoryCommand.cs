@@ -16,7 +16,7 @@ namespace PsBash.Cmdlets;
 /// Without this, PowerShell's <c>history</c> alias (<c>Get-History</c>) ran and leaked its binder errors.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashHistory")]
-public sealed class InvokeBashHistoryCommand : PSCmdlet
+public sealed class InvokeBashHistoryCommand : BashCmdlet
 {
     // Decoys for DIRECT calls only (the transpiler single-quotes dash words): bare -c / -d / -p / -w would bind
     // common parameters. Put back in front of the arguments.

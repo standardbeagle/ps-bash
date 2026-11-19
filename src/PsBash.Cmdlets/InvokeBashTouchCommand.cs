@@ -41,7 +41,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashTouch")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashTouchCommand : PSCmdlet
+public sealed class InvokeBashTouchCommand : BashCmdlet
 {
     [Parameter] public SwitchParameter a { get; set; }
     [Parameter] public SwitchParameter c { get; set; }

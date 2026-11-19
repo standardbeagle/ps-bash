@@ -7,7 +7,7 @@ namespace PsBash.Cmdlets;
 /// Re-registering an existing name replaces the hook atomically.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Register, "BashChpwdHook")]
-public sealed class RegisterBashChpwdHookCommand : PSCmdlet
+public sealed class RegisterBashChpwdHookCommand : BashCmdlet
 {
     [Parameter(Mandatory = true)]
     public string Name { get; set; } = string.Empty;

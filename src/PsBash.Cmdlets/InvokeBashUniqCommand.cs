@@ -49,7 +49,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashUniq")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashUniqCommand : PSCmdlet
+public sealed class InvokeBashUniqCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

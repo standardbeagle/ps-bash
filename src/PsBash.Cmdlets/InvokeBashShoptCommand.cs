@@ -34,7 +34,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashShopt")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashShoptCommand : PSCmdlet
+public sealed class InvokeBashShoptCommand : BashCmdlet
 {
     // bash 5.2's shopt table, in the order `shopt` lists it, with the defaults of a non-interactive shell.
     private static readonly (string Name, bool On)[] ShoptTable =

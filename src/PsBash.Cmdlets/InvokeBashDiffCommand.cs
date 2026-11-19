@@ -22,7 +22,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashDiff")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashDiffCommand : PSCmdlet
+public sealed class InvokeBashDiffCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

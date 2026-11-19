@@ -29,7 +29,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashTest")]
 [OutputType(typeof(bool))]
-public sealed class InvokeBashTestCommand : PSCmdlet
+public sealed class InvokeBashTestCommand : BashCmdlet
 {
     // Decoy switches: catch the bare bash operators before the binder maps
     // them to a common parameter. The IsPresent flag is what we re-inject.

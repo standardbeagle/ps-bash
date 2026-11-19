@@ -27,7 +27,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashType")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashTypeCommand : PSCmdlet
+public sealed class InvokeBashTypeCommand : BashCmdlet
 {
     internal static IReadOnlySet<string> Builtins => BashBuiltins.Names;
 

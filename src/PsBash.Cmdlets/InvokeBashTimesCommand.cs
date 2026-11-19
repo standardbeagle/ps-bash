@@ -5,7 +5,7 @@ namespace PsBash.Cmdlets;
 
 /// <summary>The <c>times</c> builtin: user/system CPU time of the shell, then of its children (two lines).</summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashTimes")]
-public sealed class InvokeBashTimesCommand : PSCmdlet
+public sealed class InvokeBashTimesCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

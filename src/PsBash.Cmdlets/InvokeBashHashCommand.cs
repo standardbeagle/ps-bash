@@ -23,7 +23,7 @@ namespace PsBash.Cmdlets;
 /// (ambiguous with <c>-PipelineVariable</c>/<c>-ProgressAction</c>).</para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashHash")]
-public sealed class InvokeBashHashCommand : PSCmdlet
+public sealed class InvokeBashHashCommand : BashCmdlet
 {
     private const string Usage = "hash: usage: hash [-lr] [-p pathname] [-dt] [name ...]";
 

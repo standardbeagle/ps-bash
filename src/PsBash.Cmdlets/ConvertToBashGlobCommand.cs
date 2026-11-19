@@ -23,7 +23,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsData.ConvertTo, "BashGlob")]
 [OutputType(typeof(string))]
-public sealed class ConvertToBashGlobCommand : PSCmdlet
+public sealed class ConvertToBashGlobCommand : BashCmdlet
 {
     [Parameter(Position = 0, ValueFromPipeline = true)]
     [AllowNull]

@@ -11,7 +11,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashPrintenv")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashPrintenvCommand : PSCmdlet
+public sealed class InvokeBashPrintenvCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

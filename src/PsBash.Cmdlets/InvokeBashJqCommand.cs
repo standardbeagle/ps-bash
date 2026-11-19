@@ -28,7 +28,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashJq")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashJqCommand : PSCmdlet
+public sealed class InvokeBashJqCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

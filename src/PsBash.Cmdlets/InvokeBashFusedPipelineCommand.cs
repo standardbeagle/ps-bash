@@ -77,7 +77,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashFusedPipeline", DefaultParameterSetName = RunSet)]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashFusedPipelineCommand : PSCmdlet
+public sealed class InvokeBashFusedPipelineCommand : BashCmdlet
 {
     /// <summary>
     /// The transpiled inner pipeline (the exact text the unfused path would have

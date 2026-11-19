@@ -22,7 +22,7 @@ namespace PsBash.Cmdlets;
 /// </para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashNative")]
-public sealed class InvokeBashNativeCommand : PSCmdlet, IDisposable
+public sealed class InvokeBashNativeCommand : BashCmdlet
 {
     [Parameter(Mandatory = true, Position = 0)]
     public string Name { get; set; } = "";
@@ -113,7 +113,7 @@ public sealed class InvokeBashNativeCommand : PSCmdlet, IDisposable
         _fallback?.Dispose();
     }
 
-    public void Dispose()
+    protected override void DisposeResources()
     {
         _child?.Dispose();
         _fallback?.Dispose();

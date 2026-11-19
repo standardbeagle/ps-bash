@@ -27,7 +27,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashYes")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashYesCommand : PSCmdlet
+public sealed class InvokeBashYesCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

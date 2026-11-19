@@ -9,7 +9,7 @@ namespace PsBash.Cmdlets;
 /// <c>complete -r</c>); the line editor's completion is not driven by them. Usage errors exit 2 like bash.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashComplete")]
-public sealed class InvokeBashCompleteCommand : PSCmdlet
+public sealed class InvokeBashCompleteCommand : BashCmdlet
 {
     private const string StoreVar = "__BashCompSpecs";
     private static readonly string ValueFlags = "AGWCFXPSo";
@@ -105,7 +105,7 @@ public sealed class InvokeBashCompleteCommand : PSCmdlet
 
 /// <summary>The <c>compopt</c> builtin. It only changes a running completion function's options, and ps-bash runs none, so it validates and fails like bash does outside one.</summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashCompopt")]
-public sealed class InvokeBashCompoptCommand : PSCmdlet
+public sealed class InvokeBashCompoptCommand : BashCmdlet
 {
     private static readonly HashSet<string> Options = new(StringComparer.Ordinal)
         { "bashdefault", "default", "dirnames", "filenames", "noquote", "nosort", "nospace", "plusdirs" };

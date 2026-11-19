@@ -13,7 +13,7 @@ namespace PsBash.Cmdlets;
 /// output, never the detached child's. Exit status follows GNU nohup: 125 own failure, 127 command not found.</para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashNohup")]
-public sealed class InvokeBashNohupCommand : PSCmdlet
+public sealed class InvokeBashNohupCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

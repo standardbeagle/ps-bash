@@ -24,7 +24,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashWhich")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashWhichCommand : PSCmdlet
+public sealed class InvokeBashWhichCommand : BashCmdlet
 {
     // Decoy for the bare `-a` (show-all) flag. Without it `-a` prefix-collides with
     // this cmdlet's own -Arguments parameter and the binder consumes it (and the

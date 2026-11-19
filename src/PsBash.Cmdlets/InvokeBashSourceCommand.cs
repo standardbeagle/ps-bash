@@ -9,7 +9,7 @@ namespace PsBash.Cmdlets;
 /// Positional arguments are passed through $global:BashPositional.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashSource")]
-public sealed class InvokeBashSourceCommand : PSCmdlet
+public sealed class InvokeBashSourceCommand : BashCmdlet
 {
     [Parameter(Position = 0, Mandatory = true)]
     public string? Path { get; set; }
@@ -68,7 +68,7 @@ public sealed class InvokeBashSourceCommand : PSCmdlet
             // launcher process would still return 0 to the caller. Push a
             // non-zero exit code into the global so the outer eval picks
             // it up.
-            SessionState.PSVariable.Set("global:LASTEXITCODE", 1);
+            FileSystemHelpers.SetLastExitCode(this, 1);
             return null;
         }
 
@@ -87,14 +87,14 @@ public sealed class InvokeBashSourceCommand : PSCmdlet
                 "SourceReadFailed",
                 ErrorCategory.ReadError,
                 resolvedPath));
-            SessionState.PSVariable.Set("global:LASTEXITCODE", 1);
+            FileSystemHelpers.SetLastExitCode(this, 1);
             return null;
         }
 
         // bash: sourcing a file with no commands succeeds (`false; . empty.sh; echo $?` -> 0).
         if (string.IsNullOrWhiteSpace(content))
         {
-            SessionState.PSVariable.Set("global:LASTEXITCODE", 0);
+            FileSystemHelpers.SetLastExitCode(this, 0);
             return null;
         }
 
@@ -104,7 +104,7 @@ public sealed class InvokeBashSourceCommand : PSCmdlet
             result = BashTranspiler.Transpile(content, TranspileContext.Eval, null, SharedStdin.Get(SessionState) is not null);
         if (string.IsNullOrEmpty(result))
         {
-            SessionState.PSVariable.Set("global:LASTEXITCODE", 0);
+            FileSystemHelpers.SetLastExitCode(this, 0);
             return null;
         }
 

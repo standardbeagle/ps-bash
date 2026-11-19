@@ -12,7 +12,7 @@ namespace PsBash.Cmdlets;
 /// and the loop stage after it still completes.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashPipeGate")]
-public sealed class InvokeBashPipeGateCommand : PSCmdlet
+public sealed class InvokeBashPipeGateCommand : BashCmdlet
 {
     [Parameter(ValueFromPipeline = true)]
     [AllowNull]

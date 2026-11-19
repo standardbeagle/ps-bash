@@ -32,7 +32,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashAwk")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashAwkCommand : PSCmdlet
+public sealed class InvokeBashAwkCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
@@ -167,14 +167,14 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
                 {
                     if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     FileSystemHelpers.WriteBashError(this, $"awk: can't open source file {pf}: {ex.Message}");
-                    SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
+                    FileSystemHelpers.SetLastExitCode(this, 2);
                     _halt = true;
                     return;
                 }
                 if (!File.Exists(resolved))
                 {
                     FileSystemHelpers.WriteBashError(this, $"awk: fatal: cannot open source file `{pf}' for reading: No such file or directory");
-                    SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
+                    FileSystemHelpers.SetLastExitCode(this, 2);
                     _halt = true;
                     return;
                 }
@@ -187,7 +187,7 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
         if (programText == null)
         {
             FileSystemHelpers.WriteBashError(this, "awk: usage: awk [options] program [file ...]");
-            SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
+            FileSystemHelpers.SetLastExitCode(this, 2);
             _halt = true;
             return;
         }
@@ -200,7 +200,7 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
         catch (AwkInterpreter.AwkSyntaxException ex)
         {
             FileSystemHelpers.WriteBashError(this, ex.Message);
-            SessionState.PSVariable.Set("global:LASTEXITCODE", ex.ExitCode);
+            FileSystemHelpers.SetLastExitCode(this, ex.ExitCode);
             _halt = true;
             return;
         }
@@ -332,7 +332,7 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
             machine.Flush();
 
             int exit = machine.ExitCode != 0 ? machine.ExitCode : _fileError;
-            SessionState.PSVariable.Set("global:LASTEXITCODE", exit);
+            FileSystemHelpers.SetLastExitCode(this, exit);
         }
         finally
         {
@@ -349,7 +349,7 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
         catch (AwkInterpreter.AwkRuntimeException ex)
         {
             FileSystemHelpers.WriteBashError(this, $"awk: {ex.Message}");
-            SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
+            FileSystemHelpers.SetLastExitCode(this, 2);
         }
     }
 
@@ -410,7 +410,7 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
         {
             _machine?.Flush();
             FileSystemHelpers.WriteBashError(this, $"awk: {ex.Message}");
-            SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
+            FileSystemHelpers.SetLastExitCode(this, 2);
             _halt = true;
             return false;
         }
@@ -418,7 +418,7 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
         {
             _machine?.Flush();
             FileSystemHelpers.WriteBashError(this, "awk: regular expression match timed out");
-            SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
+            FileSystemHelpers.SetLastExitCode(this, 2);
             _halt = true;
             return false;
         }

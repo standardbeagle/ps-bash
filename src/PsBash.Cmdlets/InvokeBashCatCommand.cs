@@ -62,7 +62,7 @@ namespace PsBash.Cmdlets;
 [Cmdlet(VerbsLifecycle.Invoke, "BashCat")]
 [OutputType(typeof(PSObject))]
 [OutputType(typeof(string))]
-public sealed class InvokeBashCatCommand : PSCmdlet
+public sealed class InvokeBashCatCommand : BashCmdlet
 {
     /// <summary>
     /// The bash <c>-E</c> (show <c>$</c> at line end) switch — declared
@@ -355,7 +355,7 @@ public sealed class InvokeBashCatCommand : PSCmdlet
         }
         if (_hadError)
         {
-            SessionState.PSVariable.Set("global:LASTEXITCODE", 1);
+            FileSystemHelpers.SetLastExitCode(this, 1);
         }
     }
 

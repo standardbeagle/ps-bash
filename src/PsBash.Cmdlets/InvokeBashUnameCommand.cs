@@ -22,7 +22,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashUname")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashUnameCommand : PSCmdlet
+public sealed class InvokeBashUnameCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

@@ -21,7 +21,7 @@ namespace PsBash.Cmdlets;
 /// consumer that resolves relative paths through raw .NET.</para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashPopd")]
-public sealed class InvokeBashPopdCommand : PSCmdlet
+public sealed class InvokeBashPopdCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

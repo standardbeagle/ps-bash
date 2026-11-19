@@ -34,7 +34,7 @@ namespace PsBash.Cmdlets;
 [Cmdlet(VerbsLifecycle.Invoke, "BashRg")]
 [OutputType("PsBash.RgMatch")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashRgCommand : PSCmdlet
+public sealed class InvokeBashRgCommand : BashCmdlet
 {
     // StopProcessing ends a native rg run, which has no time limit (a search of a large tree is user work).
     private readonly CancellationTokenSource _stop = new();

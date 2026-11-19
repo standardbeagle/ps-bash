@@ -10,7 +10,7 @@ namespace PsBash.Cmdlets;
 /// creates keep the inherited process mask.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashUmask")]
-public sealed class InvokeBashUmaskCommand : PSCmdlet
+public sealed class InvokeBashUmaskCommand : BashCmdlet
 {
     // The mask belongs to the shell session (the runspace), like the shopt table: a pooled host serves many
     // commands, and `umask 077` in one must not change what the next one reports.

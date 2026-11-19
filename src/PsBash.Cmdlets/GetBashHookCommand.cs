@@ -7,7 +7,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsCommon.Get, "BashHook")]
 [OutputType(typeof(BashHookInfo))]
-public sealed class GetBashHookCommand : PSCmdlet
+public sealed class GetBashHookCommand : BashCmdlet
 {
     /// <summary>Optional filter. Omit to return all hooks.</summary>
     [Parameter]

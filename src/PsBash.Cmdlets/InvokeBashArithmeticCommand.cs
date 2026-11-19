@@ -33,7 +33,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashArith")]
 [OutputType(typeof(long))]
-public sealed class InvokeBashArithmeticCommand : PSCmdlet
+public sealed class InvokeBashArithmeticCommand : BashCmdlet
 {
     [Parameter(Position = 0, ValueFromRemainingArguments = true)]
     public string[]? Tokens { get; set; }
@@ -48,7 +48,7 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
 
         // Set directly, not through SetLastExitCode: that would clear the mark an EARLIER word of the same
         // command left (`echo $((1/0)) $((1+1))` is still abandoned).
-        SessionState.PSVariable.Set(new PSVariable("global:LASTEXITCODE", 0));
+        FileSystemHelpers.SetLastExitCode(this, 0);
         try
         {
             long result = BashArith.Evaluate(SubstituteExpressionVariables(expr), ReadVar, WriteVar, ReadRawVar);

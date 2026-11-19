@@ -40,7 +40,7 @@ namespace PsBash.Cmdlets;
 [Cmdlet(VerbsLifecycle.Invoke, "BashGrep")]
 [OutputType("PsBash.GrepMatch")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashGrepCommand : PSCmdlet
+public sealed class InvokeBashGrepCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

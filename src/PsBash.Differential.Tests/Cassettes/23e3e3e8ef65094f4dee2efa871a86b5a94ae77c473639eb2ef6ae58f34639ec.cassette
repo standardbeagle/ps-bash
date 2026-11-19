@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 175
+stdout-length: 20
+stderr-length: 0
+==== SCRIPT ====
+cat nosuch 2>/dev/null | seq 1; echo "s=$?"; cat nosuch 2>/dev/null | printf x; echo " s=$?"; false | tee /dev/null; echo "s=$?"; cat nosuch 2>/dev/null | tail -1; echo "s=$?"
+==== STDOUT ====
+1
+s=0
+x s=0
+s=0
+s=0
+
+==== STDERR ====
+

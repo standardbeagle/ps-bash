@@ -28,7 +28,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashCut")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashCutCommand : PSCmdlet
+public sealed class InvokeBashCutCommand : BashCmdlet
 {
     private const string OptBytes = "bytes", OptChars = "characters", OptFields = "fields",
         OptDelim = "delimiter", OptOnly = "only-delimited", OptOutDelim = "output-delimiter",

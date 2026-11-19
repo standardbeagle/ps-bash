@@ -15,7 +15,7 @@ namespace PsBash.Cmdlets;
 /// <remarks>Shells out to the <c>git</c> binary via <see cref="BashRuntime.RunChildProcess(ProcessStartInfo, System.TimeSpan?)"/> (bounded + kill-tree).</remarks>
 [Cmdlet(VerbsLifecycle.Invoke, "BashGit")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashGitCommand : PSCmdlet
+public sealed class InvokeBashGitCommand : BashCmdlet
 {
     // StopProcessing ends the git child: psgit passes any git command through (clone, fetch, gc), so no time limit.
     private readonly CancellationTokenSource _stop = new();

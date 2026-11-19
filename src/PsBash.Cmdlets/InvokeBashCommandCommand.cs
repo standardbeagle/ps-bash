@@ -42,7 +42,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashCommand")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashCommandCommand : PSCmdlet
+public sealed class InvokeBashCommandCommand : BashCmdlet
 {
     // Declared because the bare token -v prefix-matches the -Verbose common
     // parameter. Captures both -v and -V (binder is case-insensitive).

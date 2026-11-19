@@ -16,7 +16,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashExpr")]
 [OutputType("PsBash.ExprOutput")]
-public sealed class InvokeBashExprCommand : PSCmdlet
+public sealed class InvokeBashExprCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

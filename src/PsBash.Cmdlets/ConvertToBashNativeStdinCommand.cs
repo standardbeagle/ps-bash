@@ -23,7 +23,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsData.ConvertTo, "BashNativeStdin")]
 [OutputType(typeof(byte[]), typeof(string))]
-public sealed class ConvertToBashNativeStdinCommand : PSCmdlet
+public sealed class ConvertToBashNativeStdinCommand : BashCmdlet
 {
     [Parameter(Mandatory = true, Position = 0)]
     public string Name { get; set; } = "";

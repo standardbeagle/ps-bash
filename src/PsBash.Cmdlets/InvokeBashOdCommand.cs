@@ -16,7 +16,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashOd")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashOdCommand : PSCmdlet
+public sealed class InvokeBashOdCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

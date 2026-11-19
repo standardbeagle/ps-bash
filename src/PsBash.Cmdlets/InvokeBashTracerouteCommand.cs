@@ -21,7 +21,7 @@ namespace PsBash.Cmdlets;
 /// </remarks>
 [Cmdlet(VerbsLifecycle.Invoke, "BashTraceroute")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashTracerouteCommand : PSCmdlet
+public sealed class InvokeBashTracerouteCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

@@ -6,7 +6,7 @@ namespace PsBash.Cmdlets;
 /// Removes a previously registered chpwd hook. No-op if the name is not registered.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Unregister, "BashChpwdHook")]
-public sealed class UnregisterBashChpwdHookCommand : PSCmdlet
+public sealed class UnregisterBashChpwdHookCommand : BashCmdlet
 {
     [Parameter(Mandatory = true)]
     public string Name { get; set; } = string.Empty;

@@ -40,7 +40,7 @@ namespace PsBash.Cmdlets;
 [Cmdlet(VerbsLifecycle.Invoke, "BashHead")]
 [OutputType(typeof(PSObject))]
 [OutputType(typeof(string))]
-public sealed class InvokeBashHeadCommand : PSCmdlet
+public sealed class InvokeBashHeadCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

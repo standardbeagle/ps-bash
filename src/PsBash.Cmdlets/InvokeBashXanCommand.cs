@@ -52,7 +52,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashXan")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashXanCommand : PSCmdlet
+public sealed class InvokeBashXanCommand : BashCmdlet
 {
     // object[] (not string[]) because PowerShell parses bash-style
     // comma-lists like `xan select name,city` into nested arrays. With a

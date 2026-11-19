@@ -69,7 +69,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashInstall")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashInstallCommand : PSCmdlet
+public sealed class InvokeBashInstallCommand : BashCmdlet
 {
     [Parameter] public SwitchParameter D { get; set; }
     [Parameter] public SwitchParameter V { get; set; }

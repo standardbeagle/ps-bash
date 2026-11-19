@@ -19,7 +19,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsCommon.New, "BashLazyStdin")]
 [OutputType(typeof(StdinCursor))]
-public sealed class NewBashLazyStdinCommand : PSCmdlet
+public sealed class NewBashLazyStdinCommand : BashCmdlet
 {
     [Parameter(Mandatory = true, Position = 0)]
     public string Script { get; set; } = "";

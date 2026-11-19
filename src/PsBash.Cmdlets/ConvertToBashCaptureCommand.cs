@@ -23,7 +23,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsData.ConvertTo, "BashCapture")]
 [OutputType(typeof(string))]
-public sealed class ConvertToBashCaptureCommand : PSCmdlet
+public sealed class ConvertToBashCaptureCommand : BashCmdlet
 {
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }

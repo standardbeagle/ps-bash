@@ -34,7 +34,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashYq")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashYqCommand : PSCmdlet
+public sealed class InvokeBashYqCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

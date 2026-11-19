@@ -32,7 +32,7 @@ namespace PsBash.Cmdlets;
 /// silent-wrong-output bug, not an inconsistency: see that method's remarks.</para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashPushd")]
-public sealed class InvokeBashPushdCommand : PSCmdlet
+public sealed class InvokeBashPushdCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

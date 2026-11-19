@@ -40,7 +40,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashBash")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashBashCommand : PSCmdlet, IDisposable
+public sealed class InvokeBashBashCommand : BashCmdlet
 {
     /// <summary>
     /// Bash's <c>-c SCRIPT</c> one-shot flag. Declared as a literal
@@ -134,7 +134,7 @@ public sealed class InvokeBashBashCommand : PSCmdlet, IDisposable
     /// <summary>Ctrl-C, or the pipeline stopping: the child's whole tree goes with it.</summary>
     protected override void StopProcessing() => _child?.Kill();
 
-    public void Dispose() => _child?.Dispose();
+    protected override void DisposeResources() => _child?.Dispose();
 
     /// <summary>
     /// True when the argv names no program — no <c>-c</c> and no script operand, only options (<c>-s</c> included) —
@@ -237,7 +237,7 @@ public sealed class InvokeBashBashCommand : PSCmdlet, IDisposable
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             FileSystemHelpers.WriteBashError(this, "bash: " + ex.Message);
-            SessionState.PSVariable.Set("global:LASTEXITCODE", 1);
+            FileSystemHelpers.SetLastExitCode(this, 1);
         }
     }
 
@@ -249,7 +249,7 @@ public sealed class InvokeBashBashCommand : PSCmdlet, IDisposable
         int exitCode = _child.Complete(this);
         if (Stopping) return;
         // Forward child exit code to the caller's $LASTEXITCODE — oracle parity.
-        SessionState.PSVariable.Set("global:LASTEXITCODE", exitCode);
+        FileSystemHelpers.SetLastExitCode(this, exitCode);
     }
 
     /// <summary>

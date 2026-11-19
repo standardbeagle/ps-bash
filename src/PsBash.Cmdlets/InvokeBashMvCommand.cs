@@ -46,7 +46,7 @@ public enum MvExisting
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashMv")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashMvCommand : PSCmdlet
+public sealed class InvokeBashMvCommand : BashCmdlet
 {
     [Parameter] public SwitchParameter v { get; set; }
 

@@ -32,7 +32,7 @@ namespace PsBash.Cmdlets;
 /// </para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashRedirect")]
-public sealed class InvokeBashRedirectCommand : PSCmdlet, IDisposable
+public sealed class InvokeBashRedirectCommand : BashCmdlet
 {
     [Parameter(Position = 0)]
     public string? Path { get; set; }
@@ -329,7 +329,7 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet, IDisposable
 
     // A terminating error upstream (a discarded line: `{ echo ${!undef}; } 2>>f`) ends the pipeline without
     // EndProcessing; PowerShell still disposes the cmdlet, so what was written is flushed and the file is let go.
-    public void Dispose() => Close();
+    protected override void DisposeResources() => Close();
 
     private void Close()
     {

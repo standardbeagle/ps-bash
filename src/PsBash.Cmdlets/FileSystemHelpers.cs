@@ -409,6 +409,7 @@ internal static class FileSystemHelpers
     public static void SetLastExitCode(PSCmdlet cmdlet, int code)
     {
         cmdlet.SessionState.PSVariable.Set(new PSVariable("global:LASTEXITCODE", code));
+        if (cmdlet is BashCmdlet own) own.OwnStatus = code; // re-asserted after the stages ahead of it (BashCmdlet)
         InvokeBashPipeStageCommand.NoteStatus(code); // the stage's own status (PIPESTATUS when a later stage stops it)
     }
 
@@ -620,7 +621,6 @@ internal static class FileSystemHelpers
         WriteBashError(cmdlet, UsageHint(cmd) is { } hint ? message + "\n" + hint : message);
         SetLastExitCode(cmdlet, 1);
     }
-
     /// <summary>
     /// The text of <see cref="WriteMissingOperand"/> for a pure plan that carries its error as a string: the
     /// first line (the operand after which one is missing quoted as gnulib <c>quote()</c>,
@@ -676,7 +676,7 @@ internal static class FileSystemHelpers
 
     public static void WriteOptionError(
         PSCmdlet cmdlet, string cmd, string token,
-        ISet<string> validButUnsupported)
+        ISet<string> validButUnsupported, int usageExitCode = 2)
     {
         string lookup = token;
         if (token.StartsWith("--", StringComparison.Ordinal))
@@ -716,7 +716,8 @@ internal static class FileSystemHelpers
             char bad = token.Length > 1 ? token[1] : '-';
             WriteBashError(cmdlet, $"{cmd}: invalid option -- '{bad}'");
         }
-        SetLastExitCode(cmdlet, 2);
+        if (UsageHint(cmd) is { } hint) WriteBashError(cmdlet, hint);
+        SetLastExitCode(cmdlet, usageExitCode);
     }
 
     // ───────────────────────── Destructive filesystem ops (OS interface) ─────────────────────────

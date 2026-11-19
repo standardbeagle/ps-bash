@@ -17,7 +17,7 @@ namespace PsBash.Cmdlets;
 /// Not provided: the <c>flock FD</c> form (it locks a descriptor the shell holds open) and <c>-u</c>.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashFlock")]
-public sealed class InvokeBashFlockCommand : PSCmdlet
+public sealed class InvokeBashFlockCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

@@ -27,7 +27,7 @@ namespace PsBash.Cmdlets;
 /// moved, syncs nothing.</para>
 /// </remarks>
 [Cmdlet(VerbsLifecycle.Invoke, "BashCd")]
-public sealed class InvokeBashCdCommand : PSCmdlet
+public sealed class InvokeBashCdCommand : BashCmdlet
 {
     /// <summary>The operands, forwarded to <c>Set-Location</c> unchanged.</summary>
     [Parameter(ValueFromRemainingArguments = true)]

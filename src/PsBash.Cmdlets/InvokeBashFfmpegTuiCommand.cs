@@ -11,7 +11,7 @@ namespace PsBash.Cmdlets;
 /// Spectre loop as <c>Show-Styled</c>. Strata-gated (ships only with the styling cmdlets).
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashFfmpegTui")]
-public sealed class InvokeBashFfmpegTuiCommand : PSCmdlet
+public sealed class InvokeBashFfmpegTuiCommand : BashCmdlet
 {
     /// <summary>The directory (or single file) to open. Omitted → the current directory.</summary>
     [Parameter(Position = 0, ValueFromRemainingArguments = true)]

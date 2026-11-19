@@ -27,7 +27,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashDeclare")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashDeclareCommand : PSCmdlet
+public sealed class InvokeBashDeclareCommand : BashCmdlet
 {
     [Parameter] public SwitchParameter P { get; set; }
 

@@ -9,7 +9,7 @@ namespace PsBash.Cmdlets;
 /// 123. Aliases <c>true</c> / <c>false</c> (psm1) name these cmdlets. Operands are ignored; stdin is drained.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashTrue")]
-public sealed class InvokeBashTrueCommand : PSCmdlet
+public sealed class InvokeBashTrueCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
@@ -23,7 +23,7 @@ public sealed class InvokeBashTrueCommand : PSCmdlet
 
 /// <summary>Coreutils <c>false</c> as a program: status 1. See <see cref="InvokeBashTrueCommand"/>.</summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashFalse")]
-public sealed class InvokeBashFalseCommand : PSCmdlet
+public sealed class InvokeBashFalseCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

@@ -46,7 +46,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashTee")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashTeeCommand : PSCmdlet
+public sealed class InvokeBashTeeCommand : BashCmdlet
 {
     /// <summary>
     /// The bash <c>-a</c> (append) switch — declared explicitly because the

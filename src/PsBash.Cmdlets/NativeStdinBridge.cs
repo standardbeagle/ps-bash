@@ -284,7 +284,7 @@ public sealed class NativeStdinBridge
 /// </summary>
 [Cmdlet(VerbsCommon.Enter, "BashNativeStdin")]
 [OutputType(typeof(NativeStdinBridge))]
-public sealed class EnterBashNativeStdinCommand : PSCmdlet
+public sealed class EnterBashNativeStdinCommand : BashCmdlet
 {
     [Parameter(Mandatory = true, Position = 0)]
     public string Name { get; set; } = "";
@@ -314,7 +314,7 @@ public sealed class EnterBashNativeStdinCommand : PSCmdlet
 
 /// <summary><c>Exit-BashNativeStdin $bridge</c>: undo <c>Enter-BashNativeStdin</c> (a null bridge is a no-op).</summary>
 [Cmdlet(VerbsCommon.Exit, "BashNativeStdin")]
-public sealed class ExitBashNativeStdinCommand : PSCmdlet
+public sealed class ExitBashNativeStdinCommand : BashCmdlet
 {
     [Parameter(Position = 0)]
     [AllowNull]

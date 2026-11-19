@@ -9,7 +9,7 @@ namespace PsBash.Cmdlets;
 /// <see cref="BashFdTable"/>; exit status 1 with a bash-style message when it cannot.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashExecFd")]
-public sealed class InvokeBashExecFdCommand : PSCmdlet
+public sealed class InvokeBashExecFdCommand : BashCmdlet
 {
     [Parameter(Position = 0)]
     public int Descriptor { get; set; }
@@ -76,14 +76,14 @@ public sealed class InvokeBashExecFdCommand : PSCmdlet
 
 /// <summary>Close every descriptor opened by <c>exec</c>: the host runs this when a new invocation starts.</summary>
 [Cmdlet(VerbsCommon.Clear, "BashFd")]
-public sealed class ClearBashFdCommand : PSCmdlet
+public sealed class ClearBashFdCommand : BashCmdlet
 {
     protected override void EndProcessing() => BashFdTable.CloseAll();
 }
 
 /// <summary><c>cmd &gt;&amp;N</c>: the command's output goes to descriptor N (a pipeline sink).</summary>
 [Cmdlet(VerbsCommunications.Write, "BashFd")]
-public sealed class WriteBashFdCommand : PSCmdlet
+public sealed class WriteBashFdCommand : BashCmdlet
 {
     [Parameter(Position = 0, Mandatory = true)]
     public int Descriptor { get; set; }
@@ -136,7 +136,7 @@ public sealed class WriteBashFdCommand : PSCmdlet
 
 /// <summary><c>cmd &lt;&amp;N</c>: the rest of descriptor N, one record per line, as the command's stdin.</summary>
 [Cmdlet(VerbsCommunications.Read, "BashFd")]
-public sealed class ReadBashFdCommand : PSCmdlet
+public sealed class ReadBashFdCommand : BashCmdlet
 {
     [Parameter(Position = 0, Mandatory = true)]
     public int Descriptor { get; set; }

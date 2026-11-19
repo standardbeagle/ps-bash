@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 303
+stdout-length: 26
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"; echo x | grep --bogus > f 2>/dev/null; echo "s=$?"; v=$(echo x | grep --bogus 2>/dev/null); echo "s=$?"; echo x | grep --bogus 2>&1 | cat >/dev/null; echo "s=$?"; echo x | grep --bogus 2>/dev/null | wc -l; echo "s=$?"; seq 3 | grep 5; echo "s=$?"; seq 3 | grep 2 | grep 7; echo "s=$?"
+==== STDOUT ====
+s=2
+s=2
+s=0
+0
+s=0
+s=1
+s=1
+
+==== STDERR ====
+

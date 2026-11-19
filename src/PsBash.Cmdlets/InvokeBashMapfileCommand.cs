@@ -54,7 +54,7 @@ namespace PsBash.Cmdlets;
 /// psm1 and resolve to this cmdlet automatically.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashMapfile")]
-public sealed class InvokeBashMapfileCommand : PSCmdlet
+public sealed class InvokeBashMapfileCommand : BashCmdlet
 {
     /// <summary>
     /// <c>-O ORIGIN</c> — start assigning at this array index. Declared

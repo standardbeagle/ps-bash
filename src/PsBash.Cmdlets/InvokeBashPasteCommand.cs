@@ -29,7 +29,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashPaste")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashPasteCommand : PSCmdlet
+public sealed class InvokeBashPasteCommand : BashCmdlet
 {
     [Parameter]
     [Alias("d")]

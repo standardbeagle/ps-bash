@@ -66,7 +66,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashGzip")]
 [OutputType(typeof(string))]
-public class InvokeBashGzipCommand : PSCmdlet
+public class InvokeBashGzipCommand : BashCmdlet
 {
     /// <summary><c>gunzip</c> / <c>zcat</c>: decompress whatever the options say.</summary>
     private protected virtual bool ImpliedDecompress => false;

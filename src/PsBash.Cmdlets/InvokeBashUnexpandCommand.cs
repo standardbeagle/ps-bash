@@ -53,7 +53,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashUnexpand")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashUnexpandCommand : PSCmdlet
+public sealed class InvokeBashUnexpandCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

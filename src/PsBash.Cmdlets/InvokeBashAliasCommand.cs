@@ -38,7 +38,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashAlias")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashAliasCommand : PSCmdlet
+public sealed class InvokeBashAliasCommand : BashCmdlet
 {
     /// <summary>
     /// <c>-p</c> print. Declared explicitly because the bare token prefix-

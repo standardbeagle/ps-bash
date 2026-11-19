@@ -70,7 +70,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashStat")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashStatCommand : PSCmdlet
+public sealed class InvokeBashStatCommand : BashCmdlet
 {
     private const string OptFormat = "format", OptPrintf = "printf", OptTerse = "terse", OptCached = "cached";
 

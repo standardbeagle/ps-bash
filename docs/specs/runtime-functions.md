@@ -112,6 +112,15 @@ every diagnostic twice (its Bash-mode copy then went through `$Host.UI.WriteErro
 immune to `2>/dev/null`; it is an ErrorRecord now, like `>&2` output). `Write-BashError` remains only for the
 psm1 helpers (`Get-BashItem`, `Read-BashFile*`) and the job-control functions.
 
+**A pipeline's status is its last status-setting stage's, whenever each stage finishes.** PowerShell runs every
+stage's BeginProcessing before the first record and each stage's EndProcessing in order, so a status a later stage
+set early (`echo x | grep --bogus`: grep's usage error, found while parsing) was overwritten by the stage ahead of it
+(echo sets 0 as it runs): the pipeline came out 0, GNU 2. Every cmdlet derives from `BashCmdlet`, sets its status only
+through `FileSystemHelpers.SetLastExitCode` (which records it on the instance), and a stage after the first re-asserts
+that status in `Dispose`, which the engine calls after every EndProcessing in ascending pipeline position, so the last
+stage that set a status wins. A stage that set none (a redirection, a capture) leaves it. Guard
+`BashCmdletBaseGuardTests`; behavior `PipelineLastStageStatusTests.Status_OfALaterStage_SurvivesTheStagesAheadOfIt`.
+
 **Diagnostics name operands as typed.** GNU quotes the argv element, never the resolved full path
 (`cat: nosuchfile: No such file or directory`). Every diagnostic goes through
 `FileSystemHelpers.WriteStderr`, which calls `OperandDisplay.Rewrite`: an operand resolved through

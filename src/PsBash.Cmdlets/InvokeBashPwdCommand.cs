@@ -35,7 +35,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashPwd")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashPwdCommand : PSCmdlet
+public sealed class InvokeBashPwdCommand : BashCmdlet
 {
     /// <summary>
     /// The bash <c>-P</c> (physical) switch. Declared as an explicit

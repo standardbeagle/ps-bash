@@ -43,7 +43,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashSplit")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashSplitCommand : PSCmdlet
+public sealed class InvokeBashSplitCommand : BashCmdlet
 {
     /// <summary>
     /// Valid GNU <c>split</c> options ps-bash does not implement, refused loudly (exit 2) instead of

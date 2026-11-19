@@ -22,7 +22,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashEcho")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashEchoCommand : PSCmdlet
+public sealed class InvokeBashEchoCommand : BashCmdlet
 {
     /// <summary>
     /// Decoy for the bare <c>-e</c> / <c>-E</c> tokens on a direct cmdlet call —

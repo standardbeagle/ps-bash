@@ -27,7 +27,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashMktemp")]
 [OutputType("PsBash.MktempOutput")]
-public sealed class InvokeBashMktempCommand : PSCmdlet
+public sealed class InvokeBashMktempCommand : BashCmdlet
 {
     [Parameter] public SwitchParameter d { get; set; }
 

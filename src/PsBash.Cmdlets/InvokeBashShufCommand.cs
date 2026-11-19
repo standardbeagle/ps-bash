@@ -29,7 +29,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashShuf")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashShufCommand : PSCmdlet
+public sealed class InvokeBashShufCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

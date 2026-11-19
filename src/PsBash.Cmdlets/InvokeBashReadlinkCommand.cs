@@ -20,7 +20,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashReadlink")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashReadlinkCommand : PSCmdlet
+public sealed class InvokeBashReadlinkCommand : BashCmdlet
 {
     /// <summary>Decoy for a direct call's <c>-f</c>.</summary>
     [Parameter] public SwitchParameter f { get; set; }

@@ -15,7 +15,7 @@ namespace PsBash.Cmdlets;
 /// <remarks>Uses <see cref="Ping"/> (cross-platform managed ICMP), so it needs no external binary.</remarks>
 [Cmdlet(VerbsLifecycle.Invoke, "BashPing")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashPingCommand : PSCmdlet
+public sealed class InvokeBashPingCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

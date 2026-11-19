@@ -37,7 +37,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashSort")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashSortCommand : PSCmdlet
+public sealed class InvokeBashSortCommand : BashCmdlet
 {
     private const string OptReverse = "reverse", OptNumeric = "numeric", OptGeneral = "general",
         OptHuman = "human", OptMonth = "month", OptVersion = "version-sort", OptFold = "fold",

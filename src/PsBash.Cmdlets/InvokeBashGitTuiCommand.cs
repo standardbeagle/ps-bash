@@ -11,7 +11,7 @@ namespace PsBash.Cmdlets;
 /// commits / rebases / pushes. Strata-gated (ships only with the styling cmdlets).
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashGitTui")]
-public sealed class InvokeBashGitTuiCommand : PSCmdlet
+public sealed class InvokeBashGitTuiCommand : BashCmdlet
 {
     protected override void EndProcessing()
     {

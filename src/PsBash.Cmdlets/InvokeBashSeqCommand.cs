@@ -51,7 +51,7 @@ namespace PsBash.Cmdlets;
 [Cmdlet(VerbsLifecycle.Invoke, "BashSeq")]
 [OutputType("PsBash.SeqOutput")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashSeqCommand : PSCmdlet
+public sealed class InvokeBashSeqCommand : BashCmdlet
 {
     [Parameter] public SwitchParameter w { get; set; }
 

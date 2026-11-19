@@ -16,7 +16,7 @@ namespace PsBash.Cmdlets;
 /// Without explicit arguments it walks the positional parameters.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashGetopts")]
-public sealed class InvokeBashGetoptsCommand : PSCmdlet
+public sealed class InvokeBashGetoptsCommand : BashCmdlet
 {
     private const string PosVar = "__PSBASH_OPTPOS";
 

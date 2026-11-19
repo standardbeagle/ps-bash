@@ -35,7 +35,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashLess")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashLessCommand : PSCmdlet
+public sealed class InvokeBashLessCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

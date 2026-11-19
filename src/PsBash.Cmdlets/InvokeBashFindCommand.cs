@@ -34,7 +34,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashFind")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashFindCommand : PSCmdlet
+public sealed class InvokeBashFindCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
@@ -926,12 +926,12 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                 string here = SessionState.Path.CurrentFileSystemLocation.Path;
                 childDir = ChildDirectory.Enter(this, Path.GetFullPath(workDir.Length == 0 ? "/" : workDir, here));
             }
-            SessionState.PSVariable.Set("global:LASTEXITCODE", 0);
+            FileSystemHelpers.SetLastExitCode(this, 0);
             // `find -exec prog {} \; 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4).
             if (InvokeBashNativeCommand.MergedProgramPath(this, argv[0]) is { } program)
             {
                 int exit = InvokeBashNativeCommand.RunMerged(this, program, argv.Skip(1), inheritStdin: true);
-                SessionState.PSVariable.Set("global:LASTEXITCODE", exit);
+                FileSystemHelpers.SetLastExitCode(this, exit);
                 return exit == 0;
             }
             foreach (var o in InvokeCommand.InvokeScript(body, boxed)) WriteObject(o);

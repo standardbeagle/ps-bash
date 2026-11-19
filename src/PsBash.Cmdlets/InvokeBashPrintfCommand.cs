@@ -34,7 +34,7 @@ namespace PsBash.Cmdlets;
 /// <see cref="FileSystemHelpers.WriteBashError"/> (discardable with <c>2&gt;/dev/null</c>)./// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashPrintf")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashPrintfCommand : PSCmdlet
+public sealed class InvokeBashPrintfCommand : BashCmdlet
 {
     private const string EscapedPercentSentinel = "\0ESCAPED_PERCENT\0";
 

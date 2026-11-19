@@ -50,7 +50,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashWc")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashWcCommand : PSCmdlet
+public sealed class InvokeBashWcCommand : BashCmdlet
 {
     /// <summary>
     /// The bash <c>-w</c> (words-only) switch — declared explicitly because the

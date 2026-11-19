@@ -25,7 +25,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashSleep")]
 [OutputType(typeof(void))]
-public sealed class InvokeBashSleepCommand : PSCmdlet
+public sealed class InvokeBashSleepCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

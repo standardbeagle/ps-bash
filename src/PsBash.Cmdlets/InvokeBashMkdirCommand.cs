@@ -37,7 +37,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashMkdir")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashMkdirCommand : PSCmdlet
+public sealed class InvokeBashMkdirCommand : BashCmdlet
 {
     [Parameter] public SwitchParameter p { get; set; }
     [Parameter] public SwitchParameter v { get; set; }

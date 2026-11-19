@@ -20,7 +20,7 @@ internal sealed record ChmodPlan(
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashChmod")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashChmodCommand : PSCmdlet
+public sealed class InvokeBashChmodCommand : BashCmdlet
 {
     // Decoys for DIRECT calls only (the transpiler quotes dash words): a bare -v / -w / -o would bind PowerShell's
     // -Verbose / -Warning* / -Out* common parameters. They are put back in front of the arguments.

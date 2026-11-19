@@ -27,7 +27,7 @@ namespace PsBash.Cmdlets;
 /// </remarks>
 [Cmdlet(VerbsLifecycle.Invoke, "BashFfmpeg")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashFfmpegCommand : PSCmdlet
+public sealed class InvokeBashFfmpegCommand : BashCmdlet
 {
     // StopProcessing ends the ffmpeg child, which has no time limit unless the plan sets one (recording).
     private readonly CancellationTokenSource _stop = new();

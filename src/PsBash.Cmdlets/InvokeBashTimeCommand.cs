@@ -31,7 +31,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashTime")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashTimeCommand : PSCmdlet
+public sealed class InvokeBashTimeCommand : BashCmdlet
 {
     /// <summary>
     /// Decoys for GNU time's <c>-p</c>, <c>-v</c> and <c>-o</c>: called directly (<c>Invoke-BashTime -p true</c>) the

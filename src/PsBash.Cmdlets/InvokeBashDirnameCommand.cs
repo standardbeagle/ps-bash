@@ -22,7 +22,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashDirname")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashDirnameCommand : PSCmdlet
+public sealed class InvokeBashDirnameCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

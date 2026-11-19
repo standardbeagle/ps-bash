@@ -20,7 +20,7 @@ namespace PsBash.Cmdlets;
 /// the rest are not evaluated.</para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashLet")]
-public sealed class InvokeBashLetCommand : PSCmdlet
+public sealed class InvokeBashLetCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
@@ -58,12 +58,12 @@ public sealed class InvokeBashLetCommand : PSCmdlet
             if (value is not long n)
             {
                 // Invoke-BashArith reported the error and set status 1.
-                SessionState.PSVariable.Set("global:LASTEXITCODE", 1);
+                FileSystemHelpers.SetLastExitCode(this, 1);
                 return;
             }
             last = n;
         }
 
-        SessionState.PSVariable.Set("global:LASTEXITCODE", last == 0 ? 1 : 0);
+        FileSystemHelpers.SetLastExitCode(this, last == 0 ? 1 : 0);
     }
 }

@@ -8,7 +8,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsData.ConvertTo, "PowerShell")]
 [OutputType(typeof(string))]
-public sealed class ConvertToPowerShellCommand : PSCmdlet
+public sealed class ConvertToPowerShellCommand : BashCmdlet
 {
     [Parameter(Position = 0, Mandatory = true, ValueFromPipeline = true)]
     public string? Source { get; set; }

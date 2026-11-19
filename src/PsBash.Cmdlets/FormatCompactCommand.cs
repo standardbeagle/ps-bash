@@ -12,7 +12,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsCommon.Format, "Compact")]
 [OutputType(typeof(string))]
-public sealed class FormatCompactCommand : PSCmdlet
+public sealed class FormatCompactCommand : BashCmdlet
 {
     // PowerShell adds these onto filesystem/provider objects; they are noise in a compact view.
     private static readonly HashSet<string> NoiseProperties = new(StringComparer.OrdinalIgnoreCase)

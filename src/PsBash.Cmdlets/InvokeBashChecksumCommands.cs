@@ -548,7 +548,7 @@ internal sealed class ChecksumStdin
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashMd5sum")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashMd5sumCommand : PSCmdlet
+public sealed class InvokeBashMd5sumCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
@@ -582,7 +582,7 @@ public sealed class InvokeBashMd5sumCommand : PSCmdlet
 /// <summary>Binary cmdlet for <c>sha1sum</c>. See <see cref="InvokeBashMd5sumCommand"/>.</summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashSha1sum")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashSha1sumCommand : PSCmdlet
+public sealed class InvokeBashSha1sumCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
@@ -616,7 +616,7 @@ public sealed class InvokeBashSha1sumCommand : PSCmdlet
 /// <summary>Binary cmdlet for <c>sha256sum</c>. See <see cref="InvokeBashMd5sumCommand"/>.</summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashSha256sum")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashSha256sumCommand : PSCmdlet
+public sealed class InvokeBashSha256sumCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

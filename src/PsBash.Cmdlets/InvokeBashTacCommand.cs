@@ -42,7 +42,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashTac")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashTacCommand : PSCmdlet
+public sealed class InvokeBashTacCommand : BashCmdlet
 {
     /// <summary>
     /// Valid GNU <c>tac</c> options ps-bash does not implement, refused loudly (exit 2) by the

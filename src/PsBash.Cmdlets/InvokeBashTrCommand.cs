@@ -47,7 +47,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashTr")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashTrCommand : PSCmdlet
+public sealed class InvokeBashTrCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
@@ -369,7 +369,7 @@ public sealed class InvokeBashTrCommand : PSCmdlet
 
         if (_optionErrorToken != null)
         {
-            FileSystemHelpers.WriteOptionError(this, "tr", _optionErrorToken, TrValidButUnsupported);
+            FileSystemHelpers.WriteOptionError(this, "tr", _optionErrorToken, TrValidButUnsupported, usageExitCode: 1); // GNU tr: usage errors are 1
             return;
         }
 

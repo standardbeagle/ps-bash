@@ -70,7 +70,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashPs")]
 [OutputType("PsBash.PsEntry")]
-public sealed class InvokeBashPsCommand : PSCmdlet
+public sealed class InvokeBashPsCommand : BashCmdlet
 {
     [Parameter] public SwitchParameter E { get; set; }
     [Parameter] public SwitchParameter A { get; set; }

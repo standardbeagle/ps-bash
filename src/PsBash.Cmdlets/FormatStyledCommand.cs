@@ -34,7 +34,7 @@ namespace PsBash.Cmdlets;
 /// </remarks>
 [Cmdlet(VerbsCommon.Format, "Styled")]
 [OutputType(typeof(string))]
-public sealed class FormatStyledCommand : PSCmdlet
+public sealed class FormatStyledCommand : BashCmdlet
 {
     /// <summary>
     /// The stylesheet to apply. Accepts inline CSS text, a path to a <c>.pcss</c>/<c>.css</c> file,

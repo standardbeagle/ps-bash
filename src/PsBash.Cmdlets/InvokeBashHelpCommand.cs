@@ -14,7 +14,7 @@ namespace PsBash.Cmdlets;
 /// </para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashHelp")]
-public sealed class InvokeBashHelpCommand : PSCmdlet
+public sealed class InvokeBashHelpCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

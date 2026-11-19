@@ -57,7 +57,7 @@ namespace PsBash.Cmdlets;
 /// No stdout (variable side-effect only).
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashRead")]
-public sealed class InvokeBashReadCommand : PSCmdlet
+public sealed class InvokeBashReadCommand : BashCmdlet
 {
     /// <summary>
     /// <c>-p PROMPT</c> — write PROMPT (followed by ": ") to stdout before

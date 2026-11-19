@@ -29,7 +29,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashJoin")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashJoinCommand : PSCmdlet
+public sealed class InvokeBashJoinCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

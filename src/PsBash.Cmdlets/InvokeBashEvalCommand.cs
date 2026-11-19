@@ -9,7 +9,7 @@ namespace PsBash.Cmdlets;
 /// A nesting-depth guard ($global:__BashEvalDepth, max 5) prevents infinite recursion.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashEval")]
-public sealed class InvokeBashEvalCommand : PSCmdlet
+public sealed class InvokeBashEvalCommand : BashCmdlet
 {
     /// <summary>
     /// The first argument (or single pipeline value).  Additional positional

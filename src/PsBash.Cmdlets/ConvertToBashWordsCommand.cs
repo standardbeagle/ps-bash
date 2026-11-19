@@ -19,7 +19,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsData.ConvertTo, "BashWords")]
 [OutputType(typeof(string))]
-public sealed class ConvertToBashWordsCommand : PSCmdlet
+public sealed class ConvertToBashWordsCommand : BashCmdlet
 {
     [Parameter(Position = 0, ValueFromPipeline = true)]
     [AllowNull]

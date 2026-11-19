@@ -52,7 +52,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashDate")]
 [OutputType("PsBash.DateOutput")]
-public sealed class InvokeBashDateCommand : PSCmdlet
+public sealed class InvokeBashDateCommand : BashCmdlet
 {
     [Parameter] public string? D { get; set; }
 

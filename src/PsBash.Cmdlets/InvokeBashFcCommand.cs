@@ -16,7 +16,7 @@ namespace PsBash.Cmdlets;
 /// fail with status 1. Without this, PowerShell's <c>fc</c> alias (<c>Format-Custom</c>) ran.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashFc")]
-public sealed class InvokeBashFcCommand : PSCmdlet
+public sealed class InvokeBashFcCommand : BashCmdlet
 {
     // Decoy for DIRECT calls only: a bare -e would bind a common parameter. Put back in front of the arguments.
     [Parameter] public string? e { get; set; }

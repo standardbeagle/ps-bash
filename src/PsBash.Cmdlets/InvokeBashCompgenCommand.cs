@@ -8,7 +8,7 @@ namespace PsBash.Cmdlets;
 /// trailing <c>[--] PREFIX</c> filters the candidates. Status 1 when nothing matches.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashCompgen")]
-public sealed class InvokeBashCompgenCommand : PSCmdlet
+public sealed class InvokeBashCompgenCommand : BashCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }

@@ -33,7 +33,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashColumn")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashColumnCommand : PSCmdlet
+public sealed class InvokeBashColumnCommand : BashCmdlet
 {
     private const string OptTable = "table", OptSep = "separator", OptOutSep = "output-separator",
         OptLimit = "limit", OptKeepEmpty = "keep-empty-lines", OptNoOp = "noop", OptWidth = "width", OptFillRows = "fillrows";
