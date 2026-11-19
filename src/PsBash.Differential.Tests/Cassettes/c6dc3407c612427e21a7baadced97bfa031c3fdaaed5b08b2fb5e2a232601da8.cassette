@@ -1,0 +1,24 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 163
+stdout-length: 51
+stderr-length: 0
+==== SCRIPT ====
+true() { echo "true func $1"; return 3; }
+true hi; echo "s=$?"
+if true; then echo y; else echo n; fi
+echo x | true; echo "p=$?"
+unset -f true
+true; echo "after=$?"
+==== STDOUT ====
+true func hi
+s=3
+true func
+n
+true func
+p=3
+after=0
+
+==== STDERR ====
+

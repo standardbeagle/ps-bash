@@ -1412,7 +1412,7 @@ public static partial class PsEmitter
     {
         Command.BoolExpr or Command.ArithCommand => false,
         Command.Simple s when s.Words.Length == 1 && s.EnvPairs.IsEmpty && s.Redirects.IsEmpty
-            && GetLiteralValue(s.Words[0]) is "true" or ":" or "false" => false,
+            && IsConstantStatusBuiltin(s, out _) => false,
         Command.AndOrList a => a.Commands.Any(ConditionRunsCommand),
         _ => true,
     };
@@ -3052,15 +3052,27 @@ public static partial class PsEmitter
     private static string EmitArithConditionExpr(ArithmeticSyntax syntax)
         => $"(@({EmitArithmeticInvocation(syntax)}) -ne 0)"; // a failed evaluation yields no value: false, status 1
 
+    /// <summary>
+    /// <c>true</c> / <c>:</c> (<paramref name="succeeds"/>) or <c>false</c> as the BUILTIN: the emitter may stand a constant
+    /// status in for it (<c>if true</c> -> <c>$true</c>, <c>| true</c> -> Out-Null). Not when the script defines a function
+    /// of that name: bash runs the function (<c>true() { return 1; }; if true</c> takes the else branch).
+    /// </summary>
+    private static bool IsConstantStatusBuiltin(Command.Simple s, out bool succeeds)
+    {
+        succeeds = false;
+        if (s.Words.IsDefaultOrEmpty || GetLiteralValue(s.Words[0]) is not ("true" or ":" or "false") || _definedFunctions?.Contains(GetLiteralValue(s.Words[0])!) == true)
+            return false;
+        succeeds = GetLiteralValue(s.Words[0]) != "false";
+        return true;
+    }
+
     private static string EmitWhileCondition(Command cond)
     {
         // Bare "true"/"false" commands map to PowerShell boolean constants
         if (cond is Command.Simple simple && simple.Words.Length == 1
             && simple.EnvPairs.IsEmpty && simple.Redirects.IsEmpty)
         {
-            var word = GetLiteralValue(simple.Words[0]);
-            if (word is "true" or ":") return "$true";
-            if (word is "false") return "$false";
+            if (IsConstantStatusBuiltin(simple, out var succeeds)) return succeeds ? "$true" : "$false";
         }
 
         return EmitCondition(cond);
@@ -3354,9 +3366,7 @@ public static partial class PsEmitter
         if (cond is Command.Simple simple && simple.Words.Length == 1
             && simple.EnvPairs.IsEmpty && simple.Redirects.IsEmpty)
         {
-            var word = GetLiteralValue(simple.Words[0]);
-            if (word is "true" or ":") return "$true";
-            if (word is "false") return "$false";
+            if (IsConstantStatusBuiltin(simple, out var succeeds)) return succeeds ? "$true" : "$false";
         }
 
         // AndOrList (cmd1 && cmd2 / cmd1 || cmd2): PowerShell's && / || are pipeline
@@ -3408,9 +3418,7 @@ public static partial class PsEmitter
         if (cmd is Command.Simple simple && simple.Words.Length == 1
             && simple.EnvPairs.IsEmpty && simple.Redirects.IsEmpty)
         {
-            var word = GetLiteralValue(simple.Words[0]);
-            if (word is "true" or ":") return "$true";
-            if (word is "false") return "$false";
+            if (IsConstantStatusBuiltin(simple, out var succeeds)) return succeeds ? "$true" : "$false";
         }
 
         // Nested AndOrList: recurse
@@ -6942,7 +6950,7 @@ public static partial class PsEmitter
         // A script-defined function named like a mapped command (`cd() { …; }`, `seq() { …; }`): PowerShell resolves an
         // alias before a function, and the command is aliased — so call the function explicitly (bash: functions first).
         if (!dynamicName && !needsCallOperator && cmd.Words.Length > 0 && GetLiteralValue(cmd.Words[0]) is { Length: > 0 } fnName
-            && _definedFunctions is { Count: > 0 } && _definedFunctions.Contains(fnName) && IsMappedCommandName(fnName))
+            && _definedFunctions is { Count: > 0 } && _definedFunctions.Contains(fnName) && IsAliasedCommandName(fnName))
         {
             var q = PsBuild.SingleQuote(fnName);
             // `builtin` has no alias to fall back to (before the definition runs, or after `unset -f builtin`): the
@@ -12148,8 +12156,7 @@ public static partial class PsEmitter
             // stdin, so we emit Out-Null and append any redirects. Excluding the redirect
             // case sent it to the Emit fallback, which emitted the bare subexpression
             // `$($global:LASTEXITCODE = 0; [void]$true)` â€” not a valid pipeline segment.
-            if (simple.Words.Length >= 1 && simple.EnvPairs.IsEmpty
-                && word0 is "true" or ":" or "false")
+            if (simple.Words.Length >= 1 && simple.EnvPairs.IsEmpty && IsConstantStatusBuiltin(simple, out _))
             {
                 var noop = new StringBuilder("Out-Null");
                 EmitPipeTargetRedirects(simple, noop);
@@ -12961,6 +12968,13 @@ public static partial class PsEmitter
         // Both on the original stderr (`>&2`) is stdout redirected, not a merge PowerShell's 2>&1 carries.
         return fd1 == fd2 && fd1 != 2 && fd1 != 0;
     }
+
+    /// <summary>
+    /// A command name PowerShell may resolve to an ALIAS (the module's <see cref="ModuleAliases"/>, or a mapped name): a
+    /// script function of that name is called explicitly, since an alias outranks a function in PowerShell and bash runs
+    /// the function (<c>true() { ...; }; true</c> ran Invoke-BashTrue). Guard: <c>FunctionShadowsModuleAliasGuardTests</c>.
+    /// </summary>
+    private static bool IsAliasedCommandName(string name) => ModuleAliases.Names.Contains(name) || IsMappedCommandName(name);
 
     /// <summary>True when <paramref name="name"/> is a command the emitter maps to an <c>Invoke-Bash*</c> cmdlet (ignoring script-defined functions).</summary>
     private static bool IsMappedCommandName(string name)

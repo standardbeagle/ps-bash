@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 91
+stdout-length: 15
+stderr-length: 0
+==== SCRIPT ====
+gunzip() { echo "g $*"; }
+gunzip a 'b c'
+printenv() { echo pe; }
+printenv HOME; echo "s=$?"
+==== STDOUT ====
+g a b c
+pe
+s=0
+
+==== STDERR ====
+

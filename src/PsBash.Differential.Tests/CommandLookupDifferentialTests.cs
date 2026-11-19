@@ -36,4 +36,16 @@ public class CommandLookupDifferentialTests
         + "builtin echo b; command echo c\n"
         + "unset -f builtin command\nbuiltin echo b2; command printf '%s\\n' c2\n"
         + "g() { builtin echo inner \"$@\"; }\nbuiltin() { echo wrap \"$@\"; }\ng z; echo \"s=$?\"");
+
+    /// <summary>
+    /// A function wins over every command ps-bash aliases, the inline <c>true</c> / <c>false</c> forms included (a
+    /// condition, a pipe target, an env prefix): PowerShell resolves an alias before a function, so
+    /// <c>true() { echo 'true func'; }; true hi</c> ran Invoke-BashTrue and printed nothing (oils builtin-special spec).
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("true() { echo \"true func $1\"; return 3; }\ntrue hi; echo \"s=$?\"\nif true; then echo y; else echo n; fi\necho x | true; echo \"p=$?\"\nunset -f true\ntrue; echo \"after=$?\"")]
+    [InlineData("false() { echo F; return 0; }\nfalse && echo ok\nwhile false; do echo body; break; done\nfalse | false; echo \"p=$?\"")]
+    [InlineData("foo=bar true; echo \"foo=$foo\"\ntrue() { echo \"true func $foo\"; }\nfoo=bar true; echo \"foo=$foo\"")]
+    [InlineData("gunzip() { echo \"g $*\"; }\ngunzip a 'b c'\nprintenv() { echo pe; }\nprintenv HOME; echo \"s=$?\"")]
+    public Task Function_WinsOverAnAliasedCommand(string script) => AssertOracle.EqualAsync(script);
 }

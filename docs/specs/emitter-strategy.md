@@ -185,6 +185,18 @@ PowerShell therefore names every command in full. Guards: `Core.Tests/PowerShell
 strips), `Host.Tests/ForeignAliasTests` (the base state holds none; no psm1/ps1 command uses an alias),
 `Cmdlets.Tests/BashSessionStateTests`; behavior `Differential.Tests/PowerShellAliasWordTests`.
 
+### 2.4 A script function wins over the runtime's aliases
+
+bash runs a function before a builtin or a program (`true() { echo 'true func'; }; true hi` prints `true func`), but the
+runtime's own aliases (`Set-Alias -Name 'true' …` in PsBash.psm1) outrank a PowerShell function. So a call of a
+function whose name the runtime aliases names the function explicitly:
+`& ((Get-Command -Name 'true' -CommandType Function -ErrorAction SilentlyContinue) ?? 'true') hi` (the alias is the
+fallback before the definition runs and after `unset -f`). Rule: `PsEmitter.IsAliasedCommandName` = the psm1's list
+(`Parser/ModuleAliases.cs`) or a mapped name. The inline `true` / `:` / `false` forms (`if true` -> `$true`,
+`| true` -> Out-Null) stand in for the builtin only: `PsEmitter.IsConstantStatusBuiltin` refuses a name the script
+defines as a function. Guards: `Core.Tests/FunctionShadowsModuleAliasGuardTests` (the list equals the psm1's; every
+alias loses to a function); behavior `Differential.Tests/CommandLookupDifferentialTests.Function_WinsOverAnAliasedCommand`.
+
 ---
 
 ## 3. `EmitPassthrough`
