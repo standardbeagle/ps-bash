@@ -2981,6 +2981,19 @@ function Complete-BashBgJob {
 # buffered output forever. Past this many entries Invoke-BashBackground reaps finished jobs first.
 $script:BashBgMaxJobs = 256
 
+function Get-BashJobNumber {
+    <#
+    .SYNOPSIS
+        The job number of $Job (the [N] of `jobs`, the N of `%N`): the number Start-BashBgJob gave it, one past the
+        highest number in the table when it started (1 in an empty table), as bash numbers jobs. A record made some
+        other way (a test adding to the table) has none and is numbered by its position in $Jobs.
+    #>
+    param($Job, [object[]]$Jobs)
+    if ($Job.PSObject.Properties['JobNumber'] -and $null -ne $Job.JobNumber) { return [int]$Job.JobNumber }
+    for ($k = 0; $k -lt $Jobs.Count; $k++) { if ([object]::ReferenceEquals($Jobs[$k], $Job)) { return $k + 1 } }
+    return 0
+}
+
 function Find-BashBgJob {
     <#
     .SYNOPSIS
@@ -2998,8 +3011,10 @@ function Find-BashBgJob {
             if ($jobs.Count -gt 1) { return $jobs[$jobs.Count - 2] }
             if ($jobs.Count -eq 1) { return $jobs[0] }
         } elseif ($num -match '^\d+$') {
-            $idx = [int]$num - 1
-            if ($idx -ge 0 -and $idx -lt $jobs.Count) { return $jobs[$idx] }
+            # The job's own number, kept while it is in the table (Get-BashJobNumber): `fg %1` reporting job 1 leaves
+            # the next job %2, as in bash, where the position made it %1 ("kill: %2: no such job").
+            $want = [int]$num
+            foreach ($j in $jobs) { if ((Get-BashJobNumber $j $jobs) -eq $want) { return $j } }
         }
     } elseif ($Spec -match '^\d+$') {
         $wantId = [int]$Spec
@@ -3169,7 +3184,9 @@ function Invoke-BashBackground {
         # The emitter found the job's stdout/stderr to be the shell's own (no enclosing redirect, pipe, command
         # substitution or function): where the host provides the session's output mux, the job writes there live
         # instead of holding its output until `wait` (docs/specs/background-jobs.md section 12).
-        [switch]$Live
+        [switch]$Live,
+        # The job's command as written (`sleep 5`): `fg` prints it when it brings the job back, as bash does.
+        [string]$Text
     )
 
     $__bgMux = if ($Live) { Get-Variable -Name __BashJobOutput -Scope Global -ValueOnly -ErrorAction Ignore } else { $null }
@@ -3190,7 +3207,7 @@ function Invoke-BashBackground {
         $__bgEnv = [PsBash.Cmdlets.BashStateSnapshot]::EnvironmentBlock()
         $job = [pscustomobject]@{
             Id = $null; PowerShell = $null; AsyncResult = $null; Done = $false
-            Status = $null; ExitCode = $null; Raw = $true; Live = $null -ne $__bgMux
+            Status = $null; ExitCode = $null; Raw = $true; Live = $null -ne $__bgMux; Text = $Text; JobNumber = $null
         }
         $job | Add-Member -MemberType ScriptProperty -Name 'HasExited' -Value {
             if ($this.Done) { return $true }
@@ -3264,6 +3281,8 @@ try {
         Status      = $status
         ExitCode    = $null
         Live        = $null -ne $__bgMux
+        Text        = $Text
+        JobNumber   = $null
     }
     # HasExited / Kill() shape so tests asserting against $script:BashBgPids
     # (the alias for $script:BashBgJobs) see Process-like surface. HasExited
@@ -3299,6 +3318,10 @@ function Start-BashBgJob {
         Guard: BackgroundJobLaunchGuardTests (nothing but property and variable sets after the start).
     #>
     param([Parameter(Mandatory)]$BgJob, [Parameter(Mandatory)][scriptblock]$StartJob, [switch]$Process)
+    # bash's job number: one past the highest in the table (Get-BashJobNumber, Find-BashBgJob's %N).
+    $__bgNumber = 1
+    foreach ($__bgOther in $script:BashBgJobs) { $__n = Get-BashJobNumber $__bgOther @($script:BashBgJobs); if ($__n -ge $__bgNumber) { $__bgNumber = $__n + 1 } }
+    $BgJob.JobNumber = $__bgNumber
     $script:BashBgJobs.Add($BgJob)
     try { $__bgStarted = & $StartJob }
     catch {
@@ -3411,12 +3434,12 @@ function Invoke-BashJobs {
 
     # -p: only each job's process id (its $! value), one line per job.
     $pidsOnly = @($Arguments | Where-Object { $_ -match '^-[lnprs]*p[lnprs]*$' }).Count -gt 0
-    $i = 1
-    foreach ($job in $script:BashBgJobs) {
-        if ($pidsOnly) { New-BashObject -BashText "$($job.Id)`n"; $i++; continue }
+    $all = @($script:BashBgJobs)
+    foreach ($job in $all) {
+        if ($pidsOnly) { New-BashObject -BashText "$($job.Id)`n"; continue }
         $status = if ($job.AsyncResult.IsCompleted) { 'Done' } else { 'Running' }
-        New-BashObject -BashText "[$i]`t$status`t$($job.Id)`tbash-bg`n"
-        $i++
+        # [N] is the job's number (%N), which stays its own while earlier jobs leave the table.
+        New-BashObject -BashText "[$(Get-BashJobNumber $job $all)]`t$status`t$($job.Id)`tbash-bg`n"
     }
 
     # bash reports a finished job once and then forgets it. Without this a Done job (its PowerShell
@@ -3433,50 +3456,36 @@ function Invoke-BashFg {
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'fg' }
 
-    $target = $null
-    if ($Arguments.Count -gt 0) {
-        $jobNum = $Arguments[0]
-        if ([int]::TryParse($jobNum, [ref]$null)) {
-            $idx = [int]$jobNum - 1
-            if ($idx -ge 0 -and $idx -lt $script:BashBgJobs.Count) {
-                $target = @($script:BashBgJobs)[$idx]
-            }
-        } else {
-            # A `%N` jobspec is the bash JOB NUMBER (the [N] shown by `jobs`), which is
-            # positional and 1-based — NOT the synthetic $! id (which starts at 1000).
-            # Comparing the stripped "1" against $_.Id never matched. Map it to the
-            # same positional index as the bare-number form.
-            $wantNum = $jobNum -replace '^%', ''
-            if ([int]::TryParse($wantNum, [ref]$null)) {
-                $idx = [int]$wantNum - 1
-                if ($idx -ge 0 -and $idx -lt $script:BashBgJobs.Count) {
-                    $target = @($script:BashBgJobs)[$idx]
-                }
-            }
-        }
-    } else {
-        $running = @($script:BashBgJobs | Where-Object { -not $_.AsyncResult.IsCompleted })
-        if ($running.Count -gt 0) {
-            $target = $running[-1]
-        }
-    }
-
+    # The job comes from the one jobspec resolver kill and wait use (Find-BashBgJob): `fg N` and `fg %N` are job
+    # number N (the [N] of `jobs`, not the $! id), `fg` alone the current job (%+, the newest). A job a signal ended
+    # stays in the table until it is reported, so `kill %%; fg` still finds it: bash prints its command and returns
+    # 128+signal. fg used to pick "the newest job still running" itself, which skipped that job ("no current job").
+    $spec = if ($Arguments.Count -gt 0) { $Arguments[0] } else { '%+' }
+    if ($spec -match '^\d+$') { $spec = "%$spec" }
+    $target = if ($spec.StartsWith('%')) { Find-BashBgJob $spec } else { $null }
     if ($null -eq $target) {
-        Write-BashError -Message 'fg: no current job'
+        if ($Arguments.Count -gt 0) { Write-BashError -Message "fg: $($Arguments[0]): no such job" }
+        else { Write-BashError -Message 'fg: no current job' }
         return
     }
 
-    if ($target.AsyncResult.IsCompleted) {
-        Write-Host "[$($target.Id)] Done`tbash-bg"
-        Complete-BashBgJob -Job $target
-        [void]$script:BashBgJobs.Remove($target)
-        return
-    }
-
-    Write-Host "bash-bg (id $($target.Id))"
-    [void]$target.AsyncResult.AsyncWaitHandle.WaitOne()
+    # bash prints the job's command as written on stdout, then waits for the job; the job's status is fg's.
+    $name = if ($target.PSObject.Properties['Text'] -and $target.Text) { $target.Text } else { 'bash-bg' }
+    Emit-BashLine -Text ($name + "`n")
+    if (-not $target.AsyncResult.IsCompleted) { [void]$target.AsyncResult.AsyncWaitHandle.WaitOne() }
     Complete-BashBgJob -Job $target
+    Write-BashBgSignalReport -Job $target
     [void]$script:BashBgJobs.Remove($target)
+    $global:LASTEXITCODE = if ($null -eq $target.ExitCode) { 0 } else { [int]$target.ExitCode }
+}
+
+function Get-BashJobCount {
+    <#
+    .SYNOPSIS
+        The number of jobs in the shell's job table, the one `jobs` lists (prompt `\j`, PsBash.Cmdlets.BashPromptText).
+        A job stays counted until it is reported (`jobs`, `wait`, `fg`), as in bash, a signalled one included.
+    #>
+    $script:BashBgJobs.Count
 }
 
 function Invoke-BashBg {

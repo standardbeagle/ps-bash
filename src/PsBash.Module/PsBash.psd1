@@ -97,6 +97,7 @@ FunctionsToExport = @(
     'Format-LsLine',
     'Get-BashFileInfo',
     'Get-BashItem',
+    'Get-BashJobCount',
     'Get-BashLsProviderEntries',
     'Get-BashPlatform',
     'Get-BashText',

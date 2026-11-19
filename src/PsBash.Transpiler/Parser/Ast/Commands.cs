@@ -214,9 +214,15 @@ public abstract record Command : BashNode
     /// <summary>
     /// A background command: <c>cmd &amp;</c> runs the inner command asynchronously.
     /// The <c>&amp;</c> operator is consumed in <c>ParseList()</c> and wraps the
-    /// preceding command in this node.
+    /// preceding command in this node. <see cref="Source"/> is the command as written (<c>sleep 5</c>), which
+    /// <c>fg</c> prints when it brings the job back; null when it cannot be sliced whole (a here-document body after it).
     /// </summary>
-    public sealed record Background(Command Inner) : Command;
+    public sealed record Background(Command Inner, string? Source = null) : Command
+    {
+        // The source text is presentation only: two jobs of the same command are the same node.
+        public bool Equals(Background? other) => other is not null && Inner.Equals(other.Inner);
+        public override int GetHashCode() => Inner.GetHashCode();
+    }
 }
 
 /// <summary>

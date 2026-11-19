@@ -1460,6 +1460,21 @@ public static class PsBuild
         => "$env:" + name + " = [PsBash.Cmdlets.BashShellState]::ClearNameref(" + SingleQuote(name) + ", $env:" + name + ")";
 
 
+    /// <summary>
+    /// <c>${v@P}</c> of the PowerShell expression <paramref name="value"/>: the prompt escapes, with the shell's session
+    /// for the counters <c>\j</c> (job table), <c>\!</c> and <c>\#</c> (PsBash.Cmdlets.BashPromptText).
+    /// </summary>
+    public static string PromptExpand(string value) =>
+        "[PsBash.Cmdlets.BashPromptText]::Expand(" + value + ", $ExecutionContext.SessionState)";
+
+    /// <summary>
+    /// The trailing <c>-Text '…'</c> of an <c>Invoke-BashBackground</c> call: the job's command as written, which
+    /// <c>fg</c> prints when it brings the job back (bash: <c>sleep 5 &amp; fg</c> prints <c>sleep 5</c>). Empty when the
+    /// parser could not slice it (the job table then names it <c>bash-bg</c>).
+    /// </summary>
+    public static string JobText(string? source) =>
+        string.IsNullOrEmpty(source) ? "" : " -Text " + SingleQuote(source);
+
     private const string FunctionSourceOpen = "<#bash:";
     private const string FunctionSourceClose = "#> ";
 

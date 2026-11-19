@@ -147,12 +147,15 @@ public sealed partial class BashParser
     /// </remarks>
     private Command ParseListStatement(Func<bool> atStop, string rule)
     {
+        int firstToken = _pos;
         var cmd = ParseAndOrProgress();
 
         if (Peek().Kind == BashTokenKind.Amp)
         {
+            // The job's text as written, for `fg` (bash prints the command it resumes).
+            var source = SliceSource(firstToken);
             Advance(); // consume &
-            return new Command.Background(cmd);
+            return new Command.Background(cmd, source);
         }
 
         var kind = Peek().Kind;
@@ -1384,14 +1387,15 @@ public sealed partial class BashParser
         SkipTerminators();
         int bodyStart = _pos;
         var body = ParseFunctionBody();
-        return new Command.ShFunction(name, body, SliceFunctionSource(bodyStart));
+        return new Command.ShFunction(name, body, SliceSource(bodyStart));
     }
 
     /// <summary>
-    /// The source text of the function body whose tokens are <c>[firstToken, _pos)</c>, or null when a here-document
-    /// inside it has its body AFTER the function (<c>f() { cat &lt;&lt;E; }</c> + body lines): the slice would lack it.
+    /// The source text of the construct (a function body, a background job) whose tokens are <c>[firstToken, _pos)</c>,
+    /// or null when a here-document inside it has its body AFTER it (<c>f() { cat &lt;&lt;E; }</c> + body lines): the
+    /// slice would lack it.
     /// </summary>
-    private string? SliceFunctionSource(int firstToken)
+    private string? SliceSource(int firstToken)
     {
         if (firstToken >= _pos || firstToken >= _tokens.Count) return null;
         int start = _tokens[firstToken].Position;
@@ -1461,7 +1465,7 @@ public sealed partial class BashParser
             throw MakeError($"syntax error near unexpected token `{(Peek().Kind == BashTokenKind.Eof ? "newline" : Peek().Value)}'", Peek().Position, "ParseParensFunction");
         int bodyStart = _pos;
         var body = ParseFunctionBody();
-        return new Command.ShFunction(name, body, SliceFunctionSource(bodyStart));
+        return new Command.ShFunction(name, body, SliceSource(bodyStart));
     }
 
     private bool IsDoubleLParen() =>

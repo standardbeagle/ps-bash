@@ -152,7 +152,6 @@ sleep 5
 matched=0
 ## END
 ## status: 0
-## XFAIL ps-bash wontfix-interactive-prompt \j needs job control, \! and \# a count of every executed command (intentional-differences.md, Interactive shell)
 ## timeout: 10
 
 #### \! for history number

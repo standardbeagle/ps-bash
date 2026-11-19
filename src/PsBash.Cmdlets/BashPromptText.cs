@@ -1,3 +1,4 @@
+using System.Management.Automation;
 using System.Text;
 
 namespace PsBash.Cmdlets;
@@ -14,7 +15,35 @@ public static class BashPromptText
     /// </summary>
     /// <remarks>Security: command substitution (<c>$(cmd)</c>, backquotes) and arithmetic in the prompt are left as
     /// written. bash runs them; ps-bash never runs code that comes from a variable's value.</remarks>
-    public static string Expand(string? prompt) => ExpandParametersAndRemoveQuoting(Decode(prompt), BashVariableStore.Get);
+    public static string Expand(string? prompt) => Expand(prompt, null);
+
+    /// <summary>
+    /// <see cref="Expand(string?)"/> with the shell's counters from <paramref name="session"/> (the emitted
+    /// <c>${v@P}</c> passes <c>$ExecutionContext.SessionState</c>): <c>\j</c> the jobs in the job table
+    /// (<c>Get-BashJobCount</c>, the table <c>jobs</c> lists); <c>\!</c> and <c>\#</c> are 1. Each is read only when
+    /// the prompt uses it.
+    /// </summary>
+    public static string Expand(string? prompt, SessionState? session)
+        => ExpandParametersAndRemoveQuoting(Decode(prompt, c => Counter(c, session)), BashVariableStore.Get);
+
+    /// <summary>The value of the counter escape <paramref name="escape"/> (<c>j ! #</c>) in <paramref name="session"/>.</summary>
+    private static int Counter(char escape, SessionState? session) => escape switch
+    {
+        'j' => JobCount(session),
+        _ => 1,
+    };
+
+    /// <summary>The job table's size through the module's one accessor; 0 without a session or the module (no job table).</summary>
+    private static int JobCount(SessionState? session)
+    {
+        if (session is null) return 0;
+        try
+        {
+            var r = session.InvokeCommand.InvokeScript("Get-BashJobCount");
+            return r.Count > 0 && r[0]?.BaseObject is int n ? n : 0;
+        }
+        catch (CommandNotFoundException) { return 0; }
+    }
 
     /// <summary>
     /// The double-quote pass over the decoded prompt: a backslash before <c>$ ` " \</c> or a newline is dropped,
@@ -48,7 +77,11 @@ public static class BashPromptText
         return sb.ToString();
     }
 
-    private static string Decode(string? prompt)
+    /// <summary>
+    /// Decodes the prompt escapes. <paramref name="counter"/> gives the shell counters <c>\j</c>, <c>\!</c>, <c>\#</c>
+    /// (called with that letter, only for an escape the prompt holds).
+    /// </summary>
+    internal static string Decode(string? prompt, Func<char, int> counter)
     {
         if (string.IsNullOrEmpty(prompt)) return string.Empty;
         var sb = new Quoting();
@@ -73,9 +106,8 @@ public static class BashPromptText
                 case 's': sb.Append("bash"); break;
                 case 'v': sb.Append("5.2"); break;
                 case 'V': sb.Append("5.2.21"); break;
-                case 'j': sb.Append('0'); break;
                 case 'l': sb.Append("tty"); break;
-                case '!': case '#': sb.Append('1'); break;
+                case 'j': case '!': case '#': sb.Append(counter(n).ToString(System.Globalization.CultureInfo.InvariantCulture)); break;
                 case 'w': case 'W':
                 {
                     // $PWD already holds the shell form (C:/x, docs/specs/paths.md); the fallback and HOME may be native.

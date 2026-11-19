@@ -149,6 +149,21 @@ public class BackgroundJobDifferentialTests
             timeout: TimeSpan.FromSeconds(60), liveOnly: true);
     }
 
+    /// <summary>
+    /// `fg` finds a job `kill` just signalled (still in the table until reported), prints its command as written and
+    /// returns its status; `%N` stays the job's own number after job 1 is reported; `\j` counts the table. `fg` picked
+    /// "the newest job still running" itself and said "no current job", printed `bash-bg` for any job, `%2` became
+    /// "no such job" once job 1 left, and `\j` was always 0 (oils prompt.spec "\j for number of jobs").
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("{ set -m; sleep 30 & kill %%; fg; echo rc=$?; fg; echo none=$?; } 2>/dev/null")]
+    [InlineData("{ set -m; sleep 1 & sleep 30 & fg %1; echo rc=$?; kill %2; fg; echo rc=$?; } 2>/dev/null")]
+    [InlineData("{ set -m; PS1='j=\\j'; echo \"${PS1@P}\"; sleep 30 & echo \"${PS1@P}\"; kill %%; fg; echo \"${PS1@P}\"; } 2>/dev/null")]
+    public async Task Differential_Background_FgOfASignalledJob(string script)
+    {
+        await AssertOracle.EqualAsync(script, timeout: TimeSpan.FromSeconds(60), liveOnly: true);
+    }
+
     // -----------------------------------------------------------------------
     // cmd &  — backgrounding operator
     // -----------------------------------------------------------------------

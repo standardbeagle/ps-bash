@@ -378,6 +378,14 @@ foreground command for CPU. That is the thing to fix, and the executor model mus
 | Pipeline stages with side effects (`{ x=1; } \| cat`) | out of scope here; fix with `ShellStateScope` per stage (separate task) |
 | `Remove-BashBgState` / pool teardown in `SdkRunspace` | replaced by `JobRegistry.OnConnectionEnd(policy)` per §6.2 |
 
+**Invariant: a jobspec names a job through one resolver.** `%N`, `%%`/`%+`/`%`, `%-` and a `$!` id map to a job-table
+entry only in psm1 `Find-BashBgJob` (`kill`, `wait`, `fg`). `%N` is the job's own number (`Get-BashJobNumber`: one past
+the highest in the table when `Start-BashBgJob` added it), not its position, so `fg %1` leaves the next job `%2`. A job
+stays in the table, Done or signalled, until a builtin reports it: `kill %%; fg` finds the job, prints its command
+(the parser's source text, `Command.Background.Source`, passed as `Invoke-BashBackground -Text`) and returns its status
+(143). `fg` once picked "the newest job still running" itself and missed a job `kill` had just signalled. Guard:
+`Host.Tests/Runtime/JobSpecResolutionGuardTests`; behaviour: oils `prompt.spec.sh` "\j for number of jobs".
+
 ## 9. Test plan (every bullet is a named test)
 
 Differential (bash = oracle, `AssertOracle`): the table in §1 verbatim; function-in-job; array/assoc in

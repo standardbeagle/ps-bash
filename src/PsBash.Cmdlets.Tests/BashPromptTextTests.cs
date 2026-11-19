@@ -64,4 +64,17 @@ public class BashPromptTextTests
     [InlineData("\\q", "\\q")]
     public void Unescape_ExpandsDollarQuoteEscapes(string input, string expected) =>
         Assert.Equal(expected, BashPromptText.Unescape(input));
+
+    // \j \! \# are the shell's counters, asked for by letter and only when the prompt holds the escape. They were
+    // hardcoded (\j 0, \! and \# 1), so `sleep 5 &` never made \j 1 (oils prompt.spec "\j for number of jobs").
+    [Theory]
+    [InlineData("foo \\j bar", "foo 3 bar")]
+    [InlineData("\\! \\#", "7 12")]
+    [InlineData("\\j\\j", "33")]
+    public void Decode_CounterEscapes_ComeFromTheShell(string prompt, string expected) =>
+        Assert.Equal(expected, BashPromptText.Decode(prompt, c => c switch { 'j' => 3, '!' => 7, '#' => 12, _ => -1 }));
+
+    [Fact]
+    public void Decode_PromptWithoutCounters_AsksForNone() =>
+        Assert.Equal("a b", BashPromptText.Decode("a \\[b\\]", _ => throw new InvalidOperationException("asked for a counter")));
 }

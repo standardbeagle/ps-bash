@@ -2968,9 +2968,11 @@ public static partial class PsEmitter
             : " -Vars @{ " + string.Join("; ", captured.Order(StringComparer.Ordinal).Select(v => $"{PsBuild.SingleQuote(v)} = {capture[v]}")) + " }";
         // A job whose stdout/stderr are the shell's own writes them live (CollectLiveJobs).
         string live = _liveJobs is not null && _liveJobs.Contains(bg) ? " -Live" : "";
+        // The job's command as written: `fg` prints it when it brings the job back (PsBuild.JobText).
+        string text = PsBuild.JobText(bg.Source);
         return MayMutateShellState(bg.Inner)
-            ? $"Invoke-BashBackground -Isolated{live}{vars} {{ {inner} }}"
-            : $"Invoke-BashBackground{live}{vars} {{ {inner} }}";
+            ? $"Invoke-BashBackground -Isolated{live}{vars} {{ {inner} }}{text}"
+            : $"Invoke-BashBackground{live}{vars} {{ {inner} }}{text}";
     }
 
     /// <summary>
@@ -10558,7 +10560,7 @@ public static partial class PsEmitter
                         string each = subOp switch
                         {
                             "@Q" => "[PsBash.Cmdlets.BashQuoteText]::ForReuse([string]$_)",
-                            "@P" => "[PsBash.Cmdlets.BashPromptText]::Expand([string]$_)",
+                            "@P" => PsBuild.PromptExpand("[string]$_"),
                             "@E" => "[PsBash.Cmdlets.BashPromptText]::Unescape([string]$_)",
                             _ => $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ 'A' }} else {{ 'a' }})",
                         };
@@ -11085,7 +11087,7 @@ public static partial class PsEmitter
                 case 'Q':
                     return $"$(if ($null -eq {varRef}) {{ '' }} else {{ [PsBash.Cmdlets.BashQuoteText]::ForReuse({varRef}) }})";
                 case 'P':
-                    return $"{open}[PsBash.Cmdlets.BashPromptText]::Expand({varRef}))";
+                    return $"{open}{PsBuild.PromptExpand(varRef)})";
                 case 'E':
                     return $"{open}[PsBash.Cmdlets.BashPromptText]::Unescape({varRef}))";
                 case 'U':
