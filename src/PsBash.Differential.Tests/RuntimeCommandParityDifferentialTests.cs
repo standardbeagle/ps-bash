@@ -157,11 +157,11 @@ public class RuntimeCommandParityDifferentialTests
 
     // The id usage errors keep only their status here: off Windows ps-bash runs the host's id, whose wording is the
     // implementation's (uutils on Ubuntu 25.10, BSD on macOS), not the recorded GNU text. InvokeBashIdCommandTests
-    // pins the wording against the host's own id.
+    // pins the wording against the host's own id. Short options only: BSD id (macOS) has no --group/--name.
     [SkippableFact]
     public Task Uname_Id_Ping_ParseLikeGnu()
         => Eq("uname -x; echo rc=$?; uname foo; echo rc=$?; for o in -o -p -i -v '-s -o' --operating-system; do uname $o > /dev/null; echo \"$o rc=$?\"; done; "
-            + "[ \"$(id -un)\" = \"$(id -u -n)\" ] && echo same; [ \"$(id -gn)\" = \"$(id --group --name)\" ] && echo same; "
+            + "[ \"$(id -un)\" = \"$(id -u -n)\" ] && echo same; [ \"$(id -gn)\" = \"$(id -g -n)\" ] && echo same; "
             + "id -n 2>/dev/null; echo rc=$?; id -ug 2>/dev/null; echo rc=$?; id -x 2>/dev/null; echo rc=$?; "
             + "ping -W 1 -c x 127.0.0.1; echo rc=$?; ping; echo rc=$?; ping -z > /dev/null 2>&1; echo rc=$?");
 

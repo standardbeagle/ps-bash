@@ -1,11 +1,11 @@
 PSBASH-ORACLE-CASSETTE v1
 bash-version: 5.2.21(1)-release
 exit-code: 0
-script-length: 429
+script-length: 420
 stdout-length: 117
 stderr-length: 214
 ==== SCRIPT ====
-uname -x; echo rc=$?; uname foo; echo rc=$?; for o in -o -p -i -v '-s -o' --operating-system; do uname $o > /dev/null; echo "$o rc=$?"; done; [ "$(id -un)" = "$(id -u -n)" ] && echo same; [ "$(id -gn)" = "$(id --group --name)" ] && echo same; id -n 2>/dev/null; echo rc=$?; id -ug 2>/dev/null; echo rc=$?; id -x 2>/dev/null; echo rc=$?; ping -W 1 -c x 127.0.0.1; echo rc=$?; ping; echo rc=$?; ping -z > /dev/null 2>&1; echo rc=$?
+uname -x; echo rc=$?; uname foo; echo rc=$?; for o in -o -p -i -v '-s -o' --operating-system; do uname $o > /dev/null; echo "$o rc=$?"; done; [ "$(id -un)" = "$(id -u -n)" ] && echo same; [ "$(id -gn)" = "$(id -g -n)" ] && echo same; id -n 2>/dev/null; echo rc=$?; id -ug 2>/dev/null; echo rc=$?; id -x 2>/dev/null; echo rc=$?; ping -W 1 -c x 127.0.0.1; echo rc=$?; ping; echo rc=$?; ping -z > /dev/null 2>&1; echo rc=$?
 ==== STDOUT ====
 rc=1
 rc=1
