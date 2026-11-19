@@ -22,8 +22,8 @@ namespace PsBash.Cmdlets;
 /// <item><c>-a N</c> / <c>--suffix-length=N</c> — suffix length, default 2.</item>
 /// <item>Positional operands: <c>FILE [PREFIX]</c>; <c>-</c> reads from
 /// pipeline. With no operands and pipeline input, falls back to stdin mode
-/// with the default <c>x</c> prefix. With no operands and no pipeline,
-/// emits a bash-style "missing operand" error.</item>
+/// with the default <c>x</c> prefix. With no operands and no pipeline, the
+/// (empty) standard input splits into nothing, status 0, as GNU.</item>
 /// <item>Output files written via <see cref="File.WriteAllText(string,string)"/>
 /// to the current working directory (resolved against <c>$PWD</c>) — exact
 /// parity with the oracle's <c>Join-Path $PWD $outName</c> behavior.</item>
@@ -389,8 +389,8 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         }
         else
         {
-            FileSystemHelpers.WriteBashError(this, "split: missing operand");
-            return;
+            // No FILE is `-` (GNU): standard input, which is empty here — nothing to split, status 0.
+            lines = new List<string>();
         }
 
         // Resolve working directory exactly as the oracle did: Join-Path $PWD ...

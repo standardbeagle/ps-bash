@@ -115,8 +115,7 @@ public sealed class InvokeBashBasenameCommand : PSCmdlet
 
         if (operands.Count == 0)
         {
-            // No operand: emit nothing (psm1 oracle parity; existing tests pin
-            // this). The two-operand SUFFIX form below is the GNU fix.
+            FileSystemHelpers.WriteMissingOperand(this, "basename");
             return;
         }
 

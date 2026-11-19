@@ -78,8 +78,8 @@ public sealed class InvokeBashChmodCommand : PSCmdlet
         }
 
         if (help || version) return new ChmodPlan(recursive, verbose, changes, quiet, help, version, mode, files, null);
-        if (mode is null) return Fail("chmod: missing operand\nTry 'chmod --help' for more information.");
-        if (files.Count == 0) return Fail($"chmod: missing operand after '{mode}'\nTry 'chmod --help' for more information.");
+        if (mode is null) return Fail(FileSystemHelpers.MissingOperandMessage("chmod"));
+        if (files.Count == 0) return Fail(FileSystemHelpers.MissingOperandMessage("chmod", mode));
         return new ChmodPlan(recursive, verbose, changes, quiet, false, false, mode, files, null);
 
         ChmodPlan Fail(string message) => new(recursive, verbose, changes, quiet, false, false, mode, files, message);

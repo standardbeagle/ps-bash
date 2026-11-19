@@ -91,7 +91,7 @@ public sealed class InvokeBashReadlinkCommand : PSCmdlet
         var operands = parsed.Operands();
         if (operands.Count == 0)
         {
-            FileSystemHelpers.WriteBashError(this, "readlink: missing operand\nTry 'readlink --help' for more information.");
+            FileSystemHelpers.WriteMissingOperand(this, "readlink");
             FileSystemHelpers.SetLastExitCode(this, 1);
             return;
         }

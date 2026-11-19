@@ -151,9 +151,7 @@ public sealed class InvokeBashCommCommand : PSCmdlet
 
         if (operands.Count < 2)
         {
-            FileSystemHelpers.WriteBashError(this, operands.Count == 0
-                ? "comm: missing operand"
-                : $"comm: missing operand after '{operands[0]}'");
+            FileSystemHelpers.WriteMissingOperand(this, "comm", operands.Count == 0 ? null : operands[0]);
             return;
         }
         if (operands.Count > 2)

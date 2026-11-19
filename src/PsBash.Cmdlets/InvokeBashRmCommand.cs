@@ -222,7 +222,7 @@ public sealed class InvokeBashRmCommand : PSCmdlet
         {
             if (!ignoreMissing)
             {
-                FileSystemHelpers.WriteBashError(this, "rm: missing operand");
+                FileSystemHelpers.WriteMissingOperand(this, "rm");
             }
             return;
         }

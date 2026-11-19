@@ -288,9 +288,7 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
         var operands = plan.Operands;
         if (operands.Count < 2)
         {
-            FileSystemHelpers.WriteBashError(this, operands.Count == 0
-                ? "join: missing operand"
-                : $"join: missing operand after '{operands[0]}'");
+            FileSystemHelpers.WriteMissingOperand(this, "join", operands.Count == 0 ? null : operands[0]);
             return;
         }
         if (operands.Count > 2)

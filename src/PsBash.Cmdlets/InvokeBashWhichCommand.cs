@@ -69,7 +69,8 @@ public sealed class InvokeBashWhichCommand : PSCmdlet
 
         if (operands.Count == 0)
         {
-            FileSystemHelpers.WriteBashError(this, "which: missing operand");
+            // debianutils which: no NAME is a silent status 1 (no message).
+            FileSystemHelpers.SetLastExitCode(this, 1);
             return;
         }
 

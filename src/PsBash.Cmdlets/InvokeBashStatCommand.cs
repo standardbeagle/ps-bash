@@ -148,7 +148,7 @@ public sealed class InvokeBashStatCommand : PSCmdlet
             }
         }
         if (s.Operands.Count == 0)
-            s.Error = "stat: missing operand\nTry 'stat --help' for more information.";
+            s.Error = FileSystemHelpers.MissingOperandMessage("stat");
         return s;
     }
 

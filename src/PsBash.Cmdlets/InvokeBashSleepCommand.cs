@@ -52,7 +52,7 @@ public sealed class InvokeBashSleepCommand : PSCmdlet
 
         if (args.Length == 0)
         {
-            FileSystemHelpers.WriteBashError(this, "sleep: missing operand");
+            FileSystemHelpers.WriteMissingOperand(this, "sleep");
             return;
         }
 

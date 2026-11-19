@@ -91,10 +91,11 @@ public class InvokeBashBasenameDirnameCommandTests : IClassFixture<SharedPwshFix
     }
 
     [Fact]
-    public void Basename_NoOperands_ProducesNoOutput()
+    public void Basename_NoOperands_MissingOperandExit1()
     {
-        var lines = RunLines("Invoke-BashBasename");
-        Assert.Empty(lines);
+        // GNU: "basename: missing operand" + the Try line, status 1 (was silent, exit 0).
+        CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashBasename")
+            .AssertFailed(1, "basename: missing operand", "Try 'basename --help' for more information.");
     }
 
     [Fact]
@@ -130,7 +131,9 @@ public class InvokeBashBasenameDirnameCommandTests : IClassFixture<SharedPwshFix
     [InlineData("/usr/bin/", "/usr")]          // trailing slash trimmed first
     [InlineData("/bin", "/")]                  // slash at index 0 -> "/"
     [InlineData("/", "/")]                      // root
-    [InlineData("", "/")]                       // empty operand -> "/" (psm1 oracle parity)
+    [InlineData("", ".")]                       // empty operand -> "." (GNU mdir_name)
+    [InlineData("a//b", "a")]                   // slashes before the last component go too
+    [InlineData("//", "/")]
     [InlineData("dir/sub/file.txt", "dir/sub")]
     [InlineData("file.txt", ".")]
     public void Dirname_StripsLastComponent(string input, string expected)
@@ -147,10 +150,11 @@ public class InvokeBashBasenameDirnameCommandTests : IClassFixture<SharedPwshFix
     }
 
     [Fact]
-    public void Dirname_NoOperands_ProducesNoOutput()
+    public void Dirname_NoOperands_MissingOperandExit1()
     {
-        var lines = RunLines("Invoke-BashDirname");
-        Assert.Empty(lines);
+        // GNU: "dirname: missing operand" + the Try line, status 1 (was silent, exit 0).
+        CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashDirname")
+            .AssertFailed(1, "dirname: missing operand", "Try 'dirname --help' for more information.");
     }
 
     [Fact]

@@ -26,6 +26,23 @@ public static class GnuQuote
     /// <summary><c>quoteaf</c>: <paramref name="name"/> always quoted.</summary>
     public static string Always(string name) => Quote(name);
 
+    /// <summary>
+    /// gnulib <c>quote()</c> (locale quoting style), what <c>expr</c>, <c>env</c> and <c>id</c> call: in a UTF-8
+    /// locale (the canonical C.UTF-8) the text between U+2018 / U+2019, a control character as a C escape
+    /// (<c>expr: syntax error: unexpected argument ‘2’</c>, <c>env: ‘x’: No such file or directory</c>).
+    /// </summary>
+    public static string Locale(string text)
+    {
+        var sb = new StringBuilder(text.Length + 2).Append('‘');
+        foreach (char ch in text)
+        {
+            if (IsControl(ch)) sb.Append(Escape(ch));
+            else if (ch == '\\') sb.Append("\\\\");
+            else sb.Append(ch);
+        }
+        return sb.Append('’').ToString();
+    }
+
     internal static bool NeedsQuoting(string name)
     {
         if (name.Length == 0) return true;

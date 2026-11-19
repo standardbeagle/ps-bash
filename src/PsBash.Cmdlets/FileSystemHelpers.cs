@@ -564,6 +564,28 @@ internal static class FileSystemHelpers
     }
 
     /// <summary>
+    /// GNU's "missing operand" usage error, the ONE spelling every command uses: <c>CMD: missing operand</c> (or
+    /// <c>missing operand after 'LAST'</c>), then the tool's <see cref="UsageHint"/>, status <paramref name="exitCode"/>
+    /// (1 for coreutils; <c>expr</c> 2, <c>nohup</c>/<c>env</c> 125). Guard: <c>MissingOperandGuardTests</c>.
+    /// </summary>
+    public static void WriteMissingOperand(PSCmdlet cmdlet, string cmd, string? after = null, int exitCode = 1)
+    {
+        WriteBashError(cmdlet, MissingOperandMessage(cmd, after));
+        SetLastExitCode(cmdlet, exitCode);
+    }
+
+    /// <summary>
+    /// The text of <see cref="WriteMissingOperand"/> for a pure plan that carries its error as a string: the
+    /// first line (the operand after which one is missing quoted as gnulib <c>quote()</c>,
+    /// <c>chmod: missing operand after ‘755’</c>), then the usage hint.
+    /// </summary>
+    public static string MissingOperandMessage(string cmd, string? after = null)
+    {
+        string message = after is null ? $"{cmd}: missing operand" : $"{cmd}: missing operand after {GnuQuote.Locale(after)}";
+        return UsageHint(cmd) is { } hint ? message + "\n" + hint : message;
+    }
+
+    /// <summary>
     /// What a tool prints after a usage error's first line (GNU coreutils: <c>Try 'CMD --help' for more
     /// information.</c>). The other GNU tools word it their own way (oracle: Ubuntu 24.04). null = this ps-bash prints
     /// no hint: sed / strings print their whole --help text, tree / rg word even the first line differently.

@@ -40,8 +40,7 @@ public sealed class InvokeBashNohupCommand : PSCmdlet
         if (rest.Length > 0 && rest[0] == "--") rest = rest.Skip(1).ToArray();
         if (rest.Length == 0)
         {
-            FileSystemHelpers.WriteStderr(this, "nohup: missing operand\nTry 'nohup --help' for more information.");
-            FileSystemHelpers.SetLastExitCode(this, 125);
+            FileSystemHelpers.WriteMissingOperand(this, "nohup", exitCode: 125);
             return;
         }
 

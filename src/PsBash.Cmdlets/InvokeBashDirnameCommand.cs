@@ -43,27 +43,35 @@ public sealed class InvokeBashDirnameCommand : PSCmdlet
             return;
         }
 
-        foreach (var path in args)
+        if (args.Length > 0 && args[0] == "--") args = args[1..];
+        if (args.Length == 0)
         {
-            var normalized = BashPath.ToShell(path).TrimEnd('/');
-
-            string dir;
-            if (normalized.Length == 0)
-            {
-                dir = "/";
-            }
-            else
-            {
-                int slashIdx = normalized.LastIndexOf('/');
-                if (slashIdx < 0)
-                    dir = ".";
-                else if (slashIdx == 0)
-                    dir = "/";
-                else
-                    dir = normalized.Substring(0, slashIdx);
-            }
-
-            WriteObject(dir);
+            FileSystemHelpers.WriteMissingOperand(this, "dirname");
+            return;
         }
+
+        foreach (var path in args)
+            WriteObject(DirectoryPart(BashPath.ToShell(path)));
+    }
+
+    /// <summary>
+    /// gnulib <c>mdir_name</c>: the name minus its last component and the slashes before it; <c>.</c> when nothing
+    /// is left, <c>/</c> for the root (<c>a//b</c> → <c>a</c>, <c>/usr/bin/</c> → <c>/usr</c>, <c>""</c> → <c>.</c>).
+    /// </summary>
+    internal static string DirectoryPart(string f)
+    {
+        int prefix = f.Length > 0 && f[0] == '/' ? 1 : 0;
+        int i = 0;
+        while (i < f.Length && f[i] == '/') i++;
+        int baseIdx = i;
+        bool sawSlash = false;
+        for (; i < f.Length; i++)
+        {
+            if (f[i] == '/') sawSlash = true;
+            else if (sawSlash) { baseIdx = i; sawSlash = false; }
+        }
+        int len = baseIdx;
+        while (prefix < len && f[len - 1] == '/') len--;
+        return len == 0 ? "." : f[..len];
     }
 }
