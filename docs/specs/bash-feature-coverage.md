@@ -34,9 +34,8 @@ First measurement (the run this document was written from): 218 of 344 snippets 
 
 Re-measured 2026-11-18 on `main` (354 snippet files as split from `snippets.txt`, each run as its own script,
 `res=$(bash "$f" 2>&1 </dev/null)`, in ps-bash and in bash 5.2): **301 of 354 byte-identical.** The other 53 are
-listed under "Open" below. The sourcing driver (`( . "$f" )`) does not finish on ps-bash: `help cd | head -1` ends
-the driver loop, and so does a later `set` snippet; that is a ps-bash bug in its own right, not a property of the
-snippets.
+listed under "Open" below. The sourcing driver (`( . "$f" )`) did not finish on ps-bash: `help cd | head -1`
+ended the driver loop (`help` reached PowerShell's own `help`; fixed, see below).
 
 ### Fixed by this work (each has an oracle test + cassette)
 
@@ -53,25 +52,33 @@ snippets.
 | a sourced/eval'd pipeline | output ended each line with CR LF (fused batch) |
 | `getopts` | command not found; now a builtin with silent mode, clusters, `OPTIND`/`OPTARG` |
 | `"${a[@]}"` / `"$@"` beside other words | joined into one argument; now one argument per element (commands, `for` lists, array literals) |
+| `PPID SHLVL GROUPS DIRSTACK BASH_ALIASES SRANDOM BASH_SUBSHELL HOSTTYPE MACHTYPE OSTYPE HOSTNAME COMP_WORDBREAKS OPTERR` unset; `$IFS` empty | one table of shell-owned variables (`ShellVariables`, guard `ShellVariablesGuardTests`); `environment-model.md` §Shell-owned variables |
+| `( trap 'echo err' ERR; false )`, a trap set in a function or `$( )` | did not fire; a function, subshell or substitution now starts without the caller's ERR trap unless `set -E`, and its own trap fires (`ErrTrapInheritance`) |
+| `nosuchcmd 2>&1 \| head -1; echo ${PIPESTATUS[0]}` | 0; a stage a later stage stops keeps the status its own commands set (`InvokeBashPipeStageCommand.NoteStatus`) |
+| `echo ${@:2:2} ${*: -1}` | binding error; an unquoted positional slice is split into words |
+| `${!:+pid}`, `${?:-q}`, `${#:-z}`, `${#!}` | broken command / `0` read as empty; the special parameters take every operator |
+| `declare -A m=([x y]=1)`, `([$k-1]=v)` | empty / literal key; a subscript with blanks, quotes or expansions is one key |
+| `exec 5<> f` | parse error; `<>` opens a descriptor read-write (`BashFdTable`) |
+| `coproc`, `select … done <<< 2` | "command not found" / parse error (the whole script did not run); now `not supported by ps-bash`, status 2, by design |
+| `help cd \| head -1` in a sourced script | "The handle is invalid." and the caller ended; `help` is a builtin (`Invoke-BashHelp`: synopsis and short description) |
+| `trap 'echo D' DEBUG; echo a` | the action never ran on a one- or two-line script |
 
 ### Open (re-measured 2026-11-18)
 
-Missing builtins (command not found): `bind caller disown enable logout suspend`; `help` (not probed in isolation,
-see above). `coproc` and `select … done <<< word` are parse errors. Now present: `getopts ulimit complete compgen
+Missing builtins (command not found): `bind caller disown enable logout suspend`. Not supported by design (a
+message and status 2): `coproc`, the `select` menu loop. `help NAME` prints the synopsis and short description only
+(bash goes on with the long text). Now present: `getopts ulimit complete compgen
 history fc builtin`, history expansion (`!!` stays literal in a script, as in bash).
 
 Semantics gaps (the construct runs but differs):
 
-- Arrays / parameters: `declare -A m=([x y]=1)` (a key with a blank), `${!:+word}` (an operator on `$!` emits a
-  broken command), `echo ${@:2:2} ${*: -1}` (binding error), `${n@a}` (empty).
-- Special variables not provided: `BASH_ALIASES DIRSTACK GROUPS PPID SHLVL`; `$IFS` reads empty before it is
-  assigned (splitting still uses the default); `( UID=5 )` gives no readonly error.
-- Traps: a `DEBUG` trap set and used on ONE line (`trap 'echo D' DEBUG; echo a`) does not run (multi-line scripts
-  do: `DebugTrapDifferentialTests`); `( trap 'echo err' ERR; false )` does not run the trap.
+- Arrays / parameters: `${n@a}` (empty); `declare -A m=([a]b]=3)` takes `a]b` as the key (bash: "must use
+  subscript").
+- Special variables not provided (reasons in `ShellVariablesGuardTests`): `BASH_ARGC BASH_ARGV BASH_ARGV0 BASH_CMDS
+  BASH_COMMAND BASH_EXECUTION_STRING HISTCMD`; `( UID=5 )` gives no readonly error.
 - xtrace: `PS4` assigned in a subshell is not used (`( PS4='>> '; set -x; echo a )` traces with `+ `).
-- Pipelines: `nosuchcmd 2>&1 | head -1; echo ${PIPESTATUS[0]}` is 0 (bash 127); no `SIGPIPE` status 141
-  (`intentional-differences.md`).
-- Redirection: `exec 5<> f` is a parse error; `{ …; } 3>&1 1>&2 2>&3 | sort` orders the two lines differently.
+- Pipelines: no `SIGPIPE` status 141 (`intentional-differences.md`).
+- Redirection: `{ …; } 3>&1 1>&2 2>&3 | sort` orders the two lines differently.
 - Diagnostics text: shell messages other than "command not found" print `bash: ` or `ps-bash: ` where bash prints
   `SCRIPT: line N: ` (readonly variable, unbound variable, `${x:?}`, `alias`/`type` not found, `no match`,
   `Permission denied`, `cannot overwrite existing file`, redirect failures; `error-handling.md` §2.6); `1/0` lacks
