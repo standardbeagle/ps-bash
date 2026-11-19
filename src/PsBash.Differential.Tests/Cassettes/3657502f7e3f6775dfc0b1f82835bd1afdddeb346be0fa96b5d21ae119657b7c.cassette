@@ -1,0 +1,28 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 408
+stdout-length: 51
+stderr-length: 0
+==== SCRIPT ====
+declare -A m=([x y]=1 ["q\"z"]=2)
+echo "${m[x y]}" "${m[q\"z]}"
+k="p q"; m[$k]=v; echo "${m[$k]}" "${m[p q]}"
+declare -A n; k2='a]b'; n[$k2]=w; echo "${n[$k2]}"
+j=x; declare -A o=([$j-1]=e [${j}2]=f); echo "${o[x-1]}" "${o[x2]}"
+declare -A p=(["sp ace"]=s ['si ngle']=t); echo "${p[sp ace]}" "${p[si ngle]}" ${#p[@]}
+for kk in "${!m[@]}"; do echo "key<$kk>"; done | sort
+i=1; a=([$i]=x [2]=y); echo "${a[@]}"
+==== STDOUT ====
+1 2
+v v
+w
+e f
+s t 2
+key<p q>
+key<q"z>
+key<x y>
+x y
+
+==== STDERR ====
+

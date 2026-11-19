@@ -7470,6 +7470,14 @@ public static partial class PsEmitter
         var entries = new List<string>(array.Elements.Length * 2);
         foreach (var elem in array.Elements)
         {
+            // `a=([$i]=x)`: an indexed subscript with an expansion is arithmetic on its expanded text (bash).
+            if (TrySplitExpandedKey(elem, out var keyExpr, out var keyHead, out var keyParts))
+            {
+                if (keyHead.Length > 0) keyParts = keyParts.Insert(0, new WordPart.Literal(keyHead));
+                entries.Add("[string](Invoke-BashArith ([string]" + keyExpr + "))");
+                entries.Add("(" + EmitAssignmentValue(new CompoundWord(keyParts)) + ")");
+                continue;
+            }
             string? first = elem.Parts.IsDefaultOrEmpty ? null : elem.Parts[0] switch
             {
                 WordPart.Literal l => l.Value,
@@ -7566,62 +7574,128 @@ public static partial class PsEmitter
         var indexedEntries = new List<string>(array.Elements.Length);
         foreach (var elem in array.Elements)
         {
-            // The lexer reads the subscript `[k1]` as a glob part, then `=v1` as a literal; a single-quoted key
-            // (`['$k']=v`) arrives as `[`, the quoted part, then `]=v`: join the run up to the `]=`.
-            var firstText = new StringBuilder();
-            int used = 0;
-            while (used < elem.Parts.Length)
-            {
-                string? piece = elem.Parts[used] switch
-                {
-                    WordPart.Literal l => l.Value,
-                    WordPart.GlobPart g => g.Pattern,
-                    WordPart.SingleQuoted sq when used > 0 => "'" + sq.Value + "'",
-                    _ => null,
-                };
-                if (piece is null) break;
-                firstText.Append(piece);
-                used++;
-                if (piece.Contains("]=", StringComparison.Ordinal)
-                    || (piece.EndsWith(']') && used < elem.Parts.Length && elem.Parts[used] is WordPart.Literal { Value: var nx } && nx.StartsWith('=')))
-                    break;
-            }
-            string first = firstText.ToString();
-            if (used == 0 || first.Length <= 2 || first[0] != '[') return false;
-            string key, head;
+            string keyExpr, head;
             ImmutableArray<WordPart> parts;
-            if (first[^1] == ']' && elem.Parts.Length > used && elem.Parts[used] is WordPart.Literal { Value: var eqTail } && eqTail.StartsWith('='))
-            {
-                key = first[1..^1];
-                head = eqTail[1..];
-                parts = elem.Parts.RemoveRange(0, used + 1);
-            }
-            else
-            {
-                int close = first.IndexOf("]=", StringComparison.Ordinal);
-                if (close < 2) return false;
-                key = first[1..close];
-                head = first[(close + 2)..];
-                parts = elem.Parts.RemoveRange(0, used);
-            }
-            // `['a+1']=c` / `["q r"]=2` / `["k\"j"]=v`: the subscript is raw text, so it gets bash's quote removal
-            // (BashQuoting); stripping only the outer quotes kept `k\"j` as the key.
-            if (key.Length == 0 || (!numericKeysAllowed && key.All(char.IsDigit))) return false;
-            key = PsBash.Core.BashQuoting.RemoveQuotes(key);
-            if (key.Length == 0) return false;
+            if (TrySplitStaticKey(elem, numericKeysAllowed, out var staticKey, out head, out parts))
+                keyExpr = PsBuild.SingleQuote(staticKey);
+            // `[$j-1]=e` / `[${j}2]=f` / `[$k]=v` on an array known to be associative: the key is the expanded subscript.
+            else if (!numericKeysAllowed || !TrySplitExpandedKey(elem, out keyExpr, out head, out parts))
+                return false;
             if (head.Length > 0) parts = parts.Insert(0, new WordPart.Literal(head));
             // bash 5.2 leaves a tilde on the right of an associative `[key]=value` literal (an indexed one expands it).
             if (parts.Any(p => p is WordPart.TildeSub))
                 parts = parts.Select(p => p is WordPart.TildeSub ts ? (WordPart)new WordPart.Literal("~" + ts.User + (ts.SlashConsumed ? "/" : "")) : p).ToImmutableArray();
             string valueExpr = "(" + EmitAssignmentValue(new CompoundWord(parts)) + ")";
-            entries.Add(PsBuild.SingleQuote(key) + ", " + valueExpr);
-            indexedEntries.Add("[string](Invoke-BashArith " + PsBuild.SingleQuote(key) + "), " + valueExpr);
+            entries.Add(keyExpr + ", " + valueExpr);
+            indexedEntries.Add("[string](Invoke-BashArith ([string]" + keyExpr + ")), " + valueExpr);
         }
         literal = "[PsBash.Cmdlets.BashAssoc]::FromPairs(" + string.Join(", ", entries) + ")";   // bash's key order and case-sensitive keys, not a @{} literal
         indexedLiteral = "[PsBash.Cmdlets.BashSparseArray]::FromEntries(" + string.Join(", ", indexedEntries) + ")";
         return true;
     }
 
+    /// <summary>
+    /// The <c>[KEY]=</c> head of an array-literal element whose subscript is plain or quoted text: the key after quote
+    /// removal, the text after the <c>=</c> and the value's remaining parts.
+    /// </summary>
+    private static bool TrySplitStaticKey(CompoundWord elem, bool numericKeysAllowed, out string key, out string head, out ImmutableArray<WordPart> parts)
+    {
+        key = head = "";
+        parts = default;
+        // The lexer reads the subscript `[k1]` as a glob part, then `=v1` as a literal; a single-quoted key
+        // (`['$k']=v`) arrives as `[`, the quoted part, then `]=v`: join the run up to the `]=`.
+        var firstText = new StringBuilder();
+        int used = 0;
+        while (used < elem.Parts.Length)
+        {
+            string? piece = elem.Parts[used] switch
+            {
+                WordPart.Literal l => l.Value,
+                WordPart.GlobPart g => g.Pattern,
+                WordPart.SingleQuoted sq when used > 0 => "'" + sq.Value + "'",
+                _ => null,
+            };
+            if (piece is null) break;
+            firstText.Append(piece);
+            used++;
+            if (piece.Contains("]=", StringComparison.Ordinal)
+                || (piece.EndsWith(']') && used < elem.Parts.Length && elem.Parts[used] is WordPart.Literal { Value: var nx } && nx.StartsWith('=')))
+                break;
+        }
+        string first = firstText.ToString();
+        if (used == 0 || first.Length <= 2 || first[0] != '[') return false;
+        if (first[^1] == ']' && elem.Parts.Length > used && elem.Parts[used] is WordPart.Literal { Value: var eqTail } && eqTail.StartsWith('='))
+        {
+            key = first[1..^1];
+            head = eqTail[1..];
+            parts = elem.Parts.RemoveRange(0, used + 1);
+        }
+        else
+        {
+            int close = first.IndexOf("]=", StringComparison.Ordinal);
+            if (close < 2) return false;
+            key = first[1..close];
+            head = first[(close + 2)..];
+            parts = elem.Parts.RemoveRange(0, used);
+        }
+        // `['a+1']=c` / `["q r"]=2` / `["k\"j"]=v`: the subscript is raw text, so it gets bash's quote removal
+        // (BashQuoting); stripping only the outer quotes kept `k\"j` as the key.
+        if (key.Length == 0 || (!numericKeysAllowed && key.All(char.IsDigit))) return false;
+        key = PsBash.Core.BashQuoting.RemoveQuotes(key);
+        if (key.Length == 0) return false;
+        return true;
+    }
+
+    /// <summary>
+    /// The <c>[KEY]=</c> head of an element whose subscript holds an expansion (<c>[$j-1]=e</c>, <c>[${j}2]=f</c>,
+    /// <c>["$k"]=v</c>): the subscript's expanded text as a PowerShell string (no splitting, no globbing), the text after
+    /// the <c>=</c> and the value's remaining parts. bash expands an associative subscript like a double-quoted word.
+    /// </summary>
+    private static bool TrySplitExpandedKey(CompoundWord elem, out string keyExpr, out string head, out ImmutableArray<WordPart> parts)
+    {
+        keyExpr = head = "";
+        parts = default;
+        var keyParts = ImmutableArray.CreateBuilder<WordPart>();
+        bool expands = false;
+        for (int used = 0; used < elem.Parts.Length; used++)
+        {
+            var p = elem.Parts[used];
+            string? text = p switch { WordPart.Literal l => l.Value, WordPart.GlobPart g => g.Pattern, _ => null };
+            if (used == 0)
+            {
+                if (text is not { Length: > 0 } || text[0] != '[') return false;
+                text = text[1..];
+            }
+            if (text is null)
+            {
+                if (p is not (WordPart.SingleQuoted or WordPart.EscapedLiteral)) expands = true;
+                keyParts.Add(p);
+                continue;
+            }
+            int close = text.IndexOf("]=", StringComparison.Ordinal);
+            if (close >= 0)
+            {
+                if (close > 0) keyParts.Add(new WordPart.Literal(text[..close]));
+                head = text[(close + 2)..];
+                parts = elem.Parts.RemoveRange(0, used + 1);
+            }
+            else if (text.EndsWith(']') && used + 1 < elem.Parts.Length && elem.Parts[used + 1] is WordPart.Literal { Value: var eq } && eq.StartsWith('='))
+            {
+                if (text.Length > 1) keyParts.Add(new WordPart.Literal(text[..^1]));
+                head = eq[1..];
+                parts = elem.Parts.RemoveRange(0, used + 2);
+            }
+            else
+            {
+                if (text.Length > 0) keyParts.Add(new WordPart.Literal(text));
+                continue;
+            }
+            if (!expands || keyParts.Count == 0) return false;
+            keyExpr = "([string](" + FlattenPartsToDoubleQuotedString(keyParts.ToImmutable()) + "))";
+            return true;
+        }
+        return false;
+    }
     private static string EmitAssignmentValue(CompoundWord? value)
     {
         if (value is null)

@@ -63,6 +63,34 @@ public class ShellLanguageGapParserTests
     public void Transpile_UnquotedPositionalSlice_IsSplitIntoWords(string bash)
         => Assert.Contains("ConvertTo-BashWords", Emit(bash));
 
+    // --- associative keys with blanks and expansions ----------------------------------------------
+
+    [Fact]
+    public void Parse_AssocLiteralKeyWithBlank_IsOneElement()
+    {
+        string ps = Emit("declare -A m=([x y]=1 [b]=2)");
+        Assert.Contains("'x y', (\"1\")", ps);
+        Assert.Contains("'b', (\"2\")", ps);
+    }
+
+    [Fact]
+    public void Transpile_AssocLiteralExpandedKey_IsTheExpandedText()
+        => Assert.Contains("([string](\"$env:j-1\"))", Emit("j=x; declare -A o=([$j-1]=e)"));
+
+    /// <summary>`a=([$i]=x [2]=y)` became the words `[1]=x [2]=y`: an indexed subscript with an expansion is arithmetic.</summary>
+    [Fact]
+    public void Transpile_IndexedLiteralExpandedSubscript_IsArithmetic()
+    {
+        string ps = Emit("i=1; a=([$i]=x [2]=y)");
+        Assert.Contains("BashSparseArray]::FromEntries([string](Invoke-BashArith ([string]([string](\"$env:i\")))), (\"x\"), '2'", ps);
+        Assert.DoesNotContain("ConvertTo-BashWords", ps);
+    }
+
+    // `${?:-q}` tests the text; `${!-dash}` tests set-ness: the [string] cast would make an unset `$!` set and empty.
+    [Fact]
+    public void Transpile_PlainOperatorOnBang_TestsSetNess()
+        => Assert.DoesNotContain("[string]$global:BashBgLastPid", Emit("echo ${!-dash}"));
+
     // --- ERR trap scope ---------------------------------------------------------------------------
 
     /// <summary>A function body hides the caller's ERR trap on entry (ErrTrapInheritance via VarFrameStack).</summary>

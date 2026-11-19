@@ -751,6 +751,9 @@ public sealed partial class BashParser
                 if (Peek().Kind is BashTokenKind.Word or BashTokenKind.AssignmentWord)
                 {
                     var wordToken = Advance();
+                    string elementText = SubscriptedElementText(wordToken);
+                    if (!ReferenceEquals(elementText, wordToken.Value))
+                        wordToken = wordToken with { Value = elementText };
                     // [k]=~ / [k]=a:~: the value of a subscripted element is an assignment value, so a tilde at its start
                     // or after a : expands (bash), which a plain word decomposition would leave literal.
                     var subscript = System.Text.RegularExpressions.Regex.Match(wordToken.Value, @"^\[[^\[\]]+\]=");
@@ -785,6 +788,49 @@ public sealed partial class BashParser
         }
 
         return new Assignment(name, op, value);
+    }
+
+    /// <summary>
+    /// <c>declare -A m=([x y]=1)</c>: bash reads an array-literal element's <c>[subscript]</c> to its matching <c>]</c>,
+    /// blanks included, where the lexer ended the word at the blank (<c>[x</c>, <c>y]=1</c>: two plain elements). When
+    /// <paramref name="token"/> opens a subscript that closes, followed by <c>=</c> / <c>+=</c>, in a later word, the
+    /// element is the source text from the <c>[</c> to the end of that word, and the words it spans are consumed.
+    /// Otherwise the token's own text (the same instance).
+    /// </summary>
+    private string SubscriptedElementText(BashToken token)
+    {
+        string v = token.Value;
+        int start = token.Position, end = start + v.Length;
+        if (v.Length < 2 || v[0] != '[' || start < 0 || end > _input.Length || !_input.AsSpan(start, v.Length).SequenceEqual(v))
+            return v;
+        int close = -1, depth = 0;
+        for (int i = start; i < _input.Length && close < 0; i++)
+        {
+            char c = _input[i];
+            if (c == '\\') { i++; continue; }
+            if (c == '\'') { int q = _input.IndexOf('\'', i + 1); if (q < 0) return v; i = q; continue; }
+            if (c == '"')
+            {
+                int j = i + 1;
+                while (j < _input.Length && _input[j] != '"') j += _input[j] == '\\' ? 2 : 1;
+                if (j >= _input.Length) return v;
+                i = j;
+                continue;
+            }
+            if (c is '\n' or ')' or ';' or '&' or '|' or '<' or '>') return v;
+            if (c == '[') depth++;
+            else if (c == ']' && --depth == 0) close = i;
+        }
+        if (close < end) return v;   // closed inside the word itself: an ordinary element
+        bool assigns = close + 1 < _input.Length && (_input[close + 1] == '='
+            || _input[close + 1] == '+' && close + 2 < _input.Length && _input[close + 2] == '=');
+        if (!assigns) return v;
+        while (end <= close && Peek().Kind is BashTokenKind.Word or BashTokenKind.AssignmentWord && Peek().Position <= close)
+        {
+            var next = Advance();
+            end = next.Position + next.Value.Length;
+        }
+        return end > close + 1 ? _input[start..end] : v;
     }
 
     /// <summary>

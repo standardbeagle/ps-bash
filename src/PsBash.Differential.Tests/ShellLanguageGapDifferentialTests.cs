@@ -126,4 +126,16 @@ public class ShellLanguageGapDifferentialTests
     [SkippableFact]
     public Task SpecialParameter_UnsetBangBeforeAnyJob() => Same(
         "echo \"[${!:-none}] [${!:+x}] [${!-dash}]\"");
+
+    // --- Associative keys with blanks, quotes, ] and expansions (BashParser.SubscriptedElementText) ----
+
+    [SkippableFact]
+    public Task AssocKeys_CompoundAndSubscriptAssignment() => Same(
+        "declare -A m=([x y]=1 [\"q\\\"z\"]=2)\necho \"${m[x y]}\" \"${m[q\\\"z]}\"\n"
+        + "k=\"p q\"; m[$k]=v; echo \"${m[$k]}\" \"${m[p q]}\"\n"
+        + "declare -A n; k2='a]b'; n[$k2]=w; echo \"${n[$k2]}\"\n"
+        + "j=x; declare -A o=([$j-1]=e [${j}2]=f); echo \"${o[x-1]}\" \"${o[x2]}\"\n"
+        + "declare -A p=([\"sp ace\"]=s ['si ngle']=t); echo \"${p[sp ace]}\" \"${p[si ngle]}\" ${#p[@]}\n"
+        + "for kk in \"${!m[@]}\"; do echo \"key<$kk>\"; done | sort\n"
+        + "i=1; a=([$i]=x [2]=y); echo \"${a[@]}\"");
 }
