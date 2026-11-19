@@ -43,4 +43,18 @@ public static class BashPath
             path = path.Substring(4);
         return path.IndexOf('\\') < 0 ? path : path.Replace('\\', '/');
     }
+
+    /// <summary>
+    /// A walker's next display path: <paramref name="name"/> under the bash-visible <paramref name="dir"/> (the root
+    /// as the user typed it, then each component), joined with <c>/</c> on every OS (<c>src</c> + <c>a.txt</c> →
+    /// <c>src/a.txt</c>, <c>src/</c> + <c>a.txt</c> → <c>src/a.txt</c>, empty dir → the name alone). Never
+    /// <c>Path.Combine</c> / <c>Path.DirectorySeparatorChar</c> for a path that is printed: on Windows that wrote
+    /// <c>src\a.txt</c> (rg).
+    /// </summary>
+    public static string Child(string dir, string name)
+    {
+        if (dir.Length == 0) return name;
+        char last = dir[^1];
+        return last == '/' || (last == '\\' && System.OperatingSystem.IsWindows()) ? dir + name : dir + "/" + name;
+    }
 }

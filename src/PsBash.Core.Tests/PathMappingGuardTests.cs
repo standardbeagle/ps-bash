@@ -92,6 +92,48 @@ public class PathMappingGuardTests
             string.Join("\n  ", offenders));
     }
 
+    // `dir + Path.DirectorySeparatorChar + name`: a hand-joined path. A native join is Path.Combine/Path.Join; a path
+    // that is PRINTED (a walker's display path) is BashPath.Child, which joins with '/'. rg built `src\a.txt` this way.
+    private static readonly Regex HandJoinedPath = new(
+        @"\+\s*(?:System\.IO\.)?Path\.(?:Alt)?DirectorySeparatorChar\s*\+", RegexOptions.Compiled);
+
+    [Fact]
+    public void ProductCode_NeverHandJoinsAPathWithTheNativeSeparator()
+    {
+        var offenders = new List<string>();
+        foreach (var project in ProductDirs)
+        {
+            var dir = Path.Combine(RepoRoot(), "src", project);
+            foreach (var file in Directory.EnumerateFiles(dir, "*.cs", SearchOption.AllDirectories))
+            {
+                if (file.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar)
+                    || file.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar)) continue;
+                var lines = File.ReadAllLines(file);
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    var t = lines[i].TrimStart();
+                    if (t.StartsWith("//", StringComparison.Ordinal) || t.StartsWith("///", StringComparison.Ordinal)) continue;
+                    if (HandJoinedPath.IsMatch(lines[i]))
+                        offenders.Add($"{project}/{Path.GetFileName(file)}:{i + 1}: {t}");
+                }
+            }
+        }
+        Assert.True(offenders.Count == 0,
+            "Join a printed (display) path with BashPath.Child and a native one with Path.Combine — not " +
+            "`a + Path.DirectorySeparatorChar + b`. Offenders:\n  " + string.Join("\n  ", offenders));
+        Assert.Matches(HandJoinedPath, "return display + Path.DirectorySeparatorChar + name;");
+        Assert.DoesNotMatch(HandJoinedPath, "cwd.StartsWith(full + Path.DirectorySeparatorChar)");
+    }
+
+    [Theory]
+    [InlineData("src", "a.txt", "src/a.txt")]
+    [InlineData("src/", "a.txt", "src/a.txt")]
+    [InlineData("./src", "a.txt", "./src/a.txt")]
+    [InlineData("", "a.txt", "a.txt")]
+    [InlineData("C:/x", "y", "C:/x/y")]
+    public void BashPath_Child_JoinsWithForwardSlash(string dir, string name, string expected)
+        => Assert.Equal(expected, BashPath.Child(dir, name));
+
     [Fact]
     public void TheAllowList_OnlyNamesFilesThatStillExist()
     {

@@ -29,6 +29,10 @@ names the only exceptions: tar member names, which are archive data, not filesys
 ## The rule for new code
 
 - A cmdlet that prints a path (or stores one a script reads) prints `BashPath.ToShell(path)`.
+- A walker that builds its display path a component at a time (the root as typed + each name) joins with
+  `BashPath.Child(dir, name)` (`/` on every OS), never `Path.Combine` / `+ Path.DirectorySeparatorChar +`: rg
+  printed `src\sub\b.txt`. `PathMappingGuardTests` rejects the hand join; `WalkedPathOutputGuardTests` (Cmdlets.Tests)
+  runs each tree-walking command (rg, grep -r, find, ls -R, du, cp -rv, diff -r) and fails on a `\` in its output.
 - A cmdlet that receives a path from a script resolves it with `NormalizeOperandPath` / `ProviderPath`
   and never prints the resolved native form back; diagnostics name the operand as typed (see
   runtime-functions.md, "Diagnostics name operands as typed").

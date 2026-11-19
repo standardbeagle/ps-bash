@@ -80,10 +80,5 @@ internal static class RgWalker
         catch { return dir; }
     }
 
-    private static string Join(string display, string name)
-    {
-        if (display.Length == 0) return name;
-        char last = display[^1];
-        return last == '/' || last == '\\' ? display + name : display + Path.DirectorySeparatorChar + name;
-    }
+    private static string Join(string display, string name) => PsBash.Core.BashPath.Child(display, name);
 }
