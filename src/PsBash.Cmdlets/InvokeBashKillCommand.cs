@@ -89,14 +89,40 @@ public sealed class InvokeBashKillCommand : PSCmdlet
 
     private static readonly Regex NumSignal = new(@"^-(\d+)$", RegexOptions.Compiled);
     private static readonly Regex NamedSignal = new(@"^-(SIG)?([A-Za-z][A-Za-z0-9]*)$", RegexOptions.Compiled);
-    private static readonly Regex LongSignal = new(@"^--signal=(.+)$", RegexOptions.Compiled);
     private static readonly Regex PidSpec = new(@"^-%?(\d+)$", RegexOptions.Compiled);
 
-    private static string ResolveSignal(string token)
-        => token.StartsWith("SIG", StringComparison.Ordinal) ? token
-           : Signals.TryGetValue(token, out var name) ? name
-           : int.TryParse(token, out var n) && n > 0 && n < LinuxSignalNames.Length ? "SIG" + LinuxSignalNames[n]
-           : "SIG" + token;
+    /// <summary>
+    /// The one signal-spec validator every <c>kill</c> form goes through (<c>-N</c>, <c>-NAME</c>, <c>-s SPEC</c>,
+    /// <c>-n SPEC</c>, <c>--signal[=]SPEC</c>): a number 0-64, or a name with or without <c>SIG</c> in any case (bash
+    /// accepts <c>-term</c>, <c>-SIGterm</c>), including <c>RTMIN+N</c>/<c>RTMAX-N</c>. Yields the canonical
+    /// <c>SIGNAME</c> (<c>SIG0</c> for 0, <c>SIG32</c>/<c>SIG33</c> for the nameless pair); false for anything else,
+    /// which the caller reports as <c>kill: SPEC: invalid signal specification</c> (exit 1) without signalling.
+    /// </summary>
+    internal static bool TryResolveSignalSpec(string spec, out string signalName)
+    {
+        signalName = "";
+        if (spec.Length == 0) return false;
+        bool digits = true;
+        foreach (char c in spec) digits &= char.IsAsciiDigit(c);
+        if (digits)
+        {
+            int n = BashRuntime.ParseCountClamped(spec);
+            if (n > 64) return false;
+            signalName = n == 0 ? "SIG0" : "SIG" + (LinuxSignalNames[n] ?? n.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            return true;
+        }
+        string nm = spec.StartsWith("SIG", StringComparison.OrdinalIgnoreCase) ? spec[3..] : spec;
+        int idx = Array.FindIndex(LinuxSignalNames, x => x != null && x.Equals(nm, StringComparison.OrdinalIgnoreCase));
+        if (idx > 0) { signalName = "SIG" + LinuxSignalNames[idx]; return true; }
+        var rt = Regex.Match(nm, @"^(RTMIN|RTMAX)([+-])(\d+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!rt.Success) return false;
+        int off = BashRuntime.ParseCountClamped(rt.Groups[3].Value);
+        bool min = rt.Groups[1].Value.Equals("RTMIN", StringComparison.OrdinalIgnoreCase);
+        int num = min ? (rt.Groups[2].Value == "+" ? 34 + off : -1) : (rt.Groups[2].Value == "-" ? 64 - off : -1);
+        if (num < 34 || num > 64) return false;
+        signalName = "SIG" + LinuxSignalNames[num];
+        return true;
+    }
 
     protected override void EndProcessing()
     {
@@ -158,44 +184,29 @@ public sealed class InvokeBashKillCommand : PSCmdlet
                     WriteObject(obj);
                 return;
             }
+            // Every signal-spec form: `-s SPEC` / `-n SPEC` / `--signal SPEC`, `--signal=SPEC`, `-N`, `-NAME`. Each
+            // goes through TryResolveSignalSpec; an invalid one stops kill before anything is signalled (bash).
+            string? specText = null;
             if (a == "-s" || a == "-n" || a == "--signal")
             {
                 i++;
-                if (i < args.Length)
+                if (i >= args.Length) break;
+                specText = args[i];
+            }
+            else if (a.StartsWith("--signal=", StringComparison.Ordinal)) specText = a["--signal=".Length..];
+            else if (NumSignal.IsMatch(a) || NamedSignal.IsMatch(a)) specText = a[1..];
+            if (specText != null)
+            {
+                if (!TryResolveSignalSpec(specText, out var resolved))
                 {
-                    string spec = args[i];
-                    string nm = spec.StartsWith("SIG", StringComparison.OrdinalIgnoreCase) ? spec[3..] : spec;
-                    bool known = int.TryParse(spec, out var sn)
-                        ? sn >= 0 && sn <= 64
-                        : Array.Exists(LinuxSignalNames, x => x != null && x.Equals(nm, StringComparison.OrdinalIgnoreCase))
-                          || Regex.IsMatch(nm, @"^(RTMIN|RTMAX)(\+\d+|-\d+)?$", RegexOptions.IgnoreCase);
-                    if (!known)
-                    {
-                        FileSystemHelpers.WriteBashError(this, $"kill: {spec}: invalid signal specification");
-                        FileSystemHelpers.SetLastExitCode(this, 1);
-                        return;
-                    }
-                    signalName = ResolveSignal(spec);
+                    FileSystemHelpers.WriteBashError(this, $"kill: {specText}: invalid signal specification");
+                    FileSystemHelpers.SetLastExitCode(this, 1);
+                    return;
                 }
+                signalName = resolved;
                 i++;
                 continue;
             }
-            var mNum = NumSignal.Match(a);
-            if (mNum.Success && BashRuntime.ParseCountClamped(mNum.Groups[1].Value) > 64)
-            {
-                // No such signal (the highest real-time one is 64): nothing is signalled.
-                FileSystemHelpers.WriteBashError(this, $"kill: {a[1..]}: invalid signal specification");
-                FileSystemHelpers.SetLastExitCode(this, 1);
-                return;
-            }
-            if (mNum.Success) { signalName = ResolveSignal(mNum.Groups[1].Value); i++; continue; }
-
-            // Named-signal short form (-KILL, -SIGINT, ...) — before the pid scan.
-            var mNamed = NamedSignal.Match(a);
-            if (mNamed.Success) { signalName = ResolveSignal(a.Substring(1)); i++; continue; }
-
-            var mLong = LongSignal.Match(a);
-            if (mLong.Success) { signalName = ResolveSignal(mLong.Groups[1].Value); i++; continue; }
 
             if (a.Length > 0 && a[0] == '%') { jobSpecs.Add(a); i++; continue; }
 
@@ -342,7 +353,8 @@ public sealed class InvokeBashKillCommand : PSCmdlet
             if (value == signalName && int.TryParse(key, out var n)) return n;
         string bare = signalName.StartsWith("SIG", StringComparison.Ordinal) ? signalName[3..] : signalName;
         int idx = Array.FindIndex(LinuxSignalNames, x => x != null && x.Equals(bare, StringComparison.OrdinalIgnoreCase));
-        return idx > 0 ? idx : 15;
+        if (idx > 0) return idx;
+        return int.TryParse(bare, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var num) ? num : 15;
     }
 
     /// <summary>SIGCHLD (17), SIGURG (23), SIGWINCH (28): the default action is to ignore them, so a process without a

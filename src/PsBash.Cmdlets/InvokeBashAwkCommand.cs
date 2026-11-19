@@ -76,6 +76,14 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
     private bool _bufferStdin;  // mode 2, or mode 3 with a getline that may read the pipeline
     private bool _halt;     // version/help/usage/syntax/runtime error: ignore everything that follows
 
+    /// <summary>gawk's long value options, joined to the short letter the scan handles (<c>--file=f</c> → <c>-ff</c>).</summary>
+    private static readonly PsBash.Cmdlets.Args.LongOptionAlias[] LongValueOptions =
+    {
+        new("--file", 'f'),
+        new("--field-separator", 'F'),
+        new("--assign", 'v'),
+    };
+
     protected override void BeginProcessing()
     {
         var args = Arguments ?? Array.Empty<string>();
@@ -109,6 +117,9 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
             // POSIX: option parsing ends at the first operand (the program text, or the first
             // file when -f supplied the program). `awk '{print}' -v x=1` names a FILE `-v`.
             if (arg.Length == 0 || arg[0] != '-' || arg == "-") { optionsEnded = true; AddOperand(arg, ref programText, programFiles, files); continue; }
+            // gawk's long spellings (`--file=F`, `--file F`, `--field-separator=:`, `--assign x=1`) become the joined
+            // short form handled below.
+            if (PsBash.Cmdlets.Args.LongOptionAliases.Join(args, ref i, LongValueOptions) is { } joined) arg = joined;
 
             if (arg == "-F")
             {
@@ -130,7 +141,7 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
                 varAssignments.Add(arg.Substring(2));
                 continue;
             }
-            if (arg == "-f" || arg == "--file")
+            if (arg == "-f")
             {
                 if (i + 1 < args.Length) programFiles.Add(args[++i]);
                 continue;

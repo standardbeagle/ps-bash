@@ -177,6 +177,62 @@ public class InvokeBashKillCommandTests : IClassFixture<SharedPwshFixture>
         proc.Kill();
     }
 
+    // Oracle (bash 5.2): every spec form is validated before anything is signalled — `kill -FOO $pid`,
+    // `kill -SIGFOO`, `kill -s FOO`, `kill -n 99`, `kill -65` print `kill: SPEC: invalid signal specification`
+    // and return 1. REGRESSION: `-NAME` and `--signal=NAME` took any name and fell back to TERM.
+    // (bash has no `--signal`; ps-bash accepts it like procps kill and reports the value the same way.)
+    [Theory]
+    [InlineData("'-FOO'", "FOO")]
+    [InlineData("'-SIGFOO'", "SIGFOO")]
+    [InlineData("'--signal=FOO'", "FOO")]
+    [InlineData("'--signal' FOO", "FOO")]
+    [InlineData("'-s' FOO", "FOO")]
+    [InlineData("'-n' 99", "99")]
+    [InlineData("'-65'", "65")]
+    [InlineData("'-s' RTMIN+31", "RTMIN+31")]
+    public void Kill_InvalidSignalSpec_EveryForm_RejectedExit1(string spec, string shown)
+    {
+        var errs = RunErrors($"Invoke-BashKill {spec} 2147483646; $global:__kr = $global:LASTEXITCODE");
+        Assert.Contains(errs, e => e.Contains($"kill: {shown}: invalid signal specification"));
+        Assert.DoesNotContain(errs, e => e.Contains("No such process"));
+        Assert.Equal(new[] { "1" }, RunBashText("\"$global:__kr\""));
+    }
+
+    // Oracle: names are case-insensitive with or without SIG (`-term`, `-SIGterm`, `-s rtmax-1`); a valid spec reaches
+    // the target, so a missing pid reports `No such process`, never an invalid spec.
+    [Theory]
+    [InlineData("'-term'")]
+    [InlineData("'-SIGterm'")]
+    [InlineData("'-RTMIN+2'")]
+    [InlineData("'--signal=KILL'")]
+    [InlineData("'-s' rtmax-1")]
+    [InlineData("'-n' 64")]
+    public void Kill_ValidSignalSpec_ReachesTarget(string spec)
+    {
+        var errs = RunErrors($"Invoke-BashKill {spec} 2147483646");
+        Assert.DoesNotContain(errs, e => e.Contains("invalid signal specification"));
+        Assert.Contains(errs, e => e.Contains("No such process", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData("TERM", "SIGTERM")]
+    [InlineData("sigterm", "SIGTERM")]
+    [InlineData("0", "SIG0")]
+    [InlineData("64", "SIGRTMAX")]
+    [InlineData("RTMIN+15", "SIGRTMIN+15")]
+    [InlineData("rtmax-14", "SIGRTMAX-14")]
+    [InlineData("FOO", null)]
+    [InlineData("65", null)]
+    [InlineData("RTMIN+16", "SIGRTMAX-14")]
+    [InlineData("RTMIN+31", null)]
+    [InlineData("", null)]
+    public void TryResolveSignalSpec_ValidatesEveryName(string spec, string? expected)
+    {
+        bool ok = InvokeBashKillCommand.TryResolveSignalSpec(spec, out var name);
+        Assert.Equal(expected != null, ok);
+        if (expected != null) Assert.Equal(expected, name);
+    }
+
     [Theory]
     [InlineData("SIGURG", 23)]
     [InlineData("SIGILL", 4)]

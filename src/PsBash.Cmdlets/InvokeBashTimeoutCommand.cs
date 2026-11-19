@@ -141,6 +141,9 @@ public sealed class InvokeBashTimeoutCommand : PSCmdlet
         return TimeSpan.FromSeconds(seconds);
     }
 
+    /// <summary>timeout's long value options, joined to their short letter (<c>--kill-after=5</c> → <c>-k5</c>).</summary>
+    private static readonly Args.LongOptionAlias[] ValueOptions = { new("--kill-after", 'k'), new("--signal", 's') };
+
     internal static bool Parse(string[] a, out Options o, out string error)
     {
         bool preserve = false;
@@ -154,14 +157,22 @@ public sealed class InvokeBashTimeoutCommand : PSCmdlet
             if (!x.StartsWith('-') || x.Length < 2) break;
             if (x is "--preserve-status") { preserve = true; continue; }
             if (x is "--foreground" or "-v" or "--verbose") continue;
-            if (x is "-s" or "--signal" or "-k" or "--kill-after")
+            // Every spelling of a value option (`-k D`, `-kD`, `--kill-after=D`, `--kill-after D`; same for -s) is
+            // validated here, once: `--kill-after=x` used to be skipped unchecked.
+            if (x is "-s" or "-k")
             {
-                if (i + 1 >= a.Length) { error = $"option requires an argument -- '{x.TrimStart('-')}'"; return false; }
-                if (x is "-k" or "--kill-after" && ParseDuration(a[i + 1]) is null) { error = $"invalid time interval \u2018{a[i + 1]}\u2019"; return false; }
-                i++;
+                if (i + 1 >= a.Length) { error = $"option requires an argument -- '{x[1]}'"; return false; }
+                x += a[++i];
+            }
+            else if (Args.LongOptionAliases.Join(a, ref i, ValueOptions) is { } joined) x = joined;
+            else if (x is "--signal" or "--kill-after") { error = $"option '{x}' requires an argument"; return false; }
+            if (x.Length > 2 && x[0] == '-' && x[1] is 'k' or 's')
+            {
+                string v = x[2..];
+                if (x[1] == 'k' && ParseDuration(v) is null) { error = $"invalid time interval \u2018{v}\u2019"; return false; }
+                if (x[1] == 's' && !InvokeBashKillCommand.TryResolveSignalSpec(v, out _)) { error = $"\u2018{v}\u2019: invalid signal"; return false; }
                 continue;
             }
-            if (x.StartsWith("--signal=") || x.StartsWith("--kill-after=")) continue;
             error = $"invalid option -- '{x.TrimStart('-')}'";
             return false;
         }

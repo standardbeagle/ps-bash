@@ -43,6 +43,25 @@ public class AwkOptionParsingTests : IClassFixture<SharedPwshFixture>
         return f;
     }
 
+    // Oracle (gawk 5.2.1): the long spellings take `=VALUE` or the next word. REGRESSION: `--file=prog.awk` became
+    // the program TEXT ("syntax error: assignment to a non-lvalue"), and --field-separator/--assign were unknown.
+    [Theory]
+    [InlineData("awk --file='{0}'")]
+    [InlineData("awk --file '{0}'")]
+    [InlineData("awk -f '{0}'")]
+    public void LongFileOption_BothSpellings_ReadTheProgramFile(string form)
+    {
+        var prog = TempFile("{ print \"x\" $1 }\n");
+        try { Assert.Equal(new[] { "xa" }, Bash("echo a | " + string.Format(form, prog))); }
+        finally { File.Delete(prog); }
+    }
+
+    [Theory]
+    [InlineData("echo a:b | awk --field-separator=: --assign=x=Q '{print x $2}'")]
+    [InlineData("echo a:b | awk --field-separator : --assign x=Q '{print x $2}'")]
+    public void LongFieldSeparatorAndAssign_BothSpellings(string bash) =>
+        Assert.Equal(new[] { "Qb" }, Bash(bash));
+
     [Fact]
     public void RepeatedDashV_BothAssignmentsApply() =>
         Assert.Equal(new[] { "3" }, Bash("awk -v a=1 -v b=2 'BEGIN{print a+b}'"));

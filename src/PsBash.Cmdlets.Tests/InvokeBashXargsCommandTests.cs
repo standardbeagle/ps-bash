@@ -51,6 +51,48 @@ public class InvokeBashXargsCommandTests : IClassFixture<SharedPwshFixture>
         return string.Join("\n", parts);
     }
 
+    // Oracle (findutils 4.9): every long value option takes `--name=V` or `--name V`. REGRESSION: `--max-procs=2`
+    // was taken as the COMMAND ("xargs: --max-procs=1: No such file or directory", exit 127).
+    [Theory]
+    [InlineData("'--max-procs=2' echo", "1 2")]
+    [InlineData("'--max-procs' 2 echo", "1 2")]
+    [InlineData("'-P' 2 echo", "1 2")]
+    [InlineData("'-P2' echo", "1 2")]
+    [InlineData("'--max-args=1' echo", "1\n2")]
+    [InlineData("'--max-args' 1 echo", "1\n2")]
+    [InlineData("'--replace' echo 'x{}y'", "x1y\nx2y")]
+    [InlineData("'--replace=@' echo 'x@y'", "x1y\nx2y")]
+    [InlineData("'--max-lines' echo", "1\n2")]
+    [InlineData("'--max-lines=2' echo", "1 2")]
+    public void Xargs_LongValueOptions_BothSpellings(string args, string expected)
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(),
+            $"\"1`n2`n\" | Invoke-BashXargs {args} | ForEach-Object {{ if ($_.PSObject.Properties['BashText']) {{ \"$($_.BashText)\".TrimEnd(\"`n\") }} else {{ \"$_\" }} }}")
+            .AssertSuccess();
+        Assert.Equal(expected, string.Join("\n", r.Lines));
+    }
+
+    [Theory]
+    [InlineData("'--max-procs=x' echo", "xargs: invalid number \"x\" for -P option")]
+    [InlineData("'-P' x echo", "xargs: invalid number \"x\" for -P option")]
+    [InlineData("'--max-procs=-1' echo", "xargs: value -1 for -P option should be >= 0")]
+    public void Xargs_BadMaxProcs_IsAUsageError(string args, string message)
+        => CmdResult.Run(_fixture.AcquireFresh(), $"'1' | Invoke-BashXargs {args}").AssertFailed(1, message, "Try 'xargs --help'");
+
+    [Theory]
+    [InlineData(new[] { "--max-procs=4", "echo" }, 0, "-P4")]
+    [InlineData(new[] { "--max-procs", "4", "echo" }, 1, "-P4")]
+    [InlineData(new[] { "-P", "4" }, 1, "-P4")]
+    [InlineData(new[] { "--replace" }, 0, "-I{}")]
+    [InlineData(new[] { "--max-lines" }, 0, "-L1")]
+    [InlineData(new[] { "--delimiter=," }, 0, "-d,")]
+    public void NormalizeLongOption_JoinsToTheShortForm(string[] args, int nextIndex, string joined)
+    {
+        int i = 0;
+        Assert.Equal(joined, InvokeBashXargsCommand.NormalizeLongOption(args, ref i));
+        Assert.Equal(nextIndex, i);
+    }
+
     [Fact]
     public void Xargs_BasicEcho_PassesItemsAsArgs()
     {

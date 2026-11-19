@@ -140,6 +140,34 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
         return sb.ToString();
     }
 
+    /// <summary>
+    /// xargs's long options with a value, joined to the short letter the scan handles (<c>--max-procs=4</c> → <c>-P4</c>).
+    /// <c>--replace</c> and <c>--max-lines</c> take a value only after <c>=</c> (bare: <c>-I {}</c>, <c>-L 1</c>).
+    /// </summary>
+    private static readonly PsBash.Cmdlets.Args.LongOptionAlias[] LongValueOptions =
+    {
+        new("--max-procs", 'P'),
+        new("--max-args", 'n'),
+        new("--delimiter", 'd'),
+        new("--replace", 'I', Required: false, BareValue: "{}"),
+        new("--max-lines", 'L', Required: false, BareValue: "1"),
+    };
+
+    /// <summary>
+    /// The joined short form of <c>args[i]</c> for a long value option or a separate <c>-P N</c> (so the -P number is
+    /// checked in one place), else null; advances <paramref name="i"/> onto a separate value. Pure (unit-test seam).
+    /// </summary>
+    internal static string? NormalizeLongOption(string[] args, ref int i)
+    {
+        if (args[i] == "-P")
+        {
+            if (i + 1 >= args.Length) return null;
+            i++;
+            return "-P" + args[i];
+        }
+        return PsBash.Cmdlets.Args.LongOptionAliases.Join(args, ref i, LongValueOptions);
+    }
+
     protected override void EndProcessing()
     {
         if (_lines.Flush() is { } last) { InputObject = last; ProcessInputRecord(); }
@@ -190,6 +218,22 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
                 continue;
             }
 
+            // A long option spelled `--name=VALUE` / `--name VALUE` becomes the joined short form the scan below
+            // already knows (`--max-procs=4` → `-P4`), so every value option takes both spellings (GNU getopt_long).
+            if (NormalizeLongOption(args, ref i) is { } shortForm) arg = shortForm;
+
+            // -P must be a non-negative number even though the parallelism itself is not modelled.
+            if (arg.Length > 2 && arg.StartsWith("-P", System.StringComparison.Ordinal)
+                && !(int.TryParse(arg.AsSpan(2), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _)))
+            {
+                string v = arg.Substring(2);
+                bool negative = v.Length > 1 && v[0] == '-' && int.TryParse(v.AsSpan(1), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _);
+                FileSystemHelpers.WriteBashError(this, (negative
+                    ? $"xargs: value {v} for -P option should be >= 0"
+                    : $"xargs: invalid number \"{v}\" for -P option") + "\nTry 'xargs --help' for more information.");
+                return;
+            }
+
             if (string.Equals(arg, "-0", System.StringComparison.Ordinal) ||
                 string.Equals(arg, "--null", System.StringComparison.Ordinal))
             {
@@ -225,9 +269,8 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
                 continue;
             }
 
-            // -d DELIM / -dDELIM / --delimiter=DELIM / --delimiter DELIM.
-            if (string.Equals(arg, "-d", System.StringComparison.Ordinal)
-                || string.Equals(arg, "--delimiter", System.StringComparison.Ordinal))
+            // -d DELIM / -dDELIM (--delimiter[=]DELIM arrives joined, via NormalizeLongOption).
+            if (string.Equals(arg, "-d", System.StringComparison.Ordinal))
             {
                 i++;
                 if (i < args.Length) customDelim = args[i];
@@ -237,12 +280,6 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
             if (arg.Length > 2 && arg.StartsWith("-d", System.StringComparison.Ordinal))
             {
                 customDelim = arg.Substring(2);
-                i++;
-                continue;
-            }
-            if (arg.StartsWith("--delimiter=", System.StringComparison.Ordinal))
-            {
-                customDelim = arg.Substring("--delimiter=".Length);
                 i++;
                 continue;
             }
@@ -314,17 +351,9 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
                 continue;
             }
 
-            // -P N (separate value) and -PN (joined) for the accepted-but-ignored parallel
-            // flag. The transpiler single-quotes every dash literal, so the bare `-P` arrives
-            // here with its value as the NEXT element — it must be consumed, or "2" would be
-            // taken as the command.
-            if (string.Equals(arg, "-P", System.StringComparison.Ordinal)
-                || string.Equals(arg, "--max-procs", System.StringComparison.Ordinal))
-            {
-                i += 2;
-                continue;
-            }
-            if (arg.Length > 2 && arg.StartsWith("-P", System.StringComparison.Ordinal))
+            // -PN for the accepted-but-ignored parallel flag (`-P N`, `--max-procs[=]N` were joined to this
+            // form and validated above). A bare `-P` with no value left is dropped.
+            if (arg.StartsWith("-P", System.StringComparison.Ordinal))
             {
                 i++;
                 continue;

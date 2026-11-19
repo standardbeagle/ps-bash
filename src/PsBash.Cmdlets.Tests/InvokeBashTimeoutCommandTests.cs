@@ -50,6 +50,40 @@ public class InvokeBashTimeoutCommandTests : IClassFixture<SharedPwshFixture>
     public void Parse_UsageErrors_AreRefused(string args)
         => Assert.False(InvokeBashTimeoutCommand.Parse(args.Split(' ', StringSplitOptions.RemoveEmptyEntries), out _, out _));
 
+    // Oracle (coreutils 9.4): every spelling of -k/-s is validated, exit 125. REGRESSION: `--kill-after=x` and
+    // `--signal=FOO` were skipped unchecked (and `-kx`/`-sKILL` were "invalid option").
+    [Theory]
+    [InlineData("--kill-after=x 1 true", "invalid time interval ‘x’")]
+    [InlineData("--kill-after x 1 true", "invalid time interval ‘x’")]
+    [InlineData("-k x 1 true", "invalid time interval ‘x’")]
+    [InlineData("-kx 1 true", "invalid time interval ‘x’")]
+    [InlineData("-k -1 1 true", "invalid time interval ‘-1’")]
+    [InlineData("--signal=FOO 1 true", "‘FOO’: invalid signal")]
+    [InlineData("-s FOO 1 true", "‘FOO’: invalid signal")]
+    [InlineData("-s 99 1 true", "‘99’: invalid signal")]
+    [InlineData("--kill-after", "option '--kill-after' requires an argument")]
+    public void Parse_InvalidKillAfterOrSignal_EverySpelling_IsRefused(string args, string message)
+    {
+        Assert.False(InvokeBashTimeoutCommand.Parse(args.Split(' '), out _, out var error));
+        Assert.Equal(message, error);
+    }
+
+    [Theory]
+    [InlineData("--kill-after=1s 1 true")]
+    [InlineData("-k1 1 true")]
+    [InlineData("-sKILL 1 true")]
+    [InlineData("--signal=sigterm 1 true")]
+    [InlineData("--signal 0 1 true")]
+    public void Parse_ValidKillAfterOrSignal_EverySpelling_IsAccepted(string args)
+    {
+        Assert.True(InvokeBashTimeoutCommand.Parse(args.Split(' '), out var o, out _));
+        Assert.Equal(new[] { "true" }, o.Command);
+    }
+
+    [Fact]
+    public void Timeout_KillAfterEqualsInvalid_Exits125()
+        => Run("Invoke-BashTimeout '--kill-after=x' 1 true").AssertFailed(125, "timeout: invalid time interval ‘x’");
+
     [Theory]
     [InlineData("a b", "'a b'")]
     [InlineData("it's", "'it'\\''s'")]
