@@ -248,10 +248,14 @@ $ExecutionContext.InvokeCommand.CommandNotFoundAction = {
         } catch { }   # the cmdlets assembly not loaded yet: keep "command not found"
     }
     $EventArgs.CommandScriptBlock = {
+        # The status first, kept as this pipeline stage's own: under `2>&1` the message is the stage's output, and a later
+        # stage that has what it needs (`nosuchcmd 2>&1 | head -1`) stops this one inside that write, so a status set after
+        # it was never set (PIPESTATUS `0 0`; bash `127 0`).
+        $global:LASTEXITCODE = $notFoundStatus
+        try { [PsBash.Cmdlets.InvokeBashPipeStageCommand]::NoteStatus($notFoundStatus) } catch { }   # cmdlets not loaded yet
         # Non-terminating whatever $ErrorActionPreference is (errexit sets Stop): `missing || fallback` must still run.
         Write-Error -Message $msg -Category ObjectNotFound -TargetObject $name -ErrorAction Continue
         if ($wslHint) { Write-Error -Message $wslHint -Category ResourceUnavailable -ErrorAction Continue }
-        $global:LASTEXITCODE = $notFoundStatus
     }.GetNewClosure()
     $EventArgs.StopSearch = $true
 }.GetNewClosure()

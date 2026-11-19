@@ -202,7 +202,12 @@ Combined flags are decomposed: `set -euo pipefail` extracts `-e`, `-u` and
 (`PsEmitter._pipefailMode`): every stage's status is recorded (`Invoke-BashPipeStage`) and
 `$global:PIPESTATUS` is set after the pipeline. A stage a later stage stops (`nosuchcmd 2>&1 | head -1`) records the
 status its OWN commands set (`FileSystemHelpers.SetLastExitCode` -> `InvokeBashPipeStageCommand.NoteStatus`), not
-`$LASTEXITCODE`, which the stopping stage has already overwritten: 127 there, as in bash.
+`$LASTEXITCODE`, which the stopping stage has already overwritten: 127 there, as in bash (the host's not-found handler
+sets and notes 127 BEFORE writing the message, since the stop happens inside that write). The stopping stage itself
+(head inside its Invoke-BashPipeStage) gets the engine's stop request out of its steppable pipeline raw, naming a command
+the outer pipeline does not have, so the outer pipeline would end NONE of its commands (`… | head -c 3 | od -c` printed
+nothing, every status stayed 0): the stage records itself done and asks again as itself (`UpstreamStop.RequestedBy`;
+guard `PipeStageUpstreamStopTests`).
 
 ### 2.5 Errors that discard the input line
 

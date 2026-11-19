@@ -42,4 +42,25 @@ internal static class UpstreamStop
         }
         throw ex;
     }
+
+    /// <summary>
+    /// The command that raised <paramref name="ex"/> when it is an upstream stop (<see cref="Throw"/>, <c>Select-Object
+    /// -First</c>); null for any other exception. The engine stops the commands BEFORE that command in the pipeline it
+    /// belongs to, and completes it and the ones after.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage(
+        "Trimming", "IL2075",
+        Justification = "StopUpstreamCommandsException and CommandProcessorBase are SMA types present in the host; " +
+            "reading their non-public properties is safe.")]
+    public static object? RequestedBy(Exception ex)
+    {
+        var flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
+        for (Exception? e = ex; e is not null; e = e.InnerException)
+        {
+            if (e.GetType().FullName != "System.Management.Automation.StopUpstreamCommandsException") continue;
+            var processor = e.GetType().GetProperty("RequestingCommandProcessor", flags)?.GetValue(e);
+            return processor?.GetType().GetProperty("Command", flags)?.GetValue(processor);
+        }
+        return null;
+    }
 }

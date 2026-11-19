@@ -42,9 +42,10 @@ public sealed class InvokeBashPipeStageCommand : PSCmdlet
     /// <summary>
     /// A command set <paramref name="code"/> as the status (<see cref="FileSystemHelpers.SetLastExitCode"/>): kept for the
     /// stage it runs in. <c>$LASTEXITCODE</c> is one variable for every stage, and a stage downstream overwrites it
-    /// before it stops this one (head sets 0, then stops <c>nosuchcmd</c>, whose 127 was lost).
+    /// before it stops this one (head sets 0, then stops <c>nosuchcmd</c>, whose 127 was lost). Public for the host's
+    /// command-not-found handler (SdkRunspaceSetup.ps1), script code that sets its status without a cmdlet.
     /// </summary>
-    internal static void NoteStatus(int code)
+    public static void NoteStatus(int code)
     {
         if (t_running is { } stage) stage._ownStatus = code;
     }
@@ -67,19 +68,54 @@ public sealed class InvokeBashPipeStageCommand : PSCmdlet
         _beginStatus = CurrentStatus();
     }
 
+    /// <summary>The stage has ended: its status is recorded and its steppable pipeline disposed.</summary>
+    private bool _finished;
+
     protected override void ProcessRecord()
     {
+        if (_finished) return;
         try { Run(() => _stage!.Process(InputObject)); }
+        catch (Exception ex) when (StoppedByOwnCommand(ex))
+        {
+            // A command of THIS stage has what it needs (`head -c 3`) and asked to stop the commands before it. A
+            // steppable pipeline hands that request out raw, and those commands are the stages before this one in the
+            // OUTER pipeline, where the engine looks the asker up to stop what precedes it and complete it and what
+            // follows. The inner command is not in that pipeline, so the engine completed NOTHING: the stages after this
+            // one lost their end (`printenv -0 | head -c 3 | od -c` printed nothing) and every status stayed 0
+            // (`nosuchcmd 2>&1 | head -1` gave PIPESTATUS `0 0`). Record this stage as done and ask again as itself, a
+            // command the outer pipeline has; the engine then ends the stages after it and not this one.
+            FinishStopped();
+            UpstreamStop.Throw(this);
+            throw;
+        }
         catch (Exception ex) when (FileSystemHelpers.IsPipelineStop(ex)) { RecordStopped(); throw; }
     }
 
     protected override void EndProcessing()
     {
+        if (_finished) return;
+        _finished = true;
         try { Run(() => _stage!.End()); }
+        catch (Exception ex) when (StoppedByOwnCommand(ex)) { Record(_ownStatus ?? CurrentStatus()); return; }
         catch (Exception ex) when (FileSystemHelpers.IsPipelineStop(ex)) { RecordStopped(); throw; }
         finally { _stage!.Dispose(); }
         Record(CurrentStatus());
     }
+
+    /// <summary>This stage's own command stopped it, done (the steppable pipeline has already disposed its commands).</summary>
+    private void FinishStopped()
+    {
+        _finished = true;
+        _stage!.Dispose();
+        Record(_ownStatus ?? CurrentStatus());
+    }
+
+    /// <summary>
+    /// <paramref name="ex"/> is an upstream stop a command inside this stage asked for (head), not a later stage's
+    /// (every stage is an <see cref="InvokeBashPipeStageCommand"/>, which turns its own command's stop into its own).
+    /// </summary>
+    private static bool StoppedByOwnCommand(Exception ex)
+        => UpstreamStop.RequestedBy(ex) is { } asker && asker is not InvokeBashPipeStageCommand;
 
     /// <summary>
     /// A later stage stopped this one (<c>nosuchcmd 2&gt;&amp;1 | head -1</c>: head has its line). The stage's status is

@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 122
+stdout-length: 30
+stderr-length: 0
+==== SCRIPT ====
+set -o pipefail
+printf 'ab\0cd\0' | head -c 3 | od -c | head -1; echo "a $?"
+nosuchcmd 2>/dev/null | head -1; echo "b $?"
+
+==== STDOUT ====
+0000000   a   b  \0
+a 0
+b 127
+
+==== STDERR ====
+

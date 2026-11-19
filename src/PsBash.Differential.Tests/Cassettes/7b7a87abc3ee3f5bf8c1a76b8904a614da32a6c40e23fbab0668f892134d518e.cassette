@@ -1,0 +1,35 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 436
+stdout-length: 135
+stderr-length: 0
+==== SCRIPT ====
+printf 'ab\0cd\0' | head -c 3 | od -c; echo "a ${PIPESTATUS[*]}"
+printf 'ab\0cd\0' | head -c 3 | od -c | cat; echo "b ${PIPESTATUS[*]}"
+printenv -0 | head -c 3 | wc -c; echo "c ${PIPESTATUS[*]:1}"
+printenv -0 | head -c 3 | od -c | wc -l; echo "d ${PIPESTATUS[*]:1}"
+seq 5 | head -n 2 | wc -l; echo "e ${PIPESTATUS[*]:1}"
+seq 5 | head -n 2 | sort -r | uniq -c; echo "f ${PIPESTATUS[*]:1}"
+x=$(seq 9 | head -n 2 | tr '\n' ,); echo "g $x"
+
+==== STDOUT ====
+0000000   a   b  \0
+0000003
+a 0 0 0
+0000000   a   b  \0
+0000003
+b 0 0 0 0
+3
+c 0 0
+2
+d 0 0 0
+2
+e 0 0
+      1 2
+      1 1
+f 0 0 0
+g 1,2,
+
+==== STDERR ====
+

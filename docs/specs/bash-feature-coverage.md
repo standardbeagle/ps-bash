@@ -54,7 +54,7 @@ ended the driver loop (`help` reached PowerShell's own `help`; fixed, see below)
 | `"${a[@]}"` / `"$@"` beside other words | joined into one argument; now one argument per element (commands, `for` lists, array literals) |
 | `PPID SHLVL GROUPS DIRSTACK BASH_ALIASES SRANDOM BASH_SUBSHELL HOSTTYPE MACHTYPE OSTYPE HOSTNAME COMP_WORDBREAKS OPTERR` unset; `$IFS` empty | one table of shell-owned variables (`ShellVariables`, guard `ShellVariablesGuardTests`); `environment-model.md` §Shell-owned variables |
 | `( trap 'echo err' ERR; false )`, a trap set in a function or `$( )` | did not fire; a function, subshell or substitution now starts without the caller's ERR trap unless `set -E`, and its own trap fires (`ErrTrapInheritance`) |
-| `nosuchcmd 2>&1 \| head -1; echo ${PIPESTATUS[0]}` | 0; a stage a later stage stops keeps the status its own commands set (`InvokeBashPipeStageCommand.NoteStatus`) |
+| `nosuchcmd 2>&1 \| head -1; echo ${PIPESTATUS[0]}` | 0; a stage a later stage stops keeps the status its own commands set (`InvokeBashPipeStageCommand.NoteStatus`); with head's output not redirected it was still `0 0`, and `… \| head -c 3 \| od -c` printed nothing, in any script that reads PIPESTATUS or sets pipefail: head's stop now names its own stage (`UpstreamStop.RequestedBy`) |
 | `echo ${@:2:2} ${*: -1}` | binding error; an unquoted positional slice is split into words |
 | `${!:+pid}`, `${?:-q}`, `${#:-z}`, `${#!}` | broken command / `0` read as empty; the special parameters take every operator |
 | `declare -A m=([x y]=1)`, `([$k-1]=v)` | empty / literal key; a subscript with blanks, quotes or expansions is one key |

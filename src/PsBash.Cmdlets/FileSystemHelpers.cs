@@ -381,9 +381,11 @@ internal static class FileSystemHelpers
 
     /// <summary>
     /// True when <paramref name="ex"/> is the engine's pipeline-stop signal: a
-    /// <see cref="System.Management.Automation.PipelineStoppedException"/>, which
-    /// the internal <c>StopUpstreamCommandsException</c> raised by
-    /// <c>Invoke-BashHead</c> / <c>Select-Object -First</c> also derives from.
+    /// <see cref="System.Management.Automation.PipelineStoppedException"/>: what the
+    /// commands before <c>Invoke-BashHead</c> / <c>Select-Object -First</c> see when
+    /// it stops them (the engine turns its internal <c>StopUpstreamCommandsException</c>,
+    /// a FlowControlException, into this). Only a steppable pipeline's host sees the
+    /// raw request (<see cref="UpstreamStop.RequestedBy"/>; InvokeBashPipeStageCommand).
     /// <para>
     /// A producer cmdlet's catch-all around its <c>WriteObject</c> loop MUST
     /// rethrow this instead of formatting it as a read error. When a downstream
