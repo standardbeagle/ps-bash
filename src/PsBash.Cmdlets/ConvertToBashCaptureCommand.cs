@@ -52,7 +52,9 @@ public sealed class ConvertToBashCaptureCommand : PSCmdlet
     {
         if (InputObject is null) return;
 
-        var text = BashRuntime.GetBashText(InputObject);
+        // The record's bytes (the one rule, BashRuntime.RecordBytes): a plain record is its text plus a newline even
+        // when that text already ends in one (`$(jq -r . <<<'"a\n"'; echo .)` is "a\n\n.").
+        var text = BashRuntime.RecordBytes(InputObject);
         // bash drops every NUL byte of a substitution's output, with one warning: `$(printf '.\000.')` is `..`. Kept, a
         // NUL ended the value at the first one (an environment variable is a C string).
         if (text.Contains('\0'))
@@ -65,17 +67,15 @@ public sealed class ConvertToBashCaptureCommand : PSCmdlet
             }
         }
         _hasPending = true;
-        if (BashRuntime.IsUnterminated(InputObject))
+        if (!text.EndsWith('\n'))
         {
             _pending.Append(text);
             return;
         }
 
-        // An exact record that already ends with its own terminator (`printf 'x\n'`) is the line
-        // WITHOUT it: the caller's newline join supplies the terminator once.
-        if (InputObject.Properties["NoTrailingNewline"]?.Value is true && text.EndsWith('\n'))
-            text = text[..^1];
-        _pending.Append(text);
+        // Bytes ending in a newline complete a line: the line WITHOUT that newline (the caller's newline join
+        // supplies it once).
+        _pending.Append(text, 0, text.Length - 1);
 
         Emit(_pending.ToString());
         _pending.Clear();

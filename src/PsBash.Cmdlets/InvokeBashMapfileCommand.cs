@@ -84,7 +84,6 @@ public sealed class InvokeBashMapfileCommand : PSCmdlet
     // The input as ONE text stream, built as records arrive. Keeping the records themselves (PSObjects with note
     // properties, several KB each) cost ~100x the data for `mapfile -t a < big`; only their text is needed.
     private readonly System.Text.StringBuilder _stream = new();
-    private bool _lastNeedsNewline;
 
     /// <summary>bash stores each line as a C string, so a NUL ends it: `.\0.\n` is stored as `.` (its newline too is lost).</summary>
     internal static string UpToNul(string line)
@@ -104,11 +103,11 @@ public sealed class InvokeBashMapfileCommand : PSCmdlet
     private void ProcessInputRecord()
     {
         if (InputObject == null) return;
-        // A record is a line: the PREVIOUS record gets its newline now (it was not the last), unless its text already ended with one.
-        if (_lastNeedsNewline) _stream.Append('\n');
-        string text = BashRuntime.GetBashText(InputObject).Replace("\r\n", "\n");
-        _stream.Append(text);
-        _lastNeedsNewline = !text.EndsWith('\n');
+        // The stream is the records' exact bytes (BashRuntime.RecordBytes): a plain record is a line, an unterminated
+        // tail stays unterminated, and a non-newline delimiter sees the line boundaries as data, as in bash.
+        // The CRLF fold applies to the text only: the boundary newline after a data CR (`"line1`r"`) is not a CRLF.
+        _stream.Append(PsBash.Core.StdoutRecord.Bytes(
+            BashRuntime.GetBashText(InputObject).Replace("\r\n", "\n"), BashRuntime.IsExactBytes(InputObject)));
     }
 
     protected override void EndProcessing()
@@ -201,12 +200,9 @@ public sealed class InvokeBashMapfileCommand : PSCmdlet
             i++;
         }
 
-        // The pipeline carries one record per input line (newline already removed). Rebuild the stream and cut it
-        // at the delimiter like bash: empty records are kept, an unterminated tail is the last element, and without
-        // -t every element keeps its delimiter. (A non-newline delimiter leaves the records' joins as plain newlines.)
+        // Cut the rebuilt byte stream at the delimiter like bash: empty records are kept, an unterminated tail is the
+        // last element, and without -t every element keeps its delimiter.
         var lines = new List<string>();
-        // The last record ends with a newline unless its text already did (or the stream is cut at some other delimiter).
-        if (_lastNeedsNewline && delim == '\n') _stream.Append('\n');
         string stream = _stream.ToString();
         _stream.Clear();
         int startAt = 0;

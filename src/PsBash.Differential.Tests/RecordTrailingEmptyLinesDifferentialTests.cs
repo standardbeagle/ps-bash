@@ -22,8 +22,7 @@ public class RecordTrailingEmptyLinesDifferentialTests
     public Task LineConsumers_KeepARecordsTrailingEmptyLines()
         => AssertOracle.EqualAsync(
             "cd \"$(mktemp -d)\" || exit\n"
-            // `sed -n '$='` is in the literal test only: on an unterminated last line ps-bash drops the newline after
-            // the `=` count (a separate sed-sink gap, not a record split).
+            // `sed -n '$='` on an unterminated last line: SedMissingNewlineDifferentialTests.
             + "for c in \"grep -c ''\" \"grep -n ''\" 'sed =' 'cat -n' 'cat -A' 'cat' 'nl -ba' 'cut -c1' "
             + "'tr a b' 'tr a b | wc -l' 'rev' 'tac' 'sort' 'uniq -c' 'head -n 9' 'tail -n 9' 'tail -n +1' 'shuf | sort' "
             + "'column -t' \"rg -c ''\" \"rg -n ''\" 'fold' 'expand' 'unexpand' 'paste -' 'comm - /dev/null' "

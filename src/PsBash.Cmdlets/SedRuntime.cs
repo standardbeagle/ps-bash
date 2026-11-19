@@ -21,6 +21,10 @@ internal sealed class SedRuntime
 
     public string Hold = "";
 
+    /// <summary>GNU's <c>hold.chomped</c>: the hold space ends in a newline when printed (it starts empty and terminated;
+    /// <c>h</c>/<c>H</c> copy the pattern space's state, <c>x</c> swaps it) — see <see cref="SedEnd"/>.</summary>
+    public bool HoldTerminated = true;
+
     /// <summary>The input being read, as typed ("-" for stdin).</summary>
     public string FileName = "-";
 
@@ -33,11 +37,13 @@ internal sealed class SedRuntime
     /// <summary><c>r FILE</c>: the whole file, or null when it cannot be read (silently ignored by GNU).</summary>
     public Func<string, string?>? ReadFile;
 
-    /// <summary><c>R FILE</c>: the next line of FILE (kept open between calls), or null at end/unreadable.</summary>
-    public Func<string, string?>? ReadLine;
+    /// <summary><c>R FILE</c>: the next line of FILE (kept open between calls) and whether it had its newline, or
+    /// null at end/unreadable.</summary>
+    public Func<string, BashFileSystem.TextLine?>? ReadLine;
 
-    /// <summary><c>w FILE</c>: appends one line (no terminator) to FILE (opened/truncated at program start).</summary>
-    public Action<string, string>? WriteFile;
+    /// <summary><c>w FILE</c>: writes one record (no terminator; <see cref="SedEnd"/> says how it ends) to FILE
+    /// (opened/truncated at program start).</summary>
+    public Action<string, string, SedEnd>? WriteFile;
 
     /// <summary><c>e</c>: runs a shell command line through ps-bash and returns its stdout.</summary>
     public Func<string, string>? RunCommand;

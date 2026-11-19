@@ -77,13 +77,7 @@ public static class BashJobOutput
     internal static string Text(PSObject? item, string eol)
     {
         if (item is null) return eol;
-        var bashText = item.Properties["BashText"]?.Value;
-        if (bashText is not null)
-        {
-            var text = bashText.ToString() ?? "";
-            return item.Properties["NoTrailingNewline"]?.Value is true ? text : text + eol;
-        }
         if (item.BaseObject is ErrorRecord record) return record + eol;
-        return (item.BaseObject is string s ? s : item.ToString()) + eol;
+        return BashRuntime.RecordBytes(item, eol);
     }
 }

@@ -299,22 +299,6 @@ public sealed class InvokeBashFusedPipelineCommand : PSCmdlet
     private static void RenderItem(PSObject? item, StringBuilder sb)
     {
         if (item is null) return;
-
-        var bashText = item.Properties["BashText"]?.Value;
-        if (bashText is not null)
-        {
-            sb.Append(bashText.ToString() ?? "");
-            bool noNewline = item.Properties["NoTrailingNewline"]?.Value is true;
-            if (!noNewline) sb.Append(System.Environment.NewLine);
-            return;
-        }
-
-        if (item.BaseObject is string s)
-        {
-            sb.Append(s).Append(System.Environment.NewLine);
-            return;
-        }
-
-        sb.Append(item.ToString()).Append(System.Environment.NewLine);
+        sb.Append(BashRuntime.RecordBytes(item, System.Environment.NewLine));
     }
 }

@@ -1,0 +1,203 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 822
+stdout-length: 7922
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+printf 'R1\nR2' > rf; printf 'R1\nR2\n' > rt
+for s in "-n '\$='" "'\$='" "-n '='" "'\$a X'" "'\$i X'" "'\$c X'" "'1a X'" "-n '\$l'" "'\$l'" "-n '1p'" "-n '\$p'" "'\$p'" "-n 'p;p'" "'\$P'" "'N;P;D'" "'\$!N;P'" "'s/b/B/p'" "-n 's/a/A/p'" "'1h;\$!d;x'" "'1h;\$!d;G'" "'\$!d;H;x'" "'\$!d;g'" "'1!G;h;\$!d'" "-n 'x;\$p'" "'\$r rf'" "'\$r rt'" "'1r rf'" "'R rf'" "'\$R rf'" "'\$q'" "'1q'" "'2q'" "'\$d'" "'n;d'" "'\$!n'" "'y/ab/AB/'" "-n '\$F'" "-n '\$p;\$q'" "'\$p;\$q'" "'\$=;\$q'" "'\$Q'" "'\$p;\$Q'" "-e '\$r rf' -e '\$q'" "'\$!N;P;D'" "-e '1{N;a X' -e '};P;D'" "-e '1{N;i X' -e '};P;D'"; do
+  for src in "printf 'a\nb'" "printf 'a\nb\n'" "printf a" "{ printf 'a\n'; printf b; }"; do
+    eval "$src | sed $s" > o 2>&1; echo "## $s <- $src: $(od -An -c o | tr -s ' ' | tr -d '\n')"
+  done
+done
+cd / 
+==== STDOUT ====
+## -n '$=' <- printf 'a\nb':  2 \n
+## -n '$=' <- printf 'a\nb\n':  2 \n
+## -n '$=' <- printf a:  1 \n
+## -n '$=' <- { printf 'a\n'; printf b; }:  2 \n
+## '$=' <- printf 'a\nb':  a \n 2 \n b
+## '$=' <- printf 'a\nb\n':  a \n 2 \n b \n
+## '$=' <- printf a:  1 \n a
+## '$=' <- { printf 'a\n'; printf b; }:  a \n 2 \n b
+## -n '=' <- printf 'a\nb':  1 \n 2 \n
+## -n '=' <- printf 'a\nb\n':  1 \n 2 \n
+## -n '=' <- printf a:  1 \n
+## -n '=' <- { printf 'a\n'; printf b; }:  1 \n 2 \n
+## '$a X' <- printf 'a\nb':  a \n b \n X \n
+## '$a X' <- printf 'a\nb\n':  a \n b \n X \n
+## '$a X' <- printf a:  a \n X \n
+## '$a X' <- { printf 'a\n'; printf b; }:  a \n b \n X \n
+## '$i X' <- printf 'a\nb':  a \n X \n b
+## '$i X' <- printf 'a\nb\n':  a \n X \n b \n
+## '$i X' <- printf a:  X \n a
+## '$i X' <- { printf 'a\n'; printf b; }:  a \n X \n b
+## '$c X' <- printf 'a\nb':  a \n X \n
+## '$c X' <- printf 'a\nb\n':  a \n X \n
+## '$c X' <- printf a:  X \n
+## '$c X' <- { printf 'a\n'; printf b; }:  a \n X \n
+## '1a X' <- printf 'a\nb':  a \n X \n b
+## '1a X' <- printf 'a\nb\n':  a \n X \n b \n
+## '1a X' <- printf a:  a \n X \n
+## '1a X' <- { printf 'a\n'; printf b; }:  a \n X \n b
+## -n '$l' <- printf 'a\nb':  b $ \n
+## -n '$l' <- printf 'a\nb\n':  b $ \n
+## -n '$l' <- printf a:  a $ \n
+## -n '$l' <- { printf 'a\n'; printf b; }:  b $ \n
+## '$l' <- printf 'a\nb':  a \n b $ \n b
+## '$l' <- printf 'a\nb\n':  a \n b $ \n b \n
+## '$l' <- printf a:  a $ \n a
+## '$l' <- { printf 'a\n'; printf b; }:  a \n b $ \n b
+## -n '1p' <- printf 'a\nb':  a \n
+## -n '1p' <- printf 'a\nb\n':  a \n
+## -n '1p' <- printf a:  a
+## -n '1p' <- { printf 'a\n'; printf b; }:  a \n
+## -n '$p' <- printf 'a\nb':  b
+## -n '$p' <- printf 'a\nb\n':  b \n
+## -n '$p' <- printf a:  a
+## -n '$p' <- { printf 'a\n'; printf b; }:  b
+## '$p' <- printf 'a\nb':  a \n b \n b
+## '$p' <- printf 'a\nb\n':  a \n b \n b \n
+## '$p' <- printf a:  a \n a
+## '$p' <- { printf 'a\n'; printf b; }:  a \n b \n b
+## -n 'p;p' <- printf 'a\nb':  a \n a \n b \n b
+## -n 'p;p' <- printf 'a\nb\n':  a \n a \n b \n b \n
+## -n 'p;p' <- printf a:  a \n a
+## -n 'p;p' <- { printf 'a\n'; printf b; }:  a \n a \n b \n b
+## '$P' <- printf 'a\nb':  a \n b \n b
+## '$P' <- printf 'a\nb\n':  a \n b \n b \n
+## '$P' <- printf a:  a \n a
+## '$P' <- { printf 'a\n'; printf b; }:  a \n b \n b
+## 'N;P;D' <- printf 'a\nb':  a \n b
+## 'N;P;D' <- printf 'a\nb\n':  a \n b \n
+## 'N;P;D' <- printf a:  a
+## 'N;P;D' <- { printf 'a\n'; printf b; }:  a \n b
+## '$!N;P' <- printf 'a\nb':  a \n a \n b
+## '$!N;P' <- printf 'a\nb\n':  a \n a \n b \n
+## '$!N;P' <- printf a:  a \n a
+## '$!N;P' <- { printf 'a\n'; printf b; }:  a \n a \n b
+## 's/b/B/p' <- printf 'a\nb':  a \n B \n B
+## 's/b/B/p' <- printf 'a\nb\n':  a \n B \n B \n
+## 's/b/B/p' <- printf a:  a
+## 's/b/B/p' <- { printf 'a\n'; printf b; }:  a \n B \n B
+## -n 's/a/A/p' <- printf 'a\nb':  A \n
+## -n 's/a/A/p' <- printf 'a\nb\n':  A \n
+## -n 's/a/A/p' <- printf a:  A
+## -n 's/a/A/p' <- { printf 'a\n'; printf b; }:  A \n
+## '1h;$!d;x' <- printf 'a\nb':  a \n
+## '1h;$!d;x' <- printf 'a\nb\n':  a \n
+## '1h;$!d;x' <- printf a:  a
+## '1h;$!d;x' <- { printf 'a\n'; printf b; }:  a \n
+## '1h;$!d;G' <- printf 'a\nb':  b \n a \n
+## '1h;$!d;G' <- printf 'a\nb\n':  b \n a \n
+## '1h;$!d;G' <- printf a:  a \n a
+## '1h;$!d;G' <- { printf 'a\n'; printf b; }:  b \n a \n
+## '$!d;H;x' <- printf 'a\nb':  \n b
+## '$!d;H;x' <- printf 'a\nb\n':  \n b \n
+## '$!d;H;x' <- printf a:  \n a
+## '$!d;H;x' <- { printf 'a\n'; printf b; }:  \n b
+## '$!d;g' <- printf 'a\nb':  \n
+## '$!d;g' <- printf 'a\nb\n':  \n
+## '$!d;g' <- printf a:  \n
+## '$!d;g' <- { printf 'a\n'; printf b; }:  \n
+## '1!G;h;$!d' <- printf 'a\nb':  b \n a \n
+## '1!G;h;$!d' <- printf 'a\nb\n':  b \n a \n
+## '1!G;h;$!d' <- printf a:  a
+## '1!G;h;$!d' <- { printf 'a\n'; printf b; }:  b \n a \n
+## -n 'x;$p' <- printf 'a\nb':  a \n
+## -n 'x;$p' <- printf 'a\nb\n':  a \n
+## -n 'x;$p' <- printf a:  \n
+## -n 'x;$p' <- { printf 'a\n'; printf b; }:  a \n
+## '$r rf' <- printf 'a\nb':  a \n b \n R 1 \n R 2
+## '$r rf' <- printf 'a\nb\n':  a \n b \n R 1 \n R 2
+## '$r rf' <- printf a:  a \n R 1 \n R 2
+## '$r rf' <- { printf 'a\n'; printf b; }:  a \n b \n R 1 \n R 2
+## '$r rt' <- printf 'a\nb':  a \n b \n R 1 \n R 2 \n
+## '$r rt' <- printf 'a\nb\n':  a \n b \n R 1 \n R 2 \n
+## '$r rt' <- printf a:  a \n R 1 \n R 2 \n
+## '$r rt' <- { printf 'a\n'; printf b; }:  a \n b \n R 1 \n R 2 \n
+## '1r rf' <- printf 'a\nb':  a \n R 1 \n R 2 b
+## '1r rf' <- printf 'a\nb\n':  a \n R 1 \n R 2 b \n
+## '1r rf' <- printf a:  a \n R 1 \n R 2
+## '1r rf' <- { printf 'a\n'; printf b; }:  a \n R 1 \n R 2 b
+## 'R rf' <- printf 'a\nb':  a \n R 1 \n b \n R 2
+## 'R rf' <- printf 'a\nb\n':  a \n R 1 \n b \n R 2
+## 'R rf' <- printf a:  a \n R 1 \n
+## 'R rf' <- { printf 'a\n'; printf b; }:  a \n R 1 \n b \n R 2
+## '$R rf' <- printf 'a\nb':  a \n b \n R 1 \n
+## '$R rf' <- printf 'a\nb\n':  a \n b \n R 1 \n
+## '$R rf' <- printf a:  a \n R 1 \n
+## '$R rf' <- { printf 'a\n'; printf b; }:  a \n b \n R 1 \n
+## '$q' <- printf 'a\nb':  a \n b \n
+## '$q' <- printf 'a\nb\n':  a \n b \n
+## '$q' <- printf a:  a \n
+## '$q' <- { printf 'a\n'; printf b; }:  a \n b \n
+## '1q' <- printf 'a\nb':  a \n
+## '1q' <- printf 'a\nb\n':  a \n
+## '1q' <- printf a:  a \n
+## '1q' <- { printf 'a\n'; printf b; }:  a \n
+## '2q' <- printf 'a\nb':  a \n b \n
+## '2q' <- printf 'a\nb\n':  a \n b \n
+## '2q' <- printf a:  a
+## '2q' <- { printf 'a\n'; printf b; }:  a \n b \n
+## '$d' <- printf 'a\nb':  a \n
+## '$d' <- printf 'a\nb\n':  a \n
+## '$d' <- printf a:
+## '$d' <- { printf 'a\n'; printf b; }:  a \n
+## 'n;d' <- printf 'a\nb':  a \n
+## 'n;d' <- printf 'a\nb\n':  a \n
+## 'n;d' <- printf a:  a
+## 'n;d' <- { printf 'a\n'; printf b; }:  a \n
+## '$!n' <- printf 'a\nb':  a \n b
+## '$!n' <- printf 'a\nb\n':  a \n b \n
+## '$!n' <- printf a:  a
+## '$!n' <- { printf 'a\n'; printf b; }:  a \n b
+## 'y/ab/AB/' <- printf 'a\nb':  A \n B
+## 'y/ab/AB/' <- printf 'a\nb\n':  A \n B \n
+## 'y/ab/AB/' <- printf a:  A
+## 'y/ab/AB/' <- { printf 'a\n'; printf b; }:  A \n B
+## -n '$F' <- printf 'a\nb':  - \n
+## -n '$F' <- printf 'a\nb\n':  - \n
+## -n '$F' <- printf a:  - \n
+## -n '$F' <- { printf 'a\n'; printf b; }:  - \n
+## -n '$p;$q' <- printf 'a\nb':  b \n
+## -n '$p;$q' <- printf 'a\nb\n':  b \n
+## -n '$p;$q' <- printf a:  a \n
+## -n '$p;$q' <- { printf 'a\n'; printf b; }:  b \n
+## '$p;$q' <- printf 'a\nb':  a \n b \n b \n
+## '$p;$q' <- printf 'a\nb\n':  a \n b \n b \n
+## '$p;$q' <- printf a:  a \n a \n
+## '$p;$q' <- { printf 'a\n'; printf b; }:  a \n b \n b \n
+## '$=;$q' <- printf 'a\nb':  a \n 2 \n b \n
+## '$=;$q' <- printf 'a\nb\n':  a \n 2 \n b \n
+## '$=;$q' <- printf a:  1 \n a \n
+## '$=;$q' <- { printf 'a\n'; printf b; }:  a \n 2 \n b \n
+## '$Q' <- printf 'a\nb':  a \n
+## '$Q' <- printf 'a\nb\n':  a \n
+## '$Q' <- printf a:
+## '$Q' <- { printf 'a\n'; printf b; }:  a \n
+## '$p;$Q' <- printf 'a\nb':  a \n b
+## '$p;$Q' <- printf 'a\nb\n':  a \n b \n
+## '$p;$Q' <- printf a:  a
+## '$p;$Q' <- { printf 'a\n'; printf b; }:  a \n b
+## -e '$r rf' -e '$q' <- printf 'a\nb':  a \n b \n R 1 \n R 2
+## -e '$r rf' -e '$q' <- printf 'a\nb\n':  a \n b \n R 1 \n R 2
+## -e '$r rf' -e '$q' <- printf a:  a \n R 1 \n R 2
+## -e '$r rf' -e '$q' <- { printf 'a\n'; printf b; }:  a \n b \n R 1 \n R 2
+## '$!N;P;D' <- printf 'a\nb':  a \n b
+## '$!N;P;D' <- printf 'a\nb\n':  a \n b \n
+## '$!N;P;D' <- printf a:  a
+## '$!N;P;D' <- { printf 'a\n'; printf b; }:  a \n b
+## -e '1{N;a X' -e '};P;D' <- printf 'a\nb':  a \n b \n X \n
+## -e '1{N;a X' -e '};P;D' <- printf 'a\nb\n':  a \n b \n X \n
+## -e '1{N;a X' -e '};P;D' <- printf a:  a
+## -e '1{N;a X' -e '};P;D' <- { printf 'a\n'; printf b; }:  a \n b \n X \n
+## -e '1{N;i X' -e '};P;D' <- printf 'a\nb':  X \n a \n b
+## -e '1{N;i X' -e '};P;D' <- printf 'a\nb\n':  X \n a \n b \n
+## -e '1{N;i X' -e '};P;D' <- printf a:  a
+## -e '1{N;i X' -e '};P;D' <- { printf 'a\n'; printf b; }:  X \n a \n b
+
+==== STDERR ====
+

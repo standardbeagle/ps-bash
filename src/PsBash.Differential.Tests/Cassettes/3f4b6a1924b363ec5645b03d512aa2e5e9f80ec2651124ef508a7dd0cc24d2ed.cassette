@@ -1,0 +1,34 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 390
+stdout-length: 121
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+jq -rn '"a\n"' | od -An -c
+jq -rn '"a\n"' | grep -c ''
+jq -rn '"a\n"' | tail -n 1 | od -An -c
+jq -rn '"a\n"' | sed = | od -An -c
+jq -rn '"a\n"' | tr a b | od -An -c
+basename $'a\n' | tee t | od -An -c; od -An -c t
+v=$(basename $'a\n'; echo .); echo "[$v]"
+x=$'a\n'; { echo "$x" >&2; } 2> e; od -An -c e
+printf 'abc\n' | { read -n 1 y; cat; } > o; od -An -c o
+cd / 
+==== STDOUT ====
+   a  \n  \n
+2
+  \n
+   1  \n   a  \n   2  \n  \n
+   b  \n  \n
+   a  \n  \n
+   a  \n  \n
+[a
+
+.]
+   a  \n  \n
+   b   c  \n
+
+==== STDERR ====
+

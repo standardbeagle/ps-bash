@@ -49,11 +49,11 @@ public sealed class LineAssembler
         if (item is null) return null;
         if (PassThrough) return item;
         string text = BashRuntime.GetBashText(item);
-        // The record's bytes: its text, plus the boundary newline a terminated record renders with.
-        bool boundary = !BashRuntime.IsUnterminated(item) && !text.EndsWith('\n');
-        bool complete = Terminator == '\n'
-            ? boundary || text.EndsWith('\n')
-            : !boundary && text.EndsWith(Terminator);
+        // The record's bytes (BashRuntime.RecordBytes): its text, plus the boundary newline unless it is exact bytes.
+        bool boundary = !BashRuntime.IsExactBytes(item);
+        bool complete = boundary
+            ? Terminator == '\n'
+            : text.Length > 0 && text[^1] == Terminator;
 
         if (!_hasPending)
         {

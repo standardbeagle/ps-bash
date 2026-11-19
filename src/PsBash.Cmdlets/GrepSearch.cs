@@ -505,19 +505,21 @@ internal sealed class GrepStdinFeeder
     public GrepStdinFeeder(GrepScanner scanner, bool nullData) { _scanner = scanner; _nullData = nullData; }
 
     /// <summary>Returns false once the scanner needs no more input.</summary>
-    public bool Add(string recordText, bool unterminated, object? original)
+    /// <param name="record">The pipeline record.</param>
+    /// <param name="passOriginal">Hand the record itself to the scanner (a FILTER re-emits it) when it is one line.</param>
+    public bool Add(object record, bool passOriginal)
     {
         if (!_nullData)
         {
-            var pieces = BashRuntime.SplitRecord(recordText, unterminated);
-            if (pieces.Length == 1) return _scanner.Feed(pieces[0], unterminated ? 0 : 1, original);
+            var pieces = BashRuntime.SplitRecord(record, out bool unterminated);
+            if (pieces.Length == 1) return _scanner.Feed(pieces[0], unterminated ? 0 : 1, passOriginal ? record : null);
             for (int i = 0; i < pieces.Length; i++)
                 if (!_scanner.Feed(pieces[i], unterminated && i == pieces.Length - 1 ? 0 : 1, null)) return false;
             return true;
         }
 
-        // -z: the byte stream is the records' text, each terminated by \n unless unterminated.
-        string t = recordText.EndsWith('\n') && !unterminated ? recordText : recordText + (unterminated ? "" : "\n");
+        // -z: the byte stream is the records' bytes.
+        string t = BashRuntime.RecordBytes(record);
         int s = 0;
         for (int i = 0; i < t.Length; i++)
         {

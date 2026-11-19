@@ -461,10 +461,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
 
         if (_plan.BytesMode)
         {
-            // Byte stream text of this record: BashText + boundary \n unless unterminated.
-            string text = BashRuntime.GetBashText(item);
-            if (!text.EndsWith('\n') && !BashRuntime.IsUnterminated(item)) text += "\n";
-            byte[] bytes = RawBytes.GetBytes(text);
+            byte[] bytes = RawBytes.GetBytes(BashRuntime.RecordBytes(item));
 
             if (_plan.BytesFromStart)
             {

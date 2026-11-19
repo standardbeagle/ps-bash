@@ -1,5 +1,4 @@
 using System.Management.Automation;
-using System.Text;
 using System.Text.RegularExpressions;
 using PsBash.Core.Transpiler;
 
@@ -41,23 +40,17 @@ public sealed class InvokeProcessSubSourceCommand : PSCmdlet
             return;
 
         // Run the producer scriptblock in caller scope (useNewScope=false)
-        // and capture its output objects. Collected lines are concatenated
-        // with newlines into a single bash-text blob for re-transpilation.
+        // and capture its output objects. The script is the BYTES the producer wrote (BashRuntime.RecordStreamText,
+        // the one record → bytes rule): an exact piece (`printf 'echo a'`) runs on into the next record, so
+        // `source <(printf 'echo a'; printf 'b\n')` runs `echo ab` as bash does. Joining every record with a newline
+        // ran `echo a` and then `b`.
         var output = InvokeCommand.InvokeScript(
             useLocalScope: false,
             Command,
             input: null,
             args: System.Array.Empty<object>());
 
-        var sb = new StringBuilder();
-        foreach (var item in output)
-        {
-            string text = GetBashText(item);
-            sb.Append(text.TrimEnd('\r', '\n'));
-            sb.Append('\n');
-        }
-
-        var bashContent = sb.ToString();
+        var bashContent = BashRuntime.RecordStreamText(output);
         if (string.IsNullOrWhiteSpace(bashContent))
             return;
 
@@ -88,30 +81,12 @@ public sealed class InvokeProcessSubSourceCommand : PSCmdlet
         // script scope frame), useNewScope=false targets the eval pipeline's
         // scope — exactly where bash 'source' wants the names to land.
         var inner = ScriptBlock.Create(psCode);
-        InvokeCommand.InvokeScript(
+        var produced = InvokeCommand.InvokeScript(
             useLocalScope: false,
             inner,
             input: null,
             args: System.Array.Empty<object>());
-    }
-
-    /// <summary>
-    /// Extract the bash text representation of a pipeline object. Matches the
-    /// psm1 <c>Get-BashText</c> helper: prefer a <c>BashText</c> property,
-    /// otherwise stringify.
-    /// </summary>
-    private static string GetBashText(object? obj)
-    {
-        if (obj is null) return string.Empty;
-        if (obj is PSObject pso)
-        {
-            var prop = pso.Properties["BashText"];
-            if (prop is not null && prop.Value is not null)
-                return prop.Value.ToString() ?? string.Empty;
-            if (pso.BaseObject is string s)
-                return s;
-            return pso.ToString() ?? string.Empty;
-        }
-        return obj.ToString() ?? string.Empty;
+        // The sourced commands' stdout is this command's stdout (`source <(echo 'echo hi')` prints hi). It was dropped.
+        foreach (var item in produced) WriteObject(item);
     }
 }

@@ -11,8 +11,8 @@ namespace PsBash.Cmdlets.Tests;
 /// that split each record on <c>\n</c> first would (a) ADD a line and (b) make <c>\n</c>
 /// untranslatable, turning <c>tr -d '\n'</c> into a silent no-op — the exact historical bug
 /// documented on the <c>tr</c> row of <c>docs/specs/runtime-command-reference.md</c>. The
-/// <c>WholeRecord_*</c> tests below feed records that CARRY a trailing <c>\n</c>, so a
-/// splitting core fails them instead of quietly passing. A table that touches the newline itself is
+/// <c>WholeRecord_*</c> tests below feed <c>printf 'a\nb\n'</c> (one exact-bytes record holding two lines) to the
+/// cmdlet and its lines to the core, so a core or cmdlet that adds a line fails them. A table that touches the newline itself is
 /// declined by the core (see <c>TrCore_NewlineTouchingTable_Declines</c>).</para>
 /// </summary>
 public class LineStreamTrParityTests : LineStreamParityHarness
@@ -96,9 +96,19 @@ public class LineStreamTrParityTests : LineStreamParityHarness
 
     [Fact]
     public void TrCore_WholeRecord_DoesNotAddALine_MatchesCmdlet()
-        // A no-op translate must not change the RECORD COUNT
-        // (`printf "a\nb\n" | tr x y | wc -l` answered 3, not 2).
-        => AssertTr(new[] { "x", "y" }, new[] { "a\n", "b\n" });
+    {
+        // A no-op translate must not change the RECORD COUNT (`printf "a\nb\n" | tr x y | wc -l` answered 3, not 2).
+        // The cmdlet gets printf's exact-bytes record; the fused lane hands the core that record's LINES
+        // (LineStreamRecord.SubLines = BashRuntime.SplitRecord). A bare "a\n" is no longer this shape: under the one
+        // record → bytes rule a plain record ending in "\n" IS a line plus an empty line.
+        var expected = RenderScript("Invoke-BashPrintf 'a\\nb\\n' | Invoke-BashTr x y").Replace("\r\n", "\n");
+        var actual = string.Concat(RunCore("tr", new[] { "x", "y" }, PrintfLines("a\nb\n")).Select(l => l + "\n"));
+        Assert.Equal("a\nb\n", expected);
+        Assert.Equal(expected, actual);
+    }
+
+    private static string[] PrintfLines(string bytes)
+        => BashRuntime.SplitRecord(BashRuntime.NewBashObject(bytes, "PsBash.TextOutput", noTrailingNewline: true), out _);
 
     [Fact]
     public void TrCore_WholeRecord_PipedToWc_CountsTwoLines()
@@ -106,9 +116,8 @@ public class LineStreamTrParityTests : LineStreamParityHarness
         // The `... | wc -l` half of that regression, composed through the streaming cores
         // exactly as the fused lane composes them, and diffed against the same two cmdlets in
         // a real pipeline.
-        var input = new[] { "a\n", "b\n" };
-        var expected = RenderScript(
-            "@(('a' + [char]10), ('b' + [char]10)) | Invoke-BashTr x y | Invoke-BashWc -l");
+        var input = PrintfLines("a\nb\n");
+        var expected = RenderScript("Invoke-BashPrintf 'a\\nb\\n' | Invoke-BashTr x y | Invoke-BashWc -l");
 
         Assert.True(LineStreamRegistry.TryCreate("tr", new[] { "x", "y" }, out var tr));
         Assert.True(LineStreamRegistry.TryCreate("wc", new[] { "-l" }, out var wc));

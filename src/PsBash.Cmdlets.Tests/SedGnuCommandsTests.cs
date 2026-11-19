@@ -84,6 +84,57 @@ public class SedGnuCommandsTests : IClassFixture<SharedPwshFixture>, IDisposable
     [InlineData("a1\nb2\nc3\n", ":a;:a")]
     public void Commands_MatchGnu(string expected, params string[] argv) => Assert.Equal(expected, Sed(argv));
 
+    /// <summary>
+    /// Input whose last line has no newline (GNU sed 4.9 oracle, <c>printf 'a\nb' | sed …| od -c</c>): the missing
+    /// newline belongs to the buffer that holds that line (SedEnd). REGRESSION: the last output record always took
+    /// the input's terminator state, so <c>$=</c> lost its newline and <c>-n 1p</c> / <c>1h;$!d;x</c> gained none.
+    /// </summary>
+    [Theory]
+    [InlineData("2\n", "-n", "$=")]
+    [InlineData("1\na\n2\nb", "=")]
+    [InlineData("a\nb\nX\n", "$a X")]
+    [InlineData("a\nX\nb", "$i X")]
+    [InlineData("a\nX\n", "$c X")]
+    [InlineData("b$\n", "-n", "$l")]
+    [InlineData("a\n", "-n", "1p")]
+    [InlineData("a\nb\nb", "$p")]
+    [InlineData("a\n", "1h;$!d;x")]          // x: the terminated hold space prints with its newline
+    [InlineData("b\na\n", "1!G;h;$!d")]      // G: the pattern space takes the hold space's state
+    [InlineData("a\na\nb", "$!N;P")]
+    [InlineData("a\nb", "N;P;D")]             // a D restart writes its pass's P output (it printed only "b")
+    [InlineData("a\nb\nX\n", "-e", "1{N;a X", "-e", "};P;D")] // ... and keeps its appends for the cycle's end
+    [InlineData("X\na\nb", "-e", "1{N;i X", "-e", "};P;D")]
+    [InlineData("a\nb\n", "$q")]              // q autoprints WITH a newline
+    [InlineData("b\n", "-n", "$p;$q")]        // ... and settles stdout's owed one even under -n
+    [InlineData("a\nb\nb\n", "$p;$q")]
+    [InlineData("a\n", "$Q")]                 // Q does neither
+    [InlineData("a\nb", "$p;$Q")]
+    [InlineData("a\nb\nR1\nR2", "$r {rf}")]  // the owed newline comes first; the file's bytes owe none
+    [InlineData("a\nR1\nR2b", "1r {rf}")]
+    [InlineData("a\nhib", "$e printf hi")]
+    public void LastLineWithoutNewline_EndsLikeGnu(string expected, params string[] argv)
+    {
+        string rf = Path.Combine(_dir, "rf.txt");
+        File.WriteAllText(rf, "R1\nR2");
+        string u = F("u.txt", "a\nb");
+        string args = string.Join(" ", argv.Select(a => Q(a.Replace("{rf}", rf))));
+        var (o, rc) = Bytes($"Invoke-BashSed {args} {u}");
+        Assert.Equal(0, rc);
+        Assert.Equal(expected, o);
+        // The pipeline form (an unterminated last piece) ends the same way.
+        Assert.Equal(expected, Bytes($"[PsBash.Cmdlets.BashRuntime]::BytesRecord(\"a`nb\") | Invoke-BashSed {args}").Out);
+    }
+
+    [Fact]
+    public void WFile_OwesItsOwnMissingNewline()
+    {
+        string w = Path.Combine(_dir, "w.txt");
+        string u = F("u.txt", "a\nb");
+        var (o, _) = Bytes($"Invoke-BashSed '-n' {Q("w " + w + "\n$=")} {u}");
+        Assert.Equal("2\n", o);
+        Assert.Equal("a\nb", File.ReadAllText(w));
+    }
+
     [Fact]
     public void BlocksAcrossExpressions_JoinLikeGnu()
     {

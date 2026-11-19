@@ -1,0 +1,104 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 531
+stdout-length: 1506
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+for n in 0 1 2; do
+  nl=$(printf '%*s' "$n" '' | sed 's/ /\\n/g')
+  for c in "jq -rn '\"a$nl\"'" "basename \$'a$nl'" "echo \$'a$nl'" "printf 'a$nl'"; do
+    eval "$c" > o; echo "## $c >f: $(od -An -c o | tr -s ' ' | tr -d '\n')"
+    eval "$c" | cat > o; echo "## $c |cat: $(od -An -c o | tr -s ' ' | tr -d '\n')"
+    eval "$c" | grep -c ''
+    v=$(eval "$c"; echo .); printf '%s' "$v" > o; echo "## $c \$(): $(od -An -c o | tr -s ' ' | tr -d '\n')"
+    eval "$c"; echo "## $c screen END"
+  done
+done
+cd / 
+==== STDOUT ====
+## jq -rn '"a"' >f:  a \n
+## jq -rn '"a"' |cat:  a \n
+1
+## jq -rn '"a"' $():  a \n .
+a
+## jq -rn '"a"' screen END
+## basename $'a' >f:  a \n
+## basename $'a' |cat:  a \n
+1
+## basename $'a' $():  a \n .
+a
+## basename $'a' screen END
+## echo $'a' >f:  a \n
+## echo $'a' |cat:  a \n
+1
+## echo $'a' $():  a \n .
+a
+## echo $'a' screen END
+## printf 'a' >f:  a
+## printf 'a' |cat:  a
+1
+## printf 'a' $():  a .
+a## printf 'a' screen END
+## jq -rn '"a\n"' >f:  a \n \n
+## jq -rn '"a\n"' |cat:  a \n \n
+2
+## jq -rn '"a\n"' $():  a \n \n .
+a
+
+## jq -rn '"a\n"' screen END
+## basename $'a\n' >f:  a \n \n
+## basename $'a\n' |cat:  a \n \n
+2
+## basename $'a\n' $():  a \n \n .
+a
+
+## basename $'a\n' screen END
+## echo $'a\n' >f:  a \n \n
+## echo $'a\n' |cat:  a \n \n
+2
+## echo $'a\n' $():  a \n \n .
+a
+
+## echo $'a\n' screen END
+## printf 'a\n' >f:  a \n
+## printf 'a\n' |cat:  a \n
+1
+## printf 'a\n' $():  a \n .
+a
+## printf 'a\n' screen END
+## jq -rn '"a\n\n"' >f:  a \n \n \n
+## jq -rn '"a\n\n"' |cat:  a \n \n \n
+3
+## jq -rn '"a\n\n"' $():  a \n \n \n .
+a
+
+
+## jq -rn '"a\n\n"' screen END
+## basename $'a\n\n' >f:  a \n \n \n
+## basename $'a\n\n' |cat:  a \n \n \n
+3
+## basename $'a\n\n' $():  a \n \n \n .
+a
+
+
+## basename $'a\n\n' screen END
+## echo $'a\n\n' >f:  a \n \n \n
+## echo $'a\n\n' |cat:  a \n \n \n
+3
+## echo $'a\n\n' $():  a \n \n \n .
+a
+
+
+## echo $'a\n\n' screen END
+## printf 'a\n\n' >f:  a \n \n
+## printf 'a\n\n' |cat:  a \n \n
+2
+## printf 'a\n\n' $():  a \n \n .
+a
+
+## printf 'a\n\n' screen END
+
+==== STDERR ====
+

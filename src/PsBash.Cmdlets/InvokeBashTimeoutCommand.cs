@@ -32,9 +32,7 @@ public sealed class InvokeBashTimeoutCommand : PSCmdlet
     {
         if (InputObject is null) return;
         _stdin ??= new StringBuilder();
-        var text = BashRuntime.GetBashText(InputObject);
-        _stdin.Append(text);
-        if (!text.EndsWith('\n') && !BashRuntime.IsUnterminated(InputObject)) _stdin.Append('\n');
+        _stdin.Append(BashRuntime.RecordBytes(InputObject));
     }
 
     protected override void EndProcessing()

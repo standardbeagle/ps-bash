@@ -17,12 +17,9 @@ namespace PsBash.Cmdlets;
 /// other S3 core uses. The <c>WholeRecord_*</c> parity tests feed records that carry a
 /// trailing <c>\n</c>, so a splitting re-implementation fails instead of passing quietly.</para>
 ///
-/// <para>The one place a record IS touched is the trailing-<c>\n</c> normalization applied to
-/// the RESULT: the cmdlet emits through <c>BashRuntime.NewBashObject</c>, which strips a single
-/// trailing <c>\n</c> from BashText (the serializer owns record boundaries). The streaming lane
-/// renders each yielded line as <c>line + Environment.NewLine</c>, so skipping that strip would
-/// emit one blank line per record. <see cref="BashRuntime.NormalizeBashText"/> is the SHARED
-/// helper, not a re-derivation.</para>
+/// <para>A lane record is a plain record (its text plus the boundary newline, <see cref="BashRuntime.RecordBytes"/>)
+/// and only argv whose table leaves <c>\n</c> alone are certified, so the transformed text plus that same boundary
+/// is exactly the cmdlet's output bytes: the result is yielded as is (a record <c>"a\n"</c> stays two lines).</para>
 ///
 /// <para><b>The known source/host gap is NOT fixed here.</b> Producers disagree about whether a
 /// record's text carries its trailing <c>\n</c> (<c>printf</c> does, <c>seq</c> and <c>cat</c>
@@ -216,7 +213,7 @@ internal sealed class TrStage : ILineStreamStage
     {
         foreach (var record in input)
         {
-            yield return BashRuntime.NormalizeBashText(TransformLine(record));
+            yield return TransformLine(record);
         }
     }
 

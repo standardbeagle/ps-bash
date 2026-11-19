@@ -56,6 +56,14 @@ public class ConvertToBashCaptureJoinTests : IClassFixture<SharedPwshFixture>
         Assert.Equal("ab", Run("& { Invoke-BashPrintf a; Invoke-BashPrintf b } | ConvertTo-BashCapture -Join"));
     }
 
+    // Oracle: `v=$(jq -rn '"a\n"'; echo .)` is "a\n\n." — a plain record whose text ends in a newline still gets the
+    // boundary one (BashRuntime.RecordBytes, the renderer's rule). REGRESSION: the capture gave it none ("a\n.").
+    [Fact]
+    public void Join_PlainRecordEndingInNewline_StillGetsTheBoundary()
+    {
+        Assert.Equal("a\n\n.", Run("& { \"a`n\"; '.' } | ConvertTo-BashCapture -Join"));
+    }
+
     // Oracle: `s=$(printf '.\000.'); echo ${#s}` is 2 and `$(printf '\000x')` is `x` (bash drops every NUL with a warning).
     // A kept NUL ended the value at the first one once it was stored (oils nul-bytes).
     [Theory]

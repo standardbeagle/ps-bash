@@ -290,10 +290,9 @@ public sealed class InvokeBashTrCommand : PSCmdlet
         // bytes, embedded newlines included. So this record's byte-stream contribution is
         // BashText + "\n" for a normal record and BashText verbatim for a marked one — which is what
         // makes `seq 1 3 | tr -d '\n'` (seq emits bare lines) "123" exactly like `printf '1\n2\n3\n'`.
-        // A plain record whose text already ends in its own "\n" (a bare "a\n" string) gets no second one:
-        // the same record → bytes rule as every reader (BashRuntime.RecordStreamText / SplitRecord).
-        string text = BashRuntime.GetBashText(InputObject);
-        string chunk = text.EndsWith('\n') || BashRuntime.IsUnterminated(InputObject) ? text : text + "\n";
+        // A plain record whose text already ends in a "\n" (a bare "a\n" string) still gets the boundary one:
+        // the one record → bytes rule, BashRuntime.RecordBytes.
+        string chunk = BashRuntime.RecordBytes(InputObject);
 
         // STREAMING, whatever the table: each record is transformed and written as it arrives
         // (`tail -f log | tr '\n' ' '` emits per line; `yes | tr '\n' x | head -c 5` terminates).

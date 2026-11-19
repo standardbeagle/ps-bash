@@ -52,8 +52,9 @@ public sealed class ConvertToBashNativeStdinCommand : PSCmdlet
         if (!_native)
         {
             // A bash function keeps the "no final newline" mark: `printf ab | f` must not hand f's commands "ab\n".
-            string text = BashRuntime.GetBashText(InputObject);
-            WriteObject(_bashFunction ? BashRuntime.TextRecord(text, BashRuntime.IsUnterminated(InputObject)) : text);
+            WriteObject(_bashFunction
+                ? BashRuntime.BytesRecord(BashRuntime.RecordBytes(InputObject))
+                : BashRuntime.GetBashText(InputObject));
             return;
         }
 

@@ -165,7 +165,7 @@ internal static class SharedStdin
     internal static void PushFront(SessionState state, string text)
     {
         if (text.Length == 0) return;
-        object record = text.EndsWith('\n') ? text : BashRuntime.TextRecord(text, unterminated: true);
+        object record = BashRuntime.BytesRecord(text); // never a bare "x\n": that is x plus TWO newlines
         switch (Get(state))
         {
             case StdinCursor c: c.PushFront(new object[] { record }); break;

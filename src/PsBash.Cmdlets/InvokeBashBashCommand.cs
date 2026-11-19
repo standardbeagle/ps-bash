@@ -99,9 +99,8 @@ public sealed class InvokeBashBashCommand : PSCmdlet, IDisposable
         if (_programOnStdin)
         {
             _stdinScript ??= new System.Text.StringBuilder();
-            var text = BashRuntime.GetBashText(InputObject);
-            _stdinScript.Append(text);
-            if (!text.EndsWith('\n')) _stdinScript.Append('\n');
+            // The program is the bytes the producer wrote: `{ printf 'echo a'; printf 'b\n'; } | bash` runs `echo ab`.
+            _stdinScript.Append(BashRuntime.RecordBytes(InputObject));
             return;
         }
         if (_child is not { StdinOpen: true }) return;

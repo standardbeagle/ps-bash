@@ -867,17 +867,19 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         if (item is null)
             return "";
 
+        // THE record → bytes rule (PsBash.Core.StdoutRecord, shared with every cmdlet-side reader through
+        // BashRuntime.RecordBytes; the host has no compile-time reference to the cmdlets): a plain record is its text
+        // plus the boundary, even when the text already ends in a newline.
         var bashText = item.Properties["BashText"]?.Value;
         if (bashText is not null)
         {
-            var text = bashText.ToString() ?? "";
-            var noTrailingNewline = item.Properties["NoTrailingNewline"]?.Value is true;
-            return noTrailingNewline ? text : text + eol;
+            bool exact = item.Properties[PsBash.Core.StdoutRecord.ExactBytesProperty]?.Value is true;
+            return PsBash.Core.StdoutRecord.Bytes(bashText.ToString() ?? "", exact, eol);
         }
 
         if (item.BaseObject is System.Management.Automation.ErrorRecord record)
             return record.ToString() + eol;
-        return item.BaseObject is string s ? s + eol : item.ToString() + eol;
+        return PsBash.Core.StdoutRecord.Bytes(item.BaseObject is string s ? s : item.ToString(), exact: false, eol);
     }
 
     /// <summary>

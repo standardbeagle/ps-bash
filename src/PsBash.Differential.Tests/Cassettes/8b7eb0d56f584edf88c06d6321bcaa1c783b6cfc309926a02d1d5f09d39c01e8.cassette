@@ -1,0 +1,47 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 604
+stdout-length: 369
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+printf 'r1\nr2' > rr; printf 'r1\nr2\n' > rt
+sed -n '$=' rr | od -An -c
+sed p rr rr | od -An -c
+sed -n 2p rr rr | od -An -c
+sed -n 2p rr rt | od -An -c
+sed -s -n '$=' rr rr | od -An -c
+sed '$a X' rr rt | od -An -c
+cp rr e1; sed -i '$a X' e1; od -An -c e1
+cp rr e2; sed -i 's/r/R/' e2; od -An -c e2
+cp rr e3; sed -i -n '$=' e3; od -An -c e3
+sed -n 'w w1' rr; od -An -c w1
+sed -n '1w w2' rr; od -An -c w2
+sed -n 'w w3
+$=' rr | od -An -c; od -An -c w3
+printf 'a\0b' | sed -z -n '$=' | od -An -c
+printf 'a\0b' | sed -z 'p' | od -An -c
+printf 'a\nb' | sed -n '$=' - | od -An -c
+cd / 
+==== STDOUT ====
+   2  \n
+   r   1  \n   r   1  \n   r   2  \n   r   2  \n   r   1  \n   r
+   1  \n   r   2  \n   r   2
+   r   2
+   r   2
+   2  \n   2  \n
+   r   1  \n   r   2  \n   r   1  \n   r   2  \n   X  \n
+   r   1  \n   r   2  \n   X  \n
+   R   1  \n   R   2
+   2  \n
+   r   1  \n   r   2
+   r   1  \n
+   2  \n
+   r   1  \n   r   2
+   2  \0
+   a  \0   a  \0   b  \0   b
+   2  \n
+
+==== STDERR ====
+

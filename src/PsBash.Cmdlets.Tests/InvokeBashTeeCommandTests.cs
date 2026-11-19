@@ -161,21 +161,26 @@ public class InvokeBashTeeCommandTests : IClassFixture<SharedPwshFixture>, IDisp
     }
 
     [Fact]
-    public void Tee_TrailingNewlineHeuristic_ItemsAlreadyEndWithNewline_ConcatDirectly()
+    public void Tee_RecordBytes_ExactItemsConcatDirectly_PlainItemsGetTheBoundary()
     {
-        // When the first item's BashText already ends with \n (echo/printf
-        // shape), the oracle concatenates directly without re-joining. Two
-        // items "a\n" + "b\n" should produce "a\nb\n", not "a\n\nb\n\n".
-        string target = Path.Combine(_tmpDir, "out.txt");
+        // The one record → bytes rule (BashRuntime.RecordBytes): exact-bytes items ("a\n" from printf) concatenate as
+        // they are; a plain item is a line, its text plus the boundary newline even when the text ends in one (oracle:
+        // `jq -rn '"a\n","b\n"' | tee f` writes a\n\nb\n\n). The old "already ends in \n" heuristic wrote a\nb\n.
+        string exact = Path.Combine(_tmpDir, "exact.txt");
+        string plain = Path.Combine(_tmpDir, "plain.txt");
         var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript(
             $@"
-$a = [PSCustomObject]@{{ BashText = ""a`n"" }}
-$b = [PSCustomObject]@{{ BashText = ""b`n"" }}
-@($a, $b) | Invoke-BashTee '{Q(target)}' | Out-Null
+$a = [PSCustomObject]@{{ BashText = ""a`n""; NoTrailingNewline = $true }}
+$b = [PSCustomObject]@{{ BashText = ""b`n""; NoTrailingNewline = $true }}
+@($a, $b) | Invoke-BashTee '{Q(exact)}' | Out-Null
+$c = [PSCustomObject]@{{ BashText = ""a`n"" }}
+$d = [PSCustomObject]@{{ BashText = ""b`n"" }}
+@($c, $d) | Invoke-BashTee '{Q(plain)}' | Out-Null
 ").Invoke();
         pwsh.Commands.Clear();
-        Assert.Equal("a\nb\n", File.ReadAllText(target));
+        Assert.Equal("a\nb\n", File.ReadAllText(exact));
+        Assert.Equal("a\n\nb\n\n", File.ReadAllText(plain));
     }
 
     [Fact]

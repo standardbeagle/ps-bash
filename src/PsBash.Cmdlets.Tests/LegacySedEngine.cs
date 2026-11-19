@@ -140,11 +140,14 @@ internal static class LegacySedEngine
             bool quit = false;
 
             bool restartCycle = true;
+            // EDITED from the verbatim copy (oracle: `printf 'a\nb\n' | sed '1{N;a X' -e '};P;D'` is a b X): a D restart
+            // writes the aborted pass's inserts and printed lines and keeps its appends for the cycle's end; the old engine
+            // discarded all three (`sed 'N;P;D'` lost every P).
+            var appendTexts = new List<string>();
             while (restartCycle)
             {
                 restartCycle = false;
                 var printedLines = new List<string>();
-                var appendTexts = new List<string>();
                 var insertTexts = new List<string>();
                 bool deleted = false;
 
@@ -290,6 +293,8 @@ internal static class LegacySedEngine
 
                 if (restartCycle)
                 {
+                    outputLines.AddRange(insertTexts);
+                    outputLines.AddRange(printedLines);
                     continue;
                 }
 

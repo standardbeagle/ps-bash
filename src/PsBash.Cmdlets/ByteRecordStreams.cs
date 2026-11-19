@@ -54,10 +54,9 @@ internal sealed class RecordByteEncoder
     /// <summary>Encodes one record's bytes (text + boundary newline) into <paramref name="sink"/>.</summary>
     public void Encode(object? item, ByteSink sink)
     {
-        string text = BashRuntime.GetBashText(item);
-        bool boundary = !text.EndsWith('\n') && !BashRuntime.IsUnterminated(item);
-        Emit(text, flush: false, sink);
-        if (boundary) Emit("\n", flush: false, sink);
+        // BashRuntime.RecordBytes, without the per-record copy: the text, plus the boundary unless exact bytes.
+        Emit(BashRuntime.GetBashText(item), flush: false, sink);
+        if (!BashRuntime.IsExactBytes(item)) Emit("\n", flush: false, sink);
     }
 
     /// <summary>Flushes the encoder (a trailing lone high surrogate); call once at end of input.</summary>

@@ -674,17 +674,27 @@ public static class BashRuntime
     /// </summary>
     /// <summary>
     /// The exact bytes-as-text a stdout record contributes to a file (<c>tee</c>,
-    /// <c>&gt; file</c>): its <c>BashText</c> plus a record boundary <c>\n</c>, UNLESS the
-    /// record carries <c>NoTrailingNewline</c> (printf / <c>echo -n</c> output with no final
-    /// newline) or already ends in <c>\n</c>. Single source so tee and the redirect writer
-    /// cannot drift.
+    /// <c>&gt; file</c>): <see cref="RecordBytes"/>.
     /// </summary>
-    public static string RecordFilePayload(PSObject record)
-    {
-        string text = GetBashText(record);
-        bool noNl = record.Properties["NoTrailingNewline"]?.Value is true;
-        return noNl || text.EndsWith('\n') ? text : text + "\n";
-    }
+    public static string RecordFilePayload(PSObject record) => RecordBytes(record);
+
+    /// <summary>
+    /// True when <paramref name="item"/> carries its EXACT bytes (<c>NoTrailingNewline</c>: <c>printf</c>, <c>echo -n</c>,
+    /// a piece): no record boundary is appended to its text. The one reader of that flag in PsBash.Cmdlets
+    /// (guard <c>RecordBytesGuardTests</c>).
+    /// </summary>
+    public static bool IsExactBytes(object? item)
+        => item is PSObject pso && pso.Properties[PsBash.Core.StdoutRecord.ExactBytesProperty]?.Value is true;
+
+    /// <summary>
+    /// THE bytes of a stdout record (<see cref="PsBash.Core.StdoutRecord.Bytes"/>): its text plus the line boundary
+    /// <paramref name="eol"/> — always, even when the text already ends in <c>\n</c> — unless it carries its exact bytes
+    /// (<see cref="IsExactBytes"/>). The renderer, <c>$(…)</c>, files, a child's stdin and every line reader use this
+    /// rule, so <c>cmd</c>, <c>cmd | cat</c>, <c>cmd &gt; f</c> and <c>$(cmd)</c> cannot disagree (spec
+    /// <c>runtime-functions.md</c> §Partial lines).
+    /// </summary>
+    public static string RecordBytes(object? item, string eol = "\n")
+        => PsBash.Core.StdoutRecord.Bytes(GetBashText(item), IsExactBytes(item), eol);
 
     // ---- Pipeline record kinds (docs/specs/runtime-functions.md "Pipeline record kinds") ----
     // FILTERS (output line == an input line) pass the upstream object through; TRANSFORMERS
@@ -699,9 +709,7 @@ public static class BashRuntime
     /// object); then only its LAST line is unterminated.
     /// </summary>
     public static bool IsUnterminated(object? item)
-        => item is PSObject pso
-           && pso.Properties["NoTrailingNewline"]?.Value is true
-           && !GetBashText(pso).EndsWith('\n');
+        => IsExactBytes(item) && !GetBashText(item).EndsWith('\n');
 
     /// <summary>
     /// A fresh text record: a bare string (rendered with a record boundary), or — when
@@ -716,10 +724,12 @@ public static class BashRuntime
 
     /// <summary>
     /// A record standing for exactly <paramref name="bytes"/> (a stream slice that may end in a newline, in
-    /// several, or in none). Bytes ending in ONE newline become a plain line record without it (the serializer
-    /// appends it); anything else — no final newline, or a final EMPTY line (<c>"x\n\n"</c>) — is kept as exact
-    /// bytes. Never a plain record whose text ends in <c>\n</c>: readers take that <c>\n</c> as the record's own
-    /// terminator (<see cref="SplitRecord(string, bool)"/>), so the empty line it stood for would vanish.
+    /// several, or in none). Bytes ending in ONE newline become a plain line record without it (the record boundary,
+    /// <see cref="RecordBytes"/>, puts it back); anything else — no final newline, or a final EMPTY line
+    /// (<c>"x\n\n"</c>) — is kept as exact bytes. (The plain record <c>"x\n"</c> has the same bytes, but a producer never
+    /// makes one: readers not yet on <see cref="RecordBytes"/> — wc, awk — still take its final <c>\n</c> as its own.)
+    /// Never hand-build a record from a byte slice: a bare string that still ends in its own <c>\n</c> stands for one
+    /// newline MORE than the slice had.
     /// </summary>
     public static object BytesRecord(string bytes)
         => bytes.Length > 0 && bytes[^1] == '\n' && (bytes.Length == 1 || bytes[^2] != '\n')
@@ -740,31 +750,33 @@ public static class BashRuntime
     }
 
     /// <summary>
-    /// THE record → lines splitter (spec <c>runtime-functions.md</c> §Partial lines). A record's text carries at
-    /// most ONE terminator of its own, so: drop exactly one trailing <c>\n</c>, then split on <c>\n</c> — every
-    /// earlier <c>\n</c> ends a line, so <c>"a\n\n"</c> is the two lines <c>a</c> and <c>""</c>. An empty
-    /// terminated record is one empty line (a native program's blank line arrives as <c>""</c>); an empty
-    /// <paramref name="unterminated"/> record (<c>printf ''</c>) is no line at all. When
-    /// <paramref name="unterminated"/> (pass <see cref="IsUnterminated"/>) only the LAST line lacks its newline.
-    /// Never <c>TrimEnd('\n')</c> record text: that eats the trailing empty lines (<c>printf 'a\n\n' | grep -c ''</c>
-    /// counted 1, bash 2). Guard: <c>RecordSplitGuardTests</c>. A <c>'\r'</c> stays in the line; a site that
-    /// strips it does so on the lines this returns.
+    /// THE record → lines splitter (spec <c>runtime-functions.md</c> §Partial lines): the lines of the record's
+    /// bytes (<see cref="RecordBytes"/>), computed without building them. A plain record is its text plus the
+    /// boundary newline, so its lines are its text split on <c>\n</c> (<c>"a\n"</c> = <c>a</c>, <c>""</c>; <c>""</c> =
+    /// one empty line); an exact-bytes record is <see cref="SplitBytes"/> of its text. <paramref name="unterminated"/>
+    /// = true when the LAST line has no newline (<see cref="IsUnterminated"/>). Never <c>TrimEnd('\n')</c> record text:
+    /// that eats the trailing empty lines (<c>printf 'a\n\n' | grep -c ''</c> counted 1, bash 2). Guards:
+    /// <c>RecordSplitGuardTests</c>, <c>RecordBytesGuardTests</c>. A <c>'\r'</c> stays in the line; a site that strips
+    /// it does so on the lines this returns.
     /// </summary>
-    public static string[] SplitRecord(string text, bool unterminated)
+    public static string[] SplitRecord(object? item, out bool unterminated)
     {
-        if (text.Length == 0) return unterminated ? Array.Empty<string>() : new[] { string.Empty };
-        if (text[^1] == '\n') text = text[..^1];
+        string text = GetBashText(item);
+        if (IsExactBytes(item)) return SplitBytes(text, out unterminated);
+        unterminated = false;
         return text.Split('\n');
     }
 
     /// <summary>
-    /// <see cref="SplitRecord(string, bool)"/> for a pipeline record: its BashText split into lines, with
-    /// <paramref name="unterminated"/> = <see cref="IsUnterminated"/> (true = the last line has no newline).
+    /// The lines of a byte-stream text: a final <c>\n</c> ends the last line (it does not start an empty one),
+    /// every earlier <c>\n</c> ends a line, so <c>"a\n\n"</c> is <c>a</c> and <c>""</c>. No bytes is no line
+    /// (<c>printf ''</c>). <paramref name="unterminated"/> = the bytes do not end in <c>\n</c>.
     /// </summary>
-    public static string[] SplitRecord(object? item, out bool unterminated)
+    public static string[] SplitBytes(string bytes, out bool unterminated)
     {
-        unterminated = IsUnterminated(item);
-        return SplitRecord(GetBashText(item), unterminated);
+        unterminated = bytes.Length == 0 || bytes[^1] != '\n';
+        if (bytes.Length == 0) return Array.Empty<string>();
+        return (unterminated ? bytes : bytes[..^1]).Split('\n');
     }
 
     /// <summary>
@@ -791,18 +803,16 @@ public static class BashRuntime
     }
 
     /// <summary>
-    /// The exact byte-stream text of a record sequence: each record's BashText plus a
-    /// boundary <c>\n</c> unless it is unterminated or already ends in one. What a
-    /// byte-oriented consumer (<c>head -c</c>, <c>tail -c</c>) must slice.
+    /// The exact byte-stream text of a record sequence: the concatenated <see cref="RecordBytes"/> of its
+    /// records. What a byte-oriented consumer (<c>head -c</c>, <c>tail -c</c>) must slice.
     /// </summary>
     public static string RecordStreamText(IEnumerable<object> items)
     {
         var sb = new StringBuilder();
         foreach (var item in items)
         {
-            string text = GetBashText(item);
-            sb.Append(text);
-            if (!text.EndsWith('\n') && !IsUnterminated(item)) sb.Append('\n');
+            sb.Append(GetBashText(item));
+            if (!IsExactBytes(item)) sb.Append('\n'); // RecordBytes, without the per-record copy
         }
         return sb.ToString();
     }

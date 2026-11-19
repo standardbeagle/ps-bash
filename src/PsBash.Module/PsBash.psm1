@@ -492,8 +492,8 @@ function Write-BashHostStderr {
     process {
         if ($PSBoundParameters.ContainsKey('InputObject')) {
             if ($null -ne $InputObject) {
-                $nnl = $InputObject.PSObject.Properties['NoTrailingNewline']
-                Write-BashStderrRecord -Text (Get-BashText -InputObject $InputObject) -NoNewline:([bool]($nnl -and $nnl.Value))
+                # The record's exact bytes (the one record -> bytes rule): `echo $'a\n' >&2` writes a\n\n.
+                Write-BashStderrRecord -Text ([PsBash.Cmdlets.BashRuntime]::RecordBytes($InputObject)) -NoNewline
             }
         } elseif ($PSBoundParameters.ContainsKey('Message')) {
             Write-BashStderrRecord -Text $Message

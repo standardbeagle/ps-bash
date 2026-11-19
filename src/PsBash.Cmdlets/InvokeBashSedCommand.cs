@@ -99,7 +99,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     [Parameter(DontShow = true)] public SwitchParameter PsBashProxy { get; set; }
 
     // Streaming state: pipeline records feed the engine as they arrive (BeginProcessing resolves the script).
-    private bool _pipelineMode, _pDone, _pFinished, _sawRecord, _lastUnterminated, _quitMidRecord, _bufferStdin;
+    private bool _pipelineMode, _pDone, _pFinished, _sawRecord, _bufferStdin;
     private char _term = '\n';
     private SedEngine? _engine;
     private RecordSink? _sink;
@@ -109,7 +109,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     private SedRuntime? _rt;
     private RecordSink? _debugSink;
     private readonly Dictionary<string, StreamWriter> _outFiles = new();
-    private readonly Dictionary<string, IEnumerator<string>?> _readFiles = new();
+    private readonly Dictionary<string, IEnumerator<BashFileSystem.TextLine>?> _readFiles = new();
 
     /// <summary>
     /// Hooks the new commands call: <c>w</c> files are created/truncated NOW (GNU opens every named file at
@@ -141,25 +141,27 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 try
                 {
                     string path = FileSystemHelpers.ProviderPath(this, name);
-                    en = File.Exists(path) ? ReadRawLines(path).GetEnumerator() : null;
+                    en = File.Exists(path) ? BashFileSystem.ReadTextLines(path).GetEnumerator() : null;
                 }
                 catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex)) { en = null; }
                 _readFiles[name] = en;
             }
             return en != null && en.MoveNext() ? en.Current : null;
         };
-        rt.WriteFile = (name, line) =>
+        rt.WriteFile = (name, line, end) =>
         {
             if (DevicePath.Classify(name) == DeviceKind.Stderr) { FileSystemHelpers.WriteStderr(this, line); return; }
-            if (_outFiles.TryGetValue(name, out var w)) { w.Write(line); w.Write('\n'); }
+            if (!_outFiles.TryGetValue(name, out var w)) return;
+            // Each w file has its own missing newline (SedEnd): owed by an unterminated last line, supplied by the next write.
+            if (_owedNewline.Remove(name)) w.Write('\n');
+            w.Write(line);
+            if (end == SedEnd.Newline) w.Write('\n');
+            else if (end == SedEnd.Owed) _owedNewline.Add(name);
         };
         rt.RunCommand = RunShell;
     }
 
-    private static IEnumerable<string> ReadRawLines(string path)
-    {
-        foreach (var l in BashFileSystem.ReadTextLines(path)) yield return l.Text;
-    }
+    private readonly HashSet<string> _owedNewline = new();
 
     private void OpenOutFile(string name)
     {
@@ -480,25 +482,30 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     }
 
     /// <summary>
-    /// One-record delay between the engine and the writer: a record is released as terminated when the next one
-    /// arrives, and the LAST gets the input's own terminator state (<see cref="Complete"/>) — the contract
-    /// "every output record is newline-terminated except the final one when the input had no final newline".
+    /// One-record delay between the engine and the writer, applying GNU's missing-newline rule (<see cref="SedEnd"/>):
+    /// a record that OWES its newline gets it when another record follows (<c>output_missing_newline</c>) and not at
+    /// the end; a <see cref="SedEnd.Bare"/> one never gets one; every other record ends in its newline even when it
+    /// is the last (<c>printf 'a\nb' | sed -n '$='</c> = <c>2\n</c>).
     /// </summary>
     private sealed class RecordSink
     {
         private readonly Action<string, bool> _write;
-        private string? _pending;
+        private SedOut? _pending;
         public RecordSink(Action<string, bool> write) { _write = write; }
-        public void Add(string record)
+        public void Add(string text, SedEnd end)
         {
-            if (_pending != null) _write(_pending, true);
-            _pending = record;
+            if (_pending is { } p && !IsNothing(p)) _write(p.Text, p.End != SedEnd.Bare);
+            _pending = new SedOut(text, end);
         }
-        public void Complete(bool trailingTerminator)
+        /// <summary>A <c>--debug</c> annotation line: always newline-terminated.</summary>
+        public void Add(string line) => Add(line, SedEnd.Newline);
+        public void Complete()
         {
-            if (_pending != null) _write(_pending, trailingTerminator);
+            if (_pending is { } p && !IsNothing(p)) _write(p.Text, p.End == SedEnd.Newline);
             _pending = null;
         }
+        // An empty Bare write (q supplying an owed newline) only settles what is owed; it is no record of its own.
+        private static bool IsNothing(SedOut o) => o.End == SedEnd.Bare && o.Text.Length == 0;
     }
 
     /// <summary>Write one output record to stdout; a final unterminated record carries exact bytes.</summary>
@@ -506,9 +513,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     {
         if (_term == '\n')
         {
-            WriteObject(terminated
-                ? BashRuntime.NewBashObject(record + "\n")
-                : BashRuntime.NewBashObject(record, "PsBash.TextOutput", noTrailingNewline: true));
+            WriteObject(BashRuntime.BytesRecord(terminated ? record + "\n" : record));
         }
         else
         {
@@ -555,30 +560,27 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             return;
         }
 
-        bool quitMidRecord = false;
         if (_term == '\n')
         {
             var parts = BashRuntime.SplitRecord(InputObject, out bool unterminated);
-            if (parts.Length == 0) return; // `printf ''`: no bytes, so no line and no last-line state
+            if (parts.Length == 0) return; // `printf ''`: no bytes, so no line
             _sawRecord = true;
-            _lastUnterminated = unterminated;
             for (int i = 0; i < parts.Length; i++)
             {
-                _engine!.Feed(parts[i]);
-                if (_engine.Done) { quitMidRecord = i < parts.Length - 1; break; }
+                // Only the unterminated tail of the input is a line without its newline.
+                _engine!.Feed(parts[i], terminated: !(unterminated && i == parts.Length - 1));
+                if (_engine.Done) break;
             }
         }
         else
         {
             _sawRecord = true;
-            _lastUnterminated = BashRuntime.IsUnterminated(InputObject);
-            FeedNulText(BashRuntime.RecordStreamText(new object[] { InputObject }));
+            FeedNulText(BashRuntime.RecordBytes(InputObject));
         }
 
         if (_engine!.Done)
         {
             _pDone = true;
-            _quitMidRecord = quitMidRecord;
             FinishPipeline();
             if (!PsBashProxy) UpstreamStop.Throw(this);
         }
@@ -626,30 +628,18 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         {
             // No input at all: the cycle machinery never ran, but a script can still have files to flush.
             _engine?.Finish();
+            _sink?.Complete();
             return;
         }
 
-        bool trailing;
-        if (_term == '\0')
+        // -z: a tail after the last NUL is a record without its terminator.
+        if (_term == '\0' && !_engine!.Done && _nulTail.Length > 0)
         {
-            if (!_engine!.Done && _nulTail.Length > 0)
-            {
-                _engine.Feed(_nulTail.ToString());
-                _nulTail.Clear();
-                trailing = false;
-            }
-            else
-            {
-                trailing = true;
-            }
-        }
-        else
-        {
-            // A quit in the middle of a record leaves lines unread, so the last one written had a newline.
-            trailing = _quitMidRecord || !_lastUnterminated;
+            _engine.Feed(_nulTail.ToString(), terminated: false);
+            _nulTail.Clear();
         }
         _engine!.Finish();
-        _sink!.Complete(trailing);
+        _sink!.Complete();
     }
 
     // ---- file operands ----------------------------------------------------------------------------------
@@ -734,27 +724,21 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         // One continuous stream: a single engine/sink for all units.
         RecordSink? oneSink = null;
         SedEngine? oneEngine = null;
-        bool oneTrailing = true;
         bool any = false;
         bool quitAll = false;
 
-        // Feed one unit's records; returns the unit's trailing-terminator state.
-        bool Pump(IEnumerable<BashFileSystem.TextLine> lines, SedEngine engine, string? path)
+        // Feed one unit's records. A file's last line without a newline is fed as such even mid-stream: GNU writes
+        // it without one, and the next write supplies it (so `sed p f f` still has every newline, `sed -n 2p f f`
+        // of a two-line `f` with no final newline does not).
+        void Pump(IEnumerable<BashFileSystem.TextLine> lines, SedEngine engine, string? path)
         {
-            bool trailing = true;
             try
             {
                 using var en = lines.GetEnumerator();
                 while (en.MoveNext())
                 {
-                    trailing = en.Current.HasTrailingNewline;
-                    engine.Feed(en.Current.Text);
-                    if (engine.Done)
-                    {
-                        // Quit: input remains unless that was the unit's last record.
-                        trailing = en.MoveNext() || trailing;
-                        break;
-                    }
+                    engine.Feed(en.Current.Text, en.Current.HasTrailingNewline);
+                    if (engine.Done) break;
                 }
             }
             catch (Exception ex)
@@ -763,7 +747,6 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 EmitError($"sed: can't read {BashPath.ToShell(path ?? "-")}: {FileSystemHelpers.ReadErrorMessage(ex)}");
                 readError = true;
             }
-            return trailing;
         }
 
         foreach (var operand in operands)
@@ -816,7 +799,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                     oneSink ??= new RecordSink(WriteStdoutRecord);
                     _debugSink = oneSink;
                     oneEngine ??= new SedEngine(commands, suppressDefault, oneSink.Add, _rt);
-                    oneTrailing = Pump(lines, oneEngine, path);
+                    Pump(lines, oneEngine, path);
                     if (oneEngine.Done) quitAll = true;
                     continue;
                 }
@@ -831,9 +814,9 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 var sink = new RecordSink(WriteStdoutRecord);
                 _debugSink = sink;
                 var engine = new SedEngine(commands, suppressDefault, sink.Add, _rt);
-                bool trailing = Pump(lines, engine, path);
+                Pump(lines, engine, path);
                 engine.Finish();
-                sink.Complete(trailing);
+                sink.Complete();
                 if (engine.Quit) quitAll = true;   // q/Q under -s ends the whole run, as GNU
             }
         }
@@ -841,7 +824,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         if (!separate && any && oneEngine != null)
         {
             oneEngine.Finish();
-            oneSink!.Complete(oneTrailing);
+            oneSink!.Complete();
         }
 
         if (_rt is { ExitCode: not 0 }) FileSystemHelpers.SetLastExitCode(this, _rt.ExitCode);
@@ -867,7 +850,6 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         string tmp = Path.Combine(dir, "sed" + Guid.NewGuid().ToString("N").Substring(0, 8));
         try
         {
-            bool trailing = true;
             using (var fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536))
             using (var writer = new StreamWriter(fs, RawBytes.Encoding, 65536))
             {
@@ -882,9 +864,8 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                     using var en = lines.GetEnumerator();
                     while (en.MoveNext())
                     {
-                        trailing = en.Current.HasTrailingNewline;
-                        engine.Feed(en.Current.Text);
-                        if (engine.Done) { trailing = en.MoveNext() || trailing; break; }
+                        engine.Feed(en.Current.Text, en.Current.HasTrailingNewline);
+                        if (engine.Done) break;
                     }
                 }
                 catch (Exception ex)
@@ -897,7 +878,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                     return true;
                 }
                 engine.Finish();
-                sink.Complete(trailing);
+                sink.Complete();
             }
 
             CopyFileMode(target, tmp);

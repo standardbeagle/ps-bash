@@ -454,7 +454,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     private GrepArgs _plan = null!;
     private Action? _fileModeRun;
     private bool _pipelineMode, _pDone, _pFinished, _collectStdin;
-    private readonly List<(string Text, bool Unterminated)> _stdinBuffer = new();
+    private readonly List<PSObject> _stdinBuffer = new();
 
     /// <summary>
     /// Pipeline mode streams: each record is matched as it arrives (the cmdlet resolves its whole argv in
@@ -476,7 +476,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         {
             // File mode with a `-` operand: the pipeline is that file; ProcessRecord only collects it.
             if (InputObject != null)
-                _stdinBuffer.Add((BashRuntime.GetBashText(InputObject), BashRuntime.IsUnterminated(InputObject)));
+                _stdinBuffer.Add(InputObject);
             return;
         }
         if (!_pipelineMode || InputObject == null) return;
@@ -487,7 +487,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             return;
         }
 
-        bool more = _feeder!.Add(BashRuntime.GetBashText(InputObject), BashRuntime.IsUnterminated(InputObject), InputObject);
+        bool more = _feeder!.Add(InputObject, passOriginal: true);
         if (!more || _scanner!.SourceDone || _scanner.QuitAll) _pDone = true;
 
         if (_pDone)
@@ -834,8 +834,8 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         var scanner = _scanner!;
         scanner.Begin(_plan.Label ?? StdinLabel, showName, startBinary: false, sizeHint: -1);
         var feeder = new GrepStdinFeeder(scanner, _plan.NullData);
-        foreach (var (text, unterminated) in _stdinBuffer)
-            if (!feeder.Add(text, unterminated, null)) break;
+        foreach (var record in _stdinBuffer)
+            if (!feeder.Add(record, passOriginal: false)) break;
         if (!scanner.SourceDone) feeder.Flush();
         scanner.End();
     }

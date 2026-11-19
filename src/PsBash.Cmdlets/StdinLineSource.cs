@@ -25,9 +25,9 @@ internal sealed class StdinLineSource
         _cmdlet = cmdlet;
         foreach (var item in pipeline)
         {
-            var text = (BashRuntime.GetBashText(item) ?? "").Replace("\r\n", "\n");
-            // A record is one line; text that already carries newlines contributes one line each.
-            foreach (var line in BashRuntime.SplitRecord(text, BashRuntime.IsUnterminated(item))) _piped.Enqueue(line);
+            // The lines of the record's bytes (BashRuntime.RecordBytes), CRLF read as LF.
+            var bytes = BashRuntime.RecordBytes(item).Replace("\r\n", "\n");
+            foreach (var line in BashRuntime.SplitBytes(bytes, out _)) _piped.Enqueue(line);
         }
     }
 

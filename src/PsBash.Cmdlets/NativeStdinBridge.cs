@@ -175,13 +175,8 @@ public sealed class NativeStdinBridge
         }
     }
 
-    /// <summary>A record's exact bytes: its text plus the line terminator it carries (none when unterminated).</summary>
-    internal static byte[] RecordBytes(object? record)
-    {
-        var text = BashRuntime.GetBashText(record);
-        if (!text.EndsWith('\n') && !BashRuntime.IsUnterminated(record)) text += "\n";
-        return RawBytes.GetBytes(text);
-    }
+    /// <summary>A record's exact bytes (<see cref="BashRuntime.RecordBytes"/>) as the child's stdin bytes.</summary>
+    internal static byte[] RecordBytes(object? record) => RawBytes.GetBytes(BashRuntime.RecordBytes(record));
 
     /// <summary>The unread text as records again (lines; an unterminated last piece stays unterminated), in front.</summary>
     private void PutBack(string text)

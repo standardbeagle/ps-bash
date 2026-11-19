@@ -111,10 +111,9 @@ public sealed class WriteBashFdCommand : PSCmdlet
     protected override void ProcessRecord()
     {
         if (InputObject is null || _bad) return;
-        var text = BashRuntime.GetBashText(InputObject);
         try
         {
-            int std = _std != 0 ? _std : BashFdTable.Write(Descriptor, BashRuntime.IsUnterminated(InputObject) ? text : text + "\n");
+            int std = _std != 0 ? _std : BashFdTable.Write(Descriptor, BashRuntime.RecordBytes(InputObject));
             if (std == 1)
                 WriteObject(InputObject);   // a duplicate of stdout: the record just continues down the pipeline
             else if (std == 2)

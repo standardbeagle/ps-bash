@@ -6,11 +6,36 @@ using static PsBash.Cmdlets.InvokeBashSedCommand;
 namespace PsBash.Cmdlets;
 
 /// <summary>
+/// How one sed output record ends — GNU's rule for an input whose last line has no newline. The missing newline
+/// belongs to the BUFFER that holds that line (GNU's <c>line.chomped</c>), not to "the last output record": only a
+/// write of the pattern/hold space (<c>p P w W s///p s///w</c>, the autoprint) leaves it out, and the next write to
+/// the same output supplies it first. Everything else sed writes ends in its own newline (<c>= l F i a c</c>), and
+/// <c>r R e</c> copy bytes verbatim. REGRESSION: the writer gave the final record the input's terminator state
+/// whatever it was, so <c>printf 'a\nb' | sed -n '$='</c> printed <c>2</c> with no newline (GNU <c>2\n</c>), and
+/// <c>$a\ X</c>, <c>$c\ X</c>, <c>$l</c>, <c>1p</c>, <c>$r f</c> on such input lost or gained a newline too
+/// (spec <c>runtime-functions.md</c> §Partial lines).
+/// </summary>
+internal enum SedEnd
+{
+    /// <summary>Ends in a newline.</summary>
+    Newline,
+    /// <summary>A buffer holding an input line that had no newline: written without one, and OWED — the next write to
+    /// the same output first supplies it (GNU <c>output_missing_newline</c>).</summary>
+    Owed,
+    /// <summary>Raw bytes that do not end in a newline (<c>r</c>/<c>R</c>/<c>e</c> output): nothing is owed after them.</summary>
+    Bare,
+}
+
+/// <summary>One record of sed output: its text (no terminator) and how it ends.</summary>
+internal readonly record struct SedOut(string Text, SedEnd End);
+
+/// <summary>
 /// The sed cycle engine as a PUSH state machine: <see cref="Feed"/> hands it one input record at a time and it
 /// emits output records as soon as a cycle completes, so retained memory is the pattern space plus a one-record
 /// lookahead — never the stream. It is a line-for-line port of the whole-input <c>ProcessLines</c> it replaces
-/// (same command semantics, same quirks: <c>N</c> does not advance the line number, a <c>D</c> restart discards the
-/// aborted pass's queued output, a <c>c</c> over a range prints once at the range's last line), proven equal over
+/// (same command semantics, same quirks: <c>N</c> does not advance the line number, a <c>c</c> over a range prints once
+/// at the range's last line; a <c>D</c> restart writes the aborted pass's inserts and printed lines and keeps its
+/// appends for the cycle's end, as GNU), proven equal over
 /// random scripts and inputs by <c>SedEngineEquivalenceTests</c>.
 ///
 /// <para>Whole-input lookups became state. <c>$</c> needs "is there another record": the engine answers from its
@@ -32,12 +57,12 @@ internal sealed class SedEngine
 {
     private readonly List<SedCommand> _cmds;
     private readonly bool _suppress;
-    private readonly Action<string> _emit;
+    private readonly Action<string, SedEnd> _emit;
     private readonly SedRuntime? _rt;
     private readonly bool _chrono;
 
     // ---- input side ----
-    private readonly Queue<string> _in = new();
+    private readonly Queue<(string Text, bool Terminated)> _in = new();
     private bool _eof;
     private int _pulled;          // raw records handed to the cycle so far (cycle starts + N pulls), 1-based count
 
@@ -55,21 +80,28 @@ internal sealed class SedEngine
     private enum Stage { Start, Commands, Done }
     private Stage _stage = Stage.Start;
     private string _ps = "";
+    private bool _psTerm = true;  // GNU line.chomped: the pattern space prints with its newline (see SedEnd)
     private int _lineNum;
     private string? _rawNext;     // raw record lineNum+1 when an N already consumed it
     private bool _quit;
     private int _ci;
-    private List<string> _printed = new(), _append = new(), _insert = new();
+    private List<SedOut> _printed = new(), _append = new(), _insert = new();
     private bool _deleted, _restart, _paused;
     private bool _tflag;          // a substitution succeeded since the last input line / taken `t`
     private bool _announced;      // --debug: the COMMAND: line of command _ci is already out (a paused command re-runs)
     private bool _noBanner;       // --debug: this cycle ends without END-OF-CYCLE: (q, Q, D with no newline)
+    private bool _stdoutOwed;     // the last write to stdout owes its newline (SedEnd.Owed)
+    private bool _quitWithNewline; // `q` ran: GNU settles stdout's owed newline and autoprints WITH a newline
 
-    public SedEngine(List<SedCommand> commands, bool suppressDefault, Action<string> emit, SedRuntime? runtime = null)
+    public SedEngine(List<SedCommand> commands, bool suppressDefault, Action<string, SedEnd> emit, SedRuntime? runtime = null)
     {
         _cmds = commands;
         _suppress = suppressDefault;
-        _emit = emit;
+        _emit = (text, end) =>
+        {
+            _stdoutOwed = end == SedEnd.Owed;
+            emit(text, end);
+        };
         _chrono = runtime?.Debug != null || UsesNewCommands(commands);
         _rt = runtime ?? (_chrono ? new SedRuntime() : null);
         _range = new RangeState?[commands.Count];
@@ -113,10 +145,11 @@ internal sealed class SedEngine
     /// <summary>True when a <c>q</c>/<c>Q</c> ended the script.</summary>
     public bool Quit { get; private set; }
 
-    public void Feed(string line)
+    /// <summary>One input record; <paramref name="terminated"/> = false for a last line that had no newline.</summary>
+    public void Feed(string line, bool terminated = true)
     {
         if (_stage == Stage.Done) return;
-        _in.Enqueue(line);
+        _in.Enqueue((line, terminated));
         Pump();
     }
 
@@ -140,7 +173,7 @@ internal sealed class SedEngine
                     if (_eof) _stage = Stage.Done;
                     return;
                 }
-                _ps = _in.Dequeue();
+                (_ps, _psTerm) = _in.Dequeue();
                 _pulled++;
                 _lineNum = _pulled;
                 _rawNext = null;
@@ -160,7 +193,13 @@ internal sealed class SedEngine
 
             if (_restart)
             {
+                // GNU writes i/p/P/= output as the command runs and dumps the append queue only when a cycle really
+                // ends: a D restart flushes the former and keeps the latter (`sed 'N;P;D'` printed only the last line).
+                foreach (var t in _insert) _emit(t.Text, t.End);
+                foreach (var p in _printed) _emit(p.Text, p.End);
+                var appends = _append;
                 BeginPass();
+                _append = appends;
                 continue;
             }
             FlushPass();
@@ -178,9 +217,9 @@ internal sealed class SedEngine
     {
         _ci = 0;
         _announced = false;
-        _printed = new List<string>();
-        _append = new List<string>();
-        _insert = new List<string>();
+        _printed = new List<SedOut>();
+        _append = new List<SedOut>();
+        _insert = new List<SedOut>();
         _deleted = false;
         _restart = false;
         _noBanner = false;
@@ -195,35 +234,55 @@ internal sealed class SedEngine
     /// <summary>The cycle's queued output in order: inserts, printed lines, the autoprint, then appends.</summary>
     private void FlushOutput()
     {
-        foreach (var t in _insert) _emit(t);
-        foreach (var p in _printed) _emit(p);
-        if (!_deleted && !_suppress)
+        foreach (var t in _insert) _emit(t.Text, t.End);
+        foreach (var p in _printed) _emit(p.Text, p.End);
+        if (_quitWithNewline)
         {
-            if (_ps.Contains('\n'))
-            {
-                foreach (var psLine in _ps.Split('\n')) _emit(psLine);
-            }
-            else
-            {
-                _emit(_ps);
-            }
+            // GNU `q`: output_missing_newline, then the pattern space with its newline even when the input line had
+            // none (`printf 'a\nb' | sed '$q'` is a b + newline; `sed -n '$p;$q'` is b + newline). `Q` does neither.
+            if (!_deleted && !_suppress) { _psTerm = true; EmitPatternLines(); }
+            else if (_stdoutOwed) _emit(string.Empty, SedEnd.Bare);
         }
-        foreach (var a in _append) _emit(a);
+        else if (!_deleted && !_suppress) EmitPatternLines();
+        foreach (var a in _append) _emit(a.Text, a.End);
     }
 
     // ---- output helpers: per-cycle order for the original commands, chronological once a new command is used ----
 
-    /// <summary>Output of <c>p P = s///p</c>: queued for the cycle's flush (historical) or written at once (GNU).</summary>
-    private void Out(string text)
+    /// <summary>How a write of the pattern space ends: with its newline, or owing it (an unterminated last line).</summary>
+    private SedEnd PsEnd => _psTerm ? SedEnd.Newline : SedEnd.Owed;
+
+    /// <summary>The autoprint: the pattern space one line per record, only its last line inheriting <see cref="PsEnd"/>.</summary>
+    private void EmitPatternLines()
     {
-        if (_chrono) _emit(text);
-        else _printed.Add(text);
+        int start = 0;
+        for (int nl = _ps.IndexOf('\n'); nl >= 0; nl = _ps.IndexOf('\n', start))
+        {
+            _emit(_ps.Substring(start, nl - start), SedEnd.Newline);
+            start = nl + 1;
+        }
+        _emit(start == 0 ? _ps : _ps.Substring(start), PsEnd);
     }
 
-    /// <summary>Output of <c>l F e</c>: possibly several lines, always written at once.</summary>
+    /// <summary>Output of <c>p P = s///p</c>: queued for the cycle's flush (historical) or written at once (GNU).</summary>
+    private void Out(string text, SedEnd end)
+    {
+        if (_chrono) _emit(text, end);
+        else _printed.Add(new SedOut(text, end));
+    }
+
+    /// <summary>Output of <c>l</c>: possibly several lines, each ending in a newline, always written at once.</summary>
     private void OutLines(string text)
     {
-        foreach (var l in text.Split('\n')) _emit(l);
+        foreach (var l in text.Split('\n')) _emit(l, SedEnd.Newline);
+    }
+
+    /// <summary>The first line of the pattern space, as <c>P</c>/<c>W</c> write it: up to and with the first newline,
+    /// or the whole pattern space ending like it (<see cref="PsEnd"/>) when it has none.</summary>
+    private SedOut FirstLine()
+    {
+        int nlIdx = _ps.IndexOf('\n');
+        return nlIdx >= 0 ? new SedOut(_ps.Substring(0, nlIdx), SedEnd.Newline) : new SedOut(_ps, PsEnd);
     }
 
     private void Next() { _ci++; _announced = false; }
@@ -307,8 +366,8 @@ internal sealed class SedEngine
                         _tflag = true;
                         if (cmd.Eval && _rt?.RunCommand != null) _ps = TrimNewline(_rt.RunCommand(_ps));
                     }
-                    if (cmd.PrintOnSub && subbed) Out(_ps);
-                    if (subbed && cmd.FileName != null) WriteTo(cmd.FileName, _ps);
+                    if (cmd.PrintOnSub && subbed) Out(_ps, PsEnd);
+                    if (subbed && cmd.FileName != null) WriteTo(cmd.FileName, new SedOut(_ps, PsEnd));
                     if (Dbg) DbgPattern();
                     break;
                 }
@@ -336,22 +395,23 @@ internal sealed class SedEngine
                     break;
                 }
                 case 'p':
-                    Out(_ps);
+                    Out(_ps, PsEnd);
                     break;
                 case 'P':
                 {
-                    int nlIdx = _ps.IndexOf('\n');
-                    Out(nlIdx >= 0 ? _ps.Substring(0, nlIdx) : _ps);
+                    var first = FirstLine();
+                    Out(first.Text, first.End);
                     break;
                 }
                 case 'N':
                     if (_in.Count > 0)
                     {
-                        string next = _in.Dequeue();
+                        var (next, nextTerm) = _in.Dequeue();
                         _pulled++;
                         if (_pulled == _lineNum + 1) _rawNext = next;
                         ObserveRaw(next, cycleStart: false);
                         _ps += "\n" + next;
+                        _psTerm = nextTerm;
                         // GNU's line counter follows the input; the historical engine kept the cycle's start line.
                         if (_chrono) { _lineNum = _pulled; _rawNext = null; }
                         if (Dbg) DbgPattern();
@@ -372,10 +432,10 @@ internal sealed class SedEngine
                     {
                         // Print the pattern space (unless -n), flush appends, then replace it by the next line.
                         FlushOutput();
-                        _printed = new List<string>();
-                        _append = new List<string>();
-                        _insert = new List<string>();
-                        _ps = _in.Dequeue();
+                        _printed = new List<SedOut>();
+                        _append = new List<SedOut>();
+                        _insert = new List<SedOut>();
+                        (_ps, _psTerm) = _in.Dequeue();
                         _pulled++;
                         _lineNum = _pulled;
                         _rawNext = null;
@@ -387,7 +447,7 @@ internal sealed class SedEngine
                     {
                         // No next input: GNU prints the pattern space (unless -n) and exits without running
                         // the rest of the script.
-                        if (!_suppress) OutLines(_ps);
+                        if (!_suppress) EmitPatternLines();
                         _deleted = true;
                         _quit = true;
                     }
@@ -399,6 +459,7 @@ internal sealed class SedEngine
                 case 'q':
                     _quit = true;
                     Quit = true;
+                    _quitWithNewline = true;
                     _noBanner = true;
                     if (_rt != null) _rt.ExitCode = cmd.ExitCode;
                     break;
@@ -410,14 +471,14 @@ internal sealed class SedEngine
                     if (_rt != null) _rt.ExitCode = cmd.ExitCode;
                     break;
                 case '=':
-                    Out(_lineNum.ToString());
+                    Out(_lineNum.ToString(), SedEnd.Newline);
                     break;
                 case 'a':
-                    _append.Add(cmd.Text!);
+                    _append.Add(new SedOut(cmd.Text!, SedEnd.Newline));
                     break;
                 case 'i':
-                    if (_chrono) _emit(cmd.Text!);
-                    else _insert.Add(cmd.Text!);
+                    if (_chrono) _emit(cmd.Text!, SedEnd.Newline);
+                    else _insert.Add(new SedOut(cmd.Text!, SedEnd.Newline));
                     break;
                 case 'c':
                 {
@@ -427,8 +488,8 @@ internal sealed class SedEngine
                     _deleted = true;
                     if (!continues)
                     {
-                        if (_chrono) _emit(cmd.Text!);
-                        else _append.Add(cmd.Text!);
+                        if (_chrono) _emit(cmd.Text!, SedEnd.Newline);
+                        else _append.Add(new SedOut(cmd.Text!, SedEnd.Newline));
                     }
                     break;
                 }
@@ -469,27 +530,31 @@ internal sealed class SedEngine
                     break;
 
                 // ---- hold space ----
+                // The buffer's terminated state travels with its text (GNU copies `chomped` on every one of these).
                 case 'h':
                     _rt!.Hold = _ps;
+                    _rt.HoldTerminated = _psTerm;
                     if (Dbg) DbgHold();
                     break;
                 case 'H':
                     _rt!.Hold += "\n" + _ps;
+                    _rt.HoldTerminated = _psTerm;
                     if (Dbg) DbgHold();
                     break;
                 case 'g':
                     _ps = _rt!.Hold;
+                    _psTerm = _rt.HoldTerminated;
                     if (Dbg) DbgHold();
                     break;
                 case 'G':
                     _ps += "\n" + _rt!.Hold;
+                    _psTerm = _rt.HoldTerminated;
                     if (Dbg) DbgPattern();
                     break;
                 case 'x':
                 {
-                    string swap = _ps;
-                    _ps = _rt!.Hold;
-                    _rt.Hold = swap;
+                    (_ps, _rt!.Hold) = (_rt.Hold, _ps);
+                    (_psTerm, _rt.HoldTerminated) = (_rt.HoldTerminated, _psTerm);
                     if (Dbg) { DbgPattern(); DbgHold(); }
                     break;
                 }
@@ -500,7 +565,7 @@ internal sealed class SedEngine
 
                 // ---- output ----
                 case 'F':
-                    _emit(_rt!.FileName);
+                    _emit(_rt!.FileName, SedEnd.Newline);
                     break;
                 case 'l':
                     OutLines(SedDebugFormat.List(_ps, cmd.IntArg >= 0 ? cmd.IntArg : _rt!.LineLength));
@@ -508,31 +573,28 @@ internal sealed class SedEngine
                 case 'r':
                 {
                     string? text = _rt?.ReadFile?.Invoke(cmd.FileName!);
-                    if (text != null) foreach (var line in FileLines(text)) _append.Add(line);
+                    if (text != null) _append.AddRange(RawOutput(text));
                     break;
                 }
                 case 'R':
                 {
-                    string? line = _rt?.ReadLine?.Invoke(cmd.FileName!);
-                    if (line != null) _append.Add(line);
+                    var line = _rt?.ReadLine?.Invoke(cmd.FileName!);
+                    if (line is { } l) _append.Add(new SedOut(l.Text, l.HasTrailingNewline ? SedEnd.Newline : SedEnd.Bare));
                     break;
                 }
                 case 'w':
-                    WriteTo(cmd.FileName!, _ps);
+                    WriteTo(cmd.FileName!, new SedOut(_ps, PsEnd));
                     break;
                 case 'W':
-                {
-                    int nlIdx = _ps.IndexOf('\n');
-                    WriteTo(cmd.FileName!, nlIdx >= 0 ? _ps.Substring(0, nlIdx) : _ps);
+                    WriteTo(cmd.FileName!, FirstLine());
                     break;
-                }
                 case 'e':
                     if (_rt?.RunCommand != null)
                     {
                         if (cmd.Command!.Length > 0)
                         {
                             // `e COMMAND`: run it, its output goes out before the pattern space.
-                            foreach (var line in FileLines(_rt.RunCommand(cmd.Command))) _emit(line);
+                            foreach (var o in RawOutput(_rt.RunCommand(cmd.Command))) _emit(o.Text, o.End);
                         }
                         else
                         {
@@ -551,20 +613,21 @@ internal sealed class SedEngine
 
     private static string TrimNewline(string s) => s.EndsWith('\n') ? s.Substring(0, s.Length - 1) : s;
 
-    /// <summary>The lines of a file's text: a final newline ends the last line instead of starting an empty one.</summary>
-    private static IEnumerable<string> FileLines(string text)
+    /// <summary>Bytes sed copies verbatim (<c>r</c> file, <c>e COMMAND</c> output) as output records: a final newline ends
+    /// the last line instead of starting an empty one, and a last line without one is <see cref="SedEnd.Bare"/>.</summary>
+    private static IEnumerable<SedOut> RawOutput(string text)
     {
         if (text.Length == 0) yield break;
-        text = text.Replace("\r\n", "\n");
-        if (text.EndsWith('\n')) text = text.Substring(0, text.Length - 1);
-        foreach (var l in text.Split('\n')) yield return l;
+        var lines = BashRuntime.SplitBytes(text.Replace("\r\n", "\n"), out bool unterminated);
+        for (int i = 0; i < lines.Length; i++)
+            yield return new SedOut(lines[i], unterminated && i == lines.Length - 1 ? SedEnd.Bare : SedEnd.Newline);
     }
 
     /// <summary><c>w FILE</c> (and <c>s///w</c>): <c>/dev/stdout</c> is the output stream itself, other names go to the runtime.</summary>
-    private void WriteTo(string name, string text)
+    private void WriteTo(string name, SedOut record)
     {
-        if (DevicePath.Classify(name) == DeviceKind.Stdout) { _emit(text); return; }
-        _rt?.WriteFile?.Invoke(name, text);
+        if (DevicePath.Classify(name) == DeviceKind.Stdout) { _emit(record.Text, record.End); return; }
+        _rt?.WriteFile?.Invoke(name, record.Text, record.End);
     }
 
     // ---- addresses --------------------------------------------------------------------------------------
@@ -650,7 +713,7 @@ internal sealed class SedEngine
         if (addr.Type is not (AddressType.RangeNum or AddressType.RangeRegex or AddressType.RangeNumToRegex))
             return false;
 
-        string? next = _rawNext ?? (_in.Count > 0 ? _in.Peek() : null);
+        string? next = _rawNext ?? (_in.Count > 0 ? _in.Peek().Text : null);
         if (next is null)
         {
             if (!_eof) _paused = true;
@@ -684,7 +747,12 @@ internal sealed class SedEngine
     public static IEnumerable<string> Run(IEnumerable<string> input, List<SedCommand> commands, bool suppressDefault)
     {
         var outq = new Queue<string>();
-        var engine = new SedEngine(commands, suppressDefault, outq.Enqueue);
+        // The fused lane feeds only terminated lines and declines r/R/e, so every record ends in a newline here.
+        // An empty Bare write (q settling an owed newline) is no line.
+        var engine = new SedEngine(commands, suppressDefault, (text, end) =>
+        {
+            if (text.Length > 0 || end != SedEnd.Bare) outq.Enqueue(text);
+        });
         foreach (var line in input)
         {
             engine.Feed(line);

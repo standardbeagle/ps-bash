@@ -356,11 +356,9 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         if (_outputFile is null) { WriteObject(record); return; }
         var w = EnsureOutput();
         if (w is null) return;
-        var text = BashRuntime.GetBashText(record);
-        if (_zero) { w.Write(text); return; }   // a NUL record already carries its terminator
-        if (text.EndsWith('\n')) text = text[..^1];
-        w.Write(text);
-        w.Write('\n');
+        if (_zero) { w.Write(BashRuntime.GetBashText(record)); return; }   // a NUL record already carries its terminator
+        // The record's bytes (BashRuntime.RecordBytes), and uniq always ends its last line.
+        w.Write(BashRuntime.RecordBytes(BashRuntime.PassTerminated(record)));
     }
 
     /// <summary>A fresh output line: under <c>-z</c> an exact NUL-terminated record (its text may hold <c>\n</c>).</summary>

@@ -145,11 +145,16 @@ public class InvokeBashMapfileCommandTests
     [Fact]
     public void Mapfile_CustomDelimiter_SplitsTheStream()
     {
-        // -d cuts the stream at the delimiter: one record "a,b,c" is three elements.
+        // -d cuts the stream at the delimiter. A plain record is a LINE, so its newline is data to -d:
+        // oracle `echo a,b,c | mapfile -t -d ,` is a, b, $'c\n'; exact bytes (`printf a,b,c`) end at c.
         var arr = RunAndReadArray(
             "'a,b,c' | Invoke-BashMapfile -t -d ','",
             "MAPFILE");
-        Assert.Equal(new[] { "a", "b", "c" }, arr);
+        Assert.Equal(new[] { "a", "b", "c\n" }, arr);
+        var exact = RunAndReadArray(
+            "[PsBash.Cmdlets.BashRuntime]::BytesRecord('a,b,c') | Invoke-BashMapfile -t -d ','",
+            "MAPFILE");
+        Assert.Equal(new[] { "a", "b", "c" }, exact);
     }
 
     [Fact]
@@ -196,18 +201,21 @@ public class InvokeBashMapfileCommandTests
     [Fact]
     public void Mapfile_KeepsEmptyLinesAndTheNewlineWithoutT()
     {
-        var kept = RunAndReadArray("\"a`n`nb`n\" | Invoke-BashMapfile", "MAPFILE");
+        // The bytes "a\n\nb\n" (a stream slice: BytesRecord; oracle `printf 'a\n\nb\n' | mapfile`).
+        var kept = RunAndReadArray("[PsBash.Cmdlets.BashRuntime]::BytesRecord(\"a`n`nb`n\") | Invoke-BashMapfile", "MAPFILE");
         Assert.Equal(new[] { "a\n", "\n", "b\n" }, kept);
-        var stripped = RunAndReadArray("\"a`n`nb`n\" | Invoke-BashMapfile -t", "MAPFILE");
+        var stripped = RunAndReadArray("[PsBash.Cmdlets.BashRuntime]::BytesRecord(\"a`n`nb`n\") | Invoke-BashMapfile -t", "MAPFILE");
         Assert.Equal(new[] { "a", "", "b" }, stripped);
     }
 
     [Fact]
     public void Mapfile_DelimiterKeptWithoutT_AndNulDelimiterDropped()
     {
+        // Oracle `echo 1:3: | mapfile -d :` is 1:, 3:, $'\n' (a plain record is a line); `printf '1\0003\000' |
+        // mapfile -d ''` is 1, 3 (exact bytes, as find -print0 emits).
         var kept = RunAndReadArray("'1:3:' | Invoke-BashMapfile -d ':'", "MAPFILE");
-        Assert.Equal(new[] { "1:", "3:" }, kept);
-        var nul = RunAndReadArray("\"1`03`0\" | Invoke-BashMapfile -d ''", "MAPFILE");
+        Assert.Equal(new[] { "1:", "3:", "\n" }, kept);
+        var nul = RunAndReadArray("[PsBash.Cmdlets.BashRuntime]::BytesRecord(\"1`03`0\") | Invoke-BashMapfile -d ''", "MAPFILE");
         Assert.Equal(new[] { "1", "3" }, nul);
     }
 

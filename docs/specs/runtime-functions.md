@@ -205,26 +205,60 @@ first `Feed` (`head`/`uniq` parse in `ProcessRecord` before feeding). Byte consu
 Guard: `LineAssemblerGuardTests` (every pipeline cmdlet assembles or is listed with its reason);
 oracle: `LineAssemblyDifferentialTests`. REGRESSION: 25 commands took each record as its own line(s).
 
-**A record → its lines: ONE splitter.** A record's text carries at most ONE terminator of its own (a
-terminated record whose text lacks it gets the boundary newline when rendered). So the split is: drop
-exactly one trailing `\n`, then split on `\n` — every earlier `\n` ends a line, and `printf 'a\n\n'` (one
-record) is the two lines `a` and `""`. An empty terminated record is one empty line; an empty unterminated
-record (`printf ''`) is no line. Only the last line of an `IsUnterminated` record lacks its newline. The
-primitive is `BashRuntime.SplitRecord(text, unterminated)` / `SplitRecord(item, out unterminated)`
-(`RecordLines` and the fused lane's `LineStreamRecord.SubLines` are built on it); a site that strips `\r`
-does so on the lines it returns. Never `TrimEnd('\n')` record text: it eats the trailing empty lines.
-The producer side: a plain record whose text ends in `\n` is ambiguous (`NewBashObject` strips one `\n`,
-readers take a remaining one as the own terminator), so a producer holding a byte slice emits it with
-`BashRuntime.BytesRecord(bytes)` — a plain line for `x\n`, exact bytes for `x\n\n` or `x` (`tr`, the
-`LineAssembler` join). Guard: `RecordSplitGuardTests` (no `TrimEnd(…'\n'…)` in PsBash.Cmdlets outside an
-allow-list naming why each is not a record split); unit `RecordSplitTests`; oracle
-`RecordTrailingEmptyLinesDifferentialTests`. REGRESSION: `printf 'a\n\n' | grep -c ''` was 1 (bash 2) in
-grep, sed, cat, nl, cut, rev, tac, sort, uniq, head, tail, shuf, column, rg, fold, expand, comm, paste, tr.
+**A record → its bytes: ONE rule.** INVARIANT: a plain record is its text PLUS the boundary newline,
+always, even when the text already ends in `\n`; an exact-bytes record (`NoTrailingNewline`: `printf`,
+`echo -n`) is its text. The rule is `PsBash.Core.StdoutRecord.Bytes` (Transpiler, SMA-free); the host
+renderer (`SdkWorker.GetOutputText`) calls it directly, and every cmdlet-side reader goes through
+`BashRuntime.RecordBytes(item)` / `IsExactBytes(item)` (redirect, tee, `ConvertTo-BashCapture`, `od`/byte
+streams, `tail -c`, `tr`, `timeout`, native stdin, `bash` stdin, `mapfile`, `exec {fd}>`, the fused-lane
+render, job output, `source <(…)`, psm1 stderr). bash agrees: `jq -r '"a\n"'`, `basename $'a\n'` and
+`echo $'a\n'` write `a\n\n` to the screen, a pipe, a file and `$(…)` alike. REGRESSION: the renderer used
+this rule but the readers gave such a text no boundary, so those printed two lines on screen and one in
+`| cat`, `> f`, `$(…)`, `>&2`; `{ read -n 1; cat; }` printed a blank line (`PushFront` pushed a bare `bc\n`);
+`source <(printf 'echo a'; printf 'b\n')` ran `echo a` and `b` (bash `echo ab`), and the sourced commands'
+stdout was dropped (`source <(echo 'echo hi')` printed nothing). Guard:
+`RecordBytesGuardTests` (no read of the `NoTrailingNewline` property and no `EndsWith('\n')` +
+`IsUnterminated(` rule outside the primitive in PsBash.Cmdlets, PsBash.Host, the psm1); oracle
+`RecordBytesDifferentialTests`. Known gaps (concurrent owners): `wc` (allow-listed as pending), awk's
+`SplitRecords`, `SharedStdin.TryDequeueLine`/`TryDequeueRecord`, and the `while read` gate
+(`InvokeBashPipeGateCommand`) still take a plain record's final `\n` as its own terminator.
+
+**A record → its lines: ONE splitter.** The lines of a record are the lines of its bytes: drop the
+bytes' final `\n` (if any), then split on `\n`. So a plain record `"a"` is one line, a plain `"a\n"` is
+`a` and `""`, an exact `printf 'a\n\n'` is `a` and `""`, an exact `printf ''` is no line, and only the last
+line of an `IsUnterminated` record lacks its newline. The primitives are `BashRuntime.SplitBytes(bytes,
+out unterminated)` and `SplitRecord(item, out unterminated)` (`RecordLines` and the fused lane's
+`LineStreamRecord.SubLines` are built on them); a site that strips `\r` does so on the lines it returns.
+Never `TrimEnd('\n')` record text: it eats the trailing empty lines. The producer side: a producer
+holding a byte slice emits it with `BashRuntime.BytesRecord(bytes)` — a plain record (without it) for bytes
+ending in ONE `\n`, exact bytes otherwise, including a final empty line (`"x\n\n"`): a producer never makes a
+plain record whose text ends in `\n`, so readers not yet on `RecordBytes` agree (`tr`, the `LineAssembler` join,
+`SharedStdin.PushFront`, sed's writer). Guard: `RecordSplitGuardTests` (no `TrimEnd(…'\n'…)` in
+PsBash.Cmdlets outside an allow-list naming why each is not a record split); unit `RecordSplitTests`;
+oracle `RecordTrailingEmptyLinesDifferentialTests`. REGRESSION: `printf 'a\n\n' | grep -c ''` was 1 (bash
+2) in grep, sed, cat, nl, cut, rev, tac, sort, uniq, head, tail, shuf, column, rg, fold, expand, comm,
+paste, tr.
+
+**sed: the missing newline belongs to a buffer.** INVARIANT (GNU `chomped` / `output_missing_newline`):
+an input line without a newline leaves its buffer unterminated; `N`/`n` take the new line's state,
+`h`/`H` copy the pattern space's into the hold space, `g`/`G` copy the hold space's into the pattern
+space, `x` swaps them (the hold space starts terminated). Only a write of a buffer (`p`, `P` without an
+embedded newline, `w`, `W`, `s///p`, `s///w`, the autoprint) leaves the newline out, and the NEXT write to
+that output (stdout, or each `w` file on its own) supplies it first. What sed makes itself (`=`, `l`, `F`,
+`i`, `a`, `c`) always ends in a newline; `r`/`R`/`e COMMAND` copy bytes verbatim (owed newline before,
+none owed after). `q` settles stdout's owed newline (even under `-n`) and autoprints WITH a newline
+(`printf 'a\nb' | sed '$q'` is `a\nb\n`); `Q` does neither. A `D` restart writes its pass's `i`/`p`/`P`/`=`
+output at once and keeps its appends for the cycle's real end (`sed 'N;P;D'` printed only the last line).
+Known gap: `w /dev/stdout` shares stdout's owed newline here; GNU keeps one per output (`a\nbb`). Engine: `SedEnd` (`Newline`/`Owed`/`Bare`) on every output record (`SedEngine`); the
+cmdlet's `RecordSink` applies it. With several files a file's last line without a newline is fed as such
+(`sed -n 2p f f` of `f`=`r1\nr2` prints `r2` with none). REGRESSION: the sink gave the LAST output record
+the input's terminator state, so `printf 'a\nb' | sed -n '$='` printed `2` with no newline (GNU `2\n`),
+and `$a`/`$i`/`$c`/`$l` lost theirs. Oracle: `SedMissingNewlineDifferentialTests`.
 
 ### Line terminators must survive the object choice
 
 A record renders as `BashText` + `\n` unless it carries `NoTrailingNewline` (`printf`,
-`echo -n`: the bytes are exact). The one definition of "unterminated" is
+`echo -n`: the bytes are exact) — `BashRuntime.RecordBytes`, above. The one definition of "unterminated" is
 `BashRuntime.IsUnterminated(item)`: flag set **and** text not already ending in `\n`
 (`printf '%s\n'` embeds its terminator). A multi-line record is unterminated only on its LAST
 line. GNU tools differ on the missing final newline (oracle: `printf 'b\na' | cmd | od -c`):

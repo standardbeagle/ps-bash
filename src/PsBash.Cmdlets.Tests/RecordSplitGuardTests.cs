@@ -4,8 +4,8 @@ using Xunit;
 namespace PsBash.Cmdlets.Tests;
 
 /// <summary>
-/// A pipeline record becomes lines through ONE splitter, <see cref="BashRuntime.SplitRecord(string, bool)"/>
-/// (and <see cref="BashRuntime.RecordLines"/> / <c>LineStreamRecord.SubLines</c> built on it). Every consumer used
+/// A pipeline record becomes lines through ONE splitter, <see cref="BashRuntime.SplitRecord(object?, out bool)"/> /
+/// <see cref="BashRuntime.SplitBytes"/> (and <see cref="BashRuntime.RecordLines"/> / <c>LineStreamRecord.SubLines</c> built on it). Every consumer used
 /// to spell the split itself as <c>text.TrimEnd('\n').Split('\n')</c>, which strips EVERY trailing newline: a record
 /// carries at most one terminator of its own, so the rest were empty lines, and <c>printf 'a\n\n' | grep -c ''</c>
 /// counted 1 (bash 2) in grep, sed, cat, nl, cut, rev, tac, sort, uniq, head, tail, shuf, column, rg, fold, expand ….
@@ -51,8 +51,6 @@ public class RecordSplitGuardTests
             = "sed -f SCRIPT file text; trailing blank script lines are no-op commands",
         ["InvokeBashXanCommand.cs: string body = sb.ToString().TrimEnd('\\r', '\\n');"]
             = "a table this command just rendered, emitted as one record",
-        ["InvokeProcessSubSourceCommand.cs: sb.Append(text.TrimEnd('\\r', '\\n'));"]
-            = "`source <(...)`: producer output re-transpiled as SCRIPT text, where trailing blank lines are no-ops",
     };
 
     internal static List<string> Scan(string name, string text)
