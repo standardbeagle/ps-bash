@@ -88,7 +88,10 @@ public sealed class InvokeBashKillCommand : PSCmdlet
     }
 
     private static readonly Regex NumSignal = new(@"^-(\d+)$", RegexOptions.Compiled);
-    private static readonly Regex NamedSignal = new(@"^-(SIG)?([A-Za-z][A-Za-z0-9]*)$", RegexOptions.Compiled);
+    // `-NAME`, including the real-time offsets `-RTMIN+1` / `-RTMAX-2` (TryResolveSignalSpec decides validity; this
+    // only says "the word is a signal spec, not a pid"). REGRESSION: `kill -RTMIN+1 PID` was "arguments must be process
+    // or job IDs" while `kill -s RTMIN+1 PID` worked.
+    private static readonly Regex NamedSignal = new(@"^-(SIG)?([A-Za-z][A-Za-z0-9]*(?:[+-][0-9]+)?)$", RegexOptions.Compiled);
     private static readonly Regex PidSpec = new(@"^-%?(\d+)$", RegexOptions.Compiled);
 
     /// <summary>

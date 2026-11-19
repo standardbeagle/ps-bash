@@ -1,0 +1,30 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 144
+stdout-length: 256
+stderr-length: 0
+==== SCRIPT ====
+trap 'echo a' rtmin+1 50 32 SIGRTMAX USR1 0
+echo "rc=$?"
+trap -p
+trap - 35 SIGRTMAX-14
+trap -p
+trap 'echo b' RTMIN+31 2>/dev/null; echo "bad=$?"
+==== STDOUT ====
+rc=0
+trap -- 'echo a' EXIT
+trap -- 'echo a' SIGUSR1
+trap -- 'echo a' 32
+trap -- 'echo a' SIGRTMIN+1
+trap -- 'echo a' SIGRTMAX-14
+trap -- 'echo a' SIGRTMAX
+trap -- 'echo a' EXIT
+trap -- 'echo a' SIGUSR1
+trap -- 'echo a' 32
+trap -- 'echo a' SIGRTMAX
+bad=1
+a
+
+==== STDERR ====
+

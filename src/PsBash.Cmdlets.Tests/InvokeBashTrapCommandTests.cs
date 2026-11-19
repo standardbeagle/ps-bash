@@ -217,4 +217,22 @@ public class InvokeBashTrapCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Equal("True", raw[^1].ToString());
         Assert.Contains("syntax error", InvokeBashTrapCommand.TranspileAction("echo <"));
     }
+
+    /// <summary>A signal spec resolves through kill's one table. REGRESSION: trap kept its own 1-31 table, so
+    /// <c>RTMIN+1</c> was invalid and 50 was named <c>RTMIN+16</c> (bash: <c>SIGRTMAX-14</c>).</summary>
+    [Theory]
+    [InlineData("RTMIN+1", "RTMIN+1")]
+    [InlineData("sigrtmax-14", "RTMAX-14")]
+    [InlineData("50", "RTMAX-14")]
+    [InlineData("35", "RTMIN+1")]
+    [InlineData("32", "32")]
+    [InlineData("0", "EXIT")]
+    [InlineData("SIGEXIT", null)]
+    [InlineData("err", "ERR")]
+    [InlineData("int", "INT")]
+    [InlineData("RTMIN+31", null)]
+    [InlineData("65", null)]
+    [InlineData("NOPE", null)]
+    public void NormalizeSignal_SharesKillsTable(string spec, string? expected)
+        => Assert.Equal(expected, InvokeBashTrapCommand.NormalizeSignal(spec));
 }

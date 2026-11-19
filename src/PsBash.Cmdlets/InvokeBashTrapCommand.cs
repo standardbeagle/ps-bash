@@ -52,29 +52,29 @@ public sealed class InvokeBashTrapCommand : PSCmdlet
         "EXIT", "ERR", "INT", "TERM", "HUP", "QUIT", "PIPE", "ALRM", "USR1", "USR2"
     };
 
-    // Linux x86-64 signal numbers (bash's `trap -l` table); index = number.
-    private static readonly string[] SignalByNumber =
-    {
-        "EXIT", "HUP", "INT", "QUIT", "ILL", "TRAP", "ABRT", "BUS", "FPE", "KILL", "USR1", "SEGV", "USR2", "PIPE",
-        "ALRM", "TERM", "STKFLT", "CHLD", "CONT", "STOP", "TSTP", "TTIN", "TTOU", "URG", "XCPU", "XFSZ", "VTALRM",
-        "PROF", "WINCH", "IO", "PWR", "SYS",
-    };
-
     private static readonly HashSet<string> PseudoSignals = new(StringComparer.Ordinal) { "EXIT", "ERR", "DEBUG", "RETURN" };
 
-    /// <summary>A bash signal spec (<c>INT</c>, <c>SIGINT</c>, <c>2</c>, <c>0</c>, <c>ERR</c>) as its bare upper-case name, or null when it is not one.</summary>
+    /// <summary>
+    /// A bash signal spec (<c>INT</c>, <c>SIGINT</c>, <c>2</c>, <c>0</c>, <c>ERR</c>, <c>RTMIN+1</c>, <c>50</c>) as its bare
+    /// upper-case name (<c>RTMAX-14</c> for 50, <c>32</c> for the nameless pair), or null when it is not one. A real signal
+    /// resolves through kill's validator (<see cref="InvokeBashKillCommand.TryResolveSignalSpec"/>), the one name table, so
+    /// a spec <c>kill</c> sends is one <c>trap</c> can catch. REGRESSION: this kept its own 1-31 table, so
+    /// <c>trap … RTMIN+1</c> was "invalid signal specification" and number 50 was named <c>RTMIN+16</c>.
+    /// </summary>
     internal static string? NormalizeSignal(string spec)
     {
         if (spec.Length > 0 && char.IsAsciiDigit(spec[0]))
         {
             if (!int.TryParse(spec, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var n)) return null;
-            if (n < SignalByNumber.Length) return SignalByNumber[n];
-            return n <= 64 ? "RTMIN+" + (n - 34) : null;
+            if (n == 0) return "EXIT";
         }
-        var name = spec.ToUpperInvariant();
-        if (name.StartsWith("SIG", StringComparison.Ordinal)) name = name[3..];
-        if (PseudoSignals.Contains(name) || Array.IndexOf(SignalByNumber, name) > 0) return name;
-        return name is "RTMIN" or "RTMAX" ? name : null;
+        else
+        {
+            // EXIT/ERR/DEBUG/RETURN are no signals: bash refuses `SIGEXIT`.
+            var name = spec.ToUpperInvariant();
+            if (PseudoSignals.Contains(name)) return name;
+        }
+        return InvokeBashKillCommand.TryResolveSignalSpec(spec, out var resolved) ? resolved[3..] : null;
     }
 
     protected override void EndProcessing()
@@ -269,14 +269,20 @@ public sealed class InvokeBashTrapCommand : PSCmdlet
         foreach (System.Collections.DictionaryEntry entry in dict)
         {
             var key = entry.Key?.ToString() ?? "";
-            int order = Array.IndexOf(SignalByNumber, key);
-            if (order < 0) order = key switch { "DEBUG" => 1000, "ERR" => 1001, "RETURN" => 1002, _ => 2000 };
+            // bash lists by signal number: EXIT, then 1-64, then DEBUG/ERR/RETURN.
+            int order = key switch
+            {
+                "EXIT" => 0, "DEBUG" => 1000, "ERR" => 1001, "RETURN" => 1002,
+                _ => InvokeBashKillCommand.TryResolveSignalSpec(key, out var resolved) ? InvokeBashKillCommand.SignalNumber(resolved) : 2000,
+            };
             entries.Add((order, key, entry.Value?.ToString() ?? ""));
         }
         entries.Sort((a, b) => a.Order != b.Order ? a.Order.CompareTo(b.Order) : string.CompareOrdinal(a.Signal, b.Signal));
         foreach (var (order, signal, action) in entries)
         {
-            var shown = order is >= 1 and < 1000 || order == 2000 ? "SIG" + signal : signal;
+            // The nameless 32/33 are listed as numbers (`trap -- 'x' 32`), every other signal as SIGNAME.
+            bool numeric = signal.Length > 0 && signal.All(char.IsAsciiDigit);
+            var shown = (order is >= 1 and < 1000 || order == 2000) && !numeric ? "SIG" + signal : signal;
             var obj = new PSObject();
             obj.TypeNames.Insert(0, "PsBash.TrapOutput");
             obj.Properties.Add(new PSNoteProperty("Signal", signal));

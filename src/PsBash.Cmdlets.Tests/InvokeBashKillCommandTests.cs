@@ -204,6 +204,8 @@ public class InvokeBashKillCommandTests : IClassFixture<SharedPwshFixture>
     [InlineData("'-term'")]
     [InlineData("'-SIGterm'")]
     [InlineData("'-RTMIN+2'")]
+    [InlineData("'-RTMAX-3'")]
+    [InlineData("'-SIGRTMIN+1'")]
     [InlineData("'--signal=KILL'")]
     [InlineData("'-s' rtmax-1")]
     [InlineData("'-n' 64")]
@@ -211,6 +213,8 @@ public class InvokeBashKillCommandTests : IClassFixture<SharedPwshFixture>
     {
         var errs = RunErrors($"Invoke-BashKill {spec} 2147483646");
         Assert.DoesNotContain(errs, e => e.Contains("invalid signal specification"));
+        // REGRESSION: `-RTMIN+2` was taken for a pid word ("arguments must be process or job IDs").
+        Assert.DoesNotContain(errs, e => e.Contains("arguments must be process or job IDs"));
         Assert.Contains(errs, e => e.Contains("No such process", StringComparison.OrdinalIgnoreCase));
     }
 
