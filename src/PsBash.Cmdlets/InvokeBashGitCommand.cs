@@ -25,12 +25,36 @@ public sealed class InvokeBashGitCommand : BashCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>
+    /// Decoys for a DIRECT call (<c>Invoke-BashGit log -p</c>): a bare <c>-p</c>/<c>-e</c>/<c>-i</c>/<c>-o</c>/<c>-w</c>
+    /// is ambiguous between two common parameters (a binder error), <c>-a</c> prefixes <c>-Arguments</c>, <c>-d</c>/<c>-v</c>
+    /// bind <c>-Debug</c>/<c>-Verbose</c>. git's argv is git's, so every one is a switch and
+    /// <see cref="BashRuntime.TypedArguments"/> puts it back in its place and case (`grep -e PAT`, `branch -D x`). The
+    /// transpiler passes every word quoted, so none binds from a script. One letter at most once per call
+    /// (<c>-e</c> and <c>-E</c> are the same PowerShell parameter).
+    /// </summary>
+    [Parameter] public SwitchParameter A { get; set; }
+    /// <inheritdoc cref="A"/>
+    [Parameter] public SwitchParameter D { get; set; }
+    /// <inheritdoc cref="A"/>
+    [Parameter] public SwitchParameter E { get; set; }
+    /// <inheritdoc cref="A"/>
+    [Parameter] public SwitchParameter I { get; set; }
+    /// <inheritdoc cref="A"/>
+    [Parameter] public SwitchParameter O { get; set; }
+    /// <inheritdoc cref="A"/>
+    [Parameter] public SwitchParameter P { get; set; }
+    /// <inheritdoc cref="A"/>
+    [Parameter] public SwitchParameter V { get; set; }
+    /// <inheritdoc cref="A"/>
+    [Parameter] public SwitchParameter W { get; set; }
+
     // Unit separator: a git --format / for-each-ref field delimiter that can't occur in normal output.
     private const char FieldSep = '\u001f';
 
     protected override void ProcessRecord()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        var args = BashRuntime.TypedArguments(this, Arguments);
         FileSystemHelpers.SetLastExitCode(this, 0);
 
         if (args.Length == 0)

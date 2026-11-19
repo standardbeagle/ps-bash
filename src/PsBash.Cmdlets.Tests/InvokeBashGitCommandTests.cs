@@ -71,6 +71,39 @@ public class InvokeBashGitCommandTests : IClassFixture<SharedPwshFixture>
         finally { Cleanup(repo); }
     }
 
+    // DIRECT calls: a bare -p / -e / -i / -o / -w is a prefix of two common parameters (a binder error), -a of the
+    // cmdlet's own -Arguments, -d / -v of -Debug / -Verbose. REGRESSION: `Invoke-BashGit log -p` failed with "parameter
+    // name 'p' is ambiguous". git declares a switch decoy per colliding letter and rebuilds the argv in typed order and
+    // case (BashRuntime.TypedArguments). Scripts reach it quoted (PsEmitter), so only a direct call met the binder.
+    [SkippableFact]
+    public void Direct_LogPatch_PassesTheFlagToGit()
+    {
+        Skip.IfNot(GitAvailable(), "git is not installed");
+        var repo = NewRepo();
+        try
+        {
+            var r = CmdResult.Run(_fixture.AcquireFresh(), $"Set-Location -LiteralPath '{repo}'; Invoke-BashGit log -p").AssertSuccess();
+            Assert.Contains("diff --git a/tracked.txt b/tracked.txt", r.Stdout);
+            Assert.Contains("+a", r.Stdout);
+        }
+        finally { Cleanup(repo); }
+    }
+
+    [SkippableFact]
+    public void Direct_FlagsKeepTheirPlaceAndCase()
+    {
+        Skip.IfNot(GitAvailable(), "git is not installed");
+        var repo = NewRepo();
+        try
+        {
+            // `-e` between the subcommand and its pattern (a decoy put first would make it git's own option).
+            var r = CmdResult.Run(_fixture.AcquireFresh(),
+                $"Set-Location -LiteralPath '{repo}'; Invoke-BashGit grep -e a").AssertSuccess();
+            Assert.Contains("tracked.txt:a", r.Stdout);
+        }
+        finally { Cleanup(repo); }
+    }
+
     [SkippableFact]
     public void Branch_MarksCurrentBranch()
     {
