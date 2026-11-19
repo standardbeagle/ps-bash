@@ -501,7 +501,9 @@ public sealed partial class BashParser
 
             // Inside test expressions, operator tokens like <, >, ! are comparison
             // operators, not shell redirects/negation. Consume them as literal words.
-            if (IsTestOperatorToken(Peek().Kind))
+            // Not right after =~: there the regex scan below reads them (`[[ x =~ < ]]` is a syntax error it reports,
+            // `[[ '!a' =~ !a ]]` matches the regex text `!a`).
+            if (IsTestOperatorToken(Peek().Kind) && !(extended && LastInnerWordIs(inner, "=~")))
             {
                 var opToken = Advance();
                 // Handle != (Bang followed by word starting with =)
@@ -634,6 +636,15 @@ public sealed partial class BashParser
             {
                 if (i == start) throw new ParseException($"syntax error in conditional expression: unexpected token `{c}'", BashLexer.LineAt(_input, start), 1, "[[");
                 break;
+            }
+            // So is an unquoted `<` / `>` outside a group, wherever it stands: `[[ x =~ <> ]]`, `[[ x =~ a<b ]]` are syntax
+            // errors (bash: "unexpected token `<>'" / "`<'"); `(<)`, `\<` and `"a<"` are regex text. The scan reads the source,
+            // not tokens, so it must refuse the redirection operators itself: once the lexer made `<>` a token of its own
+            // (b3cd4566) the `[[ ]]` operator branch no longer caught it and the regex took it whole.
+            if (parenDepth == 0 && c is '<' or '>')
+            {
+                var op = c == '<' && i + 1 < _input.Length && _input[i + 1] == '>' ? "<>" : c.ToString();
+                throw new ParseException($"syntax error in conditional expression: unexpected token `{op}'", BashLexer.LineAt(_input, start), 1, "[[");
             }
             // Regex parens nest; an UNBALANCED `)` closes the enclosing test group (`[[ ! ( a =~ b ) ]]`).
             if (c == '(') parenDepth++;

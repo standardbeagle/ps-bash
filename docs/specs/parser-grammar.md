@@ -282,7 +282,10 @@ and splits `^(a|b)$` into `LParen` / `Pipe` / `RParen`, so consuming tokens woul
 the `(`. `ParseTestExpr` instead re-reads the word after `=~` straight from the source
 (`ConsumeRegexOperand`) as one whitespace-delimited, quote-aware word, then skips the
 tokens inside that span. This mirrors bash, where `(` groups in a `[[ ]]` condition
-*except* after `=~`.
+*except* after `=~`. Because it reads source, not tokens, the scan itself refuses the shell
+operators bash still sees there: an unquoted `;` / `&` at its start and an unquoted `<` / `>`
+anywhere outside a regex group (`[[ x =~ <> ]]`, `[[ x =~ a<b ]]`: "unexpected token", status 2;
+`(<)`, `\<`, `'a<'` are regex text).
 
 That word is decomposed by `DecomposeRegexWord`, not the ordinary word decomposer:
 

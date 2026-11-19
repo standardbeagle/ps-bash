@@ -29,6 +29,11 @@ public class DoubleBracketSyntaxTests
     // `;` and `&` outside a regex group are still shell operators (bash 5.2: status 2).
     [InlineData("[[ x =~ ; ]]")]
     [InlineData("[[ x =~ & ]]")]
+    // So are < and > anywhere outside a group, <> (its own redirection token since b3cd4566) included.
+    [InlineData("[[ '<>' =~ <> ]]")]
+    [InlineData("[[ x =~ < ]]")]
+    [InlineData("[[ x =~ a<b ]]")]
+    [InlineData("[[ x =~ a> ]]")]
     public void Transpile_MalformedConditional_IsSyntaxError(string bash) => Assert.ThrowsAny<ParseException>(() => PsEmitter.Transpile(bash));
 
     [Theory]
@@ -45,6 +50,10 @@ public class DoubleBracketSyntaxTests
     [InlineData("[[ x =~ (;) ]]")]
     [InlineData("[[ x =~ ';' ]]")]
     [InlineData("[[ x =~ $'|' ]]")]
+    [InlineData("[[ x =~ (<) ]]")]
+    [InlineData("[[ x =~ \\< ]]")]
+    [InlineData("[[ x =~ 'a<' ]]")]
+    [InlineData("[[ x =~ !a ]]")]
     [InlineData("[[ a -eq 3 ]]")]
     [InlineData("[[ ! ! a ]]")]
     [InlineData("[ ]")]
