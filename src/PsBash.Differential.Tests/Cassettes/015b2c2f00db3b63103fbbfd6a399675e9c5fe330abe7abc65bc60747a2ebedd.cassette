@@ -1,0 +1,27 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 358
+stdout-length: 219
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"
+bash -ec 'echo hi 2>/dev/null > nodir/y; echo after' 2>&1; echo "rc=$?"
+bash -ec 'echo hi > nodir/y; echo after' 2>&1; echo "rc=$?"
+bash -ec 'cat < nofile; echo after' 2>&1; echo "rc=$?"
+bash -ec 'x=$(< nofile); echo after' 2>&1; echo "rc=$?"
+bash -c 'fn() { echo in; }; fn 2>e > nodir/w; cat e' 2>&1; echo "rc=$?"
+cd /; rm -rf "$W"
+==== STDOUT ====
+rc=1
+bash: line 1: nodir/y: No such file or directory
+rc=1
+bash: line 1: nofile: No such file or directory
+rc=1
+bash: line 1: nofile: No such file or directory
+rc=1
+bash: line 1: nodir/w: No such file or directory
+rc=0
+
+==== STDERR ====
+

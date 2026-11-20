@@ -1,7 +1,7 @@
 PSBASH-ORACLE-CASSETTE v1
-bash-version: wsl
+bash-version: 5.2.21(1)-release
 exit-code: 0
-script-length: 240
+script-length: 250
 stdout-length: 37
 stderr-length: 0
 ==== SCRIPT ====
@@ -10,14 +10,14 @@ kill -URG $$
 trap - URG
 kill -URG $$; echo "self $?"
 kill -WINCH $$; kill -s CHLD $$; echo "st $?"
-{ sleep 0.2; echo child; } & kill -URG $!; echo "k $?"; wait $!; echo "w $?"
+{ sleep 1; echo child; } & kill -URG $!; k=$?; wait $!; w=$?; echo "k $k"; echo "w $w"
 kill -URG 999999 2>/dev/null; echo "none $?"
 ==== STDOUT ====
 URG
 self 0
 st 0
-k 0
 child
+k 0
 w 0
 none 1
 

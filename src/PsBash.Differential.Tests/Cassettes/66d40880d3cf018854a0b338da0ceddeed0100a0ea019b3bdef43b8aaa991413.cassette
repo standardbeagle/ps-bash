@@ -1,0 +1,30 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 229
+stdout-length: 469
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"
+cat > s.sh <<'EOF'
+let '1+'; r1=$?
+let 'x=='; r2=$?
+let 'a b c'; r3=$?
+let '(1+2'; r4=$?
+let '1 @ 2'; r5=$?
+v='1+ '; let "$v"; r6=$?
+echo "rc=$r1 $r2 $r3 $r4 $r5 $r6"
+EOF
+bash s.sh 2>&1
+cd /; rm -rf "$W"
+==== STDOUT ====
+s.sh: line 1: let: 1+: syntax error: operand expected (error token is "+")
+s.sh: line 2: let: x==: syntax error: operand expected (error token is "==")
+s.sh: line 3: let: a b c: syntax error in expression (error token is "b c")
+s.sh: line 4: let: (1+2: missing `)' (error token is "2")
+s.sh: line 5: let: 1 @ 2: syntax error: invalid arithmetic operator (error token is "@ 2")
+s.sh: line 6: let: 1+ : syntax error: operand expected (error token is "+ ")
+rc=1 1 1 1 1 1
+
+==== STDERR ====
+

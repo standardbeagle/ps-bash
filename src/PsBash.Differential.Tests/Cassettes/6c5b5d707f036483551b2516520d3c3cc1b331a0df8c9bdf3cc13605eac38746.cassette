@@ -1,0 +1,40 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 250
+stdout-length: 504
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"
+cat > s.sh <<'EOF'
+let; echo "rc=$?"
+.; echo "rc=$?"
+source; echo "rc=$?"
+. ./nofile_zz; echo "rc=$?"
+. 2>err; echo "rc=$?"; cat err
+EOF
+bash s.sh 2>&1
+bash -c 'let; echo "rc=$?"; source; echo "rc=$?"' 2>&1
+cd /; rm -rf "$W"
+==== STDOUT ====
+s.sh: line 1: let: expression expected
+rc=1
+s.sh: line 2: .: filename argument required
+.: usage: . filename [arguments]
+rc=2
+s.sh: line 3: source: filename argument required
+source: usage: source filename [arguments]
+rc=2
+s.sh: line 4: ./nofile_zz: No such file or directory
+rc=1
+rc=2
+s.sh: line 5: .: filename argument required
+.: usage: . filename [arguments]
+bash: line 1: let: expression expected
+rc=1
+bash: line 1: source: filename argument required
+source: usage: source filename [arguments]
+rc=2
+
+==== STDERR ====
+

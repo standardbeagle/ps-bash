@@ -1,0 +1,64 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 784
+stdout-length: 761
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"
+exec 2>&1
+cat < nofile 2>/dev/null; echo "rc1=$?"
+cat 2>/dev/null < nofile; echo "rc2=$?"
+echo hi 2>err > nodir/y; echo "rc3=$?"; cat err
+echo hi > nodir/y 2>err2; echo "rc4=$?"; ls
+ls 2>&1 > nodir/q | sed 's/^/OUT:/'
+echo hi > nodir/y > b; echo "rc6=$?"; ls
+{ echo a; } 2>/dev/null > nodir/z; echo "rc7=$?"
+while read l; do echo $l; done < nofile; echo "rc8=$?"
+while read l; do echo $l; done 2>/dev/null < nofile; echo "rc9=$?"
+x=$(< nofile); echo "rc10=$?"
+x=$(< nofile 2>/dev/null); echo "rc11=$?"
+read v < /nosuchfile; echo "rc12=$?"
+fn() { echo in; }
+fn > nodir/w; echo "rc13=$?"
+{ echo a; } > nodir/z; echo "rc14=$?"
+echo hi >> nodir/y; echo "rc15=$?"
+echo hi &> nodir/y; echo "rc16=$?"
+echo hi 2>/dev/null > nodir/y; echo "rc17=$?"
+
+cd /; rm -rf "$W"
+==== STDOUT ====
+bash: line 3: nofile: No such file or directory
+rc1=1
+rc2=1
+rc3=1
+bash: line 5: nodir/y: No such file or directory
+bash: line 6: nodir/y: No such file or directory
+rc4=1
+err
+OUT:bash: line 7: nodir/q: No such file or directory
+bash: line 8: nodir/y: No such file or directory
+rc6=1
+err
+rc7=1
+bash: line 10: nofile: No such file or directory
+rc8=1
+rc9=1
+bash: line 12: nofile: No such file or directory
+rc10=1
+bash: line 13: nofile: No such file or directory
+rc11=1
+bash: line 14: /nosuchfile: No such file or directory
+rc12=1
+bash: line 16: nodir/w: No such file or directory
+rc13=1
+bash: line 17: nodir/z: No such file or directory
+rc14=1
+bash: line 18: nodir/y: No such file or directory
+rc15=1
+bash: line 19: nodir/y: No such file or directory
+rc16=1
+rc17=1
+
+==== STDERR ====
+
