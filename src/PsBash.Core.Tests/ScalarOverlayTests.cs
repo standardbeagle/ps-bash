@@ -133,4 +133,45 @@ public sealed class ScalarOverlayTests : IDisposable
         ScalarOverlay.Detach(_job);
         Assert.Null(ScalarOverlay.Current);
     }
+
+    // `env -i NAME=v cmd` (environment-model.md section 11): the command's own store, never the process environment.
+    [Fact]
+    public void ACommandsEnvironment_IgnoringTheShells_HoldsOnlyItsAssignments_AndLeavesTheProcessAlone()
+    {
+        string path = Environment.GetEnvironmentVariable("PATH")!;
+        var command = ScalarOverlay.ForCommand(ignoreEnvironment: true, [], [new(_name, "v")]);
+        t_owner = _job;
+        using (command.AttachScoped(_job))
+        {
+            Assert.Equal("v", ShellExports.Get(_name));
+            Assert.Null(ShellExports.Get("PATH"));
+            Assert.Equal(path, Environment.GetEnvironmentVariable("PATH"));
+            Assert.Null(Environment.GetEnvironmentVariable(_name));
+        }
+        Assert.Null(ScalarOverlay.Current);
+        Assert.Null(Environment.GetEnvironmentVariable(_name));
+    }
+
+    [Fact]
+    public void ACommandsEnvironment_StartsFromTheExportedVariables_MinusUnset()
+    {
+        Environment.SetEnvironmentVariable(_name, "a");
+        ShellExports.Export(_name);
+        var command = ScalarOverlay.ForCommand(ignoreEnvironment: false, ["PATH"], []);
+        Assert.Equal("a", command.Get(_name));
+        Assert.Null(command.Get("PATH"));
+    }
+
+    [Fact]
+    public void ACommandsEnvironment_InsideAJob_GivesTheJobItsStoreBack()
+    {
+        var job = Launch();
+        job.Set(_name, "job");
+        using (ScalarOverlay.ForCommand(ignoreEnvironment: true, [], []).AttachScoped(_job))
+            Assert.Null(BashOverlayGet());
+        Assert.Same(job, ScalarOverlay.Current);
+        Assert.Equal("job", BashOverlayGet());
+
+        string? BashOverlayGet() => ScalarOverlay.Current?.Get(_name);
+    }
 }

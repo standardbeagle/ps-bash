@@ -115,7 +115,7 @@ public class ChildEnvironmentGuardTests
         "BashGlob.cs", "BashLocale.cs", "BashPromptText.cs", "BashRuntime.cs", "BashShellState.cs",
         "BashStateSnapshot.cs", "BashSubscriptExpansion.cs", "BashTimeKeyword.cs", "ConvertToBashWordsCommand.cs",
         "DeclarePrinter.cs", "InvokeBashArithmeticCommand.cs", "InvokeBashCompgenCommand.cs", "InvokeBashDirsCommand.cs",
-        "InvokeBashEnvCommand.cs", "InvokeBashExecFdCommand.cs", "InvokeBashGetoptsCommand.cs",
+        "InvokeBashExecFdCommand.cs", "InvokeBashGetoptsCommand.cs",
         "InvokeBashHistoryCommand.cs", "InvokeBashReadCommand.cs", "InvokeBashTestCommand.cs",
         // declare lists every variable; hash and source search the shell's PATH, exported or not, as bash's builtins do;
         // JobEnvironmentProvider is a background job's $env: drive, the store itself (background-jobs.md section 3).

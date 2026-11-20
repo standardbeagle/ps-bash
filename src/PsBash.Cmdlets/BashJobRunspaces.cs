@@ -28,6 +28,12 @@ public static class BashJobRunspaces
     // A job's scalar store is keyed by its runspace: the one PowerShell runs the calling thread's pipeline in.
     static BashJobRunspaces() => PsBash.Core.ScalarOverlay.CurrentOwner = static () => Runspace.DefaultRunspace;
 
+    /// <summary>
+    /// The owner a scalar store is attached to for code running on this thread (its runspace), with the lookup that
+    /// resolves it installed: for a store that is not a job's (<see cref="PsBash.Core.ScalarOverlay.ForCommand"/>).
+    /// </summary>
+    internal static Runspace ScalarOwner() => Runspace.DefaultRunspace;
+
     private static readonly List<Runspace> Idle = [];
     private static readonly ConditionalWeakTable<Runspace, Baseline> Baselines = new();
     private static string? _modulePath;

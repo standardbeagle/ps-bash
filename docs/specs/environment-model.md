@@ -44,7 +44,7 @@ Scopes:
 | `local NAME` | `VarFrameStack` records the hidden variable's attribute and restores it on return; the local keeps the outer attribute (bash: a local of an exported global is exported), `local -x` exports it |
 | `( … )`, `$( … )` | `BashShellState.Save` / `Restore` carry `ShellExports.Save()` |
 | `cmd &` in a job host (`PSBASH_BG_MODE=process`) | the job host inherits every variable; `BashStateSnapshot`'s prelude marks the unexported ones (`PsBuild.MarkUnexported`) |
-| `env NAME=v prog`, `env -u`, `env -i` | `ShellExports.BeginTemp` / `EndTemp` around the run |
+| `env NAME=v prog`, `env -u`, `env -i` | the command's own store, `ScalarOverlay.ForCommand`, attached to the runspace for the run (§11) |
 
 ## 4. The primitive
 
@@ -55,8 +55,8 @@ child a cmdlet starts gets it: nested `sh` / `bash`, `timeout`, `awk system()`, 
 `ShellExports.WindowsEnvironmentBlock()` for `CreateProcessW`), a program whose stderr is merged (`Invoke-BashNative`).
 `find -exec prog` and `env prog` start the program by name: through `ChildStdio` (filtered) only when
 `InvokeBashNativeCommand.MergedProgramPath` answers, i.e. stderr is merged or the command runs in an in-process
-background job; otherwise PowerShell starts it and §7 applies. `env`'s own `NAME=v` / `-u` / `-i` take effect either way
-(they change the process environment around the run).
+background job; otherwise PowerShell starts it and §7 applies. Under `env` a program is always started through `ChildStdio`, from
+the command's own store (§11).
 The interactive shell's direct launch (`InteractiveShell.TryRunDirect`) and `CommandAssistProvider` call it too.
 
 ## 5. In-process views of the environment
@@ -204,3 +204,31 @@ asks for `\j`, `\!`, `\#` by letter and never makes one up (they were fixed at 0
 
 Guards: `Core.Tests/Parser/PromptCounterEmitterTests` (one report per input line; none for other scripts),
 `Cmdlets.Tests/BashPromptTextTests` (counters come from the shell). Behaviour: oils `prompt.spec.sh`.
+
+## 11. A command's own environment (`env [-i] [-u NAME] [NAME=VALUE] cmd`)
+
+**Invariant: building a child's environment never writes the process environment.** The foreground's scalars live in
+the process environment, which every runspace of the host process shares (a concurrent command, an in-process job,
+the host's own `TEMP` lookups, a parallel test in the cmdlet suite). `env -i cmd` used to clear it around the
+command and put it back after: meanwhile every other runspace saw `TEMP`, `TMP` and `PATH` unset (a parallel test
+resolved its temp directory to `C:\WINDOWS`).
+
+`env` gives its command a store of its own, `ScalarOverlay.ForCommand(ignore, unset, assignments)`: the shell's
+EXPORTED variables (none under `-i`), minus `-u`, plus `NAME=VALUE`, every one exported. It is attached to the
+wrapper's runspace for the command only (`ScalarOverlay.AttachScoped`, which gives a job its own store back after),
+so the command sees what bash's `env` hands a program: `BashVariableStore` / `ShellExports` read it (an in-process
+`printenv`, `date` with `TZ`), and a program is started through `ChildStdio` from it (`InnerCommand.Run`,
+`InvokeBashNativeCommand.MergedProgramPath`: `ScalarOverlay.Current` is set). Nothing the command writes reaches the
+shell.
+
+Limits, the same as an in-process job's (§7, `background-jobs.md` §3): a `.cmd` / `.bat` and PowerShell code reading
+`$env:NAME` in the wrapper's runspace see the process environment; a program name is looked up on the host's `PATH`,
+not the command's (`env -i ls` finds `ls` on Windows, where there is no `/bin` to fall back on; `env PATH=/x prog`
+still finds `prog` on the host's `PATH`). A later stage of the same pipeline runs on the same runspace and sees the
+command's store while the command writes to it.
+
+Guards: `Core.Tests/BashVariableStoreGuardTests.OnlyShellAssignments_WriteTheVariableStore` (a named list of the
+files that assign a bash variable, each with its assignment; a wrapper is not one) and
+`NoCmdlet_SetsTheProcessEnvironment_ExceptTheStore`; `Cmdlets.Tests/InvokeBashEnvCommandTests.Env_IgnoreEnvironment_*`
+(the process environment while `env -i`'s command runs, from the same and from another runspace);
+`Core.Tests/ScalarOverlayTests.ACommandsEnvironment_*`.

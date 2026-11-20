@@ -1,5 +1,3 @@
-using System.Collections;
-using System.Linq;
 using System.Management.Automation;
 
 namespace PsBash.Cmdlets;
@@ -175,19 +173,21 @@ public sealed class InvokeBashEnvCommand : BashCmdlet
     }
 
     /// <summary>
-    /// Apply <c>-i</c> / <c>-u</c> / <c>NAME=VALUE</c> (and <c>-C DIR</c>) to the shell environment, run
-    /// <paramref name="cmdName"/> in-process (so ps-bash aliases/cmdlets resolve), then restore it. Restoration runs
-    /// in a finally so a throwing command cannot leak the temporary environment. A COMMAND that is not a program
-    /// is GNU's <c>env: ‘X’: No such file or directory</c> 127; a directory <c>Permission denied</c> 126.
+    /// Run <paramref name="cmdName"/> in-process (so ps-bash aliases/cmdlets resolve) with its OWN environment: the
+    /// shell's exported variables with <c>-i</c> / <c>-u</c> / <c>NAME=VALUE</c> applied
+    /// (<see cref="PsBash.Core.ScalarOverlay.ForCommand"/>), attached to this runspace for the command only. The process
+    /// environment is never written: <c>env -i</c> cleared it around the command, and every other runspace of the host
+    /// process saw TEMP and PATH unset meanwhile (environment-model.md section 11). A program it starts gets that
+    /// environment (<see cref="BashVariableStore.ApplyTo"/>). A COMMAND that is not a program is GNU's
+    /// <c>env: ‘X’: No such file or directory</c> 127; a directory <c>Permission denied</c> 126.
     /// </summary>
     private void RunWithModifiedEnv(
         bool ignoreEnv, List<string> unset, List<(string Name, string Value)> assignments,
         string? chdir, string cmdName, string[] cmdArgs)
     {
-        var saved = new List<(string Name, string? Old)>();
-        // The assignments are the command's environment: exported for it, whatever the names' attributes are.
-        var assigned = assignments.Select(a => a.Name).ToArray();
-        var wasExported = PsBash.Core.ShellExports.BeginTemp(assigned);
+        var environment = PsBash.Core.ScalarOverlay.ForCommand(ignoreEnv, unset,
+            assignments.Select(a => new KeyValuePair<string, string>(a.Name, a.Value)));
+        IDisposable? attached = null;
         ChildDirectory? childDir = null;
         try
         {
@@ -202,24 +202,7 @@ public sealed class InvokeBashEnvCommand : BashCmdlet
                 }
                 childDir = ChildDirectory.Enter(this, target);
             }
-            if (ignoreEnv)
-            {
-                foreach (var (k, v) in BashVariableStore.Enumerate().ToList())
-                {
-                    saved.Add((k, v));
-                    BashVariableStore.Set(k, null);
-                }
-            }
-            foreach (var u in unset)
-            {
-                saved.Add((u, BashVariableStore.Get(u)));
-                BashVariableStore.Set(u, null);
-            }
-            foreach (var (n, v) in assignments)
-            {
-                saved.Add((n, BashVariableStore.Get(n)));
-                BashVariableStore.Set(n, v);
-            }
+            attached = environment.AttachScoped(BashJobRunspaces.ScalarOwner());
 
             if (Unrunnable(cmdName) is { } failure)
             {
@@ -234,13 +217,7 @@ public sealed class InvokeBashEnvCommand : BashCmdlet
         }
         finally
         {
-            // Restore in reverse so an -i full-clear followed by an assignment of
-            // the same name returns to the original value.
-            for (int k = saved.Count - 1; k >= 0; k--)
-            {
-                BashVariableStore.Set(saved[k].Name, saved[k].Old);
-            }
-            PsBash.Core.ShellExports.EndTemp(assigned, wasExported);
+            attached?.Dispose();
             childDir?.Dispose();
         }
     }

@@ -73,6 +73,32 @@ public sealed class ScalarOverlay
         return new ScalarOverlay(values, ShellExports.CopyTable(from));
     }
 
+    /// <summary>
+    /// The environment of ONE command a wrapper runs with a modified environment (<c>env [-i] [-u NAME] [NAME=VALUE]
+    /// COMMAND</c>): the calling code's EXPORTED variables (none with <paramref name="ignoreEnvironment"/>), minus
+    /// <paramref name="unset"/>, plus <paramref name="assignments"/>, every one of them exported. The command is a
+    /// program in bash, so it sees only what env hands it; nothing it writes reaches the shell.
+    /// <para>
+    /// <b>Invariant</b> (environment-model.md section 11): building a child's environment never writes the process
+    /// environment. <c>env -i</c> used to clear the PROCESS environment around its command, so every other runspace
+    /// of the host process (a concurrent test, a job, the host's own TEMP lookups) saw TEMP and PATH unset meanwhile.
+    /// The store is attached to the wrapper's runspace for the command (<see cref="AttachScoped"/>).
+    /// </para>
+    /// </summary>
+    public static ScalarOverlay ForCommand(bool ignoreEnvironment, IEnumerable<string> unset,
+        IEnumerable<KeyValuePair<string, string>> assignments)
+    {
+        ArgumentNullException.ThrowIfNull(unset);
+        ArgumentNullException.ThrowIfNull(assignments);
+        var values = new Dictionary<string, string>(ShellExports.NameComparer);
+        if (!ignoreEnvironment)
+            foreach (var (name, value) in ShellExports.Enumerate()) values[name] = value;
+        foreach (var name in unset) values.Remove(name);
+        foreach (var (name, value) in assignments) values[name] = value;
+        var exports = new ShellExports.Table { Exported = new HashSet<string>(values.Keys, ShellExports.NameComparer) };
+        return new ScalarOverlay(values, exports);
+    }
+
     /// <summary>The job running in <paramref name="owner"/> (its runspace) uses this store from now on.</summary>
     public void Attach(object owner)
     {
@@ -80,6 +106,35 @@ public sealed class ScalarOverlay
         ByOwner.AddOrUpdate(owner, this);
         Interlocked.Increment(ref s_attached);
     }
+
+    /// <summary>
+    /// The code running in <paramref name="owner"/> uses this store until the result is disposed, when the store it
+    /// had before (a job's, or none: the process environment) is back. For a command whose environment is its own
+    /// (<see cref="ForCommand"/>), which may itself run inside a job.
+    /// </summary>
+    public IDisposable AttachScoped(object owner)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        ByOwner.TryGetValue(owner, out var previous);
+        ByOwner.AddOrUpdate(owner, this);
+        if (previous is null) Interlocked.Increment(ref s_attached);
+        return new Restore(owner, previous);
+    }
+
+    private sealed class Restore(object owner, ScalarOverlay? previous) : IDisposable
+    {
+        private int _done;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _done, 1) != 0) return;
+            if (previous is not null) ByOwner.AddOrUpdate(owner, previous);
+            else Detach(owner);
+        }
+    }
+
+    /// <summary>The store attached to <paramref name="owner"/>, or null (test seam).</summary>
+    internal static ScalarOverlay? Of(object owner) => ByOwner.TryGetValue(owner, out var overlay) ? overlay : null;
 
     /// <summary>The job in <paramref name="owner"/> ended: its runspace goes back to the process environment.</summary>
     public static void Detach(object owner)

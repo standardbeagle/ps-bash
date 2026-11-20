@@ -51,6 +51,8 @@
          IsFusionDisabledByEnvValue) are internal; the transpiler test suite
          lives in PsBash.Core.Tests. -->
     <InternalsVisibleTo Include="PsBash.Core.Tests" />
+    <!-- ScalarOverlay.Of: which store a runspace has while a command runs (InvokeBashEnvCommandTests). -->
+    <InternalsVisibleTo Include="PsBash.Cmdlets.Tests" />
   </ItemGroup>
 
 </Project>

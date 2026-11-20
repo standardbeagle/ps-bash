@@ -112,6 +112,85 @@ public class BashVariableStoreGuardTests
             + string.Join("\n  ", offenders));
     }
 
+    /// <summary>
+    /// The files that WRITE a bash variable through <c>BashVariableStore.Set</c>, each with the shell assignment it
+    /// performs. A child's environment is never built by setting the shell's variables around the command and
+    /// restoring them: in the foreground the store is the PROCESS environment, shared by every runspace of the host
+    /// process, so <c>env -i cmd</c> left TEMP and PATH unset for a concurrent command (a parallel test resolved its
+    /// temp dir to C:\WINDOWS). A wrapper gives its command its own store instead
+    /// (<c>ScalarOverlay.ForCommand</c>, environment-model.md section 11).
+    /// </summary>
+    private static readonly (string File, string Assignment)[] StoreWriters =
+    [
+        ("BashArrayElement.cs", "a[0]=v on a scalar (element 0 is the scalar)"),
+        ("BashRuntime.cs", "PATH=... rewritten to the Windows list form the OS searches"),
+        ("BashShellState.cs", "a subshell's end puts the shell's own variables back"),
+        ("BashSubscriptExpansion.cs", "${x:=v} / ${x[0]:=v}"),
+        ("BashVariableLookup.cs", "the assignment primitive for a name known at run time"),
+        ("InvokeBashArithmeticCommand.cs", "(( x = 1 )) / $(( x++ ))"),
+        ("InvokeBashExecFdCommand.cs", "exec {fd}>f binds fd"),
+        ("InvokeBashGetoptsCommand.cs", "getopts NAME / OPTARG / OPTIND"),
+        ("InvokeBashPushdCommand.cs", "pushd / popd set PWD and OLDPWD"),
+        ("InvokeBashReadCommand.cs", "read NAME"),
+        ("InvokeBashUnsetCommand.cs", "unset NAME"),
+        ("JobEnvironmentProvider.cs", "$env:NAME = v in a job runspace"),
+    ];
+
+    [Fact]
+    public void OnlyShellAssignments_WriteTheVariableStore()
+    {
+        var allowed = StoreWriters.Select(w => w.File).ToHashSet(StringComparer.Ordinal);
+        var offenders = new List<string>();
+        foreach (var file in Directory.EnumerateFiles(Path.Combine(RepoRoot(), "src"), "*.cs", SearchOption.AllDirectories))
+        {
+            if (file.Contains(".Tests", StringComparison.Ordinal)
+                || file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                || file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+                continue;
+            var name = Path.GetFileName(file);
+            // The store itself, and the emitter: the code it emits for a script's own `x=v`.
+            if (name is "BashVariableStore.cs" or "PsEmitter.cs" or "PsBuild.cs" || name.StartsWith("PsEmitter.", StringComparison.Ordinal)) continue;
+            if (allowed.Contains(name)) continue;
+            var lines = File.ReadAllLines(file);
+            for (int i = 0; i < lines.Length; i++)
+            {
+                if (lines[i].TrimStart().StartsWith("//", StringComparison.Ordinal)) continue;
+                if (lines[i].Contains("BashVariableStore.Set(", StringComparison.Ordinal))
+                    offenders.Add($"{name}:{i + 1}: {lines[i].Trim()}");
+            }
+        }
+        Assert.True(offenders.Count == 0,
+            "Only a shell assignment writes a bash variable (StoreWriters, each with its reason). A command's own "
+            + "environment is a ScalarOverlay.ForCommand attached for the command, never the shell's variables set and "
+            + "restored around it (the process environment every runspace shares). Offenders:\n  "
+            + string.Join("\n  ", offenders));
+    }
+
+    /// <summary>
+    /// The process environment is written only by the store (a bash variable), in the cmdlets: no cmdlet sets an
+    /// environment variable itself, not even a host knob, which would be the whole host process's for the duration.
+    /// </summary>
+    [Fact]
+    public void NoCmdlet_SetsTheProcessEnvironment_ExceptTheStore()
+    {
+        var offenders = new List<string>();
+        foreach (var file in CmdletSources())
+        {
+            if (Path.GetFileName(file) == "BashVariableStore.cs") continue;
+            var lines = File.ReadAllLines(file);
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var line = lines[i];
+                if (line.TrimStart().StartsWith("//", StringComparison.Ordinal) || line.Contains("///", StringComparison.Ordinal)) continue;
+                if (Regex.IsMatch(line, @"Environment\.SetEnvironmentVariable\b|\[(System\.)?Environment\]::SetEnvironmentVariable"))
+                    offenders.Add($"{Path.GetFileName(file)}:{i + 1}: {line.Trim()}");
+            }
+        }
+        Assert.True(offenders.Count == 0,
+            "A cmdlet must not write the process environment (BashVariableStore.Set for a bash variable; a child's own "
+            + "environment on its ProcessStartInfo or a ScalarOverlay.ForCommand). Offenders:\n  " + string.Join("\n  ", offenders));
+    }
+
     private static string Src(params string[] parts) => File.ReadAllText(Path.Combine([RepoRoot(), "src", .. parts]));
 
     /// <summary>
