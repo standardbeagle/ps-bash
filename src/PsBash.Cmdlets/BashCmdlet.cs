@@ -58,7 +58,7 @@ public abstract class BashCmdlet : PSCmdlet, IDisposable
         // The last stage: whatever set the status after it ran ahead of it (a program ahead sets it as itself:
         // `./five | grep --bogus` is 2, not 5). A stage before the last undoes only a cmdlet ahead of it, so a trailing
         // stage that sets no status (`| Invoke-BashRedirect`, a capture) still shows it.
-        bool last = me.PipelinePosition == me.PipelineLength;
+        bool last = me.PipelinePosition == me.PipelineLength || OnlyStatusTransparentStagesAfter(me);
         int? overwritten = null; // the status the cmdlet ahead set, which this stage undoes
         if (!last)
         {
@@ -76,6 +76,24 @@ public abstract class BashCmdlet : PSCmdlet, IDisposable
         catch (Exception ex) when (ex is InvalidOperationException or PSInvalidOperationException) { /* torn-down runspace */ }
     }
 
+    /// <summary>
+    /// Every stage after this one is part of this stage's command in bash, not a stage of its own
+    /// (<see cref="IStatusTransparentStage"/>: <c>grep --bogus &gt; out</c> is <c>Invoke-BashGrep | Invoke-BashRedirect</c>), so
+    /// this stage is bash's last: it re-asserts over anything ahead, a program or a subshell included. Before, it re-asserted
+    /// only over a cmdlet ahead, and <c>./five | grep --bogus &gt; out</c> was 5 (bash 2): the program set 5 after grep's
+    /// usage error. Unreadable pipeline internals answer no (the cmdlet-ahead rule).
+    /// </summary>
+    private bool OnlyStatusTransparentStagesAfter(InvocationInfo me)
+    {
+        Cmdlet stage = this;
+        for (int n = me.PipelinePosition; n < me.PipelineLength; n++)
+        {
+            if (StderrMerge.NextStage(stage) is not IStatusTransparentStage next) return false;
+            stage = (Cmdlet)next;
+        }
+        return true;
+    }
+
     /// <summary><paramref name="them"/> is a stage before <paramref name="me"/> in the same pipeline statement.</summary>
     internal static bool IsAheadInMyPipeline(InvocationInfo? them, InvocationInfo me)
         => them is not null
@@ -85,3 +103,11 @@ public abstract class BashCmdlet : PSCmdlet, IDisposable
            && (them.ScriptLineNumber < me.ScriptLineNumber
                || (them.ScriptLineNumber == me.ScriptLineNumber && them.OffsetInLine < me.OffsetInLine));
 }
+
+/// <summary>
+/// A runtime stage that is part of the command ahead of it, not a bash pipeline stage of its own: a redirection
+/// (<c>Invoke-BashRedirect</c>) or an error capture (<c>Invoke-BashKeepStderr</c>). The stage before it re-asserts its
+/// status as bash's last stage (<see cref="BashCmdlet"/>). Such a stage sets a status only when it fails itself (a target
+/// it cannot open), and then, being later, it wins.
+/// </summary>
+internal interface IStatusTransparentStage { }

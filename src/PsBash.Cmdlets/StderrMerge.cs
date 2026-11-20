@@ -76,6 +76,26 @@ public static class StderrMerge
         }
     }
 
+    /// <summary>
+    /// The cmdlet in the stage <paramref name="cmdlet"/>'s output feeds (the next stage of its pipeline), or null when
+    /// it feeds no cmdlet or the SMA internals cannot be read. Read through the same pipe as <see cref="JoinsStdout"/>.
+    /// </summary>
+    internal static Cmdlet? NextStage(Cmdlet cmdlet)
+    {
+        if (s_accessors.Value is not { } a) return null;
+        try
+        {
+            var runtime = cmdlet.CommandRuntime;
+            if (runtime is null || !a.RuntimeType.IsInstanceOfType(runtime)) return null;
+            if (a.OutputPipe.GetValue(runtime) is not { } output || a.Downstream.GetValue(output) is not { } processor) return null;
+            return a.Command.GetValue(processor) as Cmdlet;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
     /// <summary>True when the SMA internals <see cref="JoinsStdout"/> reads were found (a guard test pins it).</summary>
     internal static bool CanDetect => s_accessors.Value is not null;
 

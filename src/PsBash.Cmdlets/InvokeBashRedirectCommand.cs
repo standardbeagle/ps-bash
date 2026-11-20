@@ -32,7 +32,7 @@ namespace PsBash.Cmdlets;
 /// </para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashRedirect")]
-public sealed class InvokeBashRedirectCommand : BashCmdlet
+public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentStage
 {
     [Parameter(Position = 0)]
     public string? Path { get; set; }

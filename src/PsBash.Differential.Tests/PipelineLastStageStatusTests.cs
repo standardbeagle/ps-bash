@@ -60,6 +60,37 @@ public class PipelineLastStageStatusTests
     [InlineData("trap 'echo \"err [${PIPESTATUS[@]}]\"' ERR; echo B | grep zzz; true | (exit 3) | cat; echo \"s=$?\"")]
     public Task Status_OfALaterStage_IsNotUndone(string script) => AssertOracle.EqualAsync(script);
 
+    /// <summary>
+    /// A middle stage's status (fixed by 45d91995, pinned here): a failed stage with stages after it, a program on
+    /// either side, through a redirection, under pipefail.
+    /// </summary>
+    private const string FiveAndQ = "cd \"$(mktemp -d)\" || exit; printf '#!/bin/sh\\nexit 5\\n' > p.sh; "
+        + "printf '#!/bin/sh\\necho x\\nexit 5\\n' > q.sh; chmod +x p.sh q.sh; ";
+
+    [SkippableTheory]
+    [InlineData(FiveAndQ + "./p.sh | grep --bogus 2>/dev/null | cat; echo \"2 rc=$?\"; "
+        + "echo x | grep --bogus > out 2>/dev/null; echo \"3 rc=$?\"; ./p.sh | grep x > out; echo \"4 rc=$?\"; "
+        + "echo x | grep --bogus 2>/dev/null | cat > out; echo \"5 rc=$?\"; ./p.sh | cat | grep --bogus > out 2>/dev/null; echo \"6 rc=$?\"; "
+        + "./q.sh | grep zzz > out; echo \"7 rc=$?\"; ./q.sh | grep x | cat > out; echo \"8 rc=$?\"")]
+    [InlineData(FiveAndQ + "./q.sh | grep --bogus 2>/dev/null | wc -l; echo \"9 rc=$?\"; echo x | grep --bogus 2>/dev/null | ./p.sh; echo \"10 rc=$?\"; "
+        + "./q.sh | grep --bogus 2>/dev/null | ./p.sh > out; echo \"11 rc=$?\"; ./q.sh | ./p.sh | grep --bogus > out 2>/dev/null; echo \"12 rc=$?\"; "
+        + "./q.sh | grep x | ./p.sh > out; echo \"13 rc=$?\"")]
+    [InlineData(FiveAndQ + "set -o pipefail; ./q.sh | grep --bogus 2>/dev/null | cat > out; echo \"14 pf rc=$?\"; "
+        + "echo x | grep --bogus 2>/dev/null | cat > out; echo \"15 pf rc=$?\"; echo x | grep x | ./p.sh > out; echo \"16 pf rc=$?\"")]
+    public Task Status_OfAMiddleStage_IsBashs(string script) => AssertOracle.EqualAsync(script, timeout: TimeSpan.FromSeconds(60));
+
+    /// <summary>
+    /// A last stage with a redirection is <c>Invoke-BashX | Invoke-BashRedirect</c>: the redirect is not a stage, so X is
+    /// bash's last and its status beats a program, a subshell or <c>false</c> ahead that finished after X failed. It came
+    /// out 5 (1 for <c>false</c>); bash 2 (<c>BashCmdlet</c>, <c>IStatusTransparentStage</c>).
+    /// </summary>
+    [SkippableTheory]
+    [InlineData(FiveAndQ + "./p.sh | grep --bogus > out 2>/dev/null; echo \"1 rc=$?\"; ./p.sh | grep --bogus > out; echo \"b rc=$?\"; "
+        + "./p.sh | tail --bogus > out 2>/dev/null; echo \"e rc=$?\"; false | grep --bogus > out 2>/dev/null; echo \"f rc=$?\"; "
+        + "(exit 5) | grep --bogus 2>/dev/null >> out; echo \"s rc=$?\"; "
+        + "./q.sh | grep x > out 2>/dev/null; echo \"ok rc=$?\"")]
+    public Task Status_OfALastStage_WithARedirect_BeatsTheStagesAhead(string script) => AssertOracle.EqualAsync(script, timeout: TimeSpan.FromSeconds(60));
+
     /// <summary>The usage error itself: grep's usage line and hint, tr's hint at status 1 (it was 2 with no hint).</summary>
     [SkippableTheory]
     [InlineData("echo x | grep --bogus 2>&1; echo \"s=$?\"; echo x | tr --bogus 2>&1; echo \"s=$?\"")]

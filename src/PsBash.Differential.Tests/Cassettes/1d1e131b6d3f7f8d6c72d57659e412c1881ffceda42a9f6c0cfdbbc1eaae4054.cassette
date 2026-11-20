@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 492
+stdout-length: 49
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; printf '#!/bin/sh\nexit 5\n' > p.sh; printf '#!/bin/sh\necho x\nexit 5\n' > q.sh; chmod +x p.sh q.sh; ./p.sh | grep --bogus 2>/dev/null | cat; echo "2 rc=$?"; echo x | grep --bogus > out 2>/dev/null; echo "3 rc=$?"; ./p.sh | grep x > out; echo "4 rc=$?"; echo x | grep --bogus 2>/dev/null | cat > out; echo "5 rc=$?"; ./p.sh | cat | grep --bogus > out 2>/dev/null; echo "6 rc=$?"; ./q.sh | grep zzz > out; echo "7 rc=$?"; ./q.sh | grep x | cat > out; echo "8 rc=$?"
+==== STDOUT ====
+2 rc=0
+3 rc=2
+4 rc=1
+5 rc=0
+6 rc=2
+7 rc=1
+8 rc=0
+
+==== STDERR ====
+

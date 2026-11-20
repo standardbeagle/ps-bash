@@ -126,6 +126,11 @@ cmdlet's. A status set later by a program, the command-not-found handler or a cm
 (`echo x | grep zzz | nosuchcmd` is 127). So a cmdlet's own status is its final one: a cmdlet that runs another
 command (`command`, `env`, `flock`) takes its status with `FileSystemHelpers.AdoptLastExitCode`, and pipefail's stage
 wrapper records the stage's status as its own. Behavior `PipelineLastStageStatusTests.Status_OfALaterStage_IsNotUndone`.
+INVARIANT: a runtime stage that is part of the command ahead of it (`Invoke-BashRedirect`, `Invoke-BashKeepStderr`:
+`IStatusTransparentStage`) is not a stage: the stage before it re-asserts as the LAST stage, over a program, subshell
+or `false` ahead too (`./five | grep --bogus > out` is 2; it was 5). The stages after are read with
+`StderrMerge.NextStage`; unreadable = the cmdlet-ahead rule. A redirect that fails sets 1 and, later, wins. Behavior
+`PipelineLastStageStatusTests.Status_OfALastStage_WithARedirect_BeatsTheStagesAhead`.
 
 **Diagnostics name operands as typed.** GNU quotes the argv element, never the resolved full path
 (`cat: nosuchfile: No such file or directory`). Every diagnostic goes through

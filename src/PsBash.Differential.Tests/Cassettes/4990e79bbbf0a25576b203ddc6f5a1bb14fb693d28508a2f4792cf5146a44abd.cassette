@@ -1,0 +1,21 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 454
+stdout-length: 43
+stderr-length: 119
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; printf '#!/bin/sh\nexit 5\n' > p.sh; printf '#!/bin/sh\necho x\nexit 5\n' > q.sh; chmod +x p.sh q.sh; ./p.sh | grep --bogus > out 2>/dev/null; echo "1 rc=$?"; ./p.sh | grep --bogus > out; echo "b rc=$?"; ./p.sh | tail --bogus > out 2>/dev/null; echo "e rc=$?"; false | grep --bogus > out 2>/dev/null; echo "f rc=$?"; (exit 5) | grep --bogus 2>/dev/null >> out; echo "s rc=$?"; ./q.sh | grep x > out 2>/dev/null; echo "ok rc=$?"
+==== STDOUT ====
+1 rc=2
+b rc=2
+e rc=1
+f rc=2
+s rc=2
+ok rc=0
+
+==== STDERR ====
+grep: unrecognized option '--bogus'
+Usage: grep [OPTION]... PATTERNS [FILE]...
+Try 'grep --help' for more information.
+

@@ -11,7 +11,7 @@ namespace PsBash.Cmdlets;
 /// back as stdout, past the wrapper's redirect. Emitted by no translation of bash; runtime-internal.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashKeepStderr")]
-public sealed class InvokeBashKeepStderrCommand : BashCmdlet
+public sealed class InvokeBashKeepStderrCommand : BashCmdlet, IStatusTransparentStage
 {
     [Parameter(ValueFromPipeline = true)]
     [AllowNull]
