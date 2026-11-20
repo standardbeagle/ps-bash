@@ -1,5 +1,4 @@
 using System.Management.Automation;
-using System.Management.Automation.Runspaces;
 using PsBash.Core.Parser;
 
 namespace PsBash.Cmdlets;
@@ -198,142 +197,15 @@ public sealed class InvokeBashCommandCommand : BashCmdlet
         }
     }
 
-    /// <summary>
-    /// Run <c>NAME ARGS...</c> bypassing shell functions. <paramref name="argv"/>[0] is the name; the
-    /// rest is splatted as an array of strings, which PowerShell binds as positional ARGUMENTS (never as
-    /// parameter tokens) — the same shape the transpiler's single-quoted flags have.
-    /// </summary>
-    /// <summary>The records as the bytes a program reads (<see cref="NativeStdinBridge.RecordBytes"/>), one byte[] each.</summary>
-    private static List<object> NativeStdinBytes(List<object> records)
+    /// <summary>The inner command (<see cref="InnerCommand"/>), fed this cmdlet's pipeline records; a name nothing answers
+    /// to is bash's <c>NAME: command not found</c>, 127.</summary>
+    private void RunInner(string[] argv) => InnerCommand.Run(this, CommandWrapper, argv, _stdin);
+
+    private static readonly InnerCommand.Wrapper CommandWrapper = new("command", static (cmdlet, name) =>
     {
-        var bytes = new List<object>(records.Count);
-        foreach (var r in records)
-        {
-            var b = r is PSObject { BaseObject: byte[] raw } ? raw : r as byte[] ?? NativeStdinBridge.RecordBytes(r);
-            if (b.Length > 0) bytes.Add(b);
-        }
-        return bytes;
-    }
-
-    private void RunInner(string[] argv)
-    {
-        // command command x, command builtin x: the wrappers only bypass functions, so peel them.
-        while (argv.Length > 1 && argv[0] is "command" or "builtin" && !argv[1].StartsWith('-')) argv = argv[1..];
-        // A builtin the emitter implements (`command eval …`, `builtin set -- a`, `command exec cmd`) has no cmdlet to
-        // resolve: it runs as its static command, the operands already expanded (BashBuiltins.RunAsSource, the same
-        // runner Resolve-BashCommand uses for `$cmd`).
-        if (BashBuiltins.RunAsSource.Contains(argv[0]))
-        {
-            var callArgs = new object[argv.Length];
-            callArgs[0] = ScriptBlock.Create(PsBuild.BuiltinAsSourceScript(argv[0]));
-            for (int k = 1; k < argv.Length; k++) callArgs[k] = argv[k];
-            // Dot-sourced: the caller's scope, as the literal builtin runs (`command eval 'x=1'` sets x there). 2>&1 and
-            // re-written: the nested script's error stream is not this cmdlet's, so `command . 2>/dev/null` printed anyway.
-            const string asSource = "$__psbash_cr = $args[0]; $__psbash_ca = @($args | Select-Object -Skip 1); ";
-            var runner = ScriptBlock.Create(asSource + (_stdin.Count > 0 ? "$input | " : "") + ". $__psbash_cr @__psbash_ca 2>&1");
-            foreach (var o in InvokeCommand.InvokeScript(false, runner, _stdin.Count > 0 ? _stdin : null, callArgs))
-            {
-                if (o?.BaseObject is ErrorRecord er) FileSystemHelpers.WriteErrorRecord(this, er);
-                else WriteObject(o);
-            }
-            FileSystemHelpers.AdoptLastExitCode(this);
-            return;
-        }
-        var name = argv[0];
-        // `command :`, `command false`, a bare `command builtin`: Resolve-BashCommand's own trivial blocks
-        // (BashBuiltins.CallStackBuiltins); there is no command of that name to find.
-        if (name is ":" or "true" or "builtin") { FileSystemHelpers.SetLastExitCode(this, 0); return; }
-        if (name == "false") { FileSystemHelpers.SetLastExitCode(this, 1); return; }
-        CommandInfo? target = null;
-        try
-        {
-            // A builtin is its run-time command first (`command bind`, `command enable -n x`): Invoke-Bash<Name>, a cmdlet
-            // or a module function, which the bare name finds only when an alias maps it (BashBuiltins, the one table).
-            var found = InvokeCommand.InvokeScript(
-                "param($n, $b) if ($b) { $f = Get-Command ('Invoke-Bash' + [WildcardPattern]::Escape($n)) -CommandType Cmdlet,Function " +
-                "-ErrorAction SilentlyContinue | Select-Object -First 1; if ($f) { return $f } }; " +
-                "Get-Command ([WildcardPattern]::Escape($n)) -CommandType Alias,Cmdlet,Application,ExternalScript " +
-                "-ErrorAction SilentlyContinue | Select-Object -First 1", name, BashBuiltins.Names.Contains(name) && name != "[");
-            foreach (var r in found)
-            {
-                if (r?.BaseObject is CommandInfo ci) { target = ci; break; }
-            }
-        }
-        catch (Exception ex)
-        {
-            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-        }
-
-        if (target == null)
-        {
-            FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + $"{name}: command not found");
-            FileSystemHelpers.SetLastExitCode(this, 127);
-            return;
-        }
-
-        // A program file the OS cannot start as it is (`command ./configure`, a #! script on PATH): Get-Command hands
-        // back the raw ApplicationInfo, so the lookup hook's stand-in never applied; ProgramFile gives the same one.
-        object invokeTarget = target;
-        if (target is ApplicationInfo file && PsBash.Core.ProgramFile.Plan(file.Path) is { } launch)
-            invokeTarget = ScriptBlock.Create(launch.StandInScript(PsBash.Core.ProgramFile.Shown(name, file.Path)));
-
-        // `command prog 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4). In a
-        // background job always through RunMerged: `& $c` would give it the process environment, not the job's scalars.
-        if (invokeTarget is ApplicationInfo app && !InvokeBashNativeCommand.IsBatchFile(app.Path)
-            && (StderrMerge.JoinsStdout(this) || PsBash.Core.ScalarOverlay.Current is not null))
-        {
-            try
-            {
-                FileSystemHelpers.SetLastExitCode(this, InvokeBashNativeCommand.RunMerged(this, app.Path, argv.Skip(1),
-                    inheritStdin: true, input: _stdin.Count > 0 ? _stdin : null));
-            }
-            catch (Exception ex)
-            {
-                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                FileSystemHelpers.WriteBashError(this, $"command: {name}: {ex.Message}");
-            }
-            return;
-        }
-
-        // Fixed body: $args[0] is the resolved command, the rest is splatted. No user text is ever
-        // part of the script.
-        const string prologue =
-            "$c = $args[0]; $rest = @(); " +
-            "if ($args.Count -gt 1) { $rest = $args[1..($args.Count - 1)] }; ";
-        // With upstream input the inner command must be fed it explicitly (`$input` is the list
-        // handed to InvokeScript); without, it inherits the caller's stdin untouched.
-        // `[` is called by that name, spelled in the call: Invoke-BashTest knows its bracket form (the closing `]`)
-        // from the text it was invoked by, and `& $c` reached it as plain `test` ("too many arguments").
-        // 2>&1: the nested script's error stream is not this cmdlet's, so `command ls /x 2>/dev/null` printed the error
-        // anyway; merged here, each ErrorRecord is re-written on this command's error stream below.
-        string call = (name == "[" ? "& '[' @rest" : "& $c @rest") + " 2>&1";
-        var invokeBody = _stdin.Count > 0 ? prologue + "$input | " + call : prologue + call;
-        var invokeArgs = new object[argv.Length];
-        invokeArgs[0] = invokeTarget;
-        for (int k = 1; k < argv.Length; k++) invokeArgs[k] = argv[k];
-
-        // A program is fed the records' BYTES, as a pipe into it is (ConvertTo-BashNativeStdin): PowerShell's native
-        // pipe formats any other object, so `printf 'a\n' | command cat` gave cat a BashText table.
-        var stdin = invokeTarget is ApplicationInfo ? NativeStdinBytes(_stdin) : _stdin;
-
-        try
-        {
-            var output = _stdin.Count > 0
-                ? InvokeCommand.InvokeScript(invokeBody, false, PipelineResultTypes.None, stdin, invokeArgs)
-                : InvokeCommand.InvokeScript(invokeBody, invokeArgs);
-            foreach (var item in output)
-            {
-                if (item?.BaseObject is ErrorRecord er) FileSystemHelpers.WriteErrorRecord(this, er);
-                else WriteObject(item);
-            }
-            FileSystemHelpers.AdoptLastExitCode(this);
-        }
-        catch (Exception ex)
-        {
-            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            FileSystemHelpers.WriteBashError(this, $"command: {name}: {ex.Message}");
-        }
-    }
+        FileSystemHelpers.WriteBashError(cmdlet, ShellDiagnostic.Prefix(cmdlet.SessionState) + $"{name}: command not found");
+        FileSystemHelpers.SetLastExitCode(cmdlet, 127);
+    }, ShellBuiltins: true);
 
     /// <summary>
     /// Look up <paramref name="name"/> via <c>Get-Command</c>. The lookup is

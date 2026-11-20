@@ -62,8 +62,10 @@ repeated here, under their area. Check both pages before you report a bug.
   Spec: `environment-model.md` §7.
 - **`.cmd` and `.bat` in a background job** get the host process environment in place of the
   job's copy.
-- **Foreground `nohup CMD` returns 0 at once.** GNU nohup waits and returns CMD's status.
-  `nohup CMD &` is unaffected.
+- **Foreground `nohup CMD` to a pipe runs CMD in this shell's process tree.** It waits and returns
+  CMD's status as GNU nohup does, but when its stdout is a pipe or a capture (`nohup CMD | cat`,
+  `$(nohup CMD)`) CMD is not detached, so closing the session ends it. Redirect its output
+  (`nohup CMD > log`) or use `nohup CMD &` for a command that must outlive the session.
 - **A nested shell is slow to start.** Each `bash -c`, `sh -c` and `#!` shell script runs in a
   ps-bash of its own: about 1 s on a warm host, more for the first one on a cold host. A loop
   that starts hundreds takes minutes. Spec: `executor-slots.md` §5.

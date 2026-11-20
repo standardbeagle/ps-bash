@@ -48,8 +48,8 @@ public class ScriptFileExecutionDifferentialTests
     public Task Command_ScriptFile_RunsLikeBash(string command) => Eq(command);
 
     // `nohup CMD >log 2>&1 &` returns before its child finishes: wait (bounded) for the line the script writes. The
-    // file then holds exactly that output, compared in the tree snapshot. (A foreground `nohup CMD` is a separate,
-    // older difference: GNU waits for CMD and returns its status, ps-bash's nohup always detaches and returns 0.)
+    // file then holds exactly that output, compared in the tree snapshot. A foreground `nohup CMD` waits for CMD and
+    // returns its status, as GNU's does (WrapperCommandDifferentialTests).
     [SkippableTheory]
     [InlineData("nohup ./d/hello n >out 2>&1 </dev/null & "
         + "i=0; until grep -q args out 2>/dev/null || [ $i -ge 400 ]; do sleep 0.1; i=$((i+1)); done; cat out")]

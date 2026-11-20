@@ -176,14 +176,25 @@ public class NativeStdioBytesTests
             $"stdout='{stdout}' exit={r.ExitCode} wallMs={r.WallMs}\n--- stderr ---\n{r.Stderr}");
     }
 
-    // Not the stdin bytes: each of these wrappers is broken in ps-bash for its own reason today (env/nohup do not run
-    // a command, `time` and `bash -c` reject piped input, timeout resolves to Windows timeout.exe, `eval` runs its
-    // text without the converter). Kept as an executable list of the gaps; remove Skip as each is fixed.
-    [SkippableTheory(Skip = "known gap: wrapper commands do not forward stdin to a native program")]
+    // A wrapper that runs its command by name hands it the pipe as bytes (InnerCommand, the one runner): env bound the
+    // records and dropped them, flock rejected them, nohup detached with no stdin.
+    [SkippableTheory]
     [InlineData("printf 'a\\nb\\n' | env {R}", "a\nb\n")]
+    [InlineData("printf 'a\\nb\\n' | env FOO=1 {R}", "a\nb\n")]
     [InlineData("printf 'a\\nb\\n' | command {R}", "a\nb\n")]
-    [InlineData("printf 'a\\nb\\n' | timeout 60 {R}", "a\nb\n")]
     [InlineData("printf 'a\\nb\\n' | nohup {R}", "a\nb\n")]
+    [InlineData("printf 'a\\nb\\n' | flock nsb.lock {R}", "a\nb\n")]
+    public async Task NativeStdin_ThroughRunByNameWrappers_IsExactBytes(string template, string expectedLatin1)
+    {
+        var got = await RunAsync("cd \"$(mktemp -d)\" || exit; " + template.Replace("{R}", R));
+        Assert.Contains(Dump(expectedLatin1), got);
+    }
+
+    // Not the stdin bytes: each of these wrappers is broken in ps-bash for its own reason today (`time` and `bash -c`
+    // reject piped input, timeout resolves to Windows timeout.exe, `eval` runs its text without the converter). Kept as
+    // an executable list of the gaps; remove Skip as each is fixed.
+    [SkippableTheory(Skip = "known gap: wrapper commands do not forward stdin to a native program")]
+    [InlineData("printf 'a\\nb\\n' | timeout 60 {R}", "a\nb\n")]
     [InlineData("printf 'a\\nb\\n' | time {R}", "a\nb\n")]
     [InlineData("eval '{R}' <<< hi", "hi\n")]
     [InlineData("bash -c '{R}' <<< hi", "hi\n")]

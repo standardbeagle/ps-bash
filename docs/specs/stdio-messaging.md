@@ -156,10 +156,10 @@ alias, a split-again stage, a Windows `.cmd`/`.bat`) runs unchanged as a steppab
 |---|---|
 | nested `bash`/`sh` (`-c`, script, program on stdin) | `InvokeBashBashCommand` → `StartChildProcessStreaming(mode)` |
 | program run directly, incl. in `$( )`, groups, subshells, loops, `|&` stages | `Invoke-BashNative` |
-| `env`, `command`, `xargs`, `find -exec/-ok`, `time`, `flock` | `InvokeBashNativeCommand.MergedProgramPath` + `RunMerged` (under `Redirected`: one pipe when `JoinsStdout`, else stderr through the cmdlet's error stream so `2>f` reaches the file; PowerShell's nested `& $c` wrote it straight to the host's stderr) |
+| `env`, `command`, `flock`, foreground `nohup` (`InnerCommand`), `xargs`, `find -exec/-ok`, `time` | `InvokeBashNativeCommand.MergedProgramPath` + `RunMerged` (under `Redirected`: one pipe when `JoinsStdout`, else stderr through the cmdlet's error stream so `2>f` reaches the file; PowerShell's nested `& $c` wrote it straight to the host's stderr) |
 | `timeout` | runs the command line with `2>&1` appended, so its program goes through `Invoke-BashNative`; under `2>f` the nested pipeline's errors are merged back (`MergeMyResults`) and re-written on the cmdlet's error stream |
 | awk `system()`, `print \| "cmd"` | `AwkShell` passes `ChildStdioMode` from awk's own merge state |
-| `nohup` | `DetachedProcess`: fd 1 and fd 2 are already one file handle |
+| `nohup` to a file, `nohup x &` | `DetachedProcess`: fd 1 and fd 2 are already one file handle |
 
 Not merge sites (the child's output is data, not passed through): awk `cmd | getline`, sed `e`, the psgit / psav
 wrappers, `traceroute`, `stat`/`id`/`ps` probes. They still start through `ChildStdio` (§4.6). Interactive `less`

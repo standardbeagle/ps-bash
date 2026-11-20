@@ -1136,9 +1136,9 @@ public static partial class PsEmitter
         Command.BraceGroup braceGroup => EmitCompoundBody(braceGroup.Redirects, () => EmitBraceGroup(braceGroup)),
         Command.ShFunction func => EmitFunction(func),
         // `nohup CMD &` detaches itself and returns at once: no host job, so `&` adds nothing (and would hide the real $!).
-        Command.Background { Inner: Command.Simple nohupBg } when IsNohup(nohupBg) => EmitSimpleFed(RewriteNohup(nohupBg)),
+        Command.Background { Inner: Command.Simple nohupBg } when IsNohup(nohupBg) => EmitSimpleFed(RewriteNohup(nohupBg, background: true)),
         Command.Background bg => EmitBackground(bg),
-        Command.Simple simple => EmitSimpleFed(IsNohup(simple) ? RewriteNohup(simple) : simple),
+        Command.Simple simple => EmitSimpleFed(IsNohup(simple) ? RewriteNohup(simple, background: false) : simple),
         Command.Pipeline pipeline => EmitPipeline(pipeline),
         Command.AndOrList andOr => EmitAndOrList(andOr),
         Command.ShAssignment assign => EmitShAssignmentStatement(assign),
@@ -2931,11 +2931,14 @@ public static partial class PsEmitter
     /// A redirect on <c>nohup CMD</c> is meant for CMD, but CMD runs detached in another process, where a host-side
     /// redirect never reaches it. The stdout/stderr file redirects move into leading private flags of
     /// <c>Invoke-BashNohup</c> (<c>--psbash-out FILE [--psbash-append] [--psbash-err FILE|&amp;1]</c>), which opens them for the child.
+    /// <c>nohup CMD &amp;</c> leads with <c>--psbash-bg</c>: only then does nohup return before CMD ends (a foreground
+    /// <c>nohup CMD</c> waits and takes CMD's status, which is also what an unmarked <c>Invoke-BashNohup</c> does).
     /// </summary>
-    private static Command.Simple RewriteNohup(Command.Simple s)
+    private static Command.Simple RewriteNohup(Command.Simple s, bool background)
     {
         var keep = ImmutableArray.CreateBuilder<Redirect>();
         var lead = new List<CompoundWord>();
+        if (background) lead.Add(LiteralWord("--psbash-bg"));
         CompoundWord? outTarget = null; bool append = false; CompoundWord? errTarget = null; bool errToOut = false;
         foreach (var r in s.Redirects)
         {
@@ -2953,7 +2956,8 @@ public static partial class PsEmitter
             else if (errTarget is not null) { lead.Add(LiteralWord("--psbash-err")); lead.Add(errTarget); }
         }
         else keep.AddRange(s.Redirects.Where(r => r.Fd == 1 || r.Fd == 2 || r.Op is "&>" or "&>>")); // stderr-only redirects keep the old behaviour
-        if (outTarget is null) return s;
+        if (outTarget is null && !background) return s;
+        if (outTarget is null) keep = s.Redirects.ToBuilder();
         var words = ImmutableArray.CreateBuilder<CompoundWord>();
         words.Add(s.Words[0]); words.AddRange(lead); for (int i = 1; i < s.Words.Length; i++) words.Add(s.Words[i]);
         return s with { Words = words.ToImmutable(), Redirects = keep.ToImmutable() };
@@ -6834,7 +6838,7 @@ public static partial class PsEmitter
     /// A special form's text with the command's redirect tail. A statement list (`cd`, `eval`) is grouped as `. { ... }`
     /// first, so the tail covers every statement and side effects stay in the caller's scope; a single command (`read`)
     /// takes the tail itself. Grouped, `Invoke-BashCat f | . { Invoke-BashRead w } 2>$null` read nothing: the group does
-    /// not hand its pipe to the command inside (`read w < f 2>/dev/null` was status 1 with w empty).
+    /// not hand its pipe to the command inside (`read w &lt; f 2>/dev/null` was status 1 with w empty).
     /// </summary>
     private static string WithRedirectTailOn(string emitted, ImmutableArray<Redirect> redirects)
     {

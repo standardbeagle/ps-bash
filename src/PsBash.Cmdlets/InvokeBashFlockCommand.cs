@@ -22,6 +22,19 @@ public sealed class InvokeBashFlockCommand : BashCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>The pipe into flock: the command's stdin (<c>echo x | flock f cat</c>). Without a pipeline parameter the
+    /// binder REJECTED the records ("The input object cannot be bound").</summary>
+    [Parameter(ValueFromPipeline = true)]
+    [AllowNull]
+    public PSObject? InputObject { get; set; }
+
+    private readonly List<object> _stdin = new();
+
+    protected override void ProcessRecord()
+    {
+        if (InputObject is not null) _stdin.Add(InputObject);
+    }
+
     protected override void EndProcessing()
     {
         var a = Arguments ?? Array.Empty<string>();
@@ -60,13 +73,11 @@ public sealed class InvokeBashFlockCommand : BashCmdlet
         using (lockFile)
         {
             if (o.CommandString is not null)
-                Run("param($s) & ([scriptblock]::Create($s))", Transpile(o.CommandString));
-            // `flock f prog 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4).
-            else if (o.Command.Length > 0 && InvokeBashNativeCommand.MergedProgramPath(this, o.Command[0]) is { } program)
-                FileSystemHelpers.SetLastExitCode(this,
-                    InvokeBashNativeCommand.RunMerged(this, program, o.Command[1..], inheritStdin: true));
+                RunString(Transpile(o.CommandString));
+            // The shared runner: the pipe is the command's stdin, its errors go where flock's do (`2>/dev/null`), a program
+            // under `2>&1` gets one pipe for both streams.
             else if (o.Command.Length > 0)
-                Run("param($c,$a) & $c @a", o.Command[0], o.Command[1..]);
+                InnerCommand.Run(this, FlockWrapper, o.Command, _stdin);
             else
             {
                 FileSystemHelpers.WriteStderr(this, "flock: requires a command to run");
@@ -82,18 +93,25 @@ public sealed class InvokeBashFlockCommand : BashCmdlet
         catch (Exception) { return bash; }
     }
 
-    private void Run(string script, params object[] args)
+    /// <summary>util-linux: a command nothing answers to is <c>flock: failed to execute X: No such file or directory</c>, 69
+    /// (EX_UNAVAILABLE: its exec failed; it was 127, a shell's status).</summary>
+    private static readonly InnerCommand.Wrapper FlockWrapper = new("flock", static (cmdlet, name) =>
     {
-        try
+        FileSystemHelpers.WriteStderr(cmdlet, $"flock: failed to execute {name}: No such file or directory");
+        FileSystemHelpers.SetLastExitCode(cmdlet, 69);
+    }, ShellBuiltins: false);
+
+    /// <summary>The <c>-c</c> string (<c>sh -c</c> in util-linux), fed the pipe; its errors re-written on flock's stream
+    /// (<c>2&gt;&amp;1</c>), so flock's redirect covers them, as <see cref="InnerCommand"/> does for a command.</summary>
+    private void RunString(string script)
+    {
+        var body = ScriptBlock.Create((_stdin.Count > 0 ? "$input | " : "") + "& ([scriptblock]::Create($args[0]))" + InnerCommand.ErrorCapture(this));
+        foreach (var r in InvokeCommand.InvokeScript(false, body, _stdin.Count > 0 ? _stdin : null, script))
         {
-            foreach (var r in InvokeCommand.InvokeScript(script, args)) WriteObject(r);
-            FileSystemHelpers.AdoptLastExitCode(this);
+            if (r?.BaseObject is ErrorRecord er) FileSystemHelpers.WriteErrorRecord(this, er);
+            else WriteObject(r);
         }
-        catch (CommandNotFoundException ex)
-        {
-            FileSystemHelpers.WriteStderr(this, $"flock: failed to execute {ex.CommandName}: No such file or directory");
-            FileSystemHelpers.SetLastExitCode(this, 127);
-        }
+        FileSystemHelpers.AdoptLastExitCode(this);
     }
 
     /// <summary>Opens the lock file with a share mode that makes the open itself the lock; null when not acquired in time.</summary>

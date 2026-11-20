@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 327
+stdout-length: 30
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; env sh -c 'echo out; echo err >&2' 2>/dev/null; echo "rc=$?"; command sh -c 'echo out; echo err >&2' 2>/dev/null | cat; echo "rc=$?"; flock lk sh -c 'echo err >&2; exit 4' 2>/dev/null; echo "rc=$?"; echo x | env sh -c 'cat; echo e >&2' 2>&1 | cat; env sh -c 'echo e2 >&2' 2>&1 >/dev/null | grep -x e2
+==== STDOUT ====
+out
+rc=0
+out
+rc=0
+rc=4
+x
+e
+e2
+
+==== STDERR ====
+

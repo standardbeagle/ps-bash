@@ -27,11 +27,19 @@ public static class DetachedProcess
     /// <param name="append">Append to <paramref name="outPath"/> instead of truncating it.</param>
     /// <param name="errPath">File that receives stderr; null shares <paramref name="outPath"/>.</param>
     public static int Spawn(string exe, IReadOnlyList<string> args, string workingDirectory, string outPath, bool append, string? errPath)
+    {
+        using var child = SpawnChild(exe, args, workingDirectory, outPath, append, errPath);
+        return child.Pid;
+    }
+
+    /// <summary>As <see cref="Spawn"/>, keeping hold of the process so a foreground <c>nohup CMD</c> can wait for its
+    /// status (<see cref="DetachedChild.Wait"/>). Disposing the result lets go of it; the process keeps running.</summary>
+    public static DetachedChild SpawnChild(string exe, IReadOnlyList<string> args, string workingDirectory, string outPath, bool append, string? errPath)
         => OperatingSystem.IsWindows()
             ? StartWindows(exe, args, workingDirectory, outPath, append, errPath)
             : StartUnix(exe, args, workingDirectory, outPath, append, errPath);
 
-    private static int StartUnix(string exe, IReadOnlyList<string> args, string cwd, string outPath, bool append, string? errPath)
+    private static DetachedChild StartUnix(string exe, IReadOnlyList<string> args, string cwd, string outPath, bool append, string? errPath)
     {
         var psi = new ProcessStartInfo(PsBash.Core.Platform.SystemTools.PosixShell) { WorkingDirectory = cwd, UseShellExecute = false };
         var op = append ? ">>" : ">";
@@ -45,8 +53,8 @@ public static class DetachedProcess
         psi.Environment["OUT"] = outPath;
         if (!string.IsNullOrEmpty(errPath)) psi.Environment["ERR"] = errPath;
         BashVariableStore.ApplyTo(psi); // the exported variables only
-        using var p = Process.Start(psi) ?? throw new InvalidOperationException("could not start " + exe);
-        return p.Id;
+        var p = Process.Start(psi) ?? throw new InvalidOperationException("could not start " + exe);
+        return new DetachedChild(p.Id, p, IntPtr.Zero);
     }
 
     // ---- Windows ----
@@ -94,7 +102,53 @@ public static class DetachedProcess
     [DllImport("kernel32.dll")]
     private static extern bool CloseHandle(IntPtr h);
 
-    private static int StartWindows(string exe, IReadOnlyList<string> args, string cwd, string outPath, bool append, string? errPath)
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
+
+    /// <summary>A started detached process, held only to learn its status: <see cref="Wait"/> never kills it.</summary>
+    public sealed class DetachedChild : IDisposable
+    {
+        private readonly Process? _unix;
+        private IntPtr _process;
+
+        internal DetachedChild(int pid, Process? unix, IntPtr process) { Pid = pid; _unix = unix; _process = process; }
+
+        /// <summary>The OS process id (<c>$!</c>).</summary>
+        public int Pid { get; }
+
+        /// <summary>
+        /// Waits for the process to exit and returns its status, or null once <paramref name="stop"/> is signalled first
+        /// (Ctrl+C, a dropped client). The process is NOT stopped then: it was started not to die with this shell.
+        /// </summary>
+        public int? Wait(CancellationToken stop)
+        {
+            const int Slice = 100;
+            while (!stop.IsCancellationRequested)
+            {
+                if (_unix is not null)
+                {
+                    if (_unix.WaitForExit(Slice)) return _unix.ExitCode;
+                }
+                else if (_process != IntPtr.Zero)
+                {
+                    if (WaitForSingleObject(_process, Slice) == 0)
+                        return GetExitCodeProcess(_process, out var code) ? unchecked((int)code) : 1;
+                }
+                else return null;
+            }
+            return null;
+        }
+
+        public void Dispose()
+        {
+            _unix?.Dispose();
+            if (_process != IntPtr.Zero) { CloseHandle(_process); _process = IntPtr.Zero; }
+        }
+    }
+    private static DetachedChild StartWindows(string exe, IReadOnlyList<string> args, string cwd, string outPath, bool append, string? errPath)
     {
         var cmd = new StringBuilder();
         AppendQuoted(cmd, exe);
@@ -143,7 +197,9 @@ public static class DetachedProcess
             if (!CreateProcessW(null, new StringBuilder(cmd.ToString()), IntPtr.Zero, IntPtr.Zero, true, baseFlags | BreakawayFromJob, envBlock, cwd, ref si, out pi)
                 && !CreateProcessW(null, new StringBuilder(cmd.ToString()), IntPtr.Zero, IntPtr.Zero, true, baseFlags, envBlock, cwd, ref si, out pi))
                 throw Failure($"CreateProcess '{exe}'");
-            return pi.dwProcessId;
+            var child = new DetachedChild(pi.dwProcessId, null, pi.hProcess);
+            pi.hProcess = IntPtr.Zero; // the child owns it now
+            return child;
         }
         finally
         {

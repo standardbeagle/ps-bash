@@ -36,7 +36,12 @@ public static class StderrMerge
         {
             // The stage the merged stream feeds may split it again.
             if (output is null || a.Downstream.GetValue(output) is not { } processor) return true;
-            return a.Command.GetValue(processor) is not InvokeBashRedirectCommand redirect || redirect.KeepsStderrWithStdout();
+            return a.Command.GetValue(processor) switch
+            {
+                InvokeBashRedirectCommand redirect => redirect.KeepsStderrWithStdout(),
+                InvokeBashKeepStderrCommand => false,
+                _ => true,
+            };
         }
         catch (Exception)
         {

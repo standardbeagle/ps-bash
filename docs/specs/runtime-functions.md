@@ -434,6 +434,32 @@ foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
 `Resolve-BashGlob` expands `*` and `?` patterns and resolves relative paths against
 PowerShell's `$PWD`.
 
+### Wrapper commands (a command that runs a command by name)
+
+INVARIANT: `command`, `env`, `flock` and a foreground `nohup` run NAME ARGS through ONE runner,
+`Cmdlets/InnerCommand.cs` (`InnerCommand.Run`), so NAME sees what bash gives it:
+- its stdin is the wrapper's pipe (`echo x | env FOO=1 cat` prints x). The wrapper declares a pipeline
+  parameter and collects the records; a program gets their bytes;
+- its errors are re-written on the wrapper's error stream, so the wrapper's redirect covers them
+  (`env ls /x 2>/dev/null` is silent and 2). The nested capture is `InnerCommand.ErrorCapture`: a bare
+  PowerShell `2>&1` told a spawning command (`sh -c`) that its stderr was merged into stdout, so the
+  child's stderr came back as stdout. `Invoke-BashKeepStderr` marks a capture that is not a merge
+  (`StderrMerge.JoinsStdout`); a real merge (`env sh -c … 2>&1`) stays one pipe;
+- its status is the wrapper's; a name nothing answers to is the wrapper's own message (`command`:
+  `NAME: command not found`, `env`: `env: ‘NAME’: No such file or directory`, `nohup`: `failed to
+  run command`), 127; `flock`'s `failed to execute` is 69 (util-linux EX_UNAVAILABLE). Only `command`/`builtin` run a builtin the emitter
+  implements (`cd`, `eval`).
+
+`nohup CMD &` (the emitter's `--psbash-bg`) detaches CMD and returns at once. A foreground `nohup CMD`
+waits and returns CMD's status: with its output redirected (or stdout a terminal: `nohup.out`) CMD
+still runs detached and nohup waits for it; with stdout a pipe or a capture (`nohup CMD | cat`,
+`$(nohup CMD)`) CMD runs in place through the runner and no `nohup.out` is made, as GNU nohup leaves
+a non-terminal stdout alone. A builtin or `sh` that nohup detaches runs in a fresh ps-bash of THIS
+build (`InvokeBashBashCommand.ResolvePsBashExecutable`), never a PATH hit: an installed build judged
+the running host stale and retired it mid-command. Guard `Core.Tests/InnerCommandGuardTests` (no `& $c @` script outside
+the runner but inventoried `time`/`xargs`; every caller takes pipeline input; no bare capture
+`2>&1`); oracle `Differential.Tests/WrapperCommandDifferentialTests`, `NativeStdioBytesTests`.
+
 ## Shared argument parser (`PsBash.Cmdlets.Args`)
 
 The ordered getopt-style parser that replaces per-cmdlet hand scans. Pure and AOT-safe (no

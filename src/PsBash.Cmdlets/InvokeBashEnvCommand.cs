@@ -34,17 +34,22 @@ public sealed class InvokeBashEnvCommand : BashCmdlet
     [Parameter] public SwitchParameter i { get; set; }
 
     /// <summary>
-    /// Stdin sink. <c>env</c> ignores its standard input, but a cmdlet that declares no pipeline parameter
-    /// REJECTS piped records ("The input object cannot be bound"), so <c>echo x | FOO=1 env | grep FOO</c>
-    /// failed. The records are bound here and dropped.
+    /// The pipe into <c>env</c>: the COMMAND's stdin (<c>echo x | env FOO=1 cat</c> prints x). A cmdlet that declares no
+    /// pipeline parameter REJECTS piped records ("The input object cannot be bound"); they were bound here and dropped,
+    /// so the command read nothing. <c>env</c> alone (the listing) ignores them.
     /// </summary>
     [Parameter(ValueFromPipeline = true)]
     [System.Management.Automation.AllowNull]
     public PSObject? InputObject { get; set; }
 
+    private readonly List<object> _stdin = new();
+
     // The work runs ONCE, in EndProcessing: with a pipeline parameter PowerShell calls ProcessRecord per
     // input record, and not at all when the upstream stage produced nothing.
-    protected override void ProcessRecord() { }
+    protected override void ProcessRecord()
+    {
+        if (InputObject is not null) _stdin.Add(InputObject);
+    }
 
     protected override void EndProcessing()
     {
@@ -223,27 +228,9 @@ public sealed class InvokeBashEnvCommand : BashCmdlet
                 return;
             }
 
-            // `env X=1 prog 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4).
-            if (InvokeBashNativeCommand.MergedProgramPath(this, cmdName) is { } program)
-            {
-                FileSystemHelpers.SetLastExitCode(this,
-                    InvokeBashNativeCommand.RunMerged(this, program, cmdArgs, inheritStdin: true));
-                return;
-            }
-
-            try
-            {
-                foreach (var r in InvokeCommand.InvokeScript("param($c,$a) & $c @a", cmdName, cmdArgs))
-                {
-                    WriteObject(r);
-                }
-                FileSystemHelpers.AdoptLastExitCode(this);
-            }
-            catch (CommandNotFoundException)
-            {
-                FileSystemHelpers.WriteBashError(this, $"env: {GnuQuote.Locale(cmdName)}: No such file or directory");
-                FileSystemHelpers.SetLastExitCode(this, 127);
-            }
+            // The shared runner: the pipe is the command's stdin, its errors go where env's do (`2>/dev/null`), a program
+            // under `2>&1` gets one pipe for both streams.
+            InnerCommand.Run(this, EnvWrapper, [cmdName, .. cmdArgs], _stdin);
         }
         finally
         {
@@ -258,6 +245,13 @@ public sealed class InvokeBashEnvCommand : BashCmdlet
         }
     }
 
+    /// <summary>GNU env: a name no program answers to is <c>env: ‘X’: No such file or directory</c>, 127; env runs
+    /// programs, never a builtin the emitter implements.</summary>
+    private static readonly InnerCommand.Wrapper EnvWrapper = new("env", static (cmdlet, name) =>
+    {
+        FileSystemHelpers.WriteBashError(cmdlet, $"env: {GnuQuote.Locale(name)}: No such file or directory");
+        FileSystemHelpers.SetLastExitCode(cmdlet, 127);
+    }, ShellBuiltins: false);
     /// <summary>
     /// Why <paramref name="name"/> cannot run as a program (execvp's answer), or null: a path naming a directory
     /// is 126 "Permission denied", a missing path or a name no command answers to is 127.

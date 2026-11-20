@@ -1028,6 +1028,15 @@ internal static class FileSystemHelpers
         && !BashRuntime.IsHostConfigTruthy(StdinLineSource.NoTtyEnvVar);
 
     /// <summary>
+    /// Is this command's stdout "a terminal" (<c>isatty(1)</c>)? The host's own stdout is always a pipe, so the signal is
+    /// the launcher's PTY hand-off (<c>PSBASH_PTY_ATTACHED</c>), and only for the LAST stage of the pipeline (a stage
+    /// feeding another writes to a pipe). Known limit: a command substitution's last stage under a PTY still counts.
+    /// </summary>
+    internal static bool StdoutIsTerminal(PSCmdlet cmdlet) =>
+        BashRuntime.IsHostConfigTruthy("PSBASH_PTY_ATTACHED")
+        && cmdlet.MyInvocation.PipelinePosition >= cmdlet.MyInvocation.PipelineLength;
+
+    /// <summary>
     /// True when <paramref name="path"/> is a device a command can read from or stat without a file behind it
     /// (<see cref="DevicePath"/>; everything but an unopened <c>/dev/fd/N</c>): the existence pre-checks treat it as
     /// present instead of reporting "No such file or directory" for <c>C:\dev\zero</c>.
