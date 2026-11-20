@@ -62,9 +62,10 @@ public sealed class InvokeBashTimeoutCommand : BashCmdlet
         {
             string line = string.Join(" ", o.Command.Select(ShellQuote));
             if (joined) line += " 2>&1";
-            // Piped-in text becomes the command's stdin as a here-string (which adds the final newline itself).
+            // Piped-in bytes become the command's stdin, exactly: a pipe from `printf %s` (a record without a final
+            // newline stays one; a here-string added "\n", so `printf a | timeout 5 wc -c` counted 2).
             if (_stdin is { Length: > 0 })
-                line += " <<< " + ShellQuote(_stdin.ToString().EndsWith('\n') ? _stdin.ToString(0, _stdin.Length - 1) : _stdin.ToString());
+                line = "printf '%s' " + ShellQuote(_stdin.ToString()) + " | " + line;
             script = PsBash.Core.Transpiler.BashTranspiler.Transpile(line, PsBash.Core.Transpiler.TranspileContext.Eval) ?? "";
         }
         catch (Exception ex)

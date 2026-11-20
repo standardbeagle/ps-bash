@@ -1,0 +1,24 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 395
+stdout-length: 40
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; echo y | time cat 2>/dev/null; echo "rc=$?"; echo w | time sh -c 'read l; echo got $l; exit 2' 2>/dev/null; echo "rc=$?"; printf a | time wc -c 2>/dev/null; printf a | timeout 5 wc -c; printf 'a\n\n' | timeout 5 wc -l; printf 'q\n' | timeout 5 sh -c 'cat; exit 3'; echo "rc=$?"; echo u | command time cat 2>/dev/null; echo v | env time -p cat 2>/dev/null; echo "rc=$?"
+==== STDOUT ====
+y
+rc=0
+got w
+rc=2
+1
+1
+2
+q
+rc=3
+u
+v
+rc=0
+
+==== STDERR ====
+

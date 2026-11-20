@@ -35,6 +35,17 @@ public class WrapperCommandDifferentialTests
             + "flock lk sh -c 'echo err >&2; exit 4' 2>/dev/null; echo \"rc=$?\"; "
             + "echo x | env sh -c 'cat; echo e >&2' 2>&1 | cat; env sh -c 'echo e2 >&2' 2>&1 >/dev/null | grep -x e2");
 
+    // Class: a command a cmdlet runs by name gets the cmdlet's pipe, byte for byte. `echo y | time cat` (GNU time, not the
+    // keyword: it is not first in the pipeline) printed nothing - Invoke-BashTime had no pipeline parameter, so the records
+    // went nowhere - and timeout fed its pipe as a here-string, which ends it with a newline (`printf a | timeout 5 wc -c`
+    // counted 2). Primitive: the runner feeds the records (a program gets ConvertTo-BashNativeStdin's bytes); guard
+    // InnerCommandGuardTests.EveryCommandRunner_TakesPipelineInput.
+    [SkippableFact]
+    public Task TimeAndTimeout_FeedTheirPipe_ByteForByte()
+        => Eq("cd \"$(mktemp -d)\" || exit; echo y | time cat 2>/dev/null; echo \"rc=$?\"; "
+            + "echo w | time sh -c 'read l; echo got $l; exit 2' 2>/dev/null; echo \"rc=$?\"; printf a | time wc -c 2>/dev/null; "
+            + "printf a | timeout 5 wc -c; printf 'a\\n\\n' | timeout 5 wc -l; printf 'q\\n' | timeout 5 sh -c 'cat; exit 3'; echo \"rc=$?\"; "
+            + "echo u | command time cat 2>/dev/null; echo v | env time -p cat 2>/dev/null; echo \"rc=$?\"");
     // Class: nohup always detached and returned 0 at once, so a foreground `nohup CMD` lost CMD's status and output
     // (`x=$(nohup echo hi)` was empty and a nohup.out appeared). Primitive: only `nohup CMD &` detaches (the emitter's
     // --psbash-bg); a foreground one waits for CMD, and with stdout neither a terminal nor redirected runs it in place

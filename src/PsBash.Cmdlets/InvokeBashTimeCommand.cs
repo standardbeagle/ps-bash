@@ -45,7 +45,24 @@ public sealed class InvokeBashTimeCommand : BashCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>
+    /// The pipe into <c>time</c>: the COMMAND's stdin (<c>echo x | time cat</c> prints x; GNU time hands its stdin to
+    /// the command). Without a pipeline parameter PowerShell gave the records nowhere to go and the command read
+    /// nothing. They are collected and fed to the command when it runs, in <see cref="EndProcessing"/>.
+    /// </summary>
+    [Parameter(ValueFromPipeline = true)]
+    [AllowNull]
+    public PSObject? InputObject { get; set; }
+
+    private readonly List<object> _stdin = new();
+
     protected override void ProcessRecord()
+    {
+        if (InputObject is not null) _stdin.Add(InputObject);
+    }
+
+    // Once, after the input: with a pipeline parameter PowerShell calls ProcessRecord per record.
+    protected override void EndProcessing()
     {
         var args = Arguments ?? Array.Empty<string>();
 
@@ -93,10 +110,17 @@ public sealed class InvokeBashTimeCommand : BashCmdlet
         // Fixed script body: $args[0] is the command name, the rest are
         // bound positionally and splatted. The body never embeds any user
         // input as PS code.
-        const string invokeBody =
+        // With piped input the command is fed it (`$input` is the list handed to InvokeScript), as the bytes a pipe
+        // writes when it resolves to a program (ConvertTo-BashNativeStdin); without, it inherits the caller's stdin.
+        const string resolve =
             "$c = Resolve-BashCommand $args[0]; $rest = @(); " +
-            "if ($args.Count -gt 1) { $rest = $args[1..($args.Count - 1)] }; " +
-            "& $c @rest 2>&1";
+            "if ($args.Count -gt 1) { $rest = $args[1..($args.Count - 1)] }; ";
+        // A cmdlet or function gets the records themselves (an unterminated one keeps its mark: `printf a | time wc -c`).
+        string invokeBody = _stdin.Count > 0
+            ? resolve + "$__psbash_ci = if ($c -is [string]) { Get-Command $c -ErrorAction Ignore | Select-Object -First 1 } else { $c }; " +
+              "if ($__psbash_ci -is [System.Management.Automation.ApplicationInfo]) { $input | ConvertTo-BashNativeStdin $args[0] | & $c @rest 2>&1 } " +
+              "else { $input | & $c @rest 2>&1 }"
+            : resolve + "& $c @rest 2>&1";
 
         var allInvokeArgs = new object[args.Length];
         allInvokeArgs[0] = cmd;
@@ -116,9 +140,12 @@ public sealed class InvokeBashTimeCommand : BashCmdlet
             // `time prog 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4); its
             // output streams through as it runs and the timing record carries no text of its own.
             var merged = InvokeBashNativeCommand.MergedProgramPath(this, cmd) is { } program
-                ? InvokeBashNativeCommand.RunMerged(this, program, args[1..], inheritStdin: true)
+                ? InvokeBashNativeCommand.RunMerged(this, program, args[1..], inheritStdin: true, input: _stdin.Count > 0 ? _stdin : null)
                 : (int?)null;
-            var output = merged is null ? InvokeCommand.InvokeScript(invokeBody, allInvokeArgs) : [];
+            var output = merged is not null ? []
+                : _stdin.Count > 0
+                    ? InvokeCommand.InvokeScript(invokeBody, false, System.Management.Automation.Runspaces.PipelineResultTypes.None, _stdin, allInvokeArgs)
+                    : InvokeCommand.InvokeScript(invokeBody, allInvokeArgs);
             sw.Stop();
             if (merged is { } mergedExit) exitCode = mergedExit;
             foreach (var item in output)

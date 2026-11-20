@@ -459,10 +459,20 @@ INVARIANT: `command`, `env`, `flock` and a foreground `nohup` run NAME ARGS thro
 waits and returns CMD's status: with its output redirected (or stdout a terminal: `nohup.out`) CMD
 still runs detached and nohup waits for it; with stdout a pipe or a capture (`nohup CMD | cat`,
 `$(nohup CMD)`) CMD runs in place through the runner and no `nohup.out` is made, as GNU nohup leaves
-a non-terminal stdout alone. A builtin or `sh` that nohup detaches runs in a fresh ps-bash of THIS
+a non-terminal stdout alone.
+
+`time` (GNU time when not first in a pipeline: `echo x | time cat`) keeps its own runner, inventoried in the
+guard: it runs functions and builtins too (`Resolve-BashCommand`; InnerCommand bypasses functions) and buffers
+the run into its timing record (an error record = status 1). It is held to the same stdin rule: it declares a
+pipeline parameter and feeds the records to the command at the end, a program through
+`ConvertTo-BashNativeStdin` (bytes, an unterminated record stays unterminated: `printf a | time wc -c` is 1).
+`timeout` runs its command line in a nested transpile and pipes the collected bytes in with `printf '%s'` (a
+here-string ended them with a newline: `printf a | timeout 5 wc -c` was 2).
+
+A builtin or `sh` that nohup detaches runs in a fresh ps-bash of THIS
 build (`InvokeBashBashCommand.ResolvePsBashExecutable`), never a PATH hit: an installed build judged
 the running host stale and retired it mid-command. Guard `Core.Tests/InnerCommandGuardTests` (no `& $c @` script outside
-the runner but inventoried `time`/`xargs`; every caller takes pipeline input; no bare capture
+the runner but inventoried `time`/`xargs`; every caller and inventoried runner takes pipeline input; no bare capture
 `2>&1`); oracle `Differential.Tests/WrapperCommandDifferentialTests`, `NativeStdioBytesTests`.
 
 ## Shared argument parser (`PsBash.Cmdlets.Args`)

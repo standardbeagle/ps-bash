@@ -72,14 +72,16 @@ public class InnerCommandGuardTests
     }
 
     /// <summary>
-    /// A cmdlet that hands InnerCommand its records must be able to receive them: without a pipeline parameter the binder
-    /// rejects <c>echo x | flock f cat</c> ("The input object cannot be bound").
+    /// A cmdlet that runs a command by name - through InnerCommand or its own inventoried script - must be able to receive
+    /// the pipe the command reads: without a pipeline parameter the binder rejects <c>echo x | flock f cat</c> ("The input
+    /// object cannot be bound"), and <c>echo x | time cat</c> printed nothing (the records went nowhere).
     /// </summary>
     [Fact]
-    public void EveryInnerCommandCaller_TakesPipelineInput()
+    public void EveryCommandRunner_TakesPipelineInput()
     {
         var offenders = CmdletSources()
-            .Where(s => s.Name != "InnerCommand.cs" && s.Text.Contains("InnerCommand.Run(", StringComparison.Ordinal)
+            .Where(s => s.Name != "InnerCommand.cs"
+                        && (s.Text.Contains("InnerCommand.Run(", StringComparison.Ordinal) || RunByNameAllowed.ContainsKey(s.Name))
                         && !s.Text.Contains("ValueFromPipeline = true", StringComparison.Ordinal))
             .Select(s => s.Name).ToList();
         Assert.True(offenders.Count == 0, "Declare a ValueFromPipeline parameter and collect its records: " + string.Join(", ", offenders));
