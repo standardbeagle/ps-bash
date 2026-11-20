@@ -7,11 +7,13 @@ namespace PsBash.Differential.Tests;
 public class KillSignalDifferentialTests
 {
     /// <summary>SIGCHLD/SIGURG/SIGWINCH are ignored by default: the shell and a job keep running (a job does not
-    /// inherit the parent's trap). ps-bash resolved the names to TERM. stderr is silenced (bash adds <c>line N:</c>).</summary>
+    /// inherit the parent's trap). ps-bash resolved the names to TERM. stderr is silenced (bash adds <c>line N:</c>).
+    /// kill's status is printed after the wait, so the output order never depends on when the job's echo runs (with
+    /// <c>echo "k $?"</c> right after the kill, a loaded host printed <c>child</c> first: s23a).</summary>
     [SkippableFact]
     public Task Kill_DefaultIgnoredSignals_DoNotEndTheShellOrAJob() =>
         AssertOracle.EqualAsync("trap 'echo URG' URG\nkill -URG $$\ntrap - URG\nkill -URG $$; echo \"self $?\"\nkill -WINCH $$; kill -s CHLD $$; echo \"st $?\"\n"
-            + "{ sleep 0.2; echo child; } & kill -URG $!; echo \"k $?\"; wait $!; echo \"w $?\"\nkill -URG 999999 2>/dev/null; echo \"none $?\"");
+            + "{ sleep 1; echo child; } & kill -URG $!; k=$?; wait $!; w=$?; echo \"k $k\"; echo \"w $w\"\nkill -URG 999999 2>/dev/null; echo \"none $?\"");
 
     /// <summary>The dash form of a real-time signal (<c>-RTMIN+1</c>, <c>-SIGRTMAX-3</c>) is a signal spec, not a pid.
     /// REGRESSION: the <c>-NAME</c> pattern stopped at the <c>+</c> / <c>-</c>, so it was refused as "arguments must be
