@@ -38,6 +38,17 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
     [Parameter(Position = 0, ValueFromRemainingArguments = true)]
     public string[]? Tokens { get; set; }
 
+    /// <summary>
+    /// The builtin evaluating the expression (<c>let</c>: Invoke-BashLet): an error is then the shell's diagnostic,
+    /// <c>s.sh: line 3: let: 1+: syntax error: operand expected (error token is "+")</c> (<see cref="ShellDiagnostic"/>).
+    /// Without it the report is <c>EXPR: MESSAGE</c>.
+    /// </summary>
+    [Parameter]
+    public string? Label { get; set; }
+
+    private void ReportError(string body)
+        => FileSystemHelpers.WriteBashError(this, Label is null ? body : ShellDiagnostic.Prefix(SessionState) + Label + ": " + body);
+
     protected override void EndProcessing()
     {
         // The transpiler emits a single quoted argument, but accept multiple
@@ -60,13 +71,13 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
         }
         catch (ArithRecursionException ex)
         {
-            FileSystemHelpers.WriteBashError(this, $"{ex.Token}: expression recursion level exceeded (error token is \"{ex.Token}\")");
+            ReportError($"{ex.Token}: expression recursion level exceeded (error token is \"{ex.Token}\")");
             if (IsWordExpansion()) FileSystemHelpers.MarkExpansionFailed(this);
         }
         catch (BashArith.BashArithException ex)
         {
             // A failed WORD abandons the command it belongs to (see PsBuild.AbandonIfExpansionFailed, echo).
-            FileSystemHelpers.WriteBashError(this, $"{expr}: {ex.Message}");   // status 1
+            ReportError($"{expr}: {ex.Message}");   // status 1
             // Marked LAST: reporting the error goes through SetLastExitCode, which ends any mark.
             if (IsWordExpansion()) FileSystemHelpers.MarkExpansionFailed(this);
         }

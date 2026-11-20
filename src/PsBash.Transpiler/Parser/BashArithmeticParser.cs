@@ -18,19 +18,22 @@ public sealed class BashArithmeticParser
     private readonly record struct Tok(T Kind, long Number = 0, string? Text = null, string? Key = null, string? Suffix = null);
     private readonly string _source;
     private readonly List<Tok> _tokens;
+    // Where each token starts in _source: a syntax error names the text from there on, as bash does.
+    private readonly List<int> _starts;
     private int _position;
 
     private BashArithmeticParser(string source)
     {
         _source = source;
-        _tokens = Tokenize(source);
+        _starts = new List<int>();
+        _tokens = Tokenize(source, _starts);
     }
 
     public static ArithmeticSyntax Parse(string? source)
     {
         var parser = new BashArithmeticParser(StripDoubleQuotes(source));
         ArithmeticExpr root = parser.ParseComma();
-        if (parser.Current.Kind != T.End) parser.Error("unexpected token");
+        if (parser.Current.Kind != T.End) parser.Error("syntax error in expression");
         return new ArithmeticSyntax(parser._source, root);
     }
 
@@ -78,8 +81,24 @@ public sealed class BashArithmeticParser
 
     private Tok Current => _tokens[_position];
     private bool Accept(T kind) { if (Current.Kind != kind) return false; _position++; return true; }
-    private void Expect(T kind) { if (!Accept(kind)) Error($"expected '{kind}'"); }
-    private void Error(string message) => throw new BashArithmeticParseException($"{message} in arithmetic expression near '{_source}'");
+    private void Expect(T kind)
+    {
+        if (!Accept(kind))
+            Error(kind == T.RParen ? "missing `)'" : kind == T.Colon ? "`:' expected for conditional expression" : $"expected '{kind}'");
+    }
+
+    /// <summary>
+    /// A syntax error in bash's words (expr.c <c>evalerror</c>): <c>syntax error: operand expected (error token is "+")</c>.
+    /// The error token is the text from the token being read on -- or, at the end of the expression, from the last
+    /// token read (bash leaves its last-token pointer there): <c>1+</c> -> "+", <c>a b</c> -> "b", <c>1+*2</c> -> "*2".
+    /// The caller puts <c>EXPR: </c> (and the shell's prefix) in front.
+    /// </summary>
+    private void Error(string message)
+    {
+        int at = Current.Kind == T.End && _position > 0 ? _position - 1 : _position;
+        string token = at < _starts.Count ? _source[Math.Min(_starts[at], _source.Length)..] : "";
+        throw new BashArithmeticParseException($"{message} (error token is \"{token}\")");
+    }
 
     private ArithmeticExpr ParseComma()
     {
@@ -204,7 +223,7 @@ public sealed class BashArithmeticParser
             Expect(T.RParen);
             return value;
         }
-        Error("unexpected token");
+        Error("syntax error: operand expected");
         throw new InvalidOperationException();
     }
 
@@ -223,13 +242,17 @@ public sealed class BashArithmeticParser
         return token is >= T.Assign and <= T.StarStarEq;
     }
 
-    private static List<Tok> Tokenize(string source)
+    private static List<Tok> Tokenize(string source, List<int> starts)
     {
         var result = new List<Tok>();
+        int tokenStart = 0;
         for (int i = 0; i < source.Length;)
         {
+            // The token(s) the previous step added start where that step began.
+            while (starts.Count < result.Count) starts.Add(tokenStart);
             char c = source[i];
             if (char.IsWhiteSpace(c)) { i++; continue; }
+            tokenStart = i;
             if (c == '_' || char.IsLetter(c))
             {
                 int start = i++;
@@ -341,10 +364,13 @@ public sealed class BashArithmeticParser
                 '>' => T.Gt, '!' => T.Bang, '?' => T.Question, ':' => T.Colon, ',' => T.Comma,
                 '=' => T.Assign, '(' => T.LParen, ')' => T.RParen, _ => T.End,
             };
-            if (single == T.End) throw new BashArithmeticParseException($"invalid arithmetic character '{c}'");
+            if (single == T.End)
+                throw new BashArithmeticParseException($"syntax error: invalid arithmetic operator (error token is \"{source[i..]}\")");
             result.Add(new Tok(single)); i++;
         }
+        while (starts.Count < result.Count) starts.Add(tokenStart);
         result.Add(new Tok(T.End));
+        starts.Add(source.Length);
         return result;
     }
 

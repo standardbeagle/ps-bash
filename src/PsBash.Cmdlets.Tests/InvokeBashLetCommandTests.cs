@@ -153,6 +153,25 @@ public class InvokeBashLetCommandTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void Let_NoOperand_IsAnError()
         => Assert.Equal(1, RunAndReadLastExitCode("Invoke-BashLet -ErrorAction SilentlyContinue"));
+
+    // Oracle (bash 5.2, s.sh line 7): `s.sh: line 7: let: expression expected`, 1 -- a shell diagnostic, prefixed.
+    [Fact]
+    public void Let_NoOperand_ReportsTheShellDiagnostic()
+        => CmdResult.Run(_fixture.AcquireFresh(),
+                "$global:BASH_SOURCE = @('s.sh'); [PsBash.Cmdlets.VarFrameStack]::SetLine(7); Invoke-BashLet")
+            .AssertFailed(1, "s.sh: line 7: let: expression expected");
+
+    // Oracle: let '1+'  ->  `s.sh: line 7: let: 1+: syntax error: operand expected (error token is "+")`, 1. The
+    // message had no prefix, no `let:` label and the parser's own words.
+    [Theory]
+    [InlineData("1+", "let: 1+: syntax error: operand expected (error token is \"+\")")]
+    [InlineData("a b c", "let: a b c: syntax error in expression (error token is \"b c\")")]
+    [InlineData("(1+2", "let: (1+2: missing `)' (error token is \"2\")")]
+    public void Let_SyntaxError_ReportsBashsMessageWithThePrefix(string operand, string message)
+        => CmdResult.Run(_fixture.AcquireFresh(),
+                "$global:BASH_SOURCE = @('s.sh'); [PsBash.Cmdlets.VarFrameStack]::SetLine(7); Invoke-BashLet '" + operand + "'")
+            .AssertFailed(1, "s.sh: line 7: " + message);
+
     [Fact]
     public void Let_AliasLet_ResolvesToCmdlet()
     {

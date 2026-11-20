@@ -157,6 +157,14 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Contains(errors, e => e.Exception.Message.Contains(".ps1"));
     }
 
+    // Oracle (bash 5.2): `. ./nofile_zz` on line 7 of s.sh  ->  `s.sh: line 7: ./nofile_zz: No such file or directory`,
+    // status 1. It read `ps-bash: ./nofile_zz: …`.
+    [Fact]
+    public void SourceNonExistentFile_ReportsTheShellDiagnostic()
+        => CmdResult.Run(_fixture.AcquireFresh(),
+                "$global:BASH_SOURCE = @('s.sh'); [PsBash.Cmdlets.VarFrameStack]::SetLine(7); Invoke-BashSource ./nofile_zz_" + Guid.NewGuid().ToString("N"))
+            .AssertFailed(1, "s.sh: line 7: ./nofile_zz_", ": No such file or directory");
+
     [Fact]
     public void SourceNonExistentShFile_WritesError()
     {

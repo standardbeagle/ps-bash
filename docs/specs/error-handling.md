@@ -242,6 +242,11 @@ A diagnostic from the shell itself carries bash's source prefix (error.c `error_
 - `Invoke-BashCommand`
 - `Invoke-BashRedirect` (an output redirect that cannot be opened) and `PsBuild.InputRedirectFailure` (an input one),
   see "Redirect open errors" below
+- `Invoke-BashSource` (`. ./missing`: `s.sh: line 3: ./missing: No such file or directory`)
+- `let`: `Invoke-BashLet` (`let: expression expected`) and `Invoke-BashArith -Label let` (an operand's error, from the
+  run-time `let` and from the emitter's static `let`, `PsEmitter.TryEmitLetAsArithmetic`)
+- `.` / `source` with no operand (emitted, `PsBuild.ShellDiagnosticLine`): `s.sh: line 3: .: filename argument required`,
+  then `.: usage: . filename [arguments]` WITHOUT the prefix, status 2
 
 `CommandNotFoundReport.Describe` builds only the reason after the prefix. Guard: Core.Tests
 `ShellDiagnosticPrefixGuardTests` fails on a line that spells "command not found" without the primitive.
@@ -254,7 +259,7 @@ A diagnostic from the shell itself carries bash's source prefix (error.c `error_
   - A statement "may raise it" (`PsEmitter.MayRaiseShellDiagnostic`) when it names a non-builtin, non-mapped,
     non-function command or a run-time name. `command x`, `builtin x`, `exec x` and a run-time `eval` count too. So do
     a redirect that may fail to open (`PsEmitter.MayFailToOpen`: `< > >> >| &> &>> >&word`, not a dup, a here-document
-    or `/dev/null`) on a simple command, an assignment or a compound command.
+    or `/dev/null`) on a simple command, an assignment or a compound command, and `let`, `.` and `source`.
   - A compound command with such a redirect and no line of its own (`while`, `{ }`, `( )`, `if`) gets its first
     command's line (`PsEmitter.CompoundStartLine`). bash names the line it ENDS on, where the redirect is written: the
     same line for a one-line command; known difference for a multi-line one. Likewise a compound nested in a multi-line
@@ -282,7 +287,7 @@ A diagnostic from the shell itself carries bash's source prefix (error.c `error_
 
 Covered: command not found, from any site (all four). Differential `ShellDiagnosticLineDifferentialTests` tests the
 script file, `-c`, `$0`, sourced files, conditions, evals and continuations. Redirect open errors:
-Differential `RedirectOpenErrorDifferentialTests`.
+Differential `RedirectOpenErrorDifferentialTests`; `let`, `.`/`source`: `LetSourceDiagnosticDifferentialTests`.
 
 #### Redirect open errors
 
@@ -317,6 +322,9 @@ POINTS AT THAT MOMENT, and the redirects after it are never opened (bash 5.2, WS
 Not yet through the primitive: the other shell diagnostics still hard-code `bash: ` or `ps-bash: ` (no NAME, no line).
 
 - builtin errors, e.g. `cd: …`, `declare: …`, `type: …`, `alias: …`, `wait: …`, `local: …`, `builtin: …`
+- arithmetic errors outside `let`: `((: 1+ : …` and `$(( 1/0 ))` (bash prints the expression with its trailing
+  blanks and an error token; the emitter trims the text), and the error token of a run-time error (`division by 0
+  (error token is "0")`)
 - the `${x:?}`, unbound-variable and bad-substitution messages (`Write-BashExpansionError`, `PsBuild` param errors)
 - bad array subscript
 - readonly variable

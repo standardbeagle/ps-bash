@@ -43,15 +43,17 @@ public sealed class InvokeBashLetCommand : BashCmdlet
 
         if (args.Length == 0)
         {
-            FileSystemHelpers.WriteBashError(this, "let: expression expected");
+            // bash: `s.sh: line 3: let: expression expected`, status 1 (ShellDiagnostic: the shell's own prefix).
+            FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + "let: expression expected");
             return;
         }
 
         // The operand is the block's argument (data), never part of its text. Created here: a script block is bound
-        // to the runspace that first runs it, and the host has several.
+        // to the runspace that first runs it, and the host has several. -Label: an error reads
+        // `s.sh: line 3: let: 1+: syntax error: operand expected (error token is "+")` (the label and prefix are Invoke-BashArith's).
         // 2>&1: the nested script's error stream is not this cmdlet's, so `let /x 2>/dev/null` printed the error anyway
-        // (InvokeBashCommandCommand.RunInner has the same rule); each ErrorRecord is re-written here as `let: …`.
-        var evaluate = ScriptBlock.Create("Invoke-BashArith $args[0] 2>&1");
+        // (InvokeBashCommandCommand.RunInner has the same rule); each ErrorRecord is re-written on this command's stream.
+        var evaluate = ScriptBlock.Create("Invoke-BashArith -Label let $args[0] 2>&1");
         long last = 0;
         foreach (var raw in args)
         {
@@ -59,7 +61,7 @@ public sealed class InvokeBashLetCommand : BashCmdlet
             object? value = null;
             foreach (var item in result)
             {
-                if (item?.BaseObject is ErrorRecord er) FileSystemHelpers.WriteBashError(this, "let: " + er.Exception.Message);
+                if (item?.BaseObject is ErrorRecord er) FileSystemHelpers.WriteErrorRecord(this, er);
                 else value = item?.BaseObject;
             }
             if (value is not long n)

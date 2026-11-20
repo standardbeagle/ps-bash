@@ -61,17 +61,9 @@ public sealed class InvokeBashSourceCommand : BashCmdlet
             if (TryCreateOptionalSnapshot(resolvedPath, Path))
                 return null;
 
-            WriteError(new ErrorRecord(
-                new System.IO.FileNotFoundException($"ps-bash: {Path}: No such file or directory"),
-                "FileNotFound",
-                ErrorCategory.ObjectNotFound,
-                Path));
-            // bash: source /nonexistent => exit 1. WriteError emits the
-            // diagnostic but doesn't set $LASTEXITCODE on its own, so the
-            // launcher process would still return 0 to the caller. Push a
-            // non-zero exit code into the global so the outer eval picks
-            // it up.
-            FileSystemHelpers.SetLastExitCode(this, 1);
+            // bash: `s.sh: line 3: ./nofile: No such file or directory`, status 1 -- the shell's own diagnostic
+            // (ShellDiagnostic), as for a redirect that cannot be opened. It read `ps-bash: ./nofile: ...`.
+            FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + $"{Path}: No such file or directory");
             return null;
         }
 

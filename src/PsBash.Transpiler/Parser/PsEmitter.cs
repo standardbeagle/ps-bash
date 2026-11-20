@@ -695,7 +695,8 @@ public static partial class PsEmitter
     /// <item>a redirect that may fail to open (<see cref="MayFailToOpen"/>: <c>&gt; nodir/f</c>, <c>&lt; missing</c>), on a
     /// simple command, an assignment or a compound command (whose redirects are applied before its body records
     /// anything);</item>
-    /// <item>a builtin given an option word (it may be invalid: <c>pwd -Q</c>).</item>
+    /// <item>a builtin given an option word (it may be invalid: <c>pwd -Q</c>);</item>
+    /// <item>a builtin that reports its own errors with the prefix: <c>let</c>, <c>.</c> / <c>source</c>.</item>
     /// </list>
     /// Otherwise a compound command is not: its body's statements record their own lines.
     /// </summary>
@@ -704,6 +705,7 @@ public static partial class PsEmitter
         _ when HasOpenableRedirect(CompoundRedirects(cmd)) => true,
         Command.Simple s when HasOpenableRedirect(s.Redirects) => true,
         Command.Simple { Words.IsDefaultOrEmpty: false } s => GetLiteralValue(s.Words[0]) is not { Length: > 0 } name
+            || name is "let" or "." or "source"
             || LooksUpACommand(s, name)
             || s.Words.Any(w => ContainsCommandSub(w.Parts))
             // A builtin given an option word may reject it (`pwd -Q`: `script.sh: line N: pwd: -Q: invalid option`).
@@ -3164,8 +3166,8 @@ public static partial class PsEmitter
     /// (<c>if (( … ))</c> / <c>while (( … ))</c>) is handled in
     /// <see cref="EmitCondition"/> via <see cref="EmitArithConditionExpr"/>.
     /// </summary>
-    private static string EmitArithCommand(Command.ArithCommand arith)
-        => PsBuild.SilentExitFromBool($"@({EmitArithmeticInvocation(arith.Expr)}) -ne 0");
+    private static string EmitArithCommand(Command.ArithCommand arith, string? label = null)
+        => PsBuild.SilentExitFromBool($"@({EmitArithmeticInvocation(arith.Expr, label)}) -ne 0");
 
     /// <summary>
     /// Boolean expression for <c>(( expr ))</c> used as an <c>if</c>/<c>while</c>
@@ -6440,7 +6442,9 @@ public static partial class PsEmitter
             specialResult = PsBuild.BareLocal;
 
         else if ((cmd0 == "source" || cmd0 == ".") && cmd.Words.Length == 1)
-            specialResult = "Write-Error '" + cmd0 + ": filename argument required' -ErrorAction Continue; $global:LASTEXITCODE = 2";
+            // bash: `s.sh: line 3: .: filename argument required`, then the usage line WITHOUT the prefix, status 2.
+            specialResult = PsBuild.ShellDiagnosticLine(PsBuild.SingleQuote(cmd0 + ": filename argument required")) + "; "
+                + PsBuild.StderrLine(cmd0 + ": usage: " + cmd0 + " filename [arguments]") + "; " + PsBuild.SetStatus(2);
 
         else if ((cmd0 == "source" || cmd0 == ".") && cmd.Words.Length >= 2)
             specialResult = EmitSourceOrDot(cmd);
@@ -9202,14 +9206,18 @@ public static partial class PsEmitter
     private static string EmitArithSub(WordPart.ArithSub arith)
         => $"$({EmitArithmeticInvocation(arith.Expr)})";
 
-    private static string EmitArithmeticInvocation(ArithmeticSyntax syntax)
+    /// <param name="syntax">The expression.</param>
+    /// <param name="label">The builtin evaluating it (<c>let</c>): an error is then the shell's diagnostic,
+    /// <c>s.sh: line 3: let: 1/0: division by 0</c> (Invoke-BashArith -Label). After the expression, so the
+    /// invocation still starts <c>Invoke-BashArith 'EXPR'</c>.</param>
+    private static string EmitArithmeticInvocation(ArithmeticSyntax syntax, string? label = null)
     {
         string expr = syntax.Source.Trim();
         var fragments = BuildArithFragments(expr, textual: syntax.Root is ArithmeticExpr.Deferred);
         string argument = fragments is null
             ? PsBuild.SingleQuote(expr)
             : $"('' + {string.Join(" + ", fragments)})";
-        var invocation = $"Invoke-BashArith {argument}";
+        var invocation = $"Invoke-BashArith {argument}" + (label is null ? "" : " -Label " + PsBuild.SingleQuote(label));
         return _nounsetMode ? PsBuild.ArithNounsetGuard(invocation) : invocation;
     }
 
@@ -13177,12 +13185,16 @@ public static partial class PsEmitter
         foreach (var word in args)
         {
             if (!TryGetLetOperandText(word, out var text)) return null;
-            try { statements.Add(EmitArithCommand(new Command.ArithCommand(BashArithmeticParser.Parse(text)))); }
+            try { statements.Add(EmitArithCommand(new Command.ArithCommand(BashArithmeticParser.Parse(text)), label: "let")); }
             catch (ParseException) { return null; }
-            // `let /x`: the arithmetic grammar's own syntax error (not a ParseException) escaped Transpile as a raw crash; the
-            // cmdlet reports it at run time as bash does. The resource limits still reach the caller.
+            // `let '1+'`: bash reports the syntax error when the command runs (`let: 1+: syntax error: operand expected`,
+            // status 1) and the script goes on. Uncaught here it ended the transpile, so no line of the script ran.
+            // The resource limits are not syntax errors: they reach the caller (and its large-stack retry).
             catch (BashArithmeticParseException ex) when (!ex.Message.Contains(NestingGuard.TooDeepMessage, StringComparison.Ordinal)
-                                                          && !ex.Message.Contains(NestingGuard.TooLongMessage, StringComparison.Ordinal)) { return null; }
+                                                          && !ex.Message.Contains(NestingGuard.TooLongMessage, StringComparison.Ordinal))
+            {
+                return null;
+            }
         }
         return string.Join("; ", statements);
     }
