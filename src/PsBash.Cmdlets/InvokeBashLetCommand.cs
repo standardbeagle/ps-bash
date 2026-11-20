@@ -49,12 +49,19 @@ public sealed class InvokeBashLetCommand : BashCmdlet
 
         // The operand is the block's argument (data), never part of its text. Created here: a script block is bound
         // to the runspace that first runs it, and the host has several.
-        var evaluate = ScriptBlock.Create("Invoke-BashArith $args[0]");
+        // 2>&1: the nested script's error stream is not this cmdlet's, so `let /x 2>/dev/null` printed the error anyway
+        // (InvokeBashCommandCommand.RunInner has the same rule); each ErrorRecord is re-written here as `let: …`.
+        var evaluate = ScriptBlock.Create("Invoke-BashArith $args[0] 2>&1");
         long last = 0;
         foreach (var raw in args)
         {
             var result = InvokeCommand.InvokeScript(false, evaluate, null, raw ?? "");
-            object? value = result.Count > 0 ? result[^1]?.BaseObject : null;
+            object? value = null;
+            foreach (var item in result)
+            {
+                if (item?.BaseObject is ErrorRecord er) FileSystemHelpers.WriteBashError(this, "let: " + er.Exception.Message);
+                else value = item?.BaseObject;
+            }
             if (value is not long n)
             {
                 // Invoke-BashArith reported the error and set status 1.

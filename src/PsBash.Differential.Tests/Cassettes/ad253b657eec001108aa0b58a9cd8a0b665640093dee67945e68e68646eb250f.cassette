@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 292
+stdout-length: 48
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; return 3 2>/dev/null; echo "ret rc=$?"; return 3 2>err1.txt; echo "ret rc=$?"; wc -l < err1.txt; ( exit 1 2 2>/dev/null; echo "after exit rc=$?" ); fn() { echo x | return 3; echo "in fn rc=$?"; }; fn; echo "fn rc=$?"; echo x | return 4 2>/dev/null; echo "top rc=$?"
+==== STDOUT ====
+ret rc=2
+ret rc=2
+1
+in fn rc=3
+fn rc=0
+top rc=2
+
+==== STDERR ====
+

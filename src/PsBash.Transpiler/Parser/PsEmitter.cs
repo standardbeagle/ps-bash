@@ -6167,6 +6167,9 @@ public static partial class PsEmitter
         }
 
         string? specialResult = null;
+        // A form that only reports (top-level `return`, `exit 1 2`) takes the command's redirects too: `return 3 2>/dev/null`
+        // printed its message anyway.
+        bool reportOnly = false;
 
         // break [N] / continue [N] -> the labelled keyword for the N-th enclosing loop.
         // A redirect on it still opens its target (`break > f` creates f).
@@ -6176,8 +6179,11 @@ public static partial class PsEmitter
         // At the top of a script or -c string (not a function, not eval/source text), bash refuses `return` with
         // status 2 and goes on; a PowerShell `return` there ended the whole script. A subshell is no different.
         else if (cmd0 == "return" && _functionDepth == 0 && (_context == TranspileContext.Default || _evalAtScriptTop))
+        {
+            reportOnly = true;
             specialResult = "$(" + EmitNoOpArgPrelude(cmd) + "Write-Error " + PsBuild.SingleQuote("return: can only `return' from a function or sourced script")
                 + " -ErrorAction Continue; " + PsBuild.SetStatus(2) + ")";
+        }
 
         // return N -> capture exit code for $?
         else if (cmd0 == "return")
@@ -6268,7 +6274,10 @@ public static partial class PsEmitter
         // from before the handler ran (see BashTranspiler.TrapEpilogueClose).
         // `exit 7 8 9`: "too many arguments", status 1, and the shell stays (bash 5.2).
         else if (cmd0 == "exit" && cmd.Words.Length > 2 && _context != TranspileContext.Eval)
+        {
+            reportOnly = true;
             specialResult = $"Write-Error 'exit: too many arguments' -ErrorAction Continue; {PsBuild.SetStatus(1)}";
+        }
 
         // `exit word` with a literal non-numeric word: "numeric argument required", and the shell leaves with 2.
         else if (cmd0 == "exit" && cmd.Words.Length == 2 && GetLiteralValue(cmd.Words[1]) is { } exitLit
@@ -6348,9 +6357,9 @@ public static partial class PsEmitter
             // cd / read / eval / readonly / set / source emit their own statement text, so the redirect
             // tail (`eval '…' >f`, `source rc 2>/dev/null`, `cd d >/dev/null`) was silently dropped.
             // Dot-source keeps their side effects (variables, functions, cwd) in the caller's scope.
-            result = cmd0 is "cd" or "read" or "eval" or "readonly" or "set" or "source" or "." or "local"
+            result = (reportOnly || cmd0 is "cd" or "read" or "eval" or "readonly" or "set" or "source" or "." or "local")
                 && !cmd.Redirects.IsDefaultOrEmpty
-                    ? PsBuild.WithRedirectTail(specialResult, tail => AppendRedirectTail(tail, cmd.Redirects))
+                    ? WithRedirectTailOn(specialResult, cmd.Redirects)
                     : specialResult;
             return true;
         }
@@ -6821,6 +6830,24 @@ public static partial class PsEmitter
         return ". $(" + LoopModeForCallSite() + EmitPassthrough(Cmdlet, cmd.Words.RemoveAt(0), cmdletSwitch: " -AsScriptBlock") + ")";
     }
 
+    /// <summary>
+    /// A special form's text with the command's redirect tail. A statement list (`cd`, `eval`) is grouped as `. { ... }`
+    /// first, so the tail covers every statement and side effects stay in the caller's scope; a single command (`read`)
+    /// takes the tail itself. Grouped, `Invoke-BashCat f | . { Invoke-BashRead w } 2>$null` read nothing: the group does
+    /// not hand its pipe to the command inside (`read w < f 2>/dev/null` was status 1 with w empty).
+    /// </summary>
+    private static string WithRedirectTailOn(string emitted, ImmutableArray<Redirect> redirects)
+    {
+        if (!IsSingleRuntimeCommand(emitted))
+            return PsBuild.WithRedirectTail(emitted, tail => AppendRedirectTail(tail, redirects));
+        var sb = new StringBuilder(emitted);
+        AppendRedirectTail(sb, redirects);
+        return sb.ToString();
+    }
+
+    /// <summary>One `Invoke-Bash*` command (no statement list, no keyword statement), which a redirect tail can follow.</summary>
+    private static bool IsSingleRuntimeCommand(string emitted) =>
+        emitted.StartsWith("Invoke-Bash", StringComparison.Ordinal) && !PsBuild.HasUnquotedStatementSeparator(emitted);
     private static string EmitMappedStandalone(Command.Simple cmd, string mapped)
     {
         if (cmd.Redirects.IsEmpty)
@@ -8970,6 +8997,15 @@ public static partial class PsEmitter
             ? inner : PsBuild.ShellStateScope(WithSubshellExitTrap(inner));
     }
 
+    /// <summary>The command a `builtin`/`command` wrapper runs (`builtin command read v` -> `read`), or null when a
+    /// word is not literal or the wrapper takes an option (`command -v x` runs nothing).</summary>
+    private static string? WrappedCommandName(Command.Simple s)
+    {
+        int at = 0;
+        while (at < s.Words.Length && GetLiteralValue(s.Words[at]) is "builtin" or "command") at++;
+        if (at < s.Words.Length && GetLiteralValue(s.Words[at]) == "--") at++;
+        return at < s.Words.Length && GetLiteralValue(s.Words[at]) is { } name && !name.StartsWith('-') ? name : null;
+    }
     /// <summary>Builtins that change shell state even though they map to a runtime command.</summary>
     private static readonly HashSet<string> StateChangingBuiltins = new(StringComparer.Ordinal)
     {
@@ -11901,9 +11937,10 @@ public static partial class PsEmitter
     /// </summary>
     private static string WrapPipelineStageIfStatementList(string emitted)
     {
+        // A `$( ... )` subexpression (`return` outside a function) is an EXPRESSION, which PowerShell allows only as a
+        // pipeline's first element: `echo x | return 3` emitted `... | $(...)` and the whole script failed to parse.
         if (emitted.StartsWith("& {", StringComparison.Ordinal)
-            || emitted.StartsWith("$(", StringComparison.Ordinal)
-            || !PsBuild.HasUnquotedStatementSeparator(emitted))
+            || (!emitted.StartsWith("$(", StringComparison.Ordinal) && !PsBuild.HasUnquotedStatementSeparator(emitted)))
             return emitted;
 
         return $"& {{ {emitted} }}";
@@ -12149,7 +12186,14 @@ public static partial class PsEmitter
                         || _runsDynamicCode && GetLiteralValue(rs.Words[0]) is { } rsName && !IsMappedCommandName(rsName) && !StateChangingBuiltins.Contains(rsName)
                         || rawStage.Contains("throw [PsBash.Cmdlets.BashSubshellExitException]", StringComparison.Ordinal)
                            && !rawStage.Contains("catch [PsBash.Cmdlets.BashSubshellExitException]", StringComparison.Ordinal));
-                if (assigningStage || functionStage || runTimeExitStage || rawStage.Contains("BashParamErrorException]::Reported", StringComparison.Ordinal)
+                // `echo x | builtin read v`, `builtin cd / | cat`: a state builtin behind the `builtin`/`command` wrapper is
+                // still a stage of its own (bash: a subshell), but the wrapper hid it from the forms above, so `v` and the
+                // cwd leaked into the shell. A lastpipe stage runs in the shell itself.
+                bool wrappedStateStage = cmd is Command.Simple { Words.Length: > 1 } wrapped
+                    && GetLiteralValue(wrapped.Words[0]) is "builtin" or "command"
+                    && WrappedCommandName(wrapped) is { } wrappedName && StateChangingBuiltins.Contains(wrappedName)
+                    && !(_scriptLastpipe && i > 0 && i == pipeline.Commands.Length - 1);
+                if (assigningStage || functionStage || runTimeExitStage || wrappedStateStage || rawStage.Contains("BashParamErrorException]::Reported", StringComparison.Ordinal)
                     && !rawStage.Contains("catch [PsBash.Cmdlets.BashParamErrorException]", StringComparison.Ordinal))
                 {
                     sb.Length = stageStart;
@@ -12977,6 +13021,10 @@ public static partial class PsEmitter
             if (!TryGetLetOperandText(word, out var text)) return null;
             try { statements.Add(EmitArithCommand(new Command.ArithCommand(BashArithmeticParser.Parse(text)))); }
             catch (ParseException) { return null; }
+            // `let /x`: the arithmetic grammar's own syntax error (not a ParseException) escaped Transpile as a raw crash; the
+            // cmdlet reports it at run time as bash does. The resource limits still reach the caller.
+            catch (BashArithmeticParseException ex) when (!ex.Message.Contains(NestingGuard.TooDeepMessage, StringComparison.Ordinal)
+                                                          && !ex.Message.Contains(NestingGuard.TooLongMessage, StringComparison.Ordinal)) { return null; }
         }
         return string.Join("; ", statements);
     }
@@ -13473,8 +13521,17 @@ public static partial class PsEmitter
                     _definedFunctions = new HashSet<string>(priorFns, StringComparer.Ordinal);
                     _definedFunctions.Remove(bn);
                 }
-                try { result = EmitSimple(cmd with { Words = rest }); }
+                // The redirects (`builtin cd /x 2>/dev/null`) are the CALLER's: every caller of this switch appends the
+                // command's tail itself (EmitMappedStandalone, a pipe stage), so the inner command keeps only its stdin
+                // (`< f`, which it opens itself) and the tail binds to one `. { }` group around it. Emitting them here
+                // too gave `. { . } 2>$null 2>$null`, which PowerShell refuses to parse.
+                var tailRedirects = cmd.Redirects.IsDefaultOrEmpty ? 0 : cmd.Redirects.Count(r => !(r.Op == "<" && r.Fd == 0));
+                var ownRedirects = tailRedirects == 0 ? cmd.Redirects : cmd.Redirects.Where(r => r.Op == "<" && r.Fd == 0).ToImmutableArray();
+                try { result = EmitSimple(cmd with { Words = rest, Redirects = ownRedirects }); }
                 finally { _definedFunctions = priorFns; }
+                // A statement list (`cd`) becomes one group for the tail; a single command (`read`) stays bare: a `. { }`
+                // group would not hand it the pipe it reads.
+                if (tailRedirects > 0 && !IsSingleRuntimeCommand(result)) result = PsBuild.WithRedirectTail(result, static _ => { });
                 return true;
             }
             case "unset":

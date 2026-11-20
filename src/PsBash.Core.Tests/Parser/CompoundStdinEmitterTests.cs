@@ -258,8 +258,27 @@ public class CompoundStdinEmitterTests
         // tail was silently dropped (`eval 'echo hi' > f` printed hi and created no file).
         var ps = T(bash);
 
-        Assert.StartsWith(". { ", ps);
-        Assert.Contains(" }" + tail, ps);
+        // A statement list is grouped so the tail covers all of it; one Invoke-Bash* command (a static `eval 'echo hi'`)
+        // takes the tail bare, as a group would not hand it a pipe (emitter-strategy.md: redirect tail written once).
+        if (ps.StartsWith("Invoke-Bash", StringComparison.Ordinal) && !PsBuild.HasUnquotedStatementSeparator(ps))
+            Assert.EndsWith(tail, ps);
+        else
+        {
+            Assert.StartsWith(". { ", ps);
+            Assert.Contains(" }" + tail, ps);
+        }
+    }
+
+    [Theory]
+    [InlineData("cat in.txt | read w 2>/dev/null")]
+    [InlineData("read w < in.txt 2>/dev/null")]
+    public void Transpile_FedReadWithRedirect_IsNotGroupedAwayFromItsPipe(string bash)
+    {
+        // REGRESSION: `read w < f 2>/dev/null` emitted `Invoke-BashCat f | . { Invoke-BashRead w } 2>$null`; the group
+        // does not hand its pipe to the command inside, so read saw no input (status 1, w empty).
+        var ps = T(bash);
+        Assert.DoesNotContain(". { Invoke-BashRead", ps);
+        Assert.Contains("Invoke-BashRead w 2>$null", ps);
     }
 
     [Fact]

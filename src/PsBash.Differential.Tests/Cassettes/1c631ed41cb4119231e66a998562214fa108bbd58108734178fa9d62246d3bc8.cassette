@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 130
+stdout-length: 20
+stderr-length: 0
+==== SCRIPT ====
+let /nosuch 2>/dev/null; echo "let rc=$?"; let 'q=2+3' 2>/dev/null; echo "rc=$? q=$q"; let /nosuch 2>&1 | grep -c 'let: /nosuch: '
+==== STDOUT ====
+let rc=1
+rc=0 q=5
+1
+
+==== STDERR ====
+

@@ -518,6 +518,17 @@ passes its pipeline to `$input` only, so the emitter builds the sharing itself
 - **Redirects on statement-list builtins.** `cd`, `eval`, `source`/`.`, `read`, `readonly`, `set` emit
   statements, not one pipeable command; their redirect tail is applied to a dot-sourced block
   (`PsBuild.WithRedirectTail`: `. { … } 2>$null`) so side effects stay in the caller's scope.
+  **INVARIANT: a command's redirect tail is written ONCE, by the caller of the form that emits it, and
+  grouped only around a statement list** (`PsEmitter.WithRedirectTailOn`). A single `Invoke-Bash*`
+  command (`read`) takes the tail bare: `cat f | . { Invoke-BashRead w } 2>$null` read nothing,
+  because the group does not hand its pipe to the command inside. A wrapper that re-emits its command
+  (`builtin`) passes the command on WITHOUT its tail (every caller of `TryEmitMappedCommand` appends it).
+  Written twice (`. { … } 2>$null 2>$null`), PowerShell refuses the WHOLE script. A form that only
+  reports (top-level `return`, `exit 1 2`) takes its redirects too. A pipe stage that is an expression
+  (`$( … )`) is wrapped `& { }`, because PowerShell allows an expression only as a first element.
+  A state builtin behind `builtin`/`command` (`echo x | builtin read v`) is still a subshell stage
+  (`WrappedCommandName`). Guards `Host.Tests/BuiltinRedirectParseabilityTests` (every builtin x
+  wrapper x position x redirect), `Differential.Tests/BuiltinWrapperRedirectDifferentialTests`.
 - **Pipelines inside a scope.** Only the FIRST stage reads the scope; later stages read the pipe
   (`{ grep a | sort; }`). A fused-lane pipeline is not formed inside a scope (the compiled cores
   know no feed).

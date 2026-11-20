@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 499
+stdout-length: 97
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; echo x | builtin cd /nosuch 2>/dev/null; echo "rc=$?"; builtin cd /nosuch 2>/dev/null; echo "rc=$?"; echo x | command cd /nosuch 2>/dev/null; echo "rc=$?"; builtin echo hi > b.txt; cat b.txt; printf 'line\n' > in.txt; read w < in.txt 2>/dev/null; echo "rc=$? w=$w"; builtin read w2 < in.txt 2>/dev/null; echo "rc=$? w2=$w2"; builtin cd /nosuch 2>err.txt; echo "rc=$?"; sed 's/^.*cd: /cd: /' err.txt; echo x | builtin builtin cd /nosuch 2>/dev/null; echo "rc=$?"; echo done
+==== STDOUT ====
+rc=1
+rc=1
+rc=1
+hi
+rc=0 w=line
+rc=0 w2=line
+rc=1
+cd: /nosuch: No such file or directory
+rc=1
+done
+
+==== STDERR ====
+

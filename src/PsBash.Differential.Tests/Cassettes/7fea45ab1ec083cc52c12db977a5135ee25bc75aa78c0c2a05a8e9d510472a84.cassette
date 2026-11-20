@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 336
+stdout-length: 32
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; here=$PWD; echo x | read a1; echo "a1=$a1"; echo x | builtin read a3; echo "a3=$a3"; echo x | builtin read a4 2>/dev/null; echo "rc=$? a4=$a4"; echo x | command read a5; echo "a5=$a5"; echo x | builtin cd / 2>/dev/null; [ "$PWD" = "$here" ] && echo same; builtin cd / | cat; [ "$PWD" = "$here" ] && echo same2
+==== STDOUT ====
+a1=
+a3=
+rc=0 a4=
+a5=
+same
+same2
+
+==== STDERR ====
+
