@@ -38,7 +38,8 @@ public sealed class InvokeBashHostnameCommand : BashCmdlet
             new OptSpec("yp", 'y', "yp"), new OptSpec("yp", '\0', "nis"),
         },
         allowAbbrev: true,
-        gnuInfoOptions: true);
+        gnuInfoOptions: true,
+        usageExitCode: 255);   // Debian hostname: usage() exits -1
 
     /// <summary>Debian hostname's usage text (<c>usage()</c>), which it prints on stdout after an unknown option.</summary>
     internal const string HostnameUsage =
@@ -96,11 +97,10 @@ public sealed class InvokeBashHostnameCommand : BashCmdlet
         // exit(-1) = 255 (REGRESSION: `hostname --bogus` printed the name, status 0). -s is the short name; the other
         // display options keep printing the host name.
         var parsed = ArgParser.Parse(args, HostnameSpec);
-        if (parsed.Error is { } err)
+        // The status first (the sink sets it): a reader that stops after the usage's first line (`| head -1`) ends this
+        // command there. No Try line (UsageErrors.Hint): the usage itself follows, on stdout.
+        if (FileSystemHelpers.TryWriteParseError(this, "hostname", parsed))
         {
-            // The status first: a reader that stops after the usage's first line (`| head -1`) ends this command there.
-            FileSystemHelpers.WriteBashError(this, err.Message("hostname"));
-            FileSystemHelpers.SetLastExitCode(this, 255);
             WriteObject(BashRuntime.NewBashObject(HostnameUsage));
             return;
         }

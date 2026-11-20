@@ -133,6 +133,6 @@ public sealed class InvokeBashPendingSignalsCommand : BashCmdlet
             }
         }
         finally { _running = false; }
-        SessionState.PSVariable.Set("global:LASTEXITCODE", status); // the status from before the traps, not this cmdlet's own
+        FileSystemHelpers.RestoreShellStatus(this, status); // the status from before the traps, not this cmdlet's own
     }
 }

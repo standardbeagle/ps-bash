@@ -24,7 +24,7 @@ public static class UsageErrors
             + "            <file> ...\n"
             + "       file -C [-m <magicfiles>]\n"
             + "       file [--help]",
-        "sed" or "strings" or "tree" or "rg" => null,
+        "sed" or "strings" or "tree" or "rg" or "hostname" => null,   // hostname: its usage text follows, on stdout
         _ => $"Try '{cmd} --help' for more information.",
     };
 

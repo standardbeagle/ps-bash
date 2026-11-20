@@ -75,7 +75,7 @@ public sealed class InvokeBashPipeStageCommand : BashCmdlet
     private bool _hadInput;
 
     /// <summary>$LASTEXITCODE back to <see cref="_beginStatus"/> (the variable only: no stage notes it as its own).</summary>
-    private void RestoreBeginStatus() => SessionState.PSVariable.Set("global:LASTEXITCODE", _beginStatus);
+    private void RestoreBeginStatus() => FileSystemHelpers.RestoreShellStatus(this, _beginStatus);
 
     /// <summary>The stage has ended: its status is recorded and its steppable pipeline disposed.</summary>
     private bool _finished;

@@ -75,6 +75,8 @@ public sealed class InvokeBashSeqCommand : BashCmdlet
             return;
         }
 
+        if (FileSystemHelpers.TryWriteParseError(this, "seq", SeqCore.ScanOptions(args).Parsed)) return;
+
         var status = SeqCore.Generate(args, w.IsPresent,
             out var values, out string? separator, out bool isInteger, out string? badIncrement);
 
@@ -93,11 +95,8 @@ public sealed class InvokeBashSeqCommand : BashCmdlet
             FileSystemHelpers.WriteUsageError(this, "seq", $"seq: invalid Zero increment value: {GnuQuote.Locale(badIncrement!)}");
             return;
         }
-        if (status == SeqCore.Status.UsageError)
-        {
-            FileSystemHelpers.WriteUsageError(this, "seq", badIncrement!);
-            return;
-        }
+        if (status == SeqCore.Status.UsageError) return;   // reported above
+
         if (status == SeqCore.Status.InvalidFloat)
         {
             FileSystemHelpers.WriteUsageError(this, "seq", $"seq: invalid floating point argument: {GnuQuote.Locale(badIncrement!)}");
@@ -142,6 +141,29 @@ internal static class SeqCore
     internal enum Status { Ok, ZeroIncrement, MissingOperand, ExtraOperand, UsageError, InvalidFloat }
 
     /// <summary>
+    /// seq's option scan (pure): the parse of the leading option words and where they end (<c>cut</c>: the words from
+    /// there on are operands). The cmdlet reports its error through <see cref="FileSystemHelpers.TryWriteParseError"/>.
+    /// </summary>
+    internal static (ParsedArgs Parsed, int Cut) ScanOptions(string[] args)
+    {
+        // GNU getopt_long with "+" (options end at the first operand: `seq 2 -w 4` has the operand `-w`), plus seq's
+        // twist: they also end at a word that looks like a negative number (`-1`, `-.5`), so `seq -1 2 3` counts from
+        // -1. An unknown option is a usage error, never an operand (REGRESSION: `seq --bogus` / `seq -Q` threw a .NET
+        // FormatException that ended the script at status 0).
+        int cut = args.Length;
+        for (int k = 0; k < args.Length; k++)
+        {
+            var a = args[k];
+            if (a == "--") break;
+            if ((a.Length >= 2 && a[0] == '-' && a[1] != '-' && a[1..].TrimStart('w') is "s" or "f") || (a.Length > 2 && a.StartsWith("--", StringComparison.Ordinal) && a.IndexOf('=') < 0
+                    && ("--separator".StartsWith(a, StringComparison.Ordinal) || "--format".StartsWith(a, StringComparison.Ordinal))))
+            { k++; continue; } // the next word is that option's value, whatever it looks like
+            if (a.Length < 2 || a[0] != '-' || a[1] == '.' || char.IsAsciiDigit(a[1])) { cut = k; break; }
+        }
+        return (ArgParser.Parse(cut == args.Length ? args : args[..cut], SeqSpec), cut);
+    }
+
+    /// <summary>
     /// Produce the formatted value strings (the exact <c>BashText</c> the cmdlet
     /// emits per line). <paramref name="separator"/> is non-null when <c>-s</c>
     /// was given (the whole sequence is one joined string). Returns
@@ -161,26 +183,8 @@ internal static class SeqCore
         bool equalWidth = equalWidthFlag;
         string? format = null;
 
-        // GNU getopt_long with "+" (options end at the first operand: `seq 2 -w 4` has the operand `-w`), plus seq's
-        // twist: they also end at a word that looks like a negative number (`-1`, `-.5`), so `seq -1 2 3` counts from
-        // -1. An unknown option is a usage error, never an operand (REGRESSION: `seq --bogus` / `seq -Q` threw a .NET
-        // FormatException that ended the script at status 0).
-        int cut = args.Length;
-        for (int k = 0; k < args.Length; k++)
-        {
-            var a = args[k];
-            if (a == "--") break;
-            if ((a.Length >= 2 && a[0] == '-' && a[1] != '-' && a[1..].TrimStart('w') is "s" or "f") || (a.Length > 2 && a.StartsWith("--", StringComparison.Ordinal) && a.IndexOf('=') < 0
-                    && ("--separator".StartsWith(a, StringComparison.Ordinal) || "--format".StartsWith(a, StringComparison.Ordinal))))
-            { k++; continue; } // the next word is that option's value, whatever it looks like
-            if (a.Length < 2 || a[0] != '-' || a[1] == '.' || char.IsAsciiDigit(a[1])) { cut = k; break; }
-        }
-        var parsed = ArgParser.Parse(cut == args.Length ? args : args[..cut], SeqSpec);
-        if (parsed.Error is { } err)
-        {
-            badIncrement = err.Message("seq");
-            return Status.UsageError;
-        }
+        var (parsed, cut) = ScanOptions(args);
+        if (parsed.HasError) return Status.UsageError;   // the cmdlet reports it through TryWriteParseError
         foreach (var tok in parsed.Tokens)
         {
             if (tok.Kind != ArgTokKind.Option) continue;

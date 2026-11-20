@@ -29,6 +29,8 @@ public class OptSpecSharedIdGuardTests
         "InvokeBashGzipCommand.GzipSpec decompress: decompress uncompress",
         "InvokeBashGzipCommand.GzipSpec quiet: quiet silent",
         "InvokeBashHeadCommand.HeadSpec quiet: quiet silent",
+        "InvokeBashHostnameCommand.HostnameSpec fqdn: fqdn long",                // oracle: hostname --fqdn = --long = -f
+        "InvokeBashHostnameCommand.HostnameSpec yp: yp nis",                     // oracle: hostname --yp = --nis = -y
         "InvokeBashSedCommand.SedSpec quiet: quiet silent",
         "InvokeBashSedCommand.SedSpec null-data: null-data zero-terminated",
         "InvokeBashTailCommand.TailSpec quiet: quiet silent",

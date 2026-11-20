@@ -414,6 +414,14 @@ internal static class FileSystemHelpers
     }
 
     /// <summary>
+    /// Puts back a status that is NOT <paramref name="cmdlet"/>'s own (the variable only: nothing records it, so
+    /// <see cref="BashCmdlet"/> never re-asserts it): the status from before a trap ran, or the one a pipeline's first
+    /// stage began with, which the later stages' starts reset before the stage's commands ran.
+    /// </summary>
+    public static void RestoreShellStatus(PSCmdlet cmdlet, object? status)
+        => cmdlet.SessionState.PSVariable.Set("global:LASTEXITCODE", status);
+
+    /// <summary>
     /// <paramref name="cmdlet"/> ran another command (<c>command ls</c>, <c>env prog</c>, <c>flock f cmd</c>) and that
     /// command's status is now the cmdlet's own. A wrapper sets 0 as it starts and the command it runs sets
     /// <c>$LASTEXITCODE</c> as ITSELF (a native, a script, another cmdlet's instance), so the wrapper's recorded status

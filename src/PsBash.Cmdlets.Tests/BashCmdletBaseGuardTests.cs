@@ -43,9 +43,9 @@ public class BashCmdletBaseGuardTests : IClassFixture<SharedPwshFixture>
         {
             if (file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")) continue;
             var name = Path.GetFileName(file);
-            // ShellSignalTraps puts back the status from before a trap ran, eval the one from before or inside its
-            // script: neither is a status of its own.
-            if (name is "FileSystemHelpers.cs" or "BashCmdlet.cs" or "ShellSignalTraps.cs" or "InvokeBashEvalCommand.cs") continue;
+            // eval puts back the status from before or inside its script: not a status of its own. A status that is not
+            // the cmdlet's (before a trap, a first pipeline stage's start) goes through FileSystemHelpers.RestoreShellStatus.
+            if (name is "FileSystemHelpers.cs" or "BashCmdlet.cs" or "InvokeBashEvalCommand.cs") continue;
             var lines = File.ReadAllLines(file);
             for (int i = 0; i < lines.Length; i++)
             {
