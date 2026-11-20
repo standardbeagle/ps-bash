@@ -748,7 +748,7 @@ public static partial class PsEmitter
     {
         if (r.Here is not null) return false;
         string? literal = GetLiteralValue(r.Target);
-        if (literal == "/dev/null") return false;
+        if (literal == DevicePath.Null) return false;
         return r.Op switch
         {
             "<" or ">" or ">>" or ">|" or "&>" or "&>>" => true,

@@ -15,6 +15,7 @@ namespace PsBash.Cmdlets.Tests;
 /// Directive 5 (Platform matrix): fnm tests skip on platforms where fnm
 /// is unavailable. direnv tests skip similarly.
 /// </summary>
+[Collection(HookRegistryCollection.Name)]
 public class OnCdIntegrationTests : IDisposable
 {
     private readonly string _prefix = $"oncd-{Guid.NewGuid():N}";

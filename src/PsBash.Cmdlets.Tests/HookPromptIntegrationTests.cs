@@ -15,6 +15,7 @@ namespace PsBash.Cmdlets.Tests;
 /// - The 'prompt' function is restored (or removed) after each test to avoid
 ///   cross-test contamination.
 /// </summary>
+[Collection(HookRegistryCollection.Name)]
 public class HookPromptIntegrationTests : IDisposable
 {
     private readonly string _prefix = $"hpi-{Guid.NewGuid():N}";

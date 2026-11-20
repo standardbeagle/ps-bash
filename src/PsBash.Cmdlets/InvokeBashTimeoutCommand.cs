@@ -76,14 +76,11 @@ public sealed class InvokeBashTimeoutCommand : BashCmdlet
             return;
         }
 
-        bool timedOut = false;
         using var ps = PowerShell.Create(RunspaceMode.CurrentRunspace);
         ps.AddScript(script, useLocalScope: true);
         if (splitStderr) ps.Commands.Commands[0].MergeMyResults(System.Management.Automation.Runspaces.PipelineResultTypes.Error, System.Management.Automation.Runspaces.PipelineResultTypes.Output);
-        System.Threading.Timer? timer = null;
-        if (o.Duration > TimeSpan.Zero)
-            timer = new System.Threading.Timer(_ => { timedOut = true; try { ps.Stop(); } catch { /* already finished */ } },
-                null, o.Duration, System.Threading.Timeout.InfiniteTimeSpan);
+        var budget = o.Duration > TimeSpan.Zero ? new PipelineBudget(ps, o.Duration) : null;
+        bool timedOut = false;
         try
         {
             foreach (var r in ps.Invoke())
@@ -92,9 +89,13 @@ public sealed class InvokeBashTimeoutCommand : BashCmdlet
                 else WriteObject(r);
             }
         }
-        catch (PipelineStoppedException) when (timedOut)
+        catch (PipelineStoppedException) when (budget is { Expired: true })
         {
-            // stopped by the timer: the status below is 124
+            // stopped by the budget: the status below is 124
+        }
+        catch (InvalidPowerShellStateException) when (budget is { Expired: true })
+        {
+            // the budget's stop was still settling when Invoke began: it ended before the command ran, also 124
         }
         catch (RuntimeException ex) when (ex.InnerException is CommandNotFoundException cnf || ex is CommandNotFoundException)
         {
@@ -103,7 +104,7 @@ public sealed class InvokeBashTimeoutCommand : BashCmdlet
             FileSystemHelpers.SetLastExitCode(this, 127);
             return;
         }
-        finally { timer?.Dispose(); }
+        finally { timedOut = budget is { Expired: true }; budget?.Dispose(); }
 
         if (timedOut)
         {
@@ -184,5 +185,55 @@ public sealed class InvokeBashTimeoutCommand : BashCmdlet
         if (i >= a.Length) { error = ""; return false; }
         o = new Options(duration.Value, preserve, a[i..]);
         return true;
+    }
+}
+
+/// <summary>
+/// Stops a nested pipeline when its time budget ends. <see cref="PowerShell.Stop"/> on a pipeline that has not started
+/// yet does nothing (it is marked stopped, and the Invoke that follows runs it to the end), so a budget that ended
+/// before Invoke reached Running also stops it as it starts. REGRESSION (Windows fleet s23e, loaded host): the 0.3 s
+/// timer fired before Invoke started, and <c>timeout 0.3 sleep 10</c> slept 10 s and exited 0.
+/// </summary>
+internal sealed class PipelineBudget : IDisposable
+{
+    private readonly PowerShell _ps;
+    private readonly System.Threading.Timer _timer;
+    private int _expired;
+
+    internal PipelineBudget(PowerShell ps, TimeSpan budget)
+    {
+        _ps = ps;
+        ps.InvocationStateChanged += OnStateChanged;
+        _timer = new System.Threading.Timer(_ => Expire(), null, budget, System.Threading.Timeout.InfiniteTimeSpan);
+    }
+
+    /// <summary>The budget has ended (whether or not the pipeline was still running then).</summary>
+    internal bool Expired => System.Threading.Volatile.Read(ref _expired) != 0;
+
+    private void Expire()
+    {
+        // The flag is published (a full fence) before the state is read inside the stop; OnStateChanged reads the state
+        // first and the flag second, so of the two, at least one sees the other and the pipeline is stopped.
+        System.Threading.Interlocked.Exchange(ref _expired, 1);
+        Stop();
+    }
+
+    private void OnStateChanged(object? sender, PSInvocationStateChangedEventArgs e)
+    {
+        if (e.InvocationStateInfo.State != PSInvocationState.Running) return;
+        System.Threading.Thread.MemoryBarrier();
+        if (Expired) Stop();
+    }
+
+    // BeginStop, not Stop: OnStateChanged runs on the thread inside Invoke, which a synchronous stop would wait on.
+    private void Stop()
+    {
+        try { _ps.BeginStop(null, null); } catch { /* finished or disposed: nothing left to stop */ }
+    }
+
+    public void Dispose()
+    {
+        _timer.Dispose();
+        _ps.InvocationStateChanged -= OnStateChanged;
     }
 }

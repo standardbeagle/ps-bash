@@ -9,6 +9,7 @@ namespace PsBash.Cmdlets.Tests;
 /// NOTE: HookRegistry.Instance is a process-global singleton. Tests that mutate
 /// it must clean up after themselves to avoid order-dependent failures.
 /// </summary>
+[Collection(HookRegistryCollection.Name)]
 public class HookRegistryTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
     private readonly SharedPwshFixture _fixture;
