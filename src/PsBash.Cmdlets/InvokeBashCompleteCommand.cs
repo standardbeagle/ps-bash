@@ -118,6 +118,7 @@ public sealed class InvokeBashCompoptCommand : BashCmdlet
         var args = Arguments ?? Array.Empty<string>();
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "compopt", args)) return;
+        if (FileSystemHelpers.TryRejectBuiltinOptions(this, "compopt", args, "oDEI", "o")) return;
         for (int i = 0; i < args.Length; i++)
         {
             if (args[i] is "-o" or "+o")

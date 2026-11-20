@@ -1,3 +1,4 @@
+using PsBash.Cmdlets.Args;
 using System.Management.Automation;
 
 namespace PsBash.Cmdlets;
@@ -167,6 +168,14 @@ public sealed class InvokeBashXargsCommand : BashCmdlet
         }
         return PsBash.Cmdlets.Args.LongOptionAliases.Join(args, ref i, LongValueOptions);
     }
+
+    /// <summary>
+    /// GNU xargs' short options (<c>"0a:E:e::I:i::L:l::n:prs:tP:xd:"</c>): only to word an option it does not have; the
+    /// scan above reads the ones it models.
+    /// </summary>
+    private static readonly OptSpecSet XargsLetters = new(
+        "0prtx".Select(c => new OptSpec(c.ToString(), c, null, OptKind.Flag))
+            .Concat("aEeIiLlnsPd".Select(c => new OptSpec(c.ToString(), c, null, OptKind.Value))));
 
     protected override void EndProcessing()
     {
@@ -360,6 +369,13 @@ public sealed class InvokeBashXargsCommand : BashCmdlet
                 i++;
                 continue;
             }
+
+            // An option xargs does not have is GNU's usage error (status 1), not the command to run: `xargs --bogus`
+            // ran a program named "--bogus" (127). The shared parser words it (letters xargs knows are skipped).
+            if (arg.Length > 1 && arg[0] == '-'
+                && ArgParser.Parse(new[] { arg }, XargsLetters) is { Error.Kind: ArgErrorKind.Unrecognized } bad
+                && FileSystemHelpers.TryWriteParseError(this, "xargs", bad))
+                return;
 
             // The first operand is the command: xargs options end there, and
             // every later token belongs to the command (GNU). Scanning on took

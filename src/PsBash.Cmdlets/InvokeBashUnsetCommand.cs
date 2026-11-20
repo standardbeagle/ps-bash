@@ -157,6 +157,10 @@ public sealed class InvokeBashUnsetCommand : BashCmdlet
             return;
         }
 
+        // bash's unset options are -f, -v, -n; any other is its usage error, status 2 (REGRESSION: `unset --bogus`
+        // was skipped silently, status 0).
+        if (FileSystemHelpers.TryRejectBuiltinOptions(this, "unset", args, "fvn")) return;
+
         bool functionMode = false;
         var names = new List<string>();
         bool explicitVar = V.IsPresent;

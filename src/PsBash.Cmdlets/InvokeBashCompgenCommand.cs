@@ -18,6 +18,9 @@ public sealed class InvokeBashCompgenCommand : BashCmdlet
         var args = Arguments ?? Array.Empty<string>();
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "compgen", args)) return;
+        // bash 5.2's compgen getopt string (abcdefgjko:suvA:G:W:P:S:X:F:C:DEI): any other option is its usage error,
+        // status 2 (REGRESSION: `compgen -Q` returned 1 with nothing on stderr).
+        if (FileSystemHelpers.TryRejectBuiltinOptions(this, "compgen", args, "abcdefgjksuvoAGWPSXFCDEI", "oAGWPSXFC")) return;
 
         var kinds = new List<string>();
         string? wordList = null, funcName = null, command = null, filter = null, pre = "", suf = "";

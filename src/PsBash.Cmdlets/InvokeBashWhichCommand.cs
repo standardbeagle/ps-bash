@@ -56,16 +56,30 @@ public sealed class InvokeBashWhichCommand : BashCmdlet
             return;
         }
 
-        bool showAll = A.IsPresent;
-        var operands = new List<string>();
-        foreach (var a in args)
+        bool showAll = A.IsPresent, silent = false;
+        // debianutils which: `getopts as`, so options end at the first name (`which ls -a` looks up "-a"), letters are
+        // case-sensitive (-A is no option), and any other letter (`--bogus` is the letter '-') is its usage error:
+        // "Illegal option -X" on stderr, the usage on stdout, status 2. It was looked up as a command name (status 1).
+        int first = 0;
+        for (; first < args.Length; first++)
         {
-            // Case-sensitive: bash which treats -A as a literal, only -a is
-            // the all-flag. Use ordinal equals to match the psm1 oracle's
-            // `-ceq` comparison.
-            if (string.Equals(a, "-a", StringComparison.Ordinal)) { showAll = true; continue; }
-            operands.Add(a);
+            var a = args[first];
+            if (a == "--") { first++; break; }
+            if (a.Length < 2 || a[0] != '-') break;
+            foreach (var c in a.AsSpan(1))
+            {
+                if (c == 'a') showAll = true;
+                else if (c == 's') silent = true;
+                else
+                {
+                    FileSystemHelpers.WriteStderr(this, "Illegal option -" + c);
+                    WriteObject("Usage: which [-as] args");
+                    FileSystemHelpers.SetLastExitCode(this, 2);
+                    return;
+                }
+            }
         }
+        var operands = new List<string>(args.Skip(first));
 
         if (operands.Count == 0)
         {
@@ -87,7 +101,7 @@ public sealed class InvokeBashWhichCommand : BashCmdlet
 
             if (cmds.Count == 0 || cmds[0] == null)
             {
-                FileSystemHelpers.WriteBashError(this, $"which: no {name} in PATH");
+                if (!silent) FileSystemHelpers.WriteBashError(this, $"which: no {name} in PATH");
                 FileSystemHelpers.SetLastExitCode(this, 1); // bash/GNU which: any miss = status 1
                 continue;
             }
@@ -116,7 +130,7 @@ public sealed class InvokeBashWhichCommand : BashCmdlet
                 output.Properties.Add(new PSNoteProperty("Path", path));
                 output.Properties.Add(new PSNoteProperty("Type", type));
                 output.Properties.Add(new PSNoteProperty("BashText", path));
-                WriteObject(output);
+                if (!silent) WriteObject(output);
             }
         }
     }

@@ -134,8 +134,8 @@ public sealed class InvokeBashTrapCommand : BashCmdlet
         }
         else if (args[0].Length > 1 && args[0][0] == '-' && args[0] != "--")
         {
-            FileSystemHelpers.WriteBashError(this, $"trap: {args[0]}: invalid option");
-            FileSystemHelpers.SetLastExitCode(this, 2);
+            var (word, bad) = FileSystemHelpers.FindInvalidBuiltinOption(args, "lp") ?? (args[0], '\0');
+            FileSystemHelpers.WriteBuiltinInvalidOption(this, "trap", word, bad);
             return;
         }
         else

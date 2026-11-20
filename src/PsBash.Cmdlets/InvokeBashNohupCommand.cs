@@ -1,5 +1,6 @@
 using System.Management.Automation;
 using PsBash.Core;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -18,6 +19,9 @@ public sealed class InvokeBashNohupCommand : BashCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    private static readonly OptSpecSet NohupSpec = new(Array.Empty<OptSpec>(), allowAbbrev: true, gnuInfoOptions: true,
+        usageExitCode: 125, requireOrder: true);
+
     protected override void EndProcessing()
     {
         var args = Arguments ?? Array.Empty<string>();
@@ -35,9 +39,13 @@ public sealed class InvokeBashNohupCommand : BashCmdlet
         }
         var rest = args.Skip(i).ToArray();
 
-        if (rest.Length > 0 && rest[0] == "--help") { Help(); return; }
-        if (FileSystemHelpers.TryHandleVersion(this, "nohup", rest)) return;
-        if (rest.Length > 0 && rest[0] == "--") rest = rest.Skip(1).ToArray();
+        // GNU nohup's getopt_long("+"): its own options (--help, --version) come before the command; an option it does
+        // not have is a usage error (125), not a command name (`nohup --bogus` ran a program "--bogus": 127).
+        var parsed = ArgParser.Parse(rest, NohupSpec);
+        if (FileSystemHelpers.TryWriteParseError(this, "nohup", parsed)) return;
+        if (parsed.Has(OptSpecSet.HelpId)) { Help(); return; }
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "nohup", parsed)) return;
+        rest = parsed.Operands().ToArray();
         if (rest.Length == 0)
         {
             FileSystemHelpers.WriteMissingOperand(this, "nohup", exitCode: 125);

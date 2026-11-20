@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 using PsBash.Core;
 
 namespace PsBash.Cmdlets;
@@ -42,6 +43,16 @@ public sealed class InvokeBashBasenameCommand : BashCmdlet
     public SwitchParameter A { get; set; }
 
 
+    private static readonly OptSpecSet BasenameSpec = new(
+        new[]
+        {
+            new OptSpec("multiple", 'a', "multiple"),
+            new OptSpec("suffix", 's', "suffix", OptKind.Value),
+            new OptSpec("zero", 'z', "zero"),
+        },
+        allowAbbrev: true,
+        gnuInfoOptions: true);
+
     protected override void ProcessRecord()
     {
         var args = Arguments ?? Array.Empty<string>();
@@ -58,61 +69,14 @@ public sealed class InvokeBashBasenameCommand : BashCmdlet
             return;
         }
 
-        string? suffix = null;
-        bool allNames = A.IsPresent;
-        bool pastDoubleDash = false;
-        var operands = new List<string>();
-
-        int i = 0;
-        while (i < args.Length)
-        {
-            var arg = args[i];
-
-            if (pastDoubleDash)
-            {
-                operands.Add(arg);
-                i++;
-                continue;
-            }
-
-            if (string.Equals(arg, "--", StringComparison.Ordinal))
-            {
-                pastDoubleDash = true;
-                i++;
-                continue;
-            }
-
-            if (string.Equals(arg, "-a", StringComparison.Ordinal) ||
-                string.Equals(arg, "--multiple", StringComparison.Ordinal))
-            {
-                allNames = true;
-                i++;
-                continue;
-            }
-
-            if (string.Equals(arg, "-s", StringComparison.Ordinal) ||
-                string.Equals(arg, "--suffix", StringComparison.Ordinal))
-            {
-                i++;
-                if (i < args.Length) suffix = args[i];
-                i++;
-                // GNU: -s implies -a, so every operand gets the suffix stripped.
-                allNames = true;
-                continue;
-            }
-
-            if (arg.StartsWith("--suffix=", StringComparison.Ordinal))
-            {
-                suffix = arg.Substring("--suffix=".Length);
-                allNames = true;
-                i++;
-                continue;
-            }
-
-            operands.Add(arg);
-            i++;
-        }
-
+        // GNU getopt_long: options anywhere (permuted), `--` ends them, an unknown one is a usage error (status 1 +
+        // Try line), never a NAME. REGRESSION: `basename --bogus` printed `--bogus`, status 0.
+        var parsed = ArgParser.Parse(args, BasenameSpec);
+        if (FileSystemHelpers.TryWriteParseError(this, "basename", parsed)) return;
+        string? suffix = parsed.Last("suffix")?.Value;
+        bool allNames = A.IsPresent || parsed.Has("multiple") || suffix is not null; // GNU: -s implies -a
+        bool zero = parsed.Has("zero");
+        var operands = parsed.Operands();
         if (operands.Count == 0)
         {
             FileSystemHelpers.WriteMissingOperand(this, "basename");
@@ -153,7 +117,7 @@ public sealed class InvokeBashBasenameCommand : BashCmdlet
                 name = name.Substring(0, name.Length - singleSuffix.Length);
             }
 
-            WriteObject(name);
+            WriteObject(zero ? NulRecords.Record(name) : name);
         }
     }
 }

@@ -103,6 +103,17 @@ public sealed class InvokeBashYqCommand : BashCmdlet
                 continue;
             }
 
+            // yq (cobra) reports a flag it does not know and stops, status 1; ps-bash models only -r/-o, so any other
+            // flag is that error, never the filter expression (`yq --bogus` filtered with "--bogus").
+            if (arg.Length > 1 && arg[0] == '-' && arg != "--")
+            {
+                FileSystemHelpers.WriteBashError(this, arg[1] == '-'
+                    ? "Error: unknown flag: " + (arg.IndexOf('=') is var eq and > 0 ? arg[..eq] : arg)
+                    : $"Error: unknown shorthand flag: '{arg[1]}' in {arg}");
+                FileSystemHelpers.SetLastExitCode(this, 1);
+                return;
+            }
+
             if (!filterSet)
             {
                 filterExpr = arg;

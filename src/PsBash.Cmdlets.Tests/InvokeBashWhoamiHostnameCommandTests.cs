@@ -100,18 +100,13 @@ public class InvokeBashWhoamiHostnameCommandTests : IClassFixture<SharedPwshFixt
     // ---- injection probe (Directive 12) ----
 
     [Fact]
-    public void Whoami_ExtraArgWithScriptblockChars_IsIgnoredNotExecuted()
+    public void Whoami_ExtraArgWithScriptblockChars_IsAnExtraOperandNotExecuted()
     {
-        // Adversarial positional arg containing PS scriptblock + $() chars.
-        // The cmdlet must NOT evaluate it as code; it must produce a clean
-        // username and no extra output, no exceptions.
-        var expected = System.Environment.UserName;
-        var lines = RunLines("Invoke-BashWhoami '$(throw \"pwn\")'; $LASTEXITCODE");
-        // First emit: bare username from the cmdlet.
-        // Second emit: the literal "0" or null from $LASTEXITCODE — depending on
-        // session state. The key assertion is that "pwn" never appears.
-        Assert.Equal(expected, lines[0]);
-        Assert.DoesNotContain(lines, l => l.Contains("pwn"));
+        // Adversarial positional arg containing PS scriptblock + $() chars. The cmdlet must NOT evaluate it as code.
+        // GNU whoami takes no operand: `whoami X` is `whoami: extra operand ‘X’` + the Try line, status 1, no name.
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashWhoami '$(throw \"pwn\")'")
+            .AssertFailed(1, "whoami: extra operand ‘$(throw \"pwn\")’", "Try 'whoami --help'");
+        Assert.DoesNotContain(r.Lines, l => l.Length > 0);
     }
 
     [Fact]

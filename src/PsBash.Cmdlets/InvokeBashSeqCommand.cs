@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -89,7 +90,17 @@ public sealed class InvokeBashSeqCommand : BashCmdlet
         }
         if (status == SeqCore.Status.ZeroIncrement)
         {
-            FileSystemHelpers.WriteBashError(this, $"seq: invalid Zero increment value: '{badIncrement}'");
+            FileSystemHelpers.WriteUsageError(this, "seq", $"seq: invalid Zero increment value: {GnuQuote.Locale(badIncrement!)}");
+            return;
+        }
+        if (status == SeqCore.Status.UsageError)
+        {
+            FileSystemHelpers.WriteUsageError(this, "seq", badIncrement!);
+            return;
+        }
+        if (status == SeqCore.Status.InvalidFloat)
+        {
+            FileSystemHelpers.WriteUsageError(this, "seq", $"seq: invalid floating point argument: {GnuQuote.Locale(badIncrement!)}");
             return;
         }
 
@@ -128,7 +139,7 @@ public sealed class InvokeBashSeqCommand : BashCmdlet
 /// </summary>
 internal static class SeqCore
 {
-    internal enum Status { Ok, ZeroIncrement, MissingOperand, ExtraOperand }
+    internal enum Status { Ok, ZeroIncrement, MissingOperand, ExtraOperand, UsageError, InvalidFloat }
 
     /// <summary>
     /// Produce the formatted value strings (the exact <c>BashText</c> the cmdlet
@@ -149,69 +160,39 @@ internal static class SeqCore
 
         bool equalWidth = equalWidthFlag;
         string? format = null;
-        var operands = new List<string>();
 
-        int i = 0;
-        while (i < args.Length)
+        // GNU getopt_long with "+" (options end at the first operand: `seq 2 -w 4` has the operand `-w`), plus seq's
+        // twist: they also end at a word that looks like a negative number (`-1`, `-.5`), so `seq -1 2 3` counts from
+        // -1. An unknown option is a usage error, never an operand (REGRESSION: `seq --bogus` / `seq -Q` threw a .NET
+        // FormatException that ended the script at status 0).
+        int cut = args.Length;
+        for (int k = 0; k < args.Length; k++)
         {
-            var arg = args[i];
-
-            if (arg == "-s" || arg == "--separator")
-            {
-                i++;
-                if (i < args.Length) { separator = args[i]; }
-                i++;
-                continue;
-            }
-
-            if (arg == "-f" || arg == "--format")
-            {
-                i++;
-                if (i < args.Length) { format = args[i]; }
-                i++;
-                continue;
-            }
-
-            if (arg.StartsWith("--format=", StringComparison.Ordinal))
-            {
-                format = arg.Substring("--format=".Length);
-                i++;
-                continue;
-            }
-
-            // Attached values: `-s,` `-s " "` `-f%02g` (getopt allows the value glued to the flag).
-            if (arg.Length > 2 && arg[0] == '-' && arg[1] == 's')
-            {
-                separator = arg.Substring(2);
-                i++;
-                continue;
-            }
-
-            if (arg.Length > 2 && arg[0] == '-' && arg[1] == 'f')
-            {
-                format = arg.Substring(2);
-                i++;
-                continue;
-            }
-
-            if (arg.StartsWith("--separator=", StringComparison.Ordinal))
-            {
-                separator = arg.Substring("--separator=".Length);
-                i++;
-                continue;
-            }
-
-            if (arg == "-w" || arg == "--equal-width")
-            {
-                equalWidth = true;
-                i++;
-                continue;
-            }
-
-            operands.Add(arg);
-            i++;
+            var a = args[k];
+            if (a == "--") break;
+            if ((a.Length >= 2 && a[0] == '-' && a[1] != '-' && a[1..].TrimStart('w') is "s" or "f") || (a.Length > 2 && a.StartsWith("--", StringComparison.Ordinal) && a.IndexOf('=') < 0
+                    && ("--separator".StartsWith(a, StringComparison.Ordinal) || "--format".StartsWith(a, StringComparison.Ordinal))))
+            { k++; continue; } // the next word is that option's value, whatever it looks like
+            if (a.Length < 2 || a[0] != '-' || a[1] == '.' || char.IsAsciiDigit(a[1])) { cut = k; break; }
         }
-
+        var parsed = ArgParser.Parse(cut == args.Length ? args : args[..cut], SeqSpec);
+        if (parsed.Error is { } err)
+        {
+            badIncrement = err.Message("seq");
+            return Status.UsageError;
+        }
+        foreach (var tok in parsed.Tokens)
+        {
+            if (tok.Kind != ArgTokKind.Option) continue;
+            switch (tok.OptId)
+            {
+                case "separator": separator = tok.Value; break;
+                case "format": format = tok.Value; break;
+                case "equal-width": equalWidth = true; break;
+            }
+        }
+        var operands = parsed.Operands();
+        for (int k = cut; k < args.Length; k++) operands.Add(args[k]);
         // GNU: one to three operands. REGRESSION: a bare `seq` printed 1 with status 0.
         if (operands.Count == 0) return Status.MissingOperand;
         if (operands.Count > 3)
@@ -223,6 +204,9 @@ internal static class SeqCore
         // Determine first, increment, last (psm1 oracle semantics).
         double first = 1, increment = 1, last = 1;
 
+        // GNU: each operand must be a floating-point number (`seq abc`: invalid floating point argument, status 1).
+        foreach (var op in operands)
+            if (!TryParseDouble(op, out _)) { badIncrement = op; return Status.InvalidFloat; }
         if (operands.Count == 1)
         {
             last = ParseDouble(operands[0]);
@@ -269,8 +253,9 @@ internal static class SeqCore
         int padWidth = 0;
         if (equalWidth && isInteger)
         {
-            double maxVal = Math.Max(Math.Abs(first), Math.Abs(last));
-            padWidth = ((long)maxVal).ToString(CultureInfo.InvariantCulture).Length;
+            // GNU: the widest of the end points AS PRINTED, a minus sign included (`seq -w -3 2`: -3 … 00 01 02).
+            padWidth = Math.Max(((long)Math.Round(first)).ToString(CultureInfo.InvariantCulture).Length,
+                ((long)Math.Round(last)).ToString(CultureInfo.InvariantCulture).Length);
         }
 
         // Everything that can fail (operand parse, zero increment) has been decided above, so
@@ -298,8 +283,8 @@ internal static class SeqCore
             {
                 long intVal = (long)Math.Round(current);
                 formatted = (equalWidth && padWidth > 0)
-                    ? intVal.ToString(CultureInfo.InvariantCulture)
-                        .PadLeft(padWidth, '0')
+                    ? (intVal < 0 ? "-" : "") + Math.Abs(intVal).ToString(CultureInfo.InvariantCulture)
+                        .PadLeft(padWidth - (intVal < 0 ? 1 : 0), '0')
                     : intVal.ToString(CultureInfo.InvariantCulture);
             }
             else
@@ -396,4 +381,19 @@ internal static class SeqCore
 
     private static double ParseDouble(string s) =>
         double.Parse(s, CultureInfo.InvariantCulture);
+
+    /// <summary>An operand strtold would take whole (leading blanks allowed, as in GNU's xstrtold).</summary>
+    private static bool TryParseDouble(string s, out double value) =>
+        double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+
+    /// <summary>seq's options (GNU: <c>-f</c>/<c>--format</c>, <c>-s</c>/<c>--separator</c>, <c>-w</c>/<c>--equal-width</c>).</summary>
+    private static readonly OptSpecSet SeqSpec = new(
+        new[]
+        {
+            new OptSpec("format", 'f', "format", OptKind.Value),
+            new OptSpec("separator", 's', "separator", OptKind.Value),
+            new OptSpec("equal-width", 'w', "equal-width"),
+        },
+        allowAbbrev: true,
+        gnuInfoOptions: true);
 }

@@ -27,6 +27,9 @@ public sealed class InvokeBashGetoptsCommand : BashCmdlet
     {
         var a = Arguments ?? Array.Empty<string>();
         FileSystemHelpers.SetLastExitCode(this, 0);
+        // getopts has no options of its own: a leading `-Q` is bash's usage error, status 2; `--` ends them.
+        if (FileSystemHelpers.TryRejectBuiltinOptions(this, "getopts", a, "")) return;
+        if (a.Length > 0 && a[0] == "--") a = a[1..];
         if (a.Length < 2)
         {
             FileSystemHelpers.WriteStderr(this, "getopts: usage: getopts optstring name [arg ...]");

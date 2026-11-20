@@ -1029,9 +1029,33 @@ public static class PsBuild
     /// run-time <c>local</c> (<see cref="BuiltinAsSourceScript"/>) sees the caller's function. (bash also lists the
     /// function's locals: the emitter does that only for locals it sees declared, PsEmitter.EmitLocalListing.)
     /// </summary>
-    public static string BareLocal =>
+    public static string BareLocal => LocalInFunction(SetStatus(0));
+
+    /// <summary>
+    /// <paramref name="inFunction"/> when a function is running, else bash's <c>local: can only be used in a function</c>
+    /// (status 1), which bash reports before it looks at any option or operand (<c>local -Q</c> at the top level).
+    /// </summary>
+    public static string LocalInFunction(string inFunction) =>
         "if ([PsBash.Cmdlets.VarFrameStack]::Current.Depth -eq 0) { " + ShellDiagnosticLine("'local: can only be used in a function'")
-        + "; " + SetStatus(1) + " } else { " + SetStatus(0) + " }";
+        + "; " + SetStatus(1) + " } else { " + inFunction + " }";
+    /// <summary>
+    /// A builtin the emitter writes, given an option it does not have (<see cref="BuiltinOptions"/>): bash's
+    /// <c>PREFIX NAME: OPT: invalid option</c> and <c>NAME: usage: SYNOPSIS</c> (the text is the runtime's, so the synopsis
+    /// is the one <c>help -s</c> prints), status 2, and the builtin does nothing.
+    /// </summary>
+    public static string BuiltinInvalidOption(string builtin, string option) =>
+        ShellDiagnosticLine("[PsBash.Cmdlets.BashRuntime]::BuiltinInvalidOption(" + SingleQuote(builtin) + ", " + SingleQuote(option) + ")")
+        + "; " + SetStatus(2);
+
+    /// <summary>
+    /// <see cref="BuiltinInvalidOption"/> decided at run time, for words the emitter cannot read (<c>cd $o</c>):
+    /// <paramref name="argsExpr"/> (a PowerShell array expression) is scanned for an option not in
+    /// <paramref name="letters"/>; one is the usage error (status 2), else <paramref name="body"/> runs.
+    /// </summary>
+    public static string RunTimeBuiltinOptionCheck(string builtin, string argsExpr, string letters, string body) =>
+        "$__psbash_optErr = [PsBash.Cmdlets.BashRuntime]::BuiltinOptionError(" + SingleQuote(builtin) + ", [string[]]" + argsExpr + ", "
+        + SingleQuote(letters) + ", '', " + DiagnosticPrefix + "); "
+        + "if ($null -ne $__psbash_optErr) { Write-Error -Message $__psbash_optErr -ErrorAction Continue; " + SetStatus(2) + " } else { " + body + " }";
     /// <summary>A shell diagnostic <paramref name="message"/> (a PowerShell string expression) with bash's source prefix, on stderr.</summary>
     public static string ShellDiagnosticLine(string message) =>
         "Write-Error -Message (" + DiagnosticPrefix + " + " + message + ") -ErrorAction Continue";
@@ -1285,9 +1309,17 @@ public static class PsBuild
         + stagesText + "; $global:PIPESTATUS = " + PipeStatusSlots + "; "
         + "if ($global:__BashPipefail) { $global:LASTEXITCODE = 0; foreach ($__s in " + PipeStatusSlots + ") { if ($__s -ne 0) { $global:LASTEXITCODE = $__s } } } }";
 
-    /// <summary>One stage of a <see cref="PipefailPipeline"/>: <paramref name="stageBlock"/> run with its status kept in slot <paramref name="index"/>.</summary>
+    /// <summary>
+    /// One stage of a <see cref="PipefailPipeline"/>: <paramref name="stageBlock"/> run with its status kept in slot
+    /// <paramref name="index"/>. The first stage reads no pipe, so its block runs in a child block of its own
+    /// (<c>&amp; { … }</c>): Invoke-BashPipeStage steps the block as a steppable pipeline, and PowerShell drops a
+    /// <c>2&gt;&amp;1</c> that sits in a steppable pipeline's own top-level pipeline (the error goes to the stage's stderr), so
+    /// <c>awk -Q 2&gt;&amp;1 | wc -l; echo ${PIPESTATUS[0]}</c> printed the usage text and counted 0 lines. A later
+    /// stage's block must receive the pipe, so it stays as it is.
+    /// </summary>
     public static string PipefailStage(int index, string stageBlock) =>
-        "Invoke-BashPipeStage -Slot " + PipeStatusSlots + " -Index " + index.ToString(System.Globalization.CultureInfo.InvariantCulture) + " -Script { " + stageBlock + " }";
+        "Invoke-BashPipeStage -Slot " + PipeStatusSlots + " -Index " + index.ToString(System.Globalization.CultureInfo.InvariantCulture)
+        + " -Script { " + (index == 0 ? "& { " + stageBlock + " }" : stageBlock) + " }";
 
     /// <summary>
     /// The call head of a builtin the emitter implements, run at run time as its own static form with the words it gets

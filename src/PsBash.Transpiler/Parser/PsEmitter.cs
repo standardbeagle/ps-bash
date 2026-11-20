@@ -673,7 +673,8 @@ public static partial class PsEmitter
     private static int SimpleCommandLine(Command.Simple s) => s.ReportLine > 0 ? s.ReportLine : s.Line;
 
     /// <summary>
-    /// The statement can run a command that is not found (its diagnostic carries the statement's line): a simple command
+    /// The statement can raise a shell diagnostic that carries its line: a builtin given an option word (it may be
+    /// invalid), or a command that is not found: a simple command
     /// (alone, in a pipeline or an and-or list) whose name is not a literal, or a literal that is no builtin, ps-bash
     /// command or script function -- or <c>command</c> / <c>exec</c> / <c>builtin</c>, which look a name up themselves.
     /// Compound commands are not: their bodies' statements record their own lines.
@@ -683,6 +684,10 @@ public static partial class PsEmitter
         Command.Simple { Words.IsDefaultOrEmpty: false } s => GetLiteralValue(s.Words[0]) is not { Length: > 0 } name
             || LooksUpACommand(s, name)
             || s.Words.Any(w => ContainsCommandSub(w.Parts))
+            // A builtin given an option word may reject it (`pwd -Q`: `script.sh: line N: pwd: -Q: invalid option`).
+            || (BuiltinOptions.EmittedBuiltins.TryGetValue(name, out var emittedSpec) && BuiltinOptions.FindInvalid(s.Words.Skip(1).Select(TryGetStaticArgValue).ToList(), emittedSpec.Letters, emittedSpec.ValueLetters) is not null)
+            || (s_optionDiagnosticBuiltins.Contains(name) && s.Words.Skip(1).Any(w => GetLiteralValue(w) is not { } v || v is ['-', not '-', ..] or ['-', '-', _, ..]))
+            || (name == "set" && SetInvalidOption(s.Words.Skip(1).Select(TryGetStaticArgValue).ToList()) is not null)
             || !(s_posixSpecialBuiltins.Contains(name) || s_specialBuiltins.Contains(name)
                  || _definedFunctions is { } fns && fns.Contains(name) || IsMappedCommandName(name)),
         // `x=$(missing)`: the substitution's command reports the assignment's line.
@@ -690,6 +695,16 @@ public static partial class PsEmitter
         Command.Pipeline p => p.Commands.Any(MayReportCommandNotFound),
         Command.AndOrList a => a.Commands.Any(MayReportCommandNotFound),
         _ => false,
+    };
+
+    /// <summary>
+    /// Builtins whose invalid-option diagnostic carries the shell prefix with the line (FileSystemHelpers.
+    /// WriteBuiltinInvalidOption, the emitted cd): a statement that gives one an option word records its line.
+    /// </summary>
+    private static readonly IReadOnlySet<string> s_optionDiagnosticBuiltins = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "alias", "unalias", "cd", "pwd", "jobs", "wait", "mapfile", "readarray", "compgen", "times", "unset", "type",
+        "ulimit", "source", "getopts", "trap", "compopt", "disown", "bind", "caller", "enable", "read",
     };
 
     /// <summary>The script reads BASH_LINENO: statements record their line for the functions they call.</summary>
@@ -5151,6 +5166,9 @@ public static partial class PsEmitter
         if (TryEmitInputRedirect(cmd, out var inputResult))
             return inputResult;
 
+        if (TryEmitInvalidBuiltinOption(cmd, out var invalidOptionResult))
+            return invalidOptionResult;
+
         if (TryEmitInvalidIdentifiers(ref cmd, out var invalidIdResult))
             return invalidIdResult;
 
@@ -6042,6 +6060,26 @@ public static partial class PsEmitter
         return sb.Append('}').ToString();
     }
 
+    /// <summary>
+    /// A builtin the emitter writes (<see cref="BuiltinOptions.EmittedBuiltins"/>), given an option it does not have
+    /// (<c>read -Q</c>, <c>export --bogus</c>): bash's usage error (<see cref="PsBuild.BuiltinInvalidOption"/>, status 2)
+    /// in place of the builtin, with the command's redirects. A function of that name is the function's business.
+    /// </summary>
+    private static bool TryEmitInvalidBuiltinOption(Command.Simple cmd, out string result)
+    {
+        result = "";
+        if (cmd.Words.Length < 2 || GetLiteralValue(cmd.Words[0]) is not { } name
+            || !BuiltinOptions.EmittedBuiltins.TryGetValue(name, out var spec)
+            || _definedFunctions is { } fns && fns.Contains(name))
+            return false;
+        if (BuiltinOptions.FindInvalid(cmd.Words.Skip(1).Select(TryGetStaticArgValue).ToList(), spec.Letters, spec.ValueLetters) is not var (word, bad))
+            return false;
+        var diagnostic = PsBuild.BuiltinInvalidOption(name, BuiltinOptions.Spelling(word, bad));
+        if (name == "local") diagnostic = PsBuild.LocalInFunction(diagnostic);
+        result = cmd.Redirects.IsDefaultOrEmpty ? diagnostic : PsBuild.WithRedirectTail(diagnostic, tail => AppendRedirectTail(tail, cmd.Redirects));
+        return true;
+    }
+
     private static bool TryEmitSpecialBuiltins(Command.Simple cmd, out string result)
     {
         result = "";
@@ -6586,10 +6624,37 @@ public static partial class PsEmitter
         return PsBuild.SetAllExport(on.Value) + "; " + (emitted ?? PsBuild.SetStatus(0));
     }
 
+    /// <summary>
+    /// The option bash's <c>set</c> rejects in <paramref name="args"/> (its leading option words), spelled as bash
+    /// names it (<c>-Q</c>, <c>+Q</c>, <c>--</c> for any <c>--word</c>), or null when every option is one of its letters.
+    /// A word known only at run time ends the scan (that <c>set</c> runs then).
+    /// </summary>
+    internal static string? SetInvalidOption(IReadOnlyList<string?> args)
+    {
+        for (int i = 0; i < args.Count; i++)
+        {
+            var a = args[i];
+            if (a is null || a is "--" or "-" or "+" || a.Length < 2 || a[0] is not ('-' or '+')) return null;
+            if (a[0] == '-' && a[1] == '-') return "--";
+            bool takesName = false;
+            foreach (var c in a.AsSpan(1))
+            {
+                if (c == 'o') { takesName = true; continue; }
+                if ("abefhkmnptuvxBCEHPT".IndexOf(c) < 0) return a[0].ToString() + c;
+            }
+            if (takesName) i++;
+        }
+        return null;
+    }
+
     private static string? EmitSet(Command.Simple cmd, List<string?>? argsOverride = null)
     {
         string? specialResult = null;
         var literalArgs = argsOverride ?? cmd.Words.Skip(1).Select(TryGetStaticArgValue).ToList();
+        // An option bash's set does not have is a usage error at run time (status 2, nothing set, the script goes on),
+        // not a refusal of the whole script.
+        if (argsOverride is null && SetInvalidOption(literalArgs) is { } badSetOption)
+            return PsBuild.BuiltinInvalidOption("set", badSetOption);
         if (argsOverride is null && TryEmitSetLoneDashOrPlus(cmd, literalArgs) is { } lone) return lone;
         // noexec: nothing after `set -n` runs (and `set +n` can never be reached by a non-interactive shell).
         if (argsOverride is null && literalArgs is ["-n"] or ["-o", "noexec"]) return PsBuild.NoExecStop;
@@ -12712,11 +12777,14 @@ public static partial class PsEmitter
     {
         // Leading options: `--` ends them (`cd -- "$dir"` is the safe spelling for a dir that starts with `-`);
         // -L / -P pick logical / physical symlink handling, which this cd does not distinguish, so they are accepted.
-        while (!args.IsEmpty && GetLiteralValue(args[0]) is "--" or "-L" or "-P")
+        // Any other option is bash's usage error (`cd: --: invalid option` + usage, status 2), not a directory name.
+        while (!args.IsEmpty && GetLiteralValue(args[0]) is { Length: > 1 } opt && opt[0] == '-')
         {
-            bool endOfOptions = GetLiteralValue(args[0]) == "--";
             args = args.RemoveAt(0);
-            if (endOfOptions) break;
+            if (opt == "--") break;
+            int bad = opt[1] == '-' ? 1 : opt.AsSpan(1).IndexOfAnyExcept("LPe@") is int k and >= 0 ? k + 1 : -1;
+            if (bad > 0)
+                return PsBuild.BuiltinInvalidOption("cd", BuiltinOptions.Spelling(opt, opt[bad]));
         }
         // bash: `cd a b` is "too many arguments", status 1, and the directory does not change.
         if (args.Length > 1)
@@ -12815,6 +12883,10 @@ public static partial class PsEmitter
                 "Write-Error -Message 'cd: OLDPWD not set' -ErrorAction Continue; $global:LASTEXITCODE = 1 " +
                 "} else { " + resolveAndAct + " }";
         }
+
+        // A word known only at run time can be an option (`cd $o`, o=-Q): bash's usage error, as for a literal one above.
+        if (!args.IsEmpty && GetLiteralValue(args[0]) is null)
+            return prefix + PsBuild.RunTimeBuiltinOptionCheck("cd", "@([string]$__psbash_cd_target)", "LPe@", resolveAndAct);
 
         return prefix + resolveAndAct;
     }
@@ -13290,8 +13362,11 @@ public static partial class PsEmitter
                 result = EmitPassthrough("Invoke-BashBg", args);
                 return true;
             case "mapfile":
-            case "readarray":
                 result = EmitPassthrough("Invoke-BashMapfile", args);
+                return true;
+            case "readarray":
+                // One builtin under two names; its diagnostics name the one typed (`readarray: --: invalid option`).
+                result = EmitPassthrough("Invoke-BashMapfile", args, cmdletSwitch: " -BashName readarray");
                 return true;
             case "alias" when _aliasStaticOnly:
                 // Expanded at transpile time (PsEmitter.Aliases.cs): record the alias for `alias` listings, define no function.
@@ -13865,7 +13940,7 @@ public static partial class PsEmitter
     /// cmdlet must be prepared to receive every flag as a plain string.
     /// </summary>
     internal static readonly IReadOnlySet<string> OrderedArgCommands =
-        new HashSet<string>(StringComparer.Ordinal) { "source", "getopts", "flock", "timeout", "times", "help", "history", "hash", "umask", "ulimit", "compgen", "shopt", "complete", "compopt", "tee", "cp", "mv", "rm", "mkdir", "chmod", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "declare", "type", "bash", "sh", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "grep", "sed", "rg", "find", "echo", "printf", "test", "ls", "du", "tree", "column", "gzip", "tar", "md5sum", "sha1sum", "sha256sum", "diff", "jq", "od", "readlink", "realpath", "kill", "ping", "uname", "shuf", "traceroute", "id" };
+        new HashSet<string>(StringComparer.Ordinal) { "source", "getopts", "mapfile", "seq", "flock", "timeout", "times", "help", "history", "hash", "umask", "ulimit", "compgen", "shopt", "complete", "compopt", "tee", "cp", "mv", "rm", "mkdir", "chmod", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "declare", "type", "bash", "sh", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "grep", "sed", "rg", "find", "echo", "printf", "test", "ls", "du", "tree", "column", "gzip", "tar", "md5sum", "sha1sum", "sha256sum", "diff", "jq", "od", "readlink", "realpath", "kill", "ping", "uname", "shuf", "traceroute", "id", "hostname" };
 
     /// <summary><c>Invoke-BashTee</c> -&gt; is <c>tee</c> in <see cref="OrderedArgCommands"/>?</summary>
     private static bool IsOrderedArgCmdlet(string cmdlet) =>

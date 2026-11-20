@@ -362,6 +362,21 @@ public static class BashRuntime
     }
 
     /// <summary>
+    /// For a builtin written in the psm1 (<c>jobs</c>, <c>wait</c>): bash's whole invalid-option diagnostic for
+    /// <paramref name="args"/> when an option is not one of <paramref name="letters"/> (<paramref name="valueLetters"/>
+    /// take an argument), else null. The caller writes it to stderr and sets status 2
+    /// (<see cref="FileSystemHelpers.WriteBuiltinInvalidOption"/> is the cmdlet form).
+    /// </summary>
+    public static string? BuiltinOptionError(string builtin, string[]? args, string letters, string valueLetters, string prefix)
+        => FileSystemHelpers.BuiltinOptionError(builtin, args, letters, valueLetters, prefix);
+
+    /// <summary>
+    /// The text of a builtin's invalid-option report without the shell prefix (<c>NAME: OPT: invalid option</c> and
+    /// <c>NAME: usage: SYNOPSIS</c>): what the emitter writes for a builtin it implements (<c>PsBuild.BuiltinInvalidOption</c>).
+    /// </summary>
+    public static string BuiltinInvalidOption(string builtin, string option)
+        => FileSystemHelpers.BuiltinInvalidOptionMessage("", builtin, option);
+    /// <summary>
     /// The bash argv a DIRECT call typed (<c>Invoke-BashPing -w 3 host</c>, <c>Invoke-BashGit log -p</c>), with every
     /// single-letter decoy parameter put back as the flag it was typed as, where it was typed.
     /// <para>

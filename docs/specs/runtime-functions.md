@@ -522,6 +522,33 @@ command's usage status (1; 2 for builtins, grep, diff, ls, sort, tar). Oracle
 `RuntimeCommandParityDifferentialTests.BinderRejectedFlag_IsAUsageErrorWithItsStatus`; mapping `Core.Tests/UsageErrorsTests`.
 Known gap: such a record escapes the statement's own redirections (`2>/dev/null`, `2>&1`, `$(…)`), a PowerShell rule.
 
+**Every command rejects an option it does not have.** INVARIANT: given an option it lacks, every command ps-bash maps
+or implements writes a diagnostic to stderr, sets a failing status and does nothing else — it never runs, never
+takes the word as an operand, a program, a command name or a capability, and never crashes. Guard
+`Differential.Tests/UnknownOptionGuardTests` runs `NAME --bogus-xyz` for every name in `ModuleAliases.Names` ∪
+`BashBuiltins.Names`; its allow-list holds only names bash itself lets through (`echo`, `true`, `:`, `false`, `test`,
+`let`, `expr`) or that cannot run unattended, each with its reason. One primitive per kind:
+- A GNU-style tool: the shared parser (`ArgParser` + `TryWriteParseError`; `WriteUsageError` for a usage error the
+  cmdlet finds itself, e.g. `seq: invalid floating point argument: ‘x’`). A command that runs another command with its
+  own arguments uses `OptSpecSet(requireOrder: true)` (getopt `"+"`: options end at the first operand, so `nohup ls -l`
+  passes `-l` on); `seq` cuts at the first operand or negative number itself (`seq 2 -w 4` is an invalid float `-w`).
+  Tools that are not getopt_long keep their host wording: gawk's usage text (stderr, 1), procps `ps`'s
+  `error: unknown gnu long option` (1), Debian `hostname`'s message + usage on stdout (255), ncurses `tput`'s
+  `invalid option -- '-'` + usage (2), debianutils `which`'s `Illegal option -X` (2), yq's `Error: unknown flag` (1).
+- A bash builtin: `BuiltinOptions.FindInvalid` (bash's `internal_getopt`: the leading option words, up to `--`, a lone
+  `-` or the first operand; `--help` is help; any `--word` is reported as `--`) and one report,
+  `SCRIPT: line N: NAME: OPT: invalid option` + `NAME: usage: SYNOPSIS` (the `help -s` synopsis), status 2, nothing
+  done. Cmdlets call `FileSystemHelpers.TryRejectBuiltinOptions`/`WriteBuiltinInvalidOption`; psm1 builtins
+  `BashRuntime.BuiltinOptionError`; builtins the emitter writes (`read`, `export`, `local`, `readonly`, `enable`,
+  `builtin` in `BuiltinOptions.EmittedBuiltins`, `set`, `cd`) emit `PsBuild.BuiltinInvalidOption` in place of the
+  builtin (a word known only at run time: `PsBuild.RunTimeBuiltinOptionCheck`). Such a statement records its line
+  (`PsEmitter.MayReportCommandNotFound`). `set --bogus` is a run-time usage error, not a refusal of the script.
+  `local -Q` outside a function is `local: can only be used in a function` (1), as in bash; `caller` with no frame
+  (`bash -c`) fails (1) before it reads its words.
+- A pipeline's first stage runs in a child block (`PsBuild.PipefailStage`: `-Script { & { … } }`): PowerShell drops a
+  `2>&1` in the top-level pipeline of a steppable pipeline, so `awk -Q 2>&1 | wc -l` printed the usage to the terminal.
+  A stop that comes out of a stage's `Begin` (the downstream `head` closed first) keeps that stage's status.
+
 **Migrating a command:**
 
 1. Declare `static readonly string[]` valid-but-unsupported names (a `string[]` field keeps the

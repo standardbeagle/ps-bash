@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -32,6 +33,8 @@ public sealed class InvokeBashYesCommand : BashCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    private static readonly OptSpecSet YesSpec = new(Array.Empty<OptSpec>(), gnuInfoOptions: true);
+
     protected override void ProcessRecord()
     {
         var args = Arguments ?? Array.Empty<string>();
@@ -48,7 +51,13 @@ public sealed class InvokeBashYesCommand : BashCmdlet
             return;
         }
 
-        var text = args.Length > 0 ? string.Join(' ', args) : "y";
+        // GNU yes knows only --help/--version, scanning every word (getopt permutes; `--` ends the options): any other
+        // option is a usage error (status 1 + Try line). REGRESSION: `yes --bogus` printed `--bogus` forever.
+        var parsed = ArgParser.Parse(args, YesSpec);
+        if (FileSystemHelpers.TryWriteParseError(this, "yes", parsed)) return;
+        var operands = parsed.Operands();
+
+        var text = operands.Count > 0 ? string.Join(' ', operands) : "y";
 
         while (!Stopping)
         {

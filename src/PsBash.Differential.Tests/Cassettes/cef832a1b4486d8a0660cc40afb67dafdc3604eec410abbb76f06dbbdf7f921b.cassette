@@ -1,0 +1,182 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 798
+stdout-length: 4298
+stderr-length: 0
+==== SCRIPT ====
+{ for c in basename dirname whoami seq yes nohup xargs; do $c --bogus-xyz </dev/null; echo "$c $?"; $c -Q </dev/null; echo "$c $?"; done
+seq 2 -w 4; echo "seq-op $?"; seq -s, 3; echo "seq-s $?"; seq -w -2 1; echo "seq-neg $?"
+yes a -Q | head -1; echo "yes-late ${PIPESTATUS[0]}"
+awk --bogus-xyz | head -2; echo "awk ${PIPESTATUS[0]}"; awk -Q 2>&1 | wc -l; echo "awk-n ${PIPESTATUS[0]}"
+hostname --bogus-xyz | head -1; echo "hostname ${PIPESTATUS[0]}"
+ps --bogus-xyz | head -1; echo "ps ${PIPESTATUS[0]}"
+tput -Q | head -1; echo "tput ${PIPESTATUS[0]}"; tput --bogus | head -1; echo "tput ${PIPESTATUS[0]}"
+which -Q >/dev/null; echo "which $?"; which --x >/dev/null; echo "which $?"
+basename -z a/b | od -c | head -1; basename -a x/y z/w; basename -s .c a.c; dirname -z a/b | od -c | head -1
+} 2>&1
+
+==== STDOUT ====
+basename: unrecognized option '--bogus-xyz'
+Try 'basename --help' for more information.
+basename 1
+basename: invalid option -- 'Q'
+Try 'basename --help' for more information.
+basename 1
+dirname: unrecognized option '--bogus-xyz'
+Try 'dirname --help' for more information.
+dirname 1
+dirname: invalid option -- 'Q'
+Try 'dirname --help' for more information.
+dirname 1
+whoami: unrecognized option '--bogus-xyz'
+Try 'whoami --help' for more information.
+whoami 1
+whoami: invalid option -- 'Q'
+Try 'whoami --help' for more information.
+whoami 1
+seq: unrecognized option '--bogus-xyz'
+Try 'seq --help' for more information.
+seq 1
+seq: invalid option -- 'Q'
+Try 'seq --help' for more information.
+seq 1
+yes: unrecognized option '--bogus-xyz'
+Try 'yes --help' for more information.
+yes 1
+yes: invalid option -- 'Q'
+Try 'yes --help' for more information.
+yes 1
+nohup: unrecognized option '--bogus-xyz'
+Try 'nohup --help' for more information.
+nohup 125
+nohup: invalid option -- 'Q'
+Try 'nohup --help' for more information.
+nohup 125
+xargs: unrecognized option '--bogus-xyz'
+Try 'xargs --help' for more information.
+xargs 1
+xargs: invalid option -- 'Q'
+Try 'xargs --help' for more information.
+xargs 1
+seq: invalid floating point argument: ‘-w’
+Try 'seq --help' for more information.
+seq-op 1
+1,2,3
+seq-s 0
+-2
+-1
+00
+01
+seq-neg 0
+yes: invalid option -- 'Q'
+Try 'yes --help' for more information.
+yes-late 1
+Usage: awk [POSIX or GNU style options] -f progfile [--] file ...
+Usage: awk [POSIX or GNU style options] [--] 'program' file ...
+POSIX options:		GNU long options: (standard)
+	-f progfile		--file=progfile
+	-F fs			--field-separator=fs
+	-v var=val		--assign=var=val
+Short options:		GNU long options: (extensions)
+	-b			--characters-as-bytes
+	-c			--traditional
+	-C			--copyright
+	-d[file]		--dump-variables[=file]
+	-D[file]		--debug[=file]
+	-e 'program-text'	--source='program-text'
+	-E file			--exec=file
+	-g			--gen-pot
+	-h			--help
+	-i includefile		--include=includefile
+	-I			--trace
+	-l library		--load=library
+	-L[fatal|invalid|no-ext]	--lint[=fatal|invalid|no-ext]
+	-M			--bignum
+	-N			--use-lc-numeric
+	-n			--non-decimal-data
+	-o[file]		--pretty-print[=file]
+	-O			--optimize
+	-p[file]		--profile[=file]
+	-P			--posix
+	-r			--re-interval
+	-s			--no-optimize
+	-S			--sandbox
+	-t			--lint-old
+	-V			--version
+
+To report bugs, use the `gawkbug' program.
+For full instructions, see the node `Bugs' in `gawk.info'
+which is section `Reporting Problems and Bugs' in the
+printed version.  This same information may be found at
+https://www.gnu.org/software/gawk/manual/html_node/Bugs.html.
+PLEASE do NOT try to report bugs by posting in comp.lang.awk,
+or by using a web forum such as Stack Overflow.
+
+gawk is a pattern scanning and processing language.
+By default it reads standard input and writes standard output.
+
+Examples:
+	awk '{ sum += $1 }; END { print sum }' file
+	awk -F: '{ print $1 }' /etc/passwd
+awk 1
+47
+awk-n 1
+hostname: unrecognized option '--bogus-xyz'
+Usage: hostname [-b] {hostname|-F file}         set host name (from file)
+hostname 255
+error: unknown gnu long option
+
+Usage:
+ ps [options]
+
+ Try 'ps --help <simple|list|output|threads|misc|all>'
+  or 'ps --help <s|l|o|t|m|a>'
+ for additional help text.
+
+For more details see ps(1).
+ps 1
+tput: invalid option -- 'Q'
+Usage: tput [options] [command]
+
+Options:
+  -S <<       read commands from standard input
+  -T TERM     use this instead of $TERM
+  -V          print curses-version
+  -v          verbose, show warnings
+  -x          do not try to clear scrollback
+
+Commands:
+  clear       clear the screen
+  init        initialize the terminal
+  reset       reinitialize the terminal
+  capname     unlike clear/init/reset, print value for capability "capname"
+tput 2
+tput: invalid option -- '-'
+Usage: tput [options] [command]
+
+Options:
+  -S <<       read commands from standard input
+  -T TERM     use this instead of $TERM
+  -V          print curses-version
+  -v          verbose, show warnings
+  -x          do not try to clear scrollback
+
+Commands:
+  clear       clear the screen
+  init        initialize the terminal
+  reset       reinitialize the terminal
+  capname     unlike clear/init/reset, print value for capability "capname"
+tput 2
+Illegal option -Q
+which 2
+Illegal option --
+which 2
+0000000   b  \0
+y
+w
+a
+0000000   a  \0
+
+==== STDERR ====
+

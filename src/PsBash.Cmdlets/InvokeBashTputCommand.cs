@@ -38,6 +38,43 @@ public sealed class InvokeBashTputCommand : BashCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>ncurses tput's usage text (6.4, as Ubuntu prints it after an invalid option).</summary>
+    internal const string TputUsage = """
+        Usage: tput [options] [command]
+
+        Options:
+          -S <<       read commands from standard input
+          -T TERM     use this instead of $TERM
+          -V          print curses-version
+          -v          verbose, show warnings
+          -x          do not try to clear scrollback
+
+        Commands:
+          clear       clear the screen
+          init        initialize the terminal
+          reset       reinitialize the terminal
+          capname     unlike clear/init/reset, print value for capability "capname"
+        """;
+
+    /// <summary>The first letter of an option word (anywhere before <c>--</c>: getopt permutes) that tput's
+    /// <c>"ST:Vvx"</c> does not have, or null.</summary>
+    internal static char? InvalidOptionLetter(IReadOnlyList<string> args)
+    {
+        for (int i = 0; i < args.Count; i++)
+        {
+            var a = args[i];
+            if (a == "--") return null;
+            if (a.Length < 2 || a[0] != '-') continue;
+            for (int k = 1; k < a.Length; k++)
+            {
+                char c = a[k];
+                if (c == 'T') { if (k == a.Length - 1) i++; break; }
+                if ("SVvx".IndexOf(c) < 0) return c;
+            }
+        }
+        return null;
+    }
+
     protected override void ProcessRecord()
     {
         var args = Arguments ?? Array.Empty<string>();
@@ -51,6 +88,15 @@ public sealed class InvokeBashTputCommand : BashCmdlet
             {
                 WriteObject(line);
             }
+            return;
+        }
+
+        // ncurses tput's getopt("ST:Vvx"), short options only (so `--bogus` is the letter '-'): any other letter is its
+        // usage error, status 2, before anything runs. (`tput --bogus` was the unknown capability "--bogus", status 4.)
+        if (InvalidOptionLetter(args) is { } badLetter)
+        {
+            FileSystemHelpers.WriteBashError(this, $"tput: invalid option -- '{badLetter}'\n" + TputUsage);
+            FileSystemHelpers.SetLastExitCode(this, 2);
             return;
         }
 

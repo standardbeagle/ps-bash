@@ -71,6 +71,13 @@ public sealed class InvokeBashPwdCommand : BashCmdlet
         }
 
         bool physical = P.IsPresent;
+        // bash's pwd knows -L and -P (the last one wins); any other option is a usage error. Operands are ignored.
+        if (FileSystemHelpers.TryRejectBuiltinOptions(this, "pwd", args, "LP")) return;
+        foreach (var a in args)
+        {
+            if (a == "--" || a.Length < 2 || a[0] != '-') break;
+            foreach (char c in a.AsSpan(1)) physical = c == 'P' || (c != 'L' && physical);
+        }
 
         string? location = null;
 

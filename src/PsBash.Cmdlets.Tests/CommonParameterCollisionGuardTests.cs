@@ -66,6 +66,12 @@ public class CommonParameterCollisionGuardTests
             ["umask"] = new(CollidingLetters),
             ["ulimit"] = new(CollidingLetters),
             ["compgen"] = new(CollidingLetters),
+            // mapfile / seq: every dash word single-quoted, so an option the builtin rejects keeps its spelling and place
+            // (`seq 2 -w 4` is an operand -w, `mapfile -Q` reports -Q); decoys stay for direct calls.
+            ["mapfile"] = new(CollidingLetters),
+            ["seq"] = new(CollidingLetters),
+            // hostname: -a/-A/-d/-i/-I are Debian hostname's display options; bare, -i was ambiguous to the binder.
+            ["hostname"] = new(CollidingLetters),
             ["time"] = new(CollidingLetters),
             ["env"] = new(CollidingLetters),
             // command: emitter single-quotes every dash literal (its own -v/-V/-p AND the inner

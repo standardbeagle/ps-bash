@@ -81,6 +81,13 @@ public sealed class OptSpecSet
     /// </summary>
     public string? BundleDigitsId { get; }
 
+    /// <summary>
+    /// getopt's <c>"+"</c> (REQUIRE_ORDER): options end at the first operand, and every word after it is an operand
+    /// however it looks. The commands that run another command with its own arguments use it (<c>nohup</c>, <c>env</c>,
+    /// <c>timeout</c>, <c>xargs</c>): <c>nohup ls -l</c> passes <c>-l</c> to ls.
+    /// </summary>
+    public bool RequireOrder { get; }
+
     /// <summary>Id of the implicit GNU <c>--help</c> option (see <c>gnuInfoOptions</c>).</summary>
     public const string HelpId = "help";
 
@@ -104,8 +111,10 @@ public sealed class OptSpecSet
         int usageExitCode = 1,
         IEnumerable<string>? longOptionOrder = null,
         string? digitOptionWording = null,
-        string? bundleDigitsId = null)
+        string? bundleDigitsId = null,
+        bool requireOrder = false)
     {
+        RequireOrder = requireOrder;
         BundleDigitsId = bundleDigitsId;
         UsageExitCode = usageExitCode;
         DigitOptionWording = digitOptionWording;

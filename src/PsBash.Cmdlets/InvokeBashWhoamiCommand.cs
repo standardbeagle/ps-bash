@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -25,6 +26,8 @@ public sealed class InvokeBashWhoamiCommand : BashCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    private static readonly OptSpecSet WhoamiSpec = new(Array.Empty<OptSpec>(), gnuInfoOptions: true);
+
     protected override void ProcessRecord()
     {
         var args = Arguments ?? Array.Empty<string>();
@@ -40,6 +43,12 @@ public sealed class InvokeBashWhoamiCommand : BashCmdlet
             }
             return;
         }
+
+        // GNU whoami takes no options and no operand: either is a usage error (status 1 + Try line).
+        // REGRESSION: `whoami --bogus` and `whoami extra` printed the user, status 0.
+        var parsed = ArgParser.Parse(args, WhoamiSpec);
+        if (FileSystemHelpers.TryWriteParseError(this, "whoami", parsed)) return;
+        if (parsed.Operands() is [var extra, ..]) { FileSystemHelpers.WriteExtraOperand(this, "whoami", extra); return; }
 
         var name = System.Environment.UserName;
         WriteObject(BashRuntime.NewBashObject(name));

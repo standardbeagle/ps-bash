@@ -14,6 +14,8 @@ public sealed class InvokeBashTimesCommand : BashCmdlet
     {
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "times", Arguments ?? Array.Empty<string>())) return;
+        // times has no options: `times -Q` is bash's usage error, status 2 (it printed the times, status 0).
+        if (FileSystemHelpers.TryRejectBuiltinOptions(this, "times", Arguments ?? Array.Empty<string>(), "")) return;
         var p = Process.GetCurrentProcess();
         WriteObject($"{Fmt(p.UserProcessorTime)} {Fmt(p.PrivilegedProcessorTime)}");
         WriteObject($"{Fmt(TimeSpan.Zero)} {Fmt(TimeSpan.Zero)}");

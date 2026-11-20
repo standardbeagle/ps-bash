@@ -65,6 +65,12 @@ public sealed class InvokeBashTypeCommand : BashCmdlet
         {
             if (!optionsDone && arg == "--") { optionsDone = true; continue; }
             if (!optionsDone && arg == "--all") { showAll = true; continue; }
+            // bash's type has no long options (`--all` aside, which ps-bash keeps): `--bogus` is its usage error.
+            if (!optionsDone && arg.Length > 2 && arg.StartsWith("--", StringComparison.Ordinal))
+            {
+                FileSystemHelpers.WriteBuiltinInvalidOption(this, "type", arg);
+                return;
+            }
             if (!optionsDone && arg.Length > 1 && arg[0] == '-' && arg[1] != '-')
             {
                 foreach (var c in arg.AsSpan(1))
@@ -77,9 +83,7 @@ public sealed class InvokeBashTypeCommand : BashCmdlet
                         case 'a': showAll = true; break;
                         case 'f': skipFunctions = true; break;
                         default:
-                            FileSystemHelpers.WriteBashError(this, $"bash: type: -{c}: invalid option\n"
-                                + "type: usage: type [-afptP] name [name ...]");
-                            FileSystemHelpers.SetLastExitCode(this, 2);
+                            FileSystemHelpers.WriteBuiltinInvalidOption(this, "type", arg, c);
                             return;
                     }
                 }

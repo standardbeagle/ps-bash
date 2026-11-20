@@ -436,6 +436,8 @@ function Write-BashBuiltinError([string]$Message, [int]$Status) {
     $global:LASTEXITCODE = $Status
 }
 function Invoke-BashEnable {
+    $optErr = [PsBash.Cmdlets.BashRuntime]::BuiltinOptionError('enable', [string[]]@($args), 'adnpsf', 'f', [PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0))
+    if ($null -ne $optErr) { Write-BashHostStderr $optErr; $global:LASTEXITCODE = 2; return }
     $names = [PsBash.Core.Parser.BashBuiltins, PsBash.Transpiler]::Names
     $ops = @($args | Where-Object { -not "$_".StartsWith('-') })
     if ($ops.Count -eq 0) { foreach ($n in ($names | Sort-Object { $_ } -CaseSensitive)) { "enable $n" }; $global:LASTEXITCODE = 0; return }
@@ -443,16 +445,28 @@ function Invoke-BashEnable {
     foreach ($n in $ops) { if (-not $names.Contains("$n")) { Write-BashBuiltinError "enable: ${n}: not a shell builtin" 1 } }
 }
 function Invoke-BashCaller {
+    # With no frame at all (`bash -c 'caller -Q'`) bash fails before it reads its words; in a script or a function
+    # an option it does not have is the usage error. Its operand is a frame number (`-1` is one too).
+    $inFrame = -not [string]::IsNullOrEmpty("$global:BASH_SOURCE") -or [PsBash.Cmdlets.VarFrameStack]::Current.Depth -gt 0
+    if ($inFrame -and $args.Count -gt 0 -and "$($args[0])" -notmatch '^-[0-9]') {
+        $optErr = [PsBash.Cmdlets.BashRuntime]::BuiltinOptionError('caller', [string[]]@($args), '', '', [PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0))
+        if ($null -ne $optErr) { Write-BashHostStderr $optErr; $global:LASTEXITCODE = 2; return }
+    }
     # Outside a function bash prints nothing and fails; ps-bash keeps no call frames to report from inside one either.
     $global:LASTEXITCODE = 1
 }
 function Invoke-BashDisown {
+    $optErr = [PsBash.Cmdlets.BashRuntime]::BuiltinOptionError('disown', [string[]]@($args), 'ahr', '', [PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0))
+    if ($null -ne $optErr) { Write-BashHostStderr $optErr; $global:LASTEXITCODE = 2; return }
     $ids = @($args | Where-Object { -not "$_".StartsWith('-') })
     if ($ids.Count -eq 0) { $ids = @('current') }
     foreach ($id in $ids) { Write-BashBuiltinError "disown: ${id}: no such job" 1 }
 }
 function Invoke-BashBind {
-    Write-Error -Message 'bind: warning: line editing not enabled' -ErrorAction Continue
+    $prefix = [PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0)
+    Write-BashHostStderr ($prefix + 'bind: warning: line editing not enabled')
+    $optErr = [PsBash.Cmdlets.BashRuntime]::BuiltinOptionError('bind', [string[]]@($args), 'lpsvPSVXmfqurx', 'mfqurx', $prefix)
+    if ($null -ne $optErr) { Write-BashHostStderr $optErr; $global:LASTEXITCODE = 2; return }
     $global:LASTEXITCODE = 0
 }
 function Invoke-BashSuspend {
@@ -3357,6 +3371,9 @@ function Invoke-BashWait {
     param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'wait' }
+    # wait's options are -f, -n, -p VAR; any other is bash's usage error, status 2 (`wait --bogus` was status 1).
+    $optErr = [PsBash.Cmdlets.BashRuntime]::BuiltinOptionError('wait', $Arguments, 'fnp', 'p', [PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0))
+    if ($null -ne $optErr) { Write-BashHostStderr $optErr; $global:LASTEXITCODE = 2; return }
 
     $global:LASTEXITCODE = 0
     # wait -n [-f] [id ...]: return when the NEXT of the named jobs (default: every job) finishes, with its status;
@@ -3433,6 +3450,11 @@ function Invoke-BashJobs {
     param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'jobs' }
+
+    # jobs' options are -l -n -p -r -s -x; any other is bash's usage error, status 2 (`jobs -Q` listed the jobs, status 0).
+    $optErr = [PsBash.Cmdlets.BashRuntime]::BuiltinOptionError('jobs', $Arguments, 'lnprsx', '', [PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0))
+    if ($null -ne $optErr) { Write-BashHostStderr $optErr; $global:LASTEXITCODE = 2; return }
+    $global:LASTEXITCODE = 0
 
     if ($script:BashBgJobs.Count -eq 0) {
         return

@@ -1,0 +1,166 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 892
+stdout-length: 5451
+stderr-length: 0
+==== SCRIPT ====
+for o in -Q --bogus; do
+pwd $o; echo "pwd $?"; times $o; echo "times $?"; unset $o; echo "unset $?"
+mapfile $o; echo "mapfile $?"; readarray $o; echo "readarray $?"; compgen $o; echo "compgen $?"
+alias $o; echo "alias $?"; unalias $o; echo "unalias $?"; getopts $o; echo "getopts $?"
+type $o; echo "type $?"; ulimit $o; echo "ulimit $?"; trap $o; echo "trap $?"
+jobs $o; echo "jobs $?"; wait $o; echo "wait $?"; disown $o; echo "disown $?"
+compopt $o; echo "compopt $?"; cd $o; echo "cd $?"; set $o; echo "set $?"; bind $o; echo "bind $?"
+done 2>&1
+{ read -Q; echo "read $?"; readonly -Q; echo "readonly $?"; export --bogus; echo "export $?"
+enable -Q; echo "enable $?"; caller -Q; echo "caller $?"; builtin -Q; echo "builtin $?"
+set -eQ; echo "set-e $?"; set +Q; echo "set+ $?"; local -Q; echo "local-top $?"
+pwd -Q 2>/dev/null; echo "quiet $?"; read -Q 2>/dev/null; echo "quiet $?"; } 2>&1
+
+==== STDOUT ====
+bash: line 2: pwd: -Q: invalid option
+pwd: usage: pwd [-LP]
+pwd 2
+bash: line 2: times: -Q: invalid option
+times: usage: times
+times 2
+bash: line 2: unset: -Q: invalid option
+unset: usage: unset [-f] [-v] [-n] [name ...]
+unset 2
+bash: line 3: mapfile: -Q: invalid option
+mapfile: usage: mapfile [-d delim] [-n count] [-O origin] [-s count] [-t] [-u fd] [-C callback] [-c quantum] [array]
+mapfile 2
+bash: line 3: readarray: -Q: invalid option
+readarray: usage: readarray [-d delim] [-n count] [-O origin] [-s count] [-t] [-u fd] [-C callback] [-c quantum] [array]
+readarray 2
+bash: line 3: compgen: -Q: invalid option
+compgen: usage: compgen [-abcdefgjksuv] [-o option] [-A action] [-G globpat] [-W wordlist] [-F function] [-C command] [-X filterpat] [-P prefix] [-S suffix] [word]
+compgen 2
+bash: line 4: alias: -Q: invalid option
+alias: usage: alias [-p] [name[=value] ... ]
+alias 2
+bash: line 4: unalias: -Q: invalid option
+unalias: usage: unalias [-a] name [name ...]
+unalias 2
+bash: line 4: getopts: -Q: invalid option
+getopts: usage: getopts optstring name [arg ...]
+getopts 2
+bash: line 5: type: -Q: invalid option
+type: usage: type [-afptP] name [name ...]
+type 2
+bash: line 5: ulimit: -Q: invalid option
+ulimit: usage: ulimit [-SHabcdefiklmnpqrstuvxPRT] [limit]
+ulimit 2
+bash: line 5: trap: -Q: invalid option
+trap: usage: trap [-lp] [[arg] signal_spec ...]
+trap 2
+bash: line 6: jobs: -Q: invalid option
+jobs: usage: jobs [-lnprs] [jobspec ...] or jobs -x command [args]
+jobs 2
+bash: line 6: wait: -Q: invalid option
+wait: usage: wait [-fn] [-p var] [id ...]
+wait 2
+bash: line 6: disown: -Q: invalid option
+disown: usage: disown [-h] [-ar] [jobspec ... | pid ...]
+disown 2
+bash: line 7: compopt: -Q: invalid option
+compopt: usage: compopt [-o|+o option] [-DEI] [name ...]
+compopt 2
+bash: line 7: cd: -Q: invalid option
+cd: usage: cd [-L|[-P [-e]] [-@]] [dir]
+cd 2
+bash: line 7: set: -Q: invalid option
+set: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]
+set 2
+bash: line 7: bind: warning: line editing not enabled
+bash: line 7: bind: -Q: invalid option
+bind: usage: bind [-lpsvPSVX] [-m keymap] [-f filename] [-q name] [-u name] [-r keyseq] [-x keyseq:shell-command] [keyseq:readline-function or readline-command]
+bind 2
+bash: line 2: pwd: --: invalid option
+pwd: usage: pwd [-LP]
+pwd 2
+bash: line 2: times: --: invalid option
+times: usage: times
+times 2
+bash: line 2: unset: --: invalid option
+unset: usage: unset [-f] [-v] [-n] [name ...]
+unset 2
+bash: line 3: mapfile: --: invalid option
+mapfile: usage: mapfile [-d delim] [-n count] [-O origin] [-s count] [-t] [-u fd] [-C callback] [-c quantum] [array]
+mapfile 2
+bash: line 3: readarray: --: invalid option
+readarray: usage: readarray [-d delim] [-n count] [-O origin] [-s count] [-t] [-u fd] [-C callback] [-c quantum] [array]
+readarray 2
+bash: line 3: compgen: --: invalid option
+compgen: usage: compgen [-abcdefgjksuv] [-o option] [-A action] [-G globpat] [-W wordlist] [-F function] [-C command] [-X filterpat] [-P prefix] [-S suffix] [word]
+compgen 2
+bash: line 4: alias: --: invalid option
+alias: usage: alias [-p] [name[=value] ... ]
+alias 2
+bash: line 4: unalias: --: invalid option
+unalias: usage: unalias [-a] name [name ...]
+unalias 2
+bash: line 4: getopts: --: invalid option
+getopts: usage: getopts optstring name [arg ...]
+getopts 2
+bash: line 5: type: --: invalid option
+type: usage: type [-afptP] name [name ...]
+type 2
+bash: line 5: ulimit: --: invalid option
+ulimit: usage: ulimit [-SHabcdefiklmnpqrstuvxPRT] [limit]
+ulimit 2
+bash: line 5: trap: --: invalid option
+trap: usage: trap [-lp] [[arg] signal_spec ...]
+trap 2
+bash: line 6: jobs: --: invalid option
+jobs: usage: jobs [-lnprs] [jobspec ...] or jobs -x command [args]
+jobs 2
+bash: line 6: wait: --: invalid option
+wait: usage: wait [-fn] [-p var] [id ...]
+wait 2
+bash: line 6: disown: --: invalid option
+disown: usage: disown [-h] [-ar] [jobspec ... | pid ...]
+disown 2
+bash: line 7: compopt: --: invalid option
+compopt: usage: compopt [-o|+o option] [-DEI] [name ...]
+compopt 2
+bash: line 7: cd: --: invalid option
+cd: usage: cd [-L|[-P [-e]] [-@]] [dir]
+cd 2
+bash: line 7: set: --: invalid option
+set: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]
+set 2
+bash: line 7: bind: warning: line editing not enabled
+bash: line 7: bind: --: invalid option
+bind: usage: bind [-lpsvPSVX] [-m keymap] [-f filename] [-q name] [-u name] [-r keyseq] [-x keyseq:shell-command] [keyseq:readline-function or readline-command]
+bind 2
+bash: line 9: read: -Q: invalid option
+read: usage: read [-ers] [-a array] [-d delim] [-i text] [-n nchars] [-N nchars] [-p prompt] [-t timeout] [-u fd] [name ...]
+read 2
+bash: line 9: readonly: -Q: invalid option
+readonly: usage: readonly [-aAf] [name[=value] ...] or readonly -p
+readonly 2
+bash: line 9: export: --: invalid option
+export: usage: export [-fn] [name[=value] ...] or export -p
+export 2
+bash: line 10: enable: -Q: invalid option
+enable: usage: enable [-a] [-dnps] [-f filename] [name ...]
+enable 2
+caller 1
+bash: line 10: builtin: -Q: invalid option
+builtin: usage: builtin [shell-builtin [arg ...]]
+builtin 2
+bash: line 11: set: -Q: invalid option
+set: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]
+set-e 2
+bash: line 11: set: +Q: invalid option
+set: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]
+set+ 2
+bash: line 11: local: can only be used in a function
+local-top 1
+quiet 2
+quiet 2
+
+==== STDERR ====
+

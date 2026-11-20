@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 using PsBash.Core;
 
 namespace PsBash.Cmdlets;
@@ -43,16 +44,27 @@ public sealed class InvokeBashDirnameCommand : BashCmdlet
             return;
         }
 
-        if (args.Length > 0 && args[0] == "--") args = args[1..];
-        if (args.Length == 0)
+        // GNU getopt_long: an unknown option is a usage error (status 1 + Try line), not a NAME.
+        // REGRESSION: `dirname --bogus` printed `.`, status 0.
+        var parsed = ArgParser.Parse(args, DirnameSpec);
+        if (FileSystemHelpers.TryWriteParseError(this, "dirname", parsed)) return;
+        bool zero = parsed.Has("zero");
+        var operands = parsed.Operands();
+        if (operands.Count == 0)
         {
             FileSystemHelpers.WriteMissingOperand(this, "dirname");
             return;
         }
 
-        foreach (var path in args)
-            WriteObject(DirectoryPart(BashPath.ToShell(path)));
+        foreach (var path in operands)
+        {
+            var dir = DirectoryPart(BashPath.ToShell(path));
+            WriteObject(zero ? NulRecords.Record(dir) : dir);
+        }
     }
+
+    private static readonly OptSpecSet DirnameSpec = new(
+        new[] { new OptSpec("zero", 'z', "zero") }, allowAbbrev: true, gnuInfoOptions: true);
 
     /// <summary>
     /// gnulib <c>mdir_name</c>: the name minus its last component and the slashes before it; <c>.</c> when nothing

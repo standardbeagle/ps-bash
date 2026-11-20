@@ -573,13 +573,83 @@ internal static class FileSystemHelpers
     public static bool TryWriteParseError(PSCmdlet cmdlet, string cmd, Args.ParsedArgs parsed)
     {
         if (parsed.Error is not { } err) return false;
-        string message = err.Message(cmd);
         // A usage error is followed by the tool's hint line(s); ps-bash's own "recognized but not supported" is not one.
-        if (err.Kind != Args.ArgErrorKind.ValidButUnsupported && UsageHint(cmd) is { } hint) message += "\n" + hint;
-        WriteBashError(cmdlet, message);
-        SetLastExitCode(cmdlet, parsed.ErrorExitCode);
+        if (err.Kind == Args.ArgErrorKind.ValidButUnsupported)
+        {
+            WriteBashError(cmdlet, err.Message(cmd));
+            SetLastExitCode(cmdlet, parsed.ErrorExitCode);
+        }
+        else WriteUsageError(cmdlet, cmd, err.Message(cmd), parsed.ErrorExitCode);
         return true;
     }
+
+    /// <summary>
+    /// A GNU usage error: <paramref name="message"/> (<c>seq: invalid floating point argument: ‘x’</c>), then the tool's
+    /// <see cref="UsageHint"/> (<c>Try 'seq --help' for more information.</c>), status <paramref name="status"/>.
+    /// </summary>
+    public static void WriteUsageError(PSCmdlet cmdlet, string cmd, string message, int status = 1)
+    {
+        if (UsageHint(cmd) is { } hint) message += "\n" + hint;
+        WriteBashError(cmdlet, message);
+        SetLastExitCode(cmdlet, status);
+    }
+
+    /// <summary>
+    /// bash's report of an option a BUILTIN does not have (<c>sh_invalidopt</c> + <c>builtin_usage</c>): the shell's
+    /// diagnostic prefix (<c>bash: line 1: </c>), <c>NAME: OPT: invalid option</c>, then <c>NAME: usage: SYNOPSIS</c>
+    /// (the synopsis <c>help -s</c> prints), status 2. <paramref name="word"/> is the argument as typed; bash names a
+    /// long option <c>--</c> and a short one by its first unknown letter (<see cref="BuiltinOptionSpelling"/>).
+    /// REGRESSION: <c>pwd --bogus</c>, <c>jobs -Q</c>, <c>mapfile --x</c>, <c>times -Q</c> printed nothing, status 0.
+    /// Guard: <c>Differential.Tests/UnknownOptionGuardTests</c>.
+    /// </summary>
+    public static void WriteBuiltinInvalidOption(PSCmdlet cmdlet, string builtin, string word, char bad = '\0')
+    {
+        WriteStderr(cmdlet, BuiltinInvalidOptionMessage(ShellDiagnostic.Prefix(cmdlet.SessionState), builtin,
+            BuiltinOptionSpelling(word, bad)));
+        SetLastExitCode(cmdlet, 2);
+    }
+
+    /// <summary>
+    /// bash's <c>internal_getopt</c> check for a builtin whose options are the letters <paramref name="letters"/> (those
+    /// in <paramref name="valueLetters"/> take an argument, attached or the next word): the leading option words, up to
+    /// <c>--</c>, a lone <c>-</c> or the first operand, are scanned and the first unknown one is reported through
+    /// <see cref="WriteBuiltinInvalidOption"/> (true: the caller stops). Parsing the known ones stays with the caller.
+    /// </summary>
+    public static bool TryRejectBuiltinOptions(PSCmdlet cmdlet, string builtin, IReadOnlyList<string> args, string letters,
+        string valueLetters = "")
+    {
+        if (FindInvalidBuiltinOption(args, letters, valueLetters) is not var (word, bad)) return false;
+        WriteBuiltinInvalidOption(cmdlet, builtin, word, bad);
+        return true;
+    }
+
+    /// <summary>
+    /// <see cref="TryRejectBuiltinOptions"/> for a builtin written in the psm1 (<c>jobs</c>, <c>wait</c>; reached through
+    /// <c>BashRuntime.BuiltinOptionError</c>): the whole diagnostic (<paramref name="prefix"/> = <c>ShellDiagnostic.Prefix</c>),
+    /// or null when every option is known. The caller writes it to stderr and sets status 2.
+    /// </summary>
+    internal static string? BuiltinOptionError(string builtin, string[]? args, string letters, string valueLetters, string prefix)
+        => FindInvalidBuiltinOption(args ?? Array.Empty<string>(), letters, valueLetters) is var (word, bad)
+            ? BuiltinInvalidOptionMessage(prefix, builtin, BuiltinOptionSpelling(word, bad))
+            : null;
+
+    /// <summary>The first option word bash would reject and its bad letter (<c>'\0'</c> for a <c>--NAME</c>), or null (pure;
+    /// <see cref="PsBash.Core.Parser.BuiltinOptions.FindInvalid"/>, shared with the emitter).</summary>
+    internal static (string Word, char Bad)? FindInvalidBuiltinOption(IReadOnlyList<string> args, string letters, string valueLetters = "")
+        => PsBash.Core.Parser.BuiltinOptions.FindInvalid(args, letters, valueLetters);
+
+    /// <summary>The text of <see cref="WriteBuiltinInvalidOption"/> (pure).</summary>
+    internal static string BuiltinInvalidOptionMessage(string prefix, string builtin, string option)
+        => $"{prefix}{builtin}: {option}: invalid option"
+           + (InvokeBashHelpCommand.Topics.TryGetValue(builtin, out var topic) ? $"\n{builtin}: usage: {topic.Synopsis}" : "");
+
+    /// <summary>
+    /// How bash's <c>internal_getopt</c> names a bad option word: <c>--</c> for any <c>--NAME</c> (a builtin has no long
+    /// options), else <c>-</c> and the first letter it does not know (<paramref name="bad"/>; the word's first letter when
+    /// not given).
+    /// </summary>
+    internal static string BuiltinOptionSpelling(string word, char bad = '\0')
+        => PsBash.Core.Parser.BuiltinOptions.Spelling(word, bad);
 
     /// <summary>
     /// GNU's "missing operand" usage error, the ONE spelling every command uses: <c>CMD: missing operand</c> (or

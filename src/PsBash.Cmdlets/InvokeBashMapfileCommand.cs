@@ -78,6 +78,13 @@ public sealed class InvokeBashMapfileCommand : BashCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>
+    /// The name the script used (<c>readarray</c>; <c>mapfile</c> when absent): the two are one builtin, but bash's
+    /// diagnostics name the one that was typed. Set by the emitter, which maps both names to this cmdlet.
+    /// </summary>
+    [Parameter]
+    public string? BashName { get; set; }
+
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
@@ -126,6 +133,11 @@ public sealed class InvokeBashMapfileCommand : BashCmdlet
             }
             return;
         }
+
+        // bash's mapfile options (d:n:O:s:tu:C:c:); any other is its usage error, status 2, named as invoked
+        // (REGRESSION: `mapfile -Q` / `readarray --bogus` were ignored, status 0).
+        if (FileSystemHelpers.TryRejectBuiltinOptions(this, BashName == "readarray" ? "readarray" : "mapfile", args,
+                "dnOstuCc", "dnOsuCc")) return;
 
         // Defaults match the psm1 oracle.
         int? count = null;

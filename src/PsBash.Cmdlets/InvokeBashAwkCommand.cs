@@ -76,6 +76,86 @@ public sealed class InvokeBashAwkCommand : BashCmdlet
     private bool _bufferStdin;  // mode 2, or mode 3 with a getline that may read the pipeline
     private bool _halt;     // version/help/usage/syntax/runtime error: ignore everything that follows
 
+
+    /// <summary>gawk 5.2's short option letters (its getopt string <c>F:f:v:W;bcCd::D::e:E:ghi:Il:L::nNo::Op::MPrSstVYZ:</c>).</summary>
+    private const string GawkShortOptions = "FfvWbcCdDeEghiIlLnNoOpMPrSstVYZ";
+
+    /// <summary>gawk 5.2's long options (getopt_long: a unique prefix selects one, so any prefix of these is known).</summary>
+    private static readonly string[] GawkLongOptions =
+    {
+        "assign", "bignum", "characters-as-bytes", "copyright", "debug", "dump-variables", "exec", "field-separator",
+        "file", "gen-pot", "help", "include", "lint", "lint-old", "load", "no-optimize", "non-decimal-data", "nostalgia",
+        "optimize", "parsedebug", "persist", "posix", "pretty-print", "profile", "re-interval", "sandbox", "source",
+        "trace", "traditional", "use-lc-numeric", "version",
+    };
+
+    /// <summary>
+    /// Whether gawk knows the option word <paramref name="arg"/> (<c>-X…</c> by its first letter, <c>--name[=v]</c> by
+    /// name or unique-or-not prefix). A known option ps-bash does not implement keeps its old path; only an unknown one
+    /// is the usage error.
+    /// </summary>
+    internal static bool IsGawkOption(string arg)
+    {
+        if (!arg.StartsWith("--", StringComparison.Ordinal)) return arg.Length > 1 && GawkShortOptions.Contains(arg[1]);
+        var name = arg.AsSpan(2);
+        int eq = name.IndexOf('=');
+        if (eq >= 0) name = name[..eq];
+        if (name.IsEmpty) return false;
+        foreach (var o in GawkLongOptions)
+            if (o.AsSpan().StartsWith(name, StringComparison.Ordinal)) return true;
+        return false;
+    }
+
+    /// <summary>gawk 5.2's usage text (<c>usage()</c>), which it writes to stderr for an unknown option.</summary>
+    internal const string GawkUsage =
+        "Usage: awk [POSIX or GNU style options] -f progfile [--] file ...\n" +
+        "Usage: awk [POSIX or GNU style options] [--] 'program' file ...\n" +
+        "POSIX options:\t\tGNU long options: (standard)\n" +
+        "\t-f progfile\t\t--file=progfile\n" +
+        "\t-F fs\t\t\t--field-separator=fs\n" +
+        "\t-v var=val\t\t--assign=var=val\n" +
+        "Short options:\t\tGNU long options: (extensions)\n" +
+        "\t-b\t\t\t--characters-as-bytes\n" +
+        "\t-c\t\t\t--traditional\n" +
+        "\t-C\t\t\t--copyright\n" +
+        "\t-d[file]\t\t--dump-variables[=file]\n" +
+        "\t-D[file]\t\t--debug[=file]\n" +
+        "\t-e 'program-text'\t--source='program-text'\n" +
+        "\t-E file\t\t\t--exec=file\n" +
+        "\t-g\t\t\t--gen-pot\n" +
+        "\t-h\t\t\t--help\n" +
+        "\t-i includefile\t\t--include=includefile\n" +
+        "\t-I\t\t\t--trace\n" +
+        "\t-l library\t\t--load=library\n" +
+        "\t-L[fatal|invalid|no-ext]\t--lint[=fatal|invalid|no-ext]\n" +
+        "\t-M\t\t\t--bignum\n" +
+        "\t-N\t\t\t--use-lc-numeric\n" +
+        "\t-n\t\t\t--non-decimal-data\n" +
+        "\t-o[file]\t\t--pretty-print[=file]\n" +
+        "\t-O\t\t\t--optimize\n" +
+        "\t-p[file]\t\t--profile[=file]\n" +
+        "\t-P\t\t\t--posix\n" +
+        "\t-r\t\t\t--re-interval\n" +
+        "\t-s\t\t\t--no-optimize\n" +
+        "\t-S\t\t\t--sandbox\n" +
+        "\t-t\t\t\t--lint-old\n" +
+        "\t-V\t\t\t--version\n" +
+        "\n" +
+        "To report bugs, use the `gawkbug' program.\n" +
+        "For full instructions, see the node `Bugs' in `gawk.info'\n" +
+        "which is section `Reporting Problems and Bugs' in the\n" +
+        "printed version.  This same information may be found at\n" +
+        "https://www.gnu.org/software/gawk/manual/html_node/Bugs.html.\n" +
+        "PLEASE do NOT try to report bugs by posting in comp.lang.awk,\n" +
+        "or by using a web forum such as Stack Overflow.\n" +
+        "\n" +
+        "gawk is a pattern scanning and processing language.\n" +
+        "By default it reads standard input and writes standard output.\n" +
+        "\n" +
+        "Examples:\n" +
+        "\tawk '{ sum += $1 }; END { print sum }' file\n" +
+        "\tawk -F: '{ print $1 }' /etc/passwd";
+
     /// <summary>gawk's long value options, joined to the short letter the scan handles (<c>--file=f</c> → <c>-ff</c>).</summary>
     private static readonly PsBash.Cmdlets.Args.LongOptionAlias[] LongValueOptions =
     {
@@ -150,6 +230,16 @@ public sealed class InvokeBashAwkCommand : BashCmdlet
             {
                 programFiles.Add(arg.Substring(2));
                 continue;
+            }
+
+            // An option gawk does not have is its usage error: the usage text on stderr, status 1 — never the
+            // program text. REGRESSION: `awk --bogus` ran `--bogus` as the program (a syntax error, status 2).
+            if (!IsGawkOption(arg))
+            {
+                FileSystemHelpers.WriteStderr(this, GawkUsage);
+                FileSystemHelpers.SetLastExitCode(this, 1);
+                _halt = true;
+                return;
             }
 
             AddOperand(arg, ref programText, programFiles, files);
@@ -300,6 +390,7 @@ public sealed class InvokeBashAwkCommand : BashCmdlet
 
     protected override void EndProcessing()
     {
+
         if (_lines.Flush() is { } last) { InputObject = last; ProcessInputRecord(); }
         if (_machine is null || _program is null) return;
         var machine = _machine;

@@ -50,6 +50,9 @@ public sealed class InvokeBashSourceCommand : BashCmdlet
     {
         if (string.IsNullOrEmpty(Path))
             return null;
+        // `source` has no options: `source -Q f` is bash's usage error, status 2 (it looked for a file `-Q`, status 1).
+        if (FileSystemHelpers.TryRejectBuiltinOptions(this, "source", new[] { Path }, ""))
+            return null;
 
         string resolvedPath = FindOnPath(Path) ?? ResolveSourcePath(Path);
 

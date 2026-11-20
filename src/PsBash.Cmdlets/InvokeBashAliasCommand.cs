@@ -94,6 +94,15 @@ public sealed class InvokeBashAliasCommand : BashCmdlet
             return;
         }
 
+        // `unalias` reaches this cmdlet as `-u` first (PsEmitter); each builtin's options are bash's: alias -p,
+        // unalias -a. Any other is the builtin's usage error, status 2 (REGRESSION: `alias -Q` was status 1, quietly).
+        bool asUnalias = args.Length > 0 && args[0] == "-u";
+        var typed = new List<string>();
+        if (P.IsPresent) typed.Add("-p");
+        if (A.IsPresent) typed.Add("-a");
+        typed.AddRange(asUnalias ? args[1..] : args);
+        if (FileSystemHelpers.TryRejectBuiltinOptions(this, asUnalias ? "unalias" : "alias", typed, asUnalias ? "a" : "p")) return;
+
         bool unaliasMode = false;
         bool removeAll = A.IsPresent;
         var operands = new List<string>();

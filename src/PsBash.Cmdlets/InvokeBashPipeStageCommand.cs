@@ -63,10 +63,19 @@ public sealed class InvokeBashPipeStageCommand : BashCmdlet
         // A stage that sets no status of its own (a pure filter) reports success, never a predecessor's leftovers.
         FileSystemHelpers.SetLastExitCode(this, 0);
         _stage = Script.GetSteppablePipeline(CommandOrigin.Internal);
-        Run(() => _stage!.Begin(this));
+        // A later stage can have what it needs from what this one wrote as it started (`awk -Q 2>&1 | head -2`: the
+        // usage text): the stop then comes out of Begin, and the stage's status must be recorded here as in ProcessRecord.
+        try { Run(() => _stage!.Begin(this)); }
+        catch (Exception ex) when (FileSystemHelpers.IsPipelineStop(ex)) { _beginStatus = CurrentStatus(); _finished = true; RecordStopped(); throw; }
         // Read now: the later stages' own starts reset the status before this stage writes anything.
         _beginStatus = CurrentStatus();
     }
+
+    /// <summary>A record reached this stage (its commands ran between its start and its end).</summary>
+    private bool _hadInput;
+
+    /// <summary>$LASTEXITCODE back to <see cref="_beginStatus"/> (the variable only: no stage notes it as its own).</summary>
+    private void RestoreBeginStatus() => SessionState.PSVariable.Set("global:LASTEXITCODE", _beginStatus);
 
     /// <summary>The stage has ended: its status is recorded and its steppable pipeline disposed.</summary>
     private bool _finished;
@@ -74,6 +83,9 @@ public sealed class InvokeBashPipeStageCommand : BashCmdlet
     protected override void ProcessRecord()
     {
         if (_finished) return;
+        // The first stage gets one call with no record: its commands run now, from the status it began with.
+        if (!_hadInput && !MyInvocation.ExpectingInput) RestoreBeginStatus();
+        _hadInput = true;
         try { Run(() => _stage!.Process(InputObject)); }
         catch (Exception ex) when (StoppedByOwnCommand(ex))
         {
@@ -95,6 +107,10 @@ public sealed class InvokeBashPipeStageCommand : BashCmdlet
     {
         if (_finished) return;
         _finished = true;
+        // With no input, nothing of this stage ran since its start, so the status is still the one it began with: the
+        // later stages' own starts reset $LASTEXITCODE to 0 in between. A status a command set as it started (`awk -Q`,
+        // a syntax error: awk parses in BeginProcessing) was lost, and PIPESTATUS[0] read 0 (gawk: 1 / 2).
+        if (!_hadInput) RestoreBeginStatus();
         try { Run(() => _stage!.End()); }
         catch (Exception ex) when (StoppedByOwnCommand(ex)) { Record(_ownStatus ?? CurrentStatus()); return; }
         catch (Exception ex) when (FileSystemHelpers.IsPipelineStop(ex)) { RecordStopped(); throw; }

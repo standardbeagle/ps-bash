@@ -17,7 +17,7 @@ namespace PsBash.Cmdlets.Args;
 /// bundle and takes the rest of it (or the next element) as its value.</item>
 /// <item>Long options: exact name, <c>=value</c>, separate value, optional unique-prefix
 /// abbreviation (ambiguous prefix = error).</item>
-/// <item>Options may follow operands (GNU permutation): <c>cp a b -r</c>.</item>
+/// <item>Options may follow operands (GNU permutation): <c>cp a b -r</c>; not under <see cref="OptSpecSet.RequireOrder"/>.</item>
 /// <item>The first problem becomes <see cref="ParsedArgs.Error"/> and scanning stops.</item>
 /// </list>
 /// Migrating a cmdlet: declare a static readonly <see cref="OptSpecSet"/>, call
@@ -53,6 +53,7 @@ public static class ArgParser
             {
                 // "" , "-" (stdin/file named -), and plain words.
                 tokens.Add(new ArgToken(ArgTokKind.Operand, i, null, null, arg, false));
+                if (spec.RequireOrder) afterDd = true; // the rest is the operand's (nohup ls -l)
                 continue;
             }
 

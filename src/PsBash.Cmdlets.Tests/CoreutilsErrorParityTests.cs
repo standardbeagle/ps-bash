@@ -103,7 +103,8 @@ public class CoreutilsErrorParityTests : IClassFixture<SharedPwshFixture>
     public void Seq_ZeroIncrement_Errors()
     {
         var (outp, err, exit) = Run("Invoke-BashSeq 1 0 5");
-        AssertErr(err, "invalid Zero increment value: '0'");
+        // GNU 9.4 quotes the operand with ‘ ’ (locale quoting), like every seq usage error.
+        AssertErr(err, "invalid Zero increment value: ‘0’");
         Assert.Equal(1, exit);
         Assert.DoesNotContain(outp, s => s.Length > 0);
     }

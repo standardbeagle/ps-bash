@@ -126,6 +126,9 @@ public sealed class InvokeBashReadCommand : BashCmdlet
             }
             return;
         }
+        // A run-time `read` (`$cmd -Q`): the emitter rejects a literal option itself (PsEmitter.TryEmitInvalidBuiltinOption).
+        var readOptions = PsBash.Core.Parser.BuiltinOptions.EmittedBuiltins["read"];
+        if (FileSystemHelpers.TryRejectBuiltinOptions(this, "read", args, readOptions.Letters, readOptions.ValueLetters)) return;
 
         string? prompt = P;
         string? arrayName = A;

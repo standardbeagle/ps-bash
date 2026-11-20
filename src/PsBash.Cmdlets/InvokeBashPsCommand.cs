@@ -86,6 +86,18 @@ public sealed class InvokeBashPsCommand : BashCmdlet
     private const int ProcCmdlineMaxBytes = 128 * 1024;
     private const int ProcUptimeMaxBytes = 256;
 
+    /// <summary>procps-ng ps's GNU long options (parser.c <c>parse_gnu_option</c>): any other <c>--NAME</c> is its error.</summary>
+    private static readonly HashSet<string> s_procpsLongOptions = new(StringComparer.Ordinal)
+    {
+        "Group", "User", "cols", "columns", "context", "cumulative", "deselect", "forest", "format", "group", "headers",
+        "help", "info", "lines", "no-headers", "no-heading", "noheaders", "noheading", "pid", "ppid", "quick-pid", "rows",
+        "sid", "signames", "sort", "tty", "user", "version", "width",
+    };
+
+    /// <summary>procps-ng ps's short usage, after its error line (<c>usage()</c> without a help section).</summary>
+    private const string ProcpsUsage =
+        "\nUsage:\n ps [options]\n\n Try 'ps --help <simple|list|output|threads|misc|all>'\n  or 'ps --help <s|l|o|t|m|a>'\n for additional help text.\n\nFor more details see ps(1).";
+
     /// <summary>Sort keys the propName switch below actually maps. Anything
     /// else is a GNU ps error ("unknown sort specifier"), not a silent PID
     /// fallback.</summary>
@@ -173,6 +185,19 @@ public sealed class InvokeBashPsCommand : BashCmdlet
                 WriteObject(line);
             }
             return;
+        }
+
+        // procps rejects a GNU long option it does not have (status 1, its usage text) — it was dropped silently.
+        // Short and BSD options keep the old rule: one ps-bash does not implement is ignored.
+        foreach (var a in args)
+        {
+            if (a == "--") break;
+            if (a.Length > 2 && a.StartsWith("--", StringComparison.Ordinal)
+                && !s_procpsLongOptions.Contains(a.AsSpan(2).ToString().Split('=')[0]))
+            {
+                FileSystemHelpers.WriteBashError(this, "error: unknown gnu long option\n" + ProcpsUsage);
+                return;
+            }
         }
 
         var options = ParseArgs(args);

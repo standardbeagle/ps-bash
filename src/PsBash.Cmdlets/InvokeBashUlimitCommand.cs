@@ -48,6 +48,12 @@ public sealed class InvokeBashUlimitCommand : BashCmdlet
         foreach (var a in args)
         {
             if (!optionsDone && a == "--") { optionsDone = true; continue; }
+            // A builtin has no long options: `ulimit --bogus` is its usage error (it was taken as a limit, status 1).
+            if (!optionsDone && a.Length > 2 && a.StartsWith("--", StringComparison.Ordinal))
+            {
+                FileSystemHelpers.WriteBuiltinInvalidOption(this, "ulimit", a);
+                return;
+            }
             if (!optionsDone && a.Length >= 2 && a[0] == '-' && a[1] != '-')
             {
                 foreach (var ch in a.AsSpan(1))
@@ -70,8 +76,7 @@ public sealed class InvokeBashUlimitCommand : BashCmdlet
         int idx = Array.FindIndex(Limits, l => l.Flag == flag);
         if (idx < 0)
         {
-            FileSystemHelpers.WriteStderr(this, $"ulimit: -{flag}: invalid option");
-            FileSystemHelpers.SetLastExitCode(this, 2);
+            FileSystemHelpers.WriteBuiltinInvalidOption(this, "ulimit", "-" + flag, flag);
             return;
         }
         var limit = Limits[idx];
