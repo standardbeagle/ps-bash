@@ -1204,11 +1204,13 @@ public static class PsBuild
     /// words (<c>'f'</c>, <c>$env:d/f</c>, <c>$null</c>); <paramref name="stdoutPath"/> null = stdout
     /// passes through, <c>"$null"</c> = discarded. <paramref name="truncate"/> / <paramref name="touch"/>
     /// are superseded targets, passed through <see cref="ArgWordArray"/> so each stays an argument.
+    /// <paramref name="openPlan"/> (null: none needed) is the order bash opens the targets in and where each open error
+    /// is reported (PsEmitter.RedirectOpenPlan, PsBash.Cmdlets.RedirectOpenPlan).
     /// </summary>
     public static string RedirectStage(
         string? stdoutPath, bool append, string? errorPath, bool errorAppend, bool passErrors,
         IReadOnlyList<string> truncate, IReadOnlyList<string> touch,
-        bool force = false, bool errorForce = false)
+        bool force = false, bool errorForce = false, string? openPlan = null)
     {
         var sb = new System.Text.StringBuilder(" | Invoke-BashRedirect");
         if (stdoutPath is not null)
@@ -1226,6 +1228,7 @@ public static class PsBuild
         if (passErrors) sb.Append(" -PassErrors");
         if (truncate.Count > 0) sb.Append(" -Truncate ").Append(ArgWordArray(truncate));
         if (touch.Count > 0) sb.Append(" -Touch ").Append(ArgWordArray(touch));
+        if (openPlan is not null) sb.Append(" -OpenPlan ").Append(SingleQuote(openPlan));
         return sb.ToString();
     }
 
@@ -1717,16 +1720,33 @@ public static class PsBuild
     /// <see cref="InputRedirectGuard"/> without its own scope, for a loop whose variables must stay in the caller's scope
     /// (a function's `local`s are plain PowerShell variables).
     /// </summary>
-    public static string InputRedirectGuardInline(string target, string ok, string? onFail = null) =>
+    public static string InputRedirectGuardInline(string target, string ok, string? onFail = null, string? failTail = null) =>
         "$__psbash_ir = [string](Write-Output " + target + "); Invoke-BashTest -e $__psbash_ir; if ($global:LASTEXITCODE -eq 0) { " + ok
-        + " } else { Write-Error -Message \"${__psbash_ir}: No such file or directory\" -ErrorAction Continue; $global:LASTEXITCODE = 1" + (onFail is null ? "" : "; " + onFail) + " }";
+        + " } else { " + InputRedirectFailure(failTail, onFail) + " }";
     /// <summary>
     /// A compound command's <c>&lt; file</c> that cannot be opened fails the command: bash reports
     /// <c>file: No such file or directory</c>, sets status 1 and never runs the body.
     /// </summary>
-    public static string InputRedirectGuard(string target, string ok, string? onFail = null) =>
+    public static string InputRedirectGuard(string target, string ok, string? onFail = null, string? failTail = null) =>
         "& { $__psbash_ir = [string](Write-Output " + target + "); Invoke-BashTest -e $__psbash_ir; if ($global:LASTEXITCODE -eq 0) { " + ok
-        + " } else { Write-Error -Message \"${__psbash_ir}: No such file or directory\" -ErrorAction Continue; $global:LASTEXITCODE = 1" + (onFail is null ? "" : "; " + onFail) + " } }";
+        + " } else { " + InputRedirectFailure(failTail, onFail) + " } }";
+
+    /// <summary>
+    /// The failure branch of every input-redirect guard (<see cref="InputRedirectGuard"/>, <see cref="InputRedirectGuardInline"/>,
+    /// <see cref="SimpleInputRedirectGuard"/>): a <c>&lt; file</c> that cannot be opened. bash reports it as a shell
+    /// diagnostic (<c>s.sh: line 3: file: No such file or directory</c>, through <see cref="ShellDiagnosticLine"/>), sets
+    /// status 1, and the command never runs. bash opens a command's redirects left to right, so the report goes where fd 2
+    /// points when the <c>&lt;</c> is reached: <paramref name="failTail"/> is the redirect tail of the output redirects
+    /// written BEFORE it, applied to the report alone (<c>cmd 2&gt;/dev/null &lt; f</c> is silent, <c>cmd &gt;out &lt; f</c>
+    /// still creates <c>out</c>); null when there are none. <paramref name="onFail"/> runs last (the errexit exit).
+    /// See docs/specs/error-handling.md "Redirect open errors".
+    /// </summary>
+    public static string InputRedirectFailure(string? failTail, string? onFail = null)
+    {
+        string report = ShellDiagnosticLine("$__psbash_ir + ': No such file or directory'");
+        if (failTail is { Length: > 0 }) report = "& { " + report + " }" + failTail;
+        return report + "; $global:LASTEXITCODE = 1" + (onFail is null ? "" : "; " + onFail);
+    }
 
     /// <summary>
     /// After a <c>for</c> loop: a loop whose body never ran has status 0 (<c>false; for x in $(true); do :; done</c> leaves 0),
@@ -1774,9 +1794,9 @@ public static class PsBuild
     /// assigns (<c>read x &lt; f</c> in a function, whose locals are PowerShell variables) stays in the caller's scope,
     /// and still one pipeline element for a following <c>| …</c> or <c>|| …</c>.
     /// </summary>
-    public static string SimpleInputRedirectGuard(string target, string ok) =>
+    public static string SimpleInputRedirectGuard(string target, string ok, string? failTail = null) =>
         ". { $__psbash_ir = [string](Write-Output " + target + "); Invoke-BashTest -e $__psbash_ir; if ($global:LASTEXITCODE -eq 0) { " + ok
-        + " } else { Write-Error -Message \"${__psbash_ir}: No such file or directory\" -ErrorAction Continue; $global:LASTEXITCODE = 1 } }";
+        + " } else { " + InputRedirectFailure(failTail) + " } }";
 
     /// <summary>
     /// A function body that reads stdin: when the function is called with a pipe (<c>echo x | f</c>,

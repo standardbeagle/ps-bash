@@ -604,11 +604,13 @@ public static partial class PsEmitter
     private static string RecordLineFor(Command cmd, bool statement)
     {
         _statementLine = (cmd is Command.Simple { Line: > 0 } ls ? SimpleCommandLine(ls) : FirstSimpleLine(cmd)) is > 0 and var line
-            ? _lineBase + line : 0;
+            ? _lineBase + line
+            // `{ ...; } > nodir/f`, `done < missing`: the redirect's open error names a line too.
+            : HasOpenableRedirect(CompoundRedirects(cmd)) && CompoundStartLine(cmd) is > 0 and var start ? _lineBase + start : 0;
         // A loop that reaches past line 1 runs its line-1 statements again after later lines recorded theirs.
         if (statement && _functionDepth == 0 && _loopDepth == 0) _loopReachesPastLine1 = RunsPastLine1(cmd);
         bool lineAlreadyRecorded = _statementLine == 1 && _scriptRoot && _functionDepth == 0 && (_loopDepth == 0 || !_loopReachesPastLine1);
-        return (_bashLinenoMode || (!PsBuild.InTrapAction && !lineAlreadyRecorded && MayReportCommandNotFound(cmd))) && _statementLine > 0
+        return (_bashLinenoMode || (!PsBuild.InTrapAction && !lineAlreadyRecorded && MayRaiseShellDiagnostic(cmd))) && _statementLine > 0
             ? PsBuild.SetCallLine(_statementLine) : "";
     }
 
@@ -685,14 +687,22 @@ public static partial class PsEmitter
     private static int SimpleCommandLine(Command.Simple s) => s.ReportLine > 0 ? s.ReportLine : s.Line;
 
     /// <summary>
-    /// The statement can raise a shell diagnostic that carries its line: a builtin given an option word (it may be
-    /// invalid), or a command that is not found: a simple command
-    /// (alone, in a pipeline or an and-or list) whose name is not a literal, or a literal that is no builtin, ps-bash
-    /// command or script function -- or <c>command</c> / <c>exec</c> / <c>builtin</c>, which look a name up themselves.
-    /// Compound commands are not: their bodies' statements record their own lines.
+    /// The statement may raise a shell diagnostic, which carries the statement's line (<see cref="PsBuild.DiagnosticPrefix"/>):
+    /// <list type="bullet">
+    /// <item>a command that is not found: a simple command (alone, in a pipeline or an and-or list) whose name is not a
+    /// literal, or a literal that is no builtin, ps-bash command or script function -- or <c>command</c> / <c>exec</c> /
+    /// <c>builtin</c>, which look a name up themselves;</item>
+    /// <item>a redirect that may fail to open (<see cref="MayFailToOpen"/>: <c>&gt; nodir/f</c>, <c>&lt; missing</c>), on a
+    /// simple command, an assignment or a compound command (whose redirects are applied before its body records
+    /// anything);</item>
+    /// <item>a builtin given an option word (it may be invalid: <c>pwd -Q</c>).</item>
+    /// </list>
+    /// Otherwise a compound command is not: its body's statements record their own lines.
     /// </summary>
-    private static bool MayReportCommandNotFound(Command cmd) => cmd switch
+    private static bool MayRaiseShellDiagnostic(Command cmd) => cmd switch
     {
+        _ when HasOpenableRedirect(CompoundRedirects(cmd)) => true,
+        Command.Simple s when HasOpenableRedirect(s.Redirects) => true,
         Command.Simple { Words.IsDefaultOrEmpty: false } s => GetLiteralValue(s.Words[0]) is not { Length: > 0 } name
             || LooksUpACommand(s, name)
             || s.Words.Any(w => ContainsCommandSub(w.Parts))
@@ -702,10 +712,10 @@ public static partial class PsEmitter
             || (name == "set" && SetInvalidOption(s.Words.Skip(1).Select(TryGetStaticArgValue).ToList()) is not null)
             || !(s_posixSpecialBuiltins.Contains(name) || s_specialBuiltins.Contains(name)
                  || _definedFunctions is { } fns && fns.Contains(name) || IsMappedCommandName(name)),
-        // `x=$(missing)`: the substitution's command reports the assignment's line.
-        Command.ShAssignment assign => ContainsCommandSub(assign),
-        Command.Pipeline p => p.Commands.Any(MayReportCommandNotFound),
-        Command.AndOrList a => a.Commands.Any(MayReportCommandNotFound),
+        // `x=$(missing)`, `x=$(< missing)`: the substitution's diagnostic reports the assignment's line.
+        Command.ShAssignment assign => ContainsCommandSub(assign) || HasOpenableRedirect(assign.Redirects),
+        Command.Pipeline p => p.Commands.Any(MayRaiseShellDiagnostic),
+        Command.AndOrList a => a.Commands.Any(MayRaiseShellDiagnostic),
         _ => false,
     };
 
@@ -718,6 +728,53 @@ public static partial class PsEmitter
         "alias", "unalias", "cd", "pwd", "jobs", "wait", "mapfile", "readarray", "compgen", "times", "unset", "type",
         "ulimit", "source", "getopts", "trap", "compopt", "disown", "bind", "caller", "enable", "read",
     };
+
+    private static bool HasOpenableRedirect(ImmutableArray<Redirect> redirects)
+    {
+        if (redirects.IsDefaultOrEmpty) return false;
+        foreach (var r in redirects)
+            if (MayFailToOpen(r)) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// A redirect that opens a file, so it can fail with a shell diagnostic (<c>nodir/f: No such file or directory</c>):
+    /// <c>&lt; &gt; &gt;&gt; &gt;| &amp;&gt; &amp;&gt;&gt;</c> and <c>&gt;&amp;word</c> (= <c>&amp;&gt;</c>). Not a dup onto a
+    /// descriptor (<c>2&gt;&amp;1</c>, <c>&gt;&amp;-</c>), a here-document or here-string, or the literal <c>/dev/null</c>.
+    /// </summary>
+    private static bool MayFailToOpen(Redirect r)
+    {
+        if (r.Here is not null) return false;
+        string? literal = GetLiteralValue(r.Target);
+        if (literal == "/dev/null") return false;
+        return r.Op switch
+        {
+            "<" or ">" or ">>" or ">|" or "&>" or "&>>" => true,
+            ">&" => literal is null || !(literal == "-" || IsAllDigits(literal)),
+            _ => false,
+        };
+    }
+
+    /// <summary>
+    /// The redirect tail the report of an input redirect that cannot be opened goes through
+    /// (<see cref="PsBuild.InputRedirectFailure"/>): the stdout/stderr redirects written BEFORE <paramref name="input"/>,
+    /// which bash has applied when it reaches the <c>&lt;</c> (left to right), so <c>cmd 2&gt;/dev/null &lt; missing</c>
+    /// is silent and <c>cmd &gt;out &lt; missing</c> still creates <c>out</c>. Null when there are none.
+    /// </summary>
+    private static string? InputFailTail(IEnumerable<Redirect> redirects, Redirect input)
+    {
+        List<Redirect>? before = null;
+        foreach (var r in redirects)
+        {
+            if (ReferenceEquals(r, input)) break;
+            if (r.FdVar is null && r.Here is null && r.Fd is 1 or 2 && r.Op is not ("<" or "<<" or "<<<"))
+                (before ??= new List<Redirect>()).Add(r);
+        }
+        if (before is null) return null;
+        var sb = new StringBuilder();
+        AppendRedirectTail(sb, before);
+        return sb.ToString();
+    }
 
     /// <summary>The script reads BASH_LINENO: statements record their line for the functions they call.</summary>
     [ThreadStatic]
@@ -805,6 +862,32 @@ public static partial class PsEmitter
         Command.AndOrList a when a.Commands.Length > 0 => LastSimpleLine(a.Commands[^1]),
         Command.Pipeline p when p.Commands.Length > 0 => LastSimpleLine(p.Commands[^1]),
         _ => 0,
+    };
+
+    /// <summary>
+    /// The line a compound command without a line of its own (<c>while</c>, <c>{ }</c>, <c>( )</c>, <c>if</c>) starts
+    /// on: its first command's. The line of a redirect's open error (<see cref="MayRaiseShellDiagnostic"/>). bash names
+    /// the line the command ENDS on (where the redirect is written): the same for a one-line command; a multi-line one
+    /// reports its first line here (docs/specs/error-handling.md "Redirect open errors").
+    /// </summary>
+    private static int CompoundStartLine(Command cmd) => cmd switch
+    {
+        Command.While w => FirstLineIn(w.Cond),
+        Command.BraceGroup b => FirstLineIn(b.Body),
+        Command.Subshell s => FirstLineIn(s.Body),
+        Command.If i when i.Arms.Length > 0 => FirstLineIn(i.Arms[0].Cond),
+        Command.ForIn f => f.Line,
+        Command.ForArith f => f.Line,
+        Command.Case c => c.Line,
+        _ => 0,
+    };
+
+    private static int FirstLineIn(Command cmd) => cmd switch
+    {
+        Command.CommandList l when l.Commands.Length > 0 => FirstLineIn(l.Commands[0]),
+        Command.Simple { Line: > 0 } s => SimpleCommandLine(s),
+        _ when FirstSimpleLine(cmd) is > 0 and var line => line,
+        _ => CompoundStartLine(cmd),
     };
 
     /// <summary>Line of the first simple command <paramref name="cmd"/> runs; 0 when unknown.</summary>
@@ -2850,7 +2933,8 @@ public static partial class PsEmitter
             // /dev/null maps to $null; `Get-Content $null` errors. Its stdin is EMPTY (EOF), so feed
             // the scope nothing explicitly (it must not see an outer pipe's or queue's data).
             result = inTarget != "$null"
-                ? PsBuild.InputRedirectGuard(inTarget, $"Invoke-BashCat {inTarget} -RawStdinBytes | & {{ {PsBuild.StdinScope(result)} }}", RedirectFailExit())
+                ? PsBuild.InputRedirectGuard(inTarget, $"Invoke-BashCat {inTarget} -RawStdinBytes | & {{ {PsBuild.StdinScope(result)} }}", RedirectFailExit(),
+                    InputFailTail(subshell.Redirects, inputRedirect))
                 : $"@() | & {{ {PsBuild.StdinScope(result)} }}";
         }
 
@@ -5442,11 +5526,23 @@ public static partial class PsEmitter
         // redirect IS the command.
         // The command is the pipe stage after the file (`Invoke-BashCat f | cmd`): fed like a here-document's command, so a
         // wrapper its emission needs (a splat hoist: `g=-; cat $g < f` read nothing) hands the file on.
-        var inner = WithPipeStageFeed(true, () => EmitSimple(innerCmd));
+        // A target that cannot be opened fails the command before it runs (bash: status 1, the command never starts).
+        // Device paths (`/dev/stdin`, `/dev/zero`) are the runtime's own and always open.
+        bool guarded = !(TryGetPureLiteralText(inputRedirect.Target.Parts, out var literalTarget)
+                         && DevicePath.Classify(literalTarget, windows: false, out _) != DeviceKind.None);
+        string? failTail = guarded ? InputFailTail(cmd.Redirects, inputRedirect) : null;
+        bool noCommand = innerCmd.Words.IsDefaultOrEmpty && innerCmd.EnvPairs.IsDefaultOrEmpty;
+        var inner = noCommand ? "" : WithPipeStageFeed(true, () => EmitSimple(innerCmd));
         if (inner.Length == 0)
         {
-            // Only a lone `$(< file)` reads the file out; any other bare redirect just opens it.
-            result = ReferenceEquals(cmd, _captureBody) ? $"Get-Content {target}" : $"Get-Content {target} | Out-Null";
+            // Only a lone `$(< file)` reads the file out; any other bare redirect just opens it. Its other redirects
+            // (`$(< f 2>/dev/null)`) still apply; emitted as a command they were an expression after a pipe.
+            var read = new StringBuilder(ReferenceEquals(cmd, _captureBody) && !remaining.Any(r => r.Fd == 1 || r.Op is "&>" or "&>>")
+                ? $"Get-Content {target}" : $"Get-Content {target} | Out-Null");
+            if (!remaining.IsDefaultOrEmpty) AppendRedirectTail(read, remaining);
+            result = read.ToString();
+            // `x=$(< missing)`: reported (status 1), as for a command; Get-Content's own error was a PowerShell one, status 0.
+            if (guarded) result = PsBuild.SimpleInputRedirectGuard(target, result, failTail);
             return true;
         }
 
@@ -5459,10 +5555,8 @@ public static partial class PsEmitter
         result = mappedConsumer
             ? $"Invoke-BashCat {target} -RawStdinBytes | {inner}"
             : $"Invoke-BashCat {target} -RawStdinBytes | {NativeStdinFeedStage(innerCmd)}{inner}";
-        // A target that cannot be opened fails the command before it runs (bash: status 1, the command never starts).
-        // Device paths (`/dev/stdin`, `/dev/zero`) are the runtime's own and always open.
-        if (!(TryGetPureLiteralText(inputRedirect.Target.Parts, out var literalTarget) && DevicePath.Classify(literalTarget, windows: false, out _) != DeviceKind.None))
-            result = PsBuild.SimpleInputRedirectGuard(target, result);
+        if (guarded)
+            result = PsBuild.SimpleInputRedirectGuard(target, result, failTail);
         return true;
     }
 
@@ -12588,12 +12682,16 @@ public static partial class PsEmitter
             return true;
 
         var opened = new List<(string Target, bool Append, bool Force)>();
+        // Where fd 2 pointed as each target was opened: that open's error is reported there (bash opens left to right,
+        // so `2>/dev/null >nodir/f` is silent and `2>e >nodir/f` writes the report into e).
+        var openDiag = new List<FdDest>();
         var fd1 = new FdDest(FdDestKind.Default);
         var fd2 = new FdDest(FdDestKind.Default);
         FdDest Open(string target, bool append, bool force = false)
         {
             if (target == "$null") return new FdDest(FdDestKind.Null);
             opened.Add((target, append, force));
+            openDiag.Add(fd2);
             return new FdDest(FdDestKind.File, opened.Count - 1);
         }
 
@@ -12696,10 +12794,53 @@ public static partial class PsEmitter
             passErrors: fd2.Kind == FdDestKind.StdoutDefault,
             truncate, touch,
             force: fd1.Kind == FdDestKind.File && opened[fd1.File].Force,
-            errorForce: errorPath is not null && opened[fd2.File].Force));
+            errorForce: errorPath is not null && opened[fd2.File].Force,
+            openPlan: RedirectOpenPlan(opened, openDiag, fd1, fd2)));
         // `>f >&2`, `2>f >&2`-style lists: the stage (no -Path) passes stdout on to stderr.
         if (fd1.Kind == FdDestKind.StderrDefault) sb.Append(PsBuild.StdoutToStderrStage);
         return true;
+    }
+
+    /// <summary>
+    /// The <c>-OpenPlan</c> of an <c>Invoke-BashRedirect</c> stage (PsBash.Cmdlets.RedirectOpenPlan reads it): the stage's
+    /// targets in the order bash opens them, each with where its open error is reported -- or null when that is what the
+    /// stage does without a plan (superseded <c>-Truncate</c> then <c>-Touch</c> targets, <c>-Path</c>, <c>-ErrorPath</c>,
+    /// every error on stderr), which keeps the common tails unchanged. A role is <c>p</c> (-Path), <c>e</c> (-ErrorPath),
+    /// <c>tN</c> / <c>aN</c> (-Truncate / -Touch element N); a report target after <c>:</c> is <c>null</c>, <c>out</c>
+    /// (the original stdout, after <c>2&gt;&amp;1</c>) or the role of a target opened earlier.
+    /// </summary>
+    private static string? RedirectOpenPlan(List<(string Target, bool Append, bool Force)> opened, List<FdDest> openDiag,
+        FdDest fd1, FdDest fd2)
+    {
+        if (opened.Count == 0) return null;
+        // The roles, numbered as the stage's -Truncate / -Touch lists are built (in open order).
+        var roles = new string[opened.Count];
+        var ranks = new int[opened.Count];
+        int truncates = 0, touches = 0;
+        for (int i = 0; i < opened.Count; i++)
+        {
+            if (fd1.Kind == FdDestKind.File && fd1.File == i) { roles[i] = "p"; ranks[i] = 2 * opened.Count; }
+            else if (fd2.Kind == FdDestKind.File && fd2.File == i) { roles[i] = "e"; ranks[i] = 2 * opened.Count + 1; }
+            else if (opened[i].Append) { roles[i] = "a" + touches; ranks[i] = opened.Count + touches++; }
+            else { roles[i] = "t" + truncates; ranks[i] = truncates++; }
+        }
+        bool needed = false;
+        var steps = new string[opened.Count];
+        for (int i = 0; i < opened.Count; i++)
+        {
+            // The stage's own order is ascending rank; any inversion means bash opens them in a different order.
+            if (i > 0 && ranks[i] < ranks[i - 1]) needed = true;
+            string? report = openDiag[i].Kind switch
+            {
+                FdDestKind.Null => "null",
+                FdDestKind.StdoutDefault => "out",
+                FdDestKind.File => roles[openDiag[i].File],
+                _ => null,
+            };
+            if (report is not null) needed = true;
+            steps[i] = report is null ? roles[i] : roles[i] + ":" + report;
+        }
+        return needed ? string.Join(' ', steps) : null;
     }
 
     /// <summary>
@@ -12823,7 +12964,8 @@ public static partial class PsEmitter
             // /dev/null maps to $null; `Get-Content $null` errors. Its stdin is EMPTY (EOF), which
             // for a stdin scope must still replace any outer pipe, so feed it nothing explicitly.
             if (inTarget != "$null")
-                result = PsBuild.InputRedirectGuard(inTarget, $"Invoke-BashCat {inTarget} -RawStdinBytes | {result}", RedirectFailExit());
+                result = PsBuild.InputRedirectGuard(inTarget, $"Invoke-BashCat {inTarget} -RawStdinBytes | {result}", RedirectFailExit(),
+                    InputFailTail(redirects, inputRedirect));
             else if (stdinScope)
                 result = $"@() | {result}";
         }

@@ -240,6 +240,8 @@ A diagnostic from the shell itself carries bash's source prefix (error.c `error_
 - the host's CommandNotFoundAction handler (`SdkRunspaceSetup.ps1`)
 - `Resolve-BashCommand` (psm1)
 - `Invoke-BashCommand`
+- `Invoke-BashRedirect` (an output redirect that cannot be opened) and `PsBuild.InputRedirectFailure` (an input one),
+  see "Redirect open errors" below
 
 `CommandNotFoundReport.Describe` builds only the reason after the prefix. Guard: Core.Tests
 `ShellDiagnosticPrefixGuardTests` fails on a line that spells "command not found" without the primitive.
@@ -249,8 +251,14 @@ A diagnostic from the shell itself carries bash's source prefix (error.c `error_
 - *Recording the line.* The emitted code records the line before each statement and each hoisted
   `if`/`elif`/`while`/`until` condition that may raise the diagnostic (`PsEmitter.RecordLineFor`,
   `PsBuild.SetCallLine`).
-  - A statement "may raise it" when it names a non-builtin, non-mapped, non-function command or a run-time name.
-    `command x`, `builtin x`, `exec x` and a run-time `eval` count too.
+  - A statement "may raise it" (`PsEmitter.MayRaiseShellDiagnostic`) when it names a non-builtin, non-mapped,
+    non-function command or a run-time name. `command x`, `builtin x`, `exec x` and a run-time `eval` count too. So do
+    a redirect that may fail to open (`PsEmitter.MayFailToOpen`: `< > >> >| &> &>> >&word`, not a dup, a here-document
+    or `/dev/null`) on a simple command, an assignment or a compound command.
+  - A compound command with such a redirect and no line of its own (`while`, `{ }`, `( )`, `if`) gets its first
+    command's line (`PsEmitter.CompoundStartLine`). bash names the line it ENDS on, where the redirect is written: the
+    same line for a one-line command; known difference for a multi-line one. Likewise a compound nested in a multi-line
+    compound (`{ … while …; done < nofile … } 2>&1`): bash names the OUTER one's end line, ps-bash the nested one's.
   - A script that reads `BASH_LINENO` records the line before every statement.
   - Every host command starts on line 1 (`VarFrameStack.ResetFor`). So a top-level line-1 statement of the script
     records nothing. The exception is a loop that reaches past line 1 (`RunsPastLine1`): its line-1 statements run
@@ -273,7 +281,38 @@ A diagnostic from the shell itself carries bash's source prefix (error.c `error_
 - *A cmdlet called directly* has recorded nothing (line 0). Its prefix leaves the line out (`NAME: `).
 
 Covered: command not found, from any site (all four). Differential `ShellDiagnosticLineDifferentialTests` tests the
-script file, `-c`, `$0`, sourced files, conditions, evals and continuations.
+script file, `-c`, `$0`, sourced files, conditions, evals and continuations. Redirect open errors:
+Differential `RedirectOpenErrorDifferentialTests`.
+
+#### Redirect open errors
+
+bash applies a command's redirects LEFT TO RIGHT. A redirect that cannot be opened fails the command (status 1, the
+command never runs, the script goes on; under `set -e` it ends) with `NAME: line N: TARGET: REASON`, written WHERE FD 2
+POINTS AT THAT MOMENT, and the redirects after it are never opened (bash 5.2, WSL):
+
+| Command | Report | Opened |
+|---|---|---|
+| `echo hi 2>/dev/null > nodir/y` | nowhere | — |
+| `echo hi > nodir/y 2>/dev/null` | stderr | — |
+| `echo hi 2>err > nodir/y` | into `err` | `err` |
+| `echo hi > nodir/y 2>err2` | stderr | not `err2` |
+| `ls 2>&1 > nodir/q \| sed …` | the pipe (original stdout) | — |
+| `echo hi > nodir/y > b` | stderr | not `b` |
+| `cat 2>/dev/null < nofile` | nowhere | — |
+| `cat < nofile 2>/dev/null`, `x=$(< nofile 2>/dev/null)` | stderr | — |
+
+- *Output redirects* (the modelled tail, `PsEmitter.TryAppendModelledRedirectTail`): the `Invoke-BashRedirect` stage
+  opens its targets in bash's order and reports each open error where fd 2 pointed when that redirect was reached. The
+  emitter passes both as `-OpenPlan` (`PsEmitter.RedirectOpenPlan` writes it, `PsBash.Cmdlets.RedirectOpenPlan`
+  reads it): space-separated `ROLE[:REPORT]` steps. ROLE is `p` (-Path), `e` (-ErrorPath), `tN`/`aN` (-Truncate/-Touch
+  element N). REPORT is `null`, `out` (the stage's output) or an EARLIER step's role; absent is stderr. The plan is
+  written only when it differs from the stage's own order (-Truncate, -Touch, -Path, -ErrorPath; reports on stderr),
+  so the common tails are unchanged; a plan that does not match the stage's targets is ignored.
+- *Input redirects* (`PsBuild.SimpleInputRedirectGuard`, `InputRedirectGuard`, `InputRedirectGuardInline`): the
+  report is `PsBuild.InputRedirectFailure`, run through the stdout/stderr redirects written BEFORE the `<`
+  (`PsEmitter.InputFailTail`). A lone `$(< file)` is guarded too (it was a PowerShell `Get-Content` error, status 0).
+- Under `set -e` the stage writes the report itself and throws a terminating error marked `psbash.reported`, so the
+  host does not print it a second time (`ps-bash: …`).
 
 Not yet through the primitive: the other shell diagnostics still hard-code `bash: ` or `ps-bash: ` (no NAME, no line).
 

@@ -75,6 +75,13 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
     [Parameter]
     public string[]? Touch { get; set; }
 
+    /// <summary>
+    /// The order bash opens the targets in and where each open error is reported (<see cref="RedirectOpenPlan"/>);
+    /// absent, the stage opens -Truncate, -Touch, -Path, -ErrorPath and reports on stderr.
+    /// </summary>
+    [Parameter]
+    public string? OpenPlan { get; set; }
+
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
@@ -138,6 +145,12 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
             return;
         }
 
+        if (RedirectOpenPlan.Parse(OpenPlan, Truncate?.Length ?? 0, Touch?.Length ?? 0, Path is not null, ErrorPath is not null)
+            is { } plan)
+        {
+            OpenInPlanOrder(plan);
+            return;
+        }
         foreach (var t in Truncate ?? [])
             if (!TryOpen(t, append: false, force: false, out var s)) return; else s?.Dispose();
         foreach (var t in Touch ?? [])
@@ -166,10 +179,69 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
         => FileSystemHelpers.IsNullDevice(raw) ? null : FileSystemHelpers.NormalizeOperandPath(raw);
 
     /// <summary>
-    /// Open one target; false (after reporting and stopping upstream) when it cannot be opened.
-    /// <paramref name="stream"/> is null for the null device (writes are discarded).
+    /// Open the targets in <paramref name="plan"/>'s order (bash's), each open error reported where fd 2 pointed when
+    /// that redirect was reached. A failure leaves the later targets unopened (bash never reaches them). The targets
+    /// opened so far stay open until then, so a report can go into one (<c>2&gt;e &gt;nodir/f</c>).
     /// </summary>
-    private bool TryOpen(string raw, bool append, bool force, out RedirectFileWriter? stream)
+    private void OpenInPlanOrder(IReadOnlyList<RedirectOpenPlan.Step> plan)
+    {
+        var held = new Dictionary<string, (string Raw, RedirectFileWriter? Stream)>(StringComparer.Ordinal);
+        try
+        {
+            foreach (var step in plan)
+            {
+                var (raw, append, force) = RoleTarget(step.Role);
+                if (!TryOpen(raw, append, force, out var s, message => ReportTo(step.Report, message, held))) return;
+                held[step.Role] = (raw, s);
+            }
+            if (held.Remove("p", out var p)) _stream = p.Stream;
+            if (held.Remove("e", out var e)) _errorStream = e.Stream;
+        }
+        finally
+        {
+            // Superseded targets (and everything, after a failure) are closed once the opens are done.
+            foreach (var (_, s) in held.Values)
+                try { s?.Dispose(); } catch { /* best-effort */ }
+        }
+    }
+
+    private (string Raw, bool Append, bool Force) RoleTarget(string role) => role switch
+    {
+        "p" => (Path!, Append, Force),
+        "e" => (ErrorPath!, ErrorAppend, ErrorForce),
+        _ when role[0] == 't' => (Truncate![int.Parse(role.AsSpan(1), System.Globalization.CultureInfo.InvariantCulture)], false, false),
+        _ => (Touch![int.Parse(role.AsSpan(1), System.Globalization.CultureInfo.InvariantCulture)], true, false),
+    };
+
+    /// <summary>
+    /// An open error, reported where fd 2 pointed: stderr (<paramref name="report"/> null), nowhere (<c>2&gt;/dev/null</c>
+    /// first), the original stdout (<c>2&gt;&amp;1</c> first), or a target opened earlier (<c>2&gt;e</c> first). Through a
+    /// target that names a device, the device's stream.
+    /// </summary>
+    private void ReportTo(string? report, string message, Dictionary<string, (string Raw, RedirectFileWriter? Stream)> held)
+    {
+        if (report is null) { FileSystemHelpers.WriteBashError(this, message); return; }
+        if (report == RedirectOpenPlan.Discard) return;
+        DeviceKind device = DeviceKind.Stdout;
+        RedirectFileWriter? stream = null;
+        if (report != RedirectOpenPlan.Stdout && held.TryGetValue(report, out var target))
+        {
+            device = DevicePath.Classify(target.Raw);
+            stream = target.Stream;
+        }
+        if (device == DeviceKind.Stderr) FileSystemHelpers.WriteStderr(this, message);
+        else if (device == DeviceKind.Stdout)
+            foreach (var line in BashRuntime.EmitBashLines(message + "\n")) WriteObject(line);
+        else Write(stream, message + "\n");
+    }
+
+    /// <summary>
+    /// Open one target; false (after reporting and stopping upstream) when it cannot be opened.
+    /// <paramref name="stream"/> is null for the null device (writes are discarded). The report is bash's shell
+    /// diagnostic (<c>s.sh: line 3: nodir/f: No such file or directory</c>, <see cref="ShellDiagnostic"/>), written on
+    /// stderr unless <paramref name="report"/> sends it elsewhere.
+    /// </summary>
+    private bool TryOpen(string raw, bool append, bool force, out RedirectFileWriter? stream, Action<string>? report = null)
     {
         stream = null;
         // Opening a stream device, /dev/null or /dev/full always succeeds and creates nothing (null stream: written
@@ -208,17 +280,23 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
             string reason = Directory.Exists(target) ? "Is a directory"
                 : ex is UnauthorizedAccessException ? "Permission denied"
                 : FileSystemHelpers.ReadErrorMessage(ex);
-            string message = $"bash: {raw}: {reason}";
+            string message = ShellDiagnostic.Prefix(SessionState) + $"{raw}: {reason}";
+            if (report is null) FileSystemHelpers.WriteBashError(this, message);
+            else report(message);
             // With an ERR trap the emitted statement check runs it first and then exits (the trap makes the
             // script errexit-checked), so the failure stays a status here.
             if (SessionState.PSVariable.GetValue("__BashErrexit") is true
                 && SessionState.PSVariable.GetValue("__BashTrapERR") is null)
             {
                 FileSystemHelpers.SetLastExitCode(this, 1);
-                ThrowTerminatingError(new ErrorRecord(
-                    new IOException(message), "BashRedirectError", ErrorCategory.WriteError, raw));
+                // Already reported above, where fd 2 pointed (`2>/dev/null >nodir/f` ends the script silently): the
+                // host must not print it again (SdkWorker reads the mark; the script's status is 1).
+                var reported = new IOException(message);
+                reported.Data["psbash.reported"] = true;
+                reported.Data["psbash.exitcode"] = 1;
+                Close();
+                ThrowTerminatingError(new ErrorRecord(reported, "BashRedirectError", ErrorCategory.WriteError, raw));
             }
-            FileSystemHelpers.WriteBashError(this, message);
             MarkOpenFailed();
             Close();
             UpstreamStop.Throw(this);

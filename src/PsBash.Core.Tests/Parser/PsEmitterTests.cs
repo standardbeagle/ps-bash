@@ -5504,7 +5504,8 @@ public class PsEmitterTests
     [InlineData("cmd >a >b", "cmd | Invoke-BashRedirect -Path b -Truncate @(& { $args } a)")]
     [InlineData("cmd >p >q >r", "cmd | Invoke-BashRedirect -Path r -Truncate @(& { $args } p q)")]
     [InlineData("cmd >>s >u", "cmd | Invoke-BashRedirect -Path u -Touch @(& { $args } s)")]
-    [InlineData("cmd 2>f1 2>f2", "cmd 2>&1 | Invoke-BashRedirect -ErrorPath f2 -Truncate @(& { $args } f1)")]
+    // -OpenPlan: an open error of f2 is reported into f1 (fd 2 pointed there); docs/specs/error-handling.md.
+    [InlineData("cmd 2>f1 2>f2", "cmd 2>&1 | Invoke-BashRedirect -ErrorPath f2 -Truncate @(& { $args } f1) -OpenPlan 't0 e:t0'")]
     [InlineData("cmd >/dev/null >f", "cmd | Invoke-BashRedirect -Path f")]
     [InlineData("cmd >f >/dev/null", "cmd | Invoke-BashRedirect -Path $null -Truncate @(& { $args } f)")]
     [InlineData("cmd 2>>e", "cmd 2>&1 | Invoke-BashRedirect -ErrorPath e -ErrorAppend")]
@@ -5512,7 +5513,7 @@ public class PsEmitterTests
     [InlineData("cmd >o 2>/dev/null", "cmd 2>$null | Invoke-BashRedirect -Path o")]
     [InlineData("cmd >/dev/null 2>e", "cmd 2>&1 | Invoke-BashRedirect -Path $null -ErrorPath e")]
     // `2>&1 >o`: stderr dup'd to the ORIGINAL stdout before stdout moves — it flows on, not into o.
-    [InlineData("cmd 2>&1 >o", "cmd 2>&1 | Invoke-BashRedirect -Path o -PassErrors")]
+    [InlineData("cmd 2>&1 >o", "cmd 2>&1 | Invoke-BashRedirect -Path o -PassErrors -OpenPlan 'p:out'")]
     [InlineData("cmd >o 2>&1", "Invoke-BashNative -- cmd 2>&1 | Invoke-BashRedirect -Path o")]
     public void Transpile_RedirectFdModel_LastWinsPerFd(string bash, string expected)
         => Assert.Equal(expected, PsEmitter.Transpile(bash));
