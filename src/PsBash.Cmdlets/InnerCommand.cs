@@ -161,7 +161,7 @@ internal static class InnerCommand
         StderrMerge.JoinsStdout(cmdlet) ? " 2>&1" : " 2>&1 | Invoke-BashKeepStderr";
 
     /// <summary>The records as the bytes a program reads (<see cref="NativeStdinBridge.RecordBytes"/>), one byte[] each.</summary>
-    private static List<object> NativeStdinBytes(List<object> records)
+    internal static List<object> NativeStdinBytes(List<object> records)
     {
         var bytes = new List<object>(records.Count);
         foreach (var r in records)

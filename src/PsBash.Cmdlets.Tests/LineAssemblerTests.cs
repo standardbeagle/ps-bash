@@ -161,6 +161,7 @@ public class LineAssemblerGuardTests
         ["InvokeBashTarCommand.cs"] = "bytes",
         ["InvokeBashTeeCommand.cs"] = "bytes",
         ["InvokeBashTestIntCommand.cs"] = "not stdin data",
+        ["InvokeBashTimeCommand.cs"] = "hands the pipeline to the command it times",
         ["InvokeBashTimeoutCommand.cs"] = "hands the pipeline to the command it runs",
         ["InvokeBashTrCommand.cs"] = "bytes (a newline is an ordinary character)",
         ["InvokeBashTrueFalseCommand.cs"] = "does not read stdin: piped input is discarded (GNU true / false)",

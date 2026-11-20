@@ -110,17 +110,17 @@ public sealed class InvokeBashTimeCommand : BashCmdlet
         // Fixed script body: $args[0] is the command name, the rest are
         // bound positionally and splatted. The body never embeds any user
         // input as PS code.
-        // With piped input the command is fed it (`$input` is the list handed to InvokeScript), as the bytes a pipe
-        // writes when it resolves to a program (ConvertTo-BashNativeStdin); without, it inherits the caller's stdin.
+        // With piped input the command is fed it (`$input` is the list handed to InvokeScript); without, it inherits
+        // the caller's stdin.
         const string resolve =
             "$c = Resolve-BashCommand $args[0]; $rest = @(); " +
             "if ($args.Count -gt 1) { $rest = $args[1..($args.Count - 1)] }; ";
-        // A cmdlet or function gets the records themselves (an unterminated one keeps its mark: `printf a | time wc -c`).
-        string invokeBody = _stdin.Count > 0
-            ? resolve + "$__psbash_ci = if ($c -is [string]) { Get-Command $c -ErrorAction Ignore | Select-Object -First 1 } else { $c }; " +
-              "if ($__psbash_ci -is [System.Management.Automation.ApplicationInfo]) { $input | ConvertTo-BashNativeStdin $args[0] | & $c @rest 2>&1 } " +
-              "else { $input | & $c @rest 2>&1 }"
-            : resolve + "& $c @rest 2>&1";
+        string invokeBody = _stdin.Count > 0 ? resolve + "$input | & $c @rest 2>&1" : resolve + "& $c @rest 2>&1";
+        // A program is fed the records' BYTES, as a pipe into it is (the decision InnerCommand makes); a cmdlet or
+        // function gets the records themselves, so an unterminated one keeps its mark (`printf a | time wc -c`).
+        var input = _stdin.Count > 0 && EnterBashNativeStdinCommand.ResolvesToApplication(this, cmd)
+            ? InnerCommand.NativeStdinBytes(_stdin)
+            : _stdin;
 
         var allInvokeArgs = new object[args.Length];
         allInvokeArgs[0] = cmd;
@@ -144,7 +144,7 @@ public sealed class InvokeBashTimeCommand : BashCmdlet
                 : (int?)null;
             var output = merged is not null ? []
                 : _stdin.Count > 0
-                    ? InvokeCommand.InvokeScript(invokeBody, false, System.Management.Automation.Runspaces.PipelineResultTypes.None, _stdin, allInvokeArgs)
+                    ? InvokeCommand.InvokeScript(invokeBody, false, System.Management.Automation.Runspaces.PipelineResultTypes.None, input, allInvokeArgs)
                     : InvokeCommand.InvokeScript(invokeBody, allInvokeArgs);
             sw.Stop();
             if (merged is { } mergedExit) exitCode = mergedExit;

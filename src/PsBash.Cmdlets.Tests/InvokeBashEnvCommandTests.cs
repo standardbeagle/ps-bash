@@ -115,39 +115,6 @@ public class InvokeBashEnvCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Equal("PSB_ONLY_RUN=1", r.Stdout);
     }
 
-    /// <summary>
-    /// A command running in ANOTHER runspace of the process while <c>env -i</c>'s command runs keeps PATH and TEMP: the
-    /// env command waits (Wait-Event) with its own environment attached, and this thread reads the process environment.
-    /// </summary>
-    [Fact]
-    public void Env_IgnoreEnvironment_LeavesTheEnvironmentOfAConcurrentCommand()
-    {
-        string path = Environment.GetEnvironmentVariable("PATH")!;
-        string? temp = Environment.GetEnvironmentVariable("TEMP");
-        using var other = PwshTestFixture.Create();
-        const string gate = "psb-env-gate";
-        other.AddScript($"env -i Wait-Event {gate} -Timeout 60 | Out-Null; 'done'");
-        var running = other.BeginInvoke();
-        try
-        {
-            // Started: its own store is attached (or, the bug, the process environment lost PATH).
-            Assert.True(SpinWait.SpinUntil(() => PsBash.Core.ScalarOverlay.Of(other.Runspace) is not null || running.IsCompleted
-                    || Environment.GetEnvironmentVariable("PATH") != path,
-                TimeSpan.FromSeconds(60)), "env's command never started");
-            Assert.Equal(path, Environment.GetEnvironmentVariable("PATH"));
-            Assert.False(running.IsCompleted, "env's command ended before it was observed");
-            Assert.Equal(path, Environment.GetEnvironmentVariable("PATH"));
-            Assert.Equal(temp, Environment.GetEnvironmentVariable("TEMP"));
-        }
-        finally
-        {
-            other.Runspace.Events.GenerateEvent(gate, null, null, null);
-            var output = other.EndInvoke(running);
-            Assert.Equal("done", Assert.Single(output)?.ToString());
-        }
-        Assert.Null(PsBash.Core.ScalarOverlay.Of(other.Runspace));
-    }
-
     [Fact]
     public void Env_NoArgs_OutputIsSortedByName()
     {
@@ -313,5 +280,33 @@ public class InvokeBashEnvCommandTests : IClassFixture<SharedPwshFixture>
         // The negative-assertion is the security probe — Directive 12.
         var raw = RunRaw("Invoke-BashEnv '$(throw \"pwn\");rm -rf /'");
         Assert.Empty(raw);
+    }
+}
+
+/// <summary>
+/// A command running in ANOTHER runspace of the process while <c>env -i</c>'s command runs keeps PATH and TEMP: env's
+/// command waits (Wait-Event) with its own environment attached, this thread reads the process environment, then the
+/// wait is stopped. Its own class in <see cref="WallClockBoundCollection"/>: the readiness wait is wall-clock bounded.
+/// </summary>
+[Collection(WallClockBoundCollection.Name)]
+public class InvokeBashEnvConcurrentCommandTests
+{
+    [Fact]
+    public void Env_IgnoreEnvironment_LeavesTheEnvironmentOfAConcurrentCommand()
+    {
+        string path = Environment.GetEnvironmentVariable("PATH")!;
+        string? temp = Environment.GetEnvironmentVariable("TEMP");
+        using var other = PwshTestFixture.Create();
+        BoundedPipeline.StopWhenReady(other, "env -i Wait-Event psb-env-gate | Out-Null", () =>
+        {
+            // Started: its own store is attached (or, the bug, the process environment lost PATH).
+            Assert.True(SpinWait.SpinUntil(() => PsBash.Core.ScalarOverlay.Of(other.Runspace) is not null
+                    || Environment.GetEnvironmentVariable("PATH") != path,
+                TimeSpan.FromSeconds(60)), "env's command never started");
+            Assert.Equal(path, Environment.GetEnvironmentVariable("PATH"));
+            Assert.Equal(temp, Environment.GetEnvironmentVariable("TEMP"));
+        }, TimeSpan.FromSeconds(30), "env -i's waiting command");
+        // Stopped mid-command, env still detaches the command's own store.
+        Assert.Null(PsBash.Core.ScalarOverlay.Of(other.Runspace));
     }
 }
