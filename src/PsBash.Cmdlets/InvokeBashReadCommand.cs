@@ -199,7 +199,8 @@ public sealed class InvokeBashReadCommand : BashCmdlet
                     FileSystemHelpers.SetLastExitCode(this, 1);
                     return;
                 }
-                fromFd = ufd;
+                // A name for the shell's stdin (`exec 5<&0; read -u 5`) reads stdin, as `read -u 0` does.
+                fromFd = ufd > 2 && BashFdTable.ReadsShellStdin(ufd) ? 0 : ufd;
                 i += 2; continue;
             }
             if (a == "-t" && i + 1 < args.Length)

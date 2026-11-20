@@ -1120,6 +1120,17 @@ public class PsEmitterTests
         Assert.DoesNotContain("Invoke-BashRedirect -Path $(", ps.Substring(0, ps.IndexOf("} else {", StringComparison.Ordinal)));
     }
 
+    // `cmd <&6`: stdin is descriptor 6, not the pipe or the scope's queue. Both were piped INTO `Read-BashFd 6` as well, which
+    // takes no pipeline input: "The input object cannot be bound" (`echo x | cat <&6`, `{ exec 6<&0; cat <&6; }` fed).
+    [Theory]
+    [InlineData("echo up | cat <&6")]
+    [InlineData("printf 'a\\n' | { read l; cat <&6; }")]
+    public void Transpile_InputFromADescriptor_IsTheCommandsOwnStdin_NeverFedThePipe(string bash)
+    {
+        var ps = PsEmitter.Transpile(bash)!;
+        Assert.Contains("Read-BashFd 6 | Invoke-BashCat", ps);
+        Assert.DoesNotMatch(@"\|\s*Read-BashFd", ps);
+    }
     [Fact]
     public void Transpile_BraceGroup_StillWorks_NotNamedFd()
     {

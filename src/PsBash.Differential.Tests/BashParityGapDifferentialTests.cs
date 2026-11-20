@@ -89,8 +89,6 @@ public class BashParityGapDifferentialTests
     [SkippableFact] public Task Lineno_IsSet()
         => Same("echo $LINENO");
 
-    [SkippableFact] public Task Exec_RedirectOnly_PrintsNothing()
-        => Same("exec 5<&0; echo ok");
 
     // --- Missing builtins ------------------------------------------------------------------------
 

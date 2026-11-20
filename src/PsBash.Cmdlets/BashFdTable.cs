@@ -16,6 +16,8 @@ internal static class BashFdTable
         /// <summary>Null for a duplicate of the shell's own stdout (<see cref="Std"/> 1) or stderr (2).</summary>
         public Stream? Stream { get; init; }
         public int Std { get; init; }
+        /// <summary>A name for the shell's own stdin (<c>exec 5&lt;&amp;0</c>): read through the shell's stdin, never a stream here.</summary>
+        public bool ShellStdin { get; init; }
         public StreamReader? Reader { get; set; }
         public StreamWriter? Writer { get; set; }
         public int Refs { get; set; } = 1;
@@ -47,8 +49,10 @@ internal static class BashFdTable
         var kind = PsBash.Core.DevicePath.Classify(path, out int deviceFd);
         if (PsBash.Core.DevicePath.IsStream(kind))
         {
-            if (kind == PsBash.Core.DeviceKind.Stdin || (access == FileAccess.Read && deviceFd < 3))
-                return $"{PsBash.Core.BashPath.ToShell(path)}: the shell's own stdin cannot be opened as a numbered descriptor";
+            // `exec 5</dev/stdin` is `exec 5<&0`. Reading the shell's stdout or stderr (`exec 5</dev/fd/1`) is not modelled.
+            if (kind == PsBash.Core.DeviceKind.Stdin) return Dup(fd, 0);
+            if (access == FileAccess.Read && deviceFd is 1 or 2)
+                return $"{PsBash.Core.BashPath.ToShell(path)}: the shell's own stdout/stderr cannot be opened for reading as a numbered descriptor";
             return Dup(fd, deviceFd);
         }
 
@@ -116,6 +120,14 @@ internal static class BashFdTable
                 Fds[fd] = new Handle { Std = from };
                 return null;
             }
+            if (from == 0)
+            {
+                // `exec 5<&0`: the shell's stdin is always open (bash's dup(0) cannot fail then), so this is a name for it.
+                // It held no table entry, and the dup failed "0: Bad file descriptor" wherever it ran.
+                CloseLocked(fd);
+                Fds[fd] = new Handle { ShellStdin = true };
+                return null;
+            }
             if (!Fds.TryGetValue(from, out var handle)) return $"{from}: Bad file descriptor";
             if (fd == from) return null;
             CloseLocked(fd);
@@ -141,6 +153,13 @@ internal static class BashFdTable
     public static bool IsOpen(int fd)
     {
         lock (Gate) return Fds.ContainsKey(fd);
+    }
+
+    /// <summary>True when <paramref name="fd"/> is a name for the shell's own stdin (<see cref="Dup"/> of 0): its reader
+    /// reads the shell's stdin (<c>read -u 5</c> as <c>read</c>, <c>cmd &lt;&amp;5</c> as <c>cmd</c>), not this table.</summary>
+    public static bool ReadsShellStdin(int fd)
+    {
+        lock (Gate) return Fds.TryGetValue(fd, out var h) && h.ShellStdin;
     }
 
     /// <summary>The lowest descriptor at or above <paramref name="min"/> that is not open (bash gives <c>{var}</c> redirections

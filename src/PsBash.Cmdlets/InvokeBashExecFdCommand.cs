@@ -143,6 +143,14 @@ public sealed class ReadBashFdCommand : BashCmdlet
 
     protected override void EndProcessing()
     {
+        if (BashFdTable.ReadsShellStdin(Descriptor))
+        {
+            // `exec 5<&0; cmd <&5`: the command reads the shell's stdin - the shared one when a scope or the launcher
+            // forwards it (its records, through the one take); else there is nothing here to forward.
+            var stdin = SharedStdin.Get(SessionState);
+            while (SharedStdin.TryTake(stdin, out var record)) WriteObject(record);
+            return;
+        }
         try
         {
             string? line;

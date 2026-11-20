@@ -1,3 +1,4 @@
+using PsBash.Differential.Tests.Oracle;
 using PsBash.Testing;
 using Xunit;
 
@@ -19,6 +20,20 @@ public class ExecFdTests
 
     private const string Work = "W=\"$(mktemp -d)\"; cd \"$W\"; ";
 
+    // Class: the shell's stdin was not an open descriptor to the table, so `exec 5<&0` failed "0: Bad file descriptor"
+    // wherever it ran (the old live-only gap case was skipped in CI, not passing). bash's dup(0) cannot fail while fd 0
+    // is open. Primitive: BashFdTable.Dup(N, 0) names the shell's stdin (`exec 7</dev/stdin` too), and its readers read
+    // that stdin (`read -u N` as `read`, `cmd <&N` the shared stdin's records). Sibling: `cmd <&N` was fed the pipe or
+    // the scope's queue as well (PsEmitter.HasOwnStdin), so `Read-BashFd` could not bind it.
+    [SkippableFact]
+    public Task ExecDupOfStdin_Succeeds_AndReadsTheShellsStdin()
+        => AssertOracle.EqualAsync("cd \"$(mktemp -d)\" || exit; exec 5<&0; echo \"dup rc=$?\"; "
+            + "printf 'a\\nb\\nc\\n' | { exec 6<&0; read -u 6 l; echo \"l=$l\"; cat <&6; }; "
+            + "echo q | { exec 7</dev/stdin; echo \"dev rc=$?\"; read -u 7 m; echo \"m=$m\"; }; "
+            + "printf 'x\\ny\\n' | { exec 8<&0; exec 9<&8; read -u 9 n; echo \"n=$n\"; read o; echo \"o=$o\"; }; "
+            + "exec 5<&-; echo \"close rc=$?\"; read -u 5 z 2>/dev/null; echo \"closed read rc=$?\"; "
+            + "printf 'F1\\nF2\\n' > f; exec 6<f; echo up | cat <&6; echo \"rc=$?\"; "
+            + "exec 6<f; printf 's1\\ns2\\n' | { cat <&6; read l; echo \"l=$l\"; }", TimeSpan.FromSeconds(60));
     [SkippableFact]
     public async Task ExecRead_ReadUReadsLinesInOrder_ThenCatGetsTheRest()
     {

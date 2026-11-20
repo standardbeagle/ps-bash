@@ -252,6 +252,18 @@ public static partial class PsEmitter
         !redirects.IsDefaultOrEmpty && redirects.Any(r => r.Fd == 0 && r.Op is "<" or "<<" or "<<<");
 
     /// <summary>
+    /// A SIMPLE command whose stdin is not the scope's or the pipe's: an input redirection (<see cref="HasInputRedirect"/>)
+    /// or <c>&lt;&amp;N</c> on a descriptor opened by <c>exec</c> (N &gt;= 3, <see cref="TryEmitFdRedirect"/>: its stdin is
+    /// <c>Read-BashFd N</c>). Fed the scope's queue or the stage's pipe as well, <c>Read-BashFd</c> could not bind it
+    /// (<c>{ exec 6&lt;&amp;0; cat &lt;&amp;6; }</c>, <c>echo x | cat &lt;&amp;6</c>), and a feed would have drained the stdin a later
+    /// command reads. Every "does this simple command read the inherited stdin" site asks this.
+    /// </summary>
+    private static bool HasOwnStdin(ImmutableArray<Redirect> redirects) =>
+        HasInputRedirect(redirects)
+        || !redirects.IsDefaultOrEmpty && redirects.Any(r => r.Fd == 0 && r.Op == "<&" && r.FdVar is null
+            && GetLiteralValue(r.Target) is { } t && IsAllDigits(t) && int.TryParse(t, out int n) && n >= 3);
+
+    /// <summary>
     /// A compound command that is given its own stdin (<c>&lt; file</c>, <c>&lt;&lt;&lt;</c>) emits its
     /// body INSIDE a stdin scope; one without redirects inherits the surrounding scope unchanged.
     /// </summary>
@@ -2884,18 +2896,18 @@ public static partial class PsEmitter
         // `-Fed` has the runtime feed the scope's queue to a reader and leave it for anything else. Piped
         // unconditionally, `printf`/`test` never ran on an empty queue and failed to bind a queued line.
         const string dynPrefix = "& (Resolve-BashCommand ";
-        if (_inStdinScope && simple.EnvPairs.IsEmpty && simple.HereDocs.IsDefaultOrEmpty && !HasInputRedirect(simple.Redirects)
+        if (_inStdinScope && simple.EnvPairs.IsEmpty && simple.HereDocs.IsDefaultOrEmpty && !HasOwnStdin(simple.Redirects)
             && text.StartsWith(dynPrefix, StringComparison.Ordinal) && !PsBuild.IsStatementList(text))
             return dynPrefix + "-Fed " + text.Substring(dynPrefix.Length);
         // The same with a splatted operand (`f() { $SH --norc "$@"; }`): the head is resolved first inside `& { ... }`.
         const string dynHoist = "& { $__bashhead = (Resolve-BashCommand -Words ";
-        if (_inStdinScope && simple.EnvPairs.IsEmpty && simple.HereDocs.IsDefaultOrEmpty && !HasInputRedirect(simple.Redirects)
+        if (_inStdinScope && simple.EnvPairs.IsEmpty && simple.HereDocs.IsDefaultOrEmpty && !HasOwnStdin(simple.Redirects)
             && text.StartsWith(dynHoist, StringComparison.Ordinal))
             return "& { $__bashhead = (Resolve-BashCommand -Fed -Words " + text.Substring(dynHoist.Length);
         if (!_inStdinScope
             || !simple.EnvPairs.IsEmpty
             || !simple.HereDocs.IsDefaultOrEmpty
-            || HasInputRedirect(simple.Redirects)
+            || HasOwnStdin(simple.Redirects)
             || simple.Words.IsDefaultOrEmpty
             || StdinOperands(simple) is not ({ } name, var args)
             || PsBuild.IsStatementList(text)
@@ -12074,7 +12086,7 @@ public static partial class PsEmitter
             // Run the stage as `{ echo ...; }`, whose stdin scope hands the pipe to the substitution.
             if (i > 0 && cmd is Command.Simple { EnvPairs.IsEmpty: true, Words.Length: >= 1 } substStage
                 && GetLiteralValue(substStage.Words[0]) is { } substName && StdinIgnoringCommands.Contains(substName)
-                && !HasInputRedirect(substStage.Redirects) && substStage.HereDocs.IsDefaultOrEmpty
+                && !HasOwnStdin(substStage.Redirects) && substStage.HereDocs.IsDefaultOrEmpty
                 && substStage.Words.Any(w => ContainsCommandSub(w.Parts)))
                 cmd = new Command.BraceGroup(substStage, ImmutableArray<Redirect>.Empty);
             // `exit 55 | (exit 44)`: every pipe stage is a subshell, so `exit` there ends only that stage, with its
@@ -12105,7 +12117,7 @@ public static partial class PsEmitter
                     && StdinIgnoringCommands.Contains(stdinName);
                 // `... | cmd < file`, `... | cmd <<< text`, `... | cmd <<EOF`: the redirect replaces the pipe as the stage's stdin, so the
                 // upstream records are drained and the command runs exactly as it would on its own.
-                bool ownStdin = HasInputRedirect(simple.Redirects)
+                bool ownStdin = HasOwnStdin(simple.Redirects)
                     || !simple.HereDocs.IsDefaultOrEmpty && simple.HereDocs.Any(h => h.Fd < 3);
                 if (ownStdin)
                     sb.Append(PsBuild.DrainStageInput(WithPipeStageFeed(false, () => Emit(simple))));

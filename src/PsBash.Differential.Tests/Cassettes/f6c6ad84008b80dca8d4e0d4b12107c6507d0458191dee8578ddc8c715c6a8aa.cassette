@@ -1,0 +1,28 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 508
+stdout-length: 88
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; exec 5<&0; echo "dup rc=$?"; printf 'a\nb\nc\n' | { exec 6<&0; read -u 6 l; echo "l=$l"; cat <&6; }; echo q | { exec 7</dev/stdin; echo "dev rc=$?"; read -u 7 m; echo "m=$m"; }; printf 'x\ny\n' | { exec 8<&0; exec 9<&8; read -u 9 n; echo "n=$n"; read o; echo "o=$o"; }; exec 5<&-; echo "close rc=$?"; read -u 5 z 2>/dev/null; echo "closed read rc=$?"; printf 'F1\nF2\n' > f; exec 6<f; echo up | cat <&6; echo "rc=$?"; exec 6<f; printf 's1\ns2\n' | { cat <&6; read l; echo "l=$l"; }
+==== STDOUT ====
+dup rc=0
+l=a
+b
+c
+dev rc=0
+m=q
+n=x
+o=y
+close rc=0
+closed read rc=1
+F1
+F2
+rc=0
+F1
+F2
+l=s1
+
+==== STDERR ====
+

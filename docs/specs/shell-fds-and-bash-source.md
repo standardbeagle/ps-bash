@@ -36,6 +36,7 @@ raw slice, so `${BASH_SOURCE[0]:-$0}` printed a literal `$0`. (`BashParser.Words
 | `exec 0/1/2…; rest` | the rest of the statement list runs under the redirections, as `{ rest; } >&2` (emitter, `PsEmitter.ExecRedirect.cs`). Gap: in a function body it ends with the function (bash keeps it for the caller). |
 | `exec 0/1/2…` with nothing after it (an interactive line), or `exec 1>&-` | **not supported**: message `exec: N: redirecting the shell's own stdin/stdout/stderr with exec is not supported`, status 1 |
 | `exec N>&1`, `exec N>&2` | N becomes a name for the shell's stdout / stderr (`exec 3>&1` + `cmd >&3`, as dotnet-install.sh does) |
+| `exec N<&0`, `exec N</dev/stdin` | N becomes a name for the shell's stdin. INVARIANT: it always succeeds (bash's dup(0) cannot fail while fd 0 is open; it failed `0: Bad file descriptor` here, with or without a console). Its readers read that stdin: `read -u N` is `read`, `cmd <&N` gets the shared stdin's records (`BashFdTable.ReadsShellStdin`; none to forward when no scope or launcher stdin is shared). Guard: `ExecFdTests.ExecDupOfStdin_Succeeds_AndReadsTheShellsStdin`. |
 | `exec N<>file`, `{v}<>file` | opens N for reading AND writing, the file created when missing, one position for both (`Redirect.ReadWrite` -> `Invoke-BashExecFd N '<>'` -> `BashFdTable`); a device name is refused |
 
 Failure to open (`exec 3<missing`) writes `exec: missing: No such file or directory`, status 1, and the script goes on
@@ -48,6 +49,8 @@ descriptor is not restored. `cmd 3<&0` is ignored (the table has no stdin to nam
 ### Using a descriptor
 - `read -u N [names]` reads one line from N (`InvokeBashReadCommand`); status 1 at end of file or on a closed N.
 - `cmd >&N` pipes the command's output to N (`Write-BashFd N`); `cmd <&N` feeds the rest of N as stdin (`Read-BashFd N`).
+  INVARIANT: `<&N` is the command's OWN stdin (`PsEmitter.HasOwnStdin`): it is never also fed the pipe or the scope's
+  queue (`echo x | cat <&6` failed "The input object cannot be bound"; a feed would also drain what a later `read` gets).
   Only N ≥ 3 is routed here; `>&1`, `>&2`, `2>&1` keep their existing handling.
 - `cmd >&$fd` / `cmd <&$fd` (a plain variable reference) is decided when the word expands (`PsEmitter.EmitRunTimeFdRedirect`):
   a number is that descriptor (`Write-BashFd` / `Read-BashFd`; 1 and 2 are the shell's own stdout/stderr, an unopened
