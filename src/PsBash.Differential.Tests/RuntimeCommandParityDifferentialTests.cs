@@ -142,6 +142,22 @@ public class RuntimeCommandParityDifferentialTests
             + ": > z.gz; gzip -d z.gz; echo rc=$?; gzip -t z.gz; echo rc=$?; gzip -d nosuch; echo rc=$?; gzip -d d nosuch; echo rc=$?; "
             + GzNamed + " > e.gz; gunzip e; echo rc=$?; " + GzNamed + " > f.gz; zcat f; echo rc=$?; rm -f *.gz", compareStderr: true);
 
+    // A command that reads stdin when given no operand — class: no record arriving was taken as "no stdin" (`gzip
+    // </dev/null` was `gzip: missing file operand`, status 1, where GNU writes a 20-byte member; `md5sum </dev/null`
+    // printed nothing). Primitive: FileSystemHelpers.StdinIsTerminal — only a terminal is not empty input. Siblings:
+    // `gzip -` is stdin, decompress/-t/-l of empty stdin is GNU's unexpected end of file, `gzip -l` lists stdin, and
+    // "not in gzip format" starts with GNU's newline. Header bytes (the OS code) are not compared: they are the host
+    // zlib's.
+    [SkippableFact]
+    public Task Gzip_NoOperand_ReadsStdin_EmptyStdinIsEmptyInput()
+        => Eq("cd \"$(mktemp -d)\" || exit; { gzip </dev/null | wc -c; echo \"c ${PIPESTATUS[0]}\"; gzip -c </dev/null | gzip -d | wc -c; "
+            + "echo \"rt ${PIPESTATUS[*]}\"; : | gzip | wc -c; echo \"pipe ${PIPESTATUS[*]}\"; gzip - </dev/null | wc -c; "
+            + "gzip -d </dev/null; echo \"d $?\"; gzip -t </dev/null; echo \"t $?\"; gzip -l </dev/null; echo \"l $?\"; "
+            + "zcat </dev/null; echo \"zcat $?\"; gunzip </dev/null; echo \"gunzip $?\"; printf 'ab\\n' | gzip - | gzip -dc; "
+            + GzNamed + " | gzip -l; echo \"l2 ${PIPESTATUS[1]}\"; printf xx | gzip -t; echo \"tb $?\"; printf xx > b.gz; "
+            + "gzip -d b.gz; echo \"fb $?\"; md5sum </dev/null; sha1sum - </dev/null; sha256sum </dev/null; "
+            + "md5sum -c </dev/null; echo \"mc $?\"; } 2>&1");
+
     // mktemp — class: the target directory and name built from a fixed place instead of GNU's rules ($TMPDIR, -t,
     // -p, a template relative to the cwd, the X run replaced). Primitive: InvokeBashMktempCommand.Plan. Random
     // characters are reduced to their count.

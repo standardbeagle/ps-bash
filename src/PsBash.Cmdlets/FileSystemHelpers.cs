@@ -1015,6 +1015,19 @@ internal static class FileSystemHelpers
         operand == "-" || DevicePath.Classify(operand) == DeviceKind.Stdin;
 
     /// <summary>
+    /// True when <paramref name="cmdlet"/>'s standard input is the terminal: nothing upstream feeds it (no pipeline,
+    /// no stdin scope — <c>&lt; file</c>, <c>&lt; /dev/null</c> and the launcher's forwarded stdin each install one)
+    /// and the console is not redirected (<c>[ -t 0 ]</c>'s own test; <c>PSBASH_NO_TTY</c> forces false). A command
+    /// that reads stdin when given no operand treats "no record arrived" as EMPTY input unless this holds:
+    /// <c>gzip &lt;/dev/null</c> is a 20-byte member and <c>md5sum &lt;/dev/null</c> the empty input's digest.
+    /// </summary>
+    internal static bool StdinIsTerminal(PSCmdlet cmdlet) =>
+        !cmdlet.MyInvocation.ExpectingInput
+        && SharedStdin.Get(cmdlet.SessionState) is null
+        && !Console.IsInputRedirected
+        && !BashRuntime.IsHostConfigTruthy(StdinLineSource.NoTtyEnvVar);
+
+    /// <summary>
     /// True when <paramref name="path"/> is a device a command can read from or stat without a file behind it
     /// (<see cref="DevicePath"/>; everything but an unopened <c>/dev/fd/N</c>): the existence pre-checks treat it as
     /// present instead of reporting "No such file or directory" for <c>C:\dev\zero</c>.

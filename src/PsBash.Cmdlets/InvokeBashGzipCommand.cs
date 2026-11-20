@@ -209,7 +209,7 @@ public class InvokeBashGzipCommand : BashCmdlet
     // DECOMPRESS / -t must see the whole gzip member before it can inflate, so the COMPRESSED
     // input bytes are kept (a MemoryStream of the real size, not the 3-5x string copies it used
     // to take) and the inflated output streams out in chunks.
-    private bool _planned, _stdinMode, _stdinDecompress, _stdinTest;
+    private bool _planned, _stdinMode, _stdinDecompress, _stdinTest, _stdinList;
     private GzipArgs? _stdinPlan;
     private RecordByteEncoder? _recordBytes;
     private GZipStream? _compressor;
@@ -234,6 +234,37 @@ public class InvokeBashGzipCommand : BashCmdlet
         _ => CompressionLevel.Optimal,
     };
 
+    /// <summary>GNU reads stdin for no operand and for a lone <c>-</c>.</summary>
+    private static bool ReadsStdin(GzipArgs plan) => plan.Operands is [] or ["-"];
+
+    /// <summary>
+    /// Sets up the stdin stream. COMPRESS creates its GZipStream at the first byte (an empty input is written as
+    /// <see cref="EmptyMember"/>: .NET's GZipStream may write nothing for it); decompress / -t / -l keep the input.
+    /// </summary>
+    private void BeginStdin(GzipArgs plan)
+    {
+        _stdinMode = true;
+        _stdinDecompress = IsDecompress(plan) || plan.List;
+        _stdinTest = plan.Test || plan.List;
+        _stdinList = plan.List;
+        _recordBytes = new RecordByteEncoder();
+        _outRecords = new ByteRecordEmitter(WriteObject);
+        if (!_stdinDecompress && !_stdinTest)
+        {
+            var level = LevelFor(plan.Level);
+            _stdinSink = bytes =>
+            {
+                if (bytes.IsEmpty) return;
+                (_compressor ??= new GZipStream(new ByteRecordStream(_outRecords), level, leaveOpen: false)).Write(bytes);
+            };
+        }
+        else
+        {
+            _compressedInput = new MemoryStream();
+            _stdinSink = bytes => _compressedInput.Write(bytes);
+        }
+    }
+
     protected override void ProcessRecord()
     {
         if (InputObject is null) return;
@@ -242,27 +273,11 @@ public class InvokeBashGzipCommand : BashCmdlet
             _planned = true;
             var plan = Plan(EffectiveArgs());
             _stdinPlan = plan;
-            // Only a plain no-operand run reads the pipeline; usage errors / --help / --version / a
-            // file operand leave it untouched (EndProcessing reports them exactly as before).
-            _stdinMode = !plan.Parsed.HasError && plan.Operands.Count == 0
-                         && !plan.Parsed.Has(OptSpecSet.HelpId) && !plan.Parsed.Has(OptSpecSet.VersionId);
-            if (_stdinMode)
-            {
-                _stdinDecompress = IsDecompress(plan);
-                _stdinTest = plan.Test;
-                _recordBytes = new RecordByteEncoder();
-                _outRecords = new ByteRecordEmitter(WriteObject);
-                if (!_stdinDecompress && !_stdinTest)
-                {
-                    _compressor = new GZipStream(new ByteRecordStream(_outRecords), LevelFor(plan.Level), leaveOpen: false);
-                    _stdinSink = bytes => _compressor.Write(bytes);
-                }
-                else
-                {
-                    _compressedInput = new MemoryStream();
-                    _stdinSink = bytes => _compressedInput.Write(bytes);
-                }
-            }
+            // Only a plain stdin run (no operand, or a lone `-`) reads the pipeline; usage errors / --help / --version /
+            // a file operand leave it untouched (EndProcessing reports them exactly as before).
+            if (!plan.Parsed.HasError && ReadsStdin(plan)
+                && !plan.Parsed.Has(OptSpecSet.HelpId) && !plan.Parsed.Has(OptSpecSet.VersionId))
+                BeginStdin(plan);
         }
         if (!_stdinMode) return;
         StdinRecords++;
@@ -319,14 +334,19 @@ public class InvokeBashGzipCommand : BashCmdlet
         int level = plan.Level;
 
         var operands = plan.Operands;
-        if (operands.Count == 0 && StdinRecords > 0)
+        if (ReadsStdin(plan))
         {
+            // No operand (or `-`) is ALWAYS stdin, as in GNU: no record arriving is empty input (`gzip </dev/null`
+            // is a 20-byte member), not a missing operand. Only a terminal is refused, with GNU's words.
+            if (StdinRecords == 0 && !force && FileSystemHelpers.StdinIsTerminal(this))
+            {
+                Error(decompress || test || list
+                    ? "gzip: compressed data not read from a terminal. Use -f to force decompression.\nFor help, type: gzip -h"
+                    : "gzip: compressed data not written to a terminal. Use -f to force compression.\nFor help, type: gzip -h");
+                return;
+            }
+            if (!_stdinMode) BeginStdin(plan);
             FinishStdin();
-            return;
-        }
-        if (operands.Count == 0)
-        {
-            Error("gzip: missing file operand");
             return;
         }
 
@@ -362,7 +382,7 @@ public class InvokeBashGzipCommand : BashCmdlet
                         catch (Exception ex)
                         {
                             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                            Error($"gzip: {name}: {Failure(ex, resolved)}");
+                            Error(FailureLine(ex, resolved, name));
                         }
                     }
                     else
@@ -390,21 +410,10 @@ public class InvokeBashGzipCommand : BashCmdlet
         {
             if (!listed)
             {
-                WriteObject(BashRuntime.NewBashObject(string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                    "{0,19} {1,19}  ratio uncompressed_name", "compressed", "uncompressed")));
+                WriteObject(BashRuntime.NewBashObject(ListHeader));
                 listed = true;
             }
-            string ratio = Ratio(u - (c - hdr), u);
-            string line = string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                "{0,19} {1,19} {2} {3}", c, u, ratio, label);
-            var obj = new PSObject();
-            obj.TypeNames.Insert(0, "PsBash.GzipListOutput");
-            obj.Properties.Add(new PSNoteProperty("BashText", line));
-            obj.Properties.Add(new PSNoteProperty("CompressedSize", c));
-            obj.Properties.Add(new PSNoteProperty("UncompressedSize", u));
-            obj.Properties.Add(new PSNoteProperty("Ratio", ratio.Trim()));
-            obj.Properties.Add(new PSNoteProperty("FileName", label));
-            WriteObject(obj);
+            WriteObject(NewListRow(c, u, hdr, label));
         }
 
         foreach (var (filePath, name) in files)
@@ -417,7 +426,7 @@ public class InvokeBashGzipCommand : BashCmdlet
             catch (Exception ex)
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                Error($"gzip: {name}: {Failure(ex, filePath)}");
+                Error(FailureLine(ex, filePath, name));
                 continue;
             }
 
@@ -441,7 +450,7 @@ public class InvokeBashGzipCommand : BashCmdlet
                 catch (Exception ex)
                 {
                     if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                    Error($"gzip: {name}: not in gzip format");
+                    Error(NotGzipLine(name));
                 }
                 continue;
             }
@@ -465,7 +474,7 @@ public class InvokeBashGzipCommand : BashCmdlet
                 {
                     if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     if (ex is InvalidDataException) lastHdr = 0;
-                    Error($"gzip: {name}: {Failure(ex, filePath)}");
+                    Error(FailureLine(ex, filePath, name));
                     continue;
                 }
                 ListRow(inputSize, uncompressedSize, hdr, StripSuffix(name, suffix));
@@ -495,7 +504,7 @@ public class InvokeBashGzipCommand : BashCmdlet
                     catch (Exception ex)
                     {
                         if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                        Error($"gzip: {name}: {Failure(ex, filePath)}");
+                        Error(FailureLine(ex, filePath, name));
                     }
                     continue;
                 }
@@ -524,7 +533,7 @@ public class InvokeBashGzipCommand : BashCmdlet
                 catch (Exception ex)
                 {
                     if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                    Error($"gzip: {name}: {Failure(ex, filePath)}");
+                    Error(FailureLine(ex, filePath, name));
                     continue;
                 }
                 if (!keep)
@@ -565,7 +574,7 @@ public class InvokeBashGzipCommand : BashCmdlet
                 catch (Exception ex)
                 {
                     if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                    Error($"gzip: {name}: {Failure(ex, filePath)}");
+                    Error(FailureLine(ex, filePath, name));
                 }
                 continue;
             }
@@ -580,7 +589,7 @@ public class InvokeBashGzipCommand : BashCmdlet
             catch (Exception ex)
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                Error($"gzip: {name}: {Failure(ex, filePath)}");
+                Error(FailureLine(ex, filePath, name));
                 continue;
             }
             if (!keep)
@@ -605,9 +614,33 @@ public class InvokeBashGzipCommand : BashCmdlet
         return BashPath.ToShell(rel.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(rel) ? resolved : rel);
     }
 
-    /// <summary>GNU's words for a failed member: a bad stream is "not in gzip format", an I/O error strerror.</summary>
-    private static string Failure(Exception ex, string path)
-        => ex is InvalidDataException ? "not in gzip format" : FileSystemHelpers.ReadErrorMessage(ex, path);
+    private static readonly string ListHeader = string.Format(System.Globalization.CultureInfo.InvariantCulture,
+        "{0,19} {1,19}  ratio uncompressed_name", "compressed", "uncompressed");
+
+    /// <summary>One <c>-l</c> row: compressed and uncompressed size, GNU's ratio (net of the member's header bytes), name.</summary>
+    private static PSObject NewListRow(long c, long u, long hdr, string label)
+    {
+        string ratio = Ratio(u - (c - hdr), u);
+        string line = string.Format(System.Globalization.CultureInfo.InvariantCulture,
+            "{0,19} {1,19} {2} {3}", c, u, ratio, label);
+        var obj = new PSObject();
+        obj.TypeNames.Insert(0, "PsBash.GzipListOutput");
+        obj.Properties.Add(new PSNoteProperty("BashText", line));
+        obj.Properties.Add(new PSNoteProperty("CompressedSize", c));
+        obj.Properties.Add(new PSNoteProperty("UncompressedSize", u));
+        obj.Properties.Add(new PSNoteProperty("Ratio", ratio.Trim()));
+        obj.Properties.Add(new PSNoteProperty("FileName", label));
+        return obj;
+    }
+
+    /// <summary>
+    /// GNU's line for a failed member: a bad stream is <see cref="NotGzipLine"/>, an I/O error <c>gzip: NAME: strerror</c>.
+    /// </summary>
+    private static string FailureLine(Exception ex, string path, string name)
+        => ex is InvalidDataException ? NotGzipLine(name) : $"gzip: {name}: {FileSystemHelpers.ReadErrorMessage(ex, path)}";
+
+    /// <summary>GNU's <c>get_method</c> report, which starts with a newline (<c>"\n%s: %s: not in gzip format\n"</c>).</summary>
+    private static string NotGzipLine(string name) => $"\ngzip: {name}: not in gzip format";
 
     private static string StripSuffix(string name, string suffix)
         => name.EndsWith(suffix, StringComparison.Ordinal) && name.Length > suffix.Length ? name[..^suffix.Length] : name;
@@ -662,17 +695,35 @@ public class InvokeBashGzipCommand : BashCmdlet
     {
         try
         {
-            if (_compressor is not null)
+            _recordBytes!.Finish(_stdinSink!);
+            if (_compressedInput is null)
             {
-                _recordBytes!.Finish(_stdinSink!);
-                _compressor.Dispose();   // writes the trailer through the record stream
+                if (_compressor is null) _outRecords!.Append(EmptyMember);
+                else _compressor.Dispose();   // writes the trailer through the record stream
                 _outRecords!.Finish();
                 return;
             }
 
-            _recordBytes!.Finish(_stdinSink!);
-            _compressedInput!.Position = 0;
+            // GNU's read_error at end of input before a header: a newline first, then the message.
+            if (_compressedInput.Length == 0)
+            {
+                Error("\ngzip: stdin: unexpected end of file");
+                return;
+            }
+            _compressedInput.Position = 0;
+            long hdr = _stdinList ? MemberOverhead(_compressedInput) : 0;
+            _compressedInput.Position = 0;
             using var gs = GzipIntegrity.OpenDecoder(_compressedInput);
+            if (_stdinList)
+            {
+                long size = 0;
+                var lbuf = new byte[81920];
+                int ln;
+                while ((ln = gs.Read(lbuf, 0, lbuf.Length)) > 0) size += ln;
+                WriteObject(BashRuntime.NewBashObject(ListHeader));
+                WriteObject(NewListRow(_compressedInput.Length, size, hdr, "stdout"));   // GNU names stdin's output "stdout"
+                return;
+            }
             if (_stdinTest)
             {
                 gs.CopyTo(Stream.Null);
@@ -688,13 +739,22 @@ public class InvokeBashGzipCommand : BashCmdlet
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException)
         {
-            Error("gzip: stdin: not in gzip format");
+            Error(NotGzipLine("stdin"));
         }
     }
     // RFC 1952 member: header, an empty final deflate block, CRC32=0, ISIZE=0.
-    // On .NET 8/10 GZipStream can emit no bytes at all when no input is written.
+    // On .NET 8/10 GZipStream can emit no bytes at all when no input is written. Its OS byte is the one GZipStream
+    // writes for every other member (zlib's OS_CODE: 3 on Linux and macOS, as GNU gzip writes there; 10 on Windows),
+    // so an empty member is not the one member that names an unknown OS (it was 255).
     private static readonly byte[] EmptyMember =
-        [0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 255, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        [0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, ZlibOsCode(), 3, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+    private static byte ZlibOsCode()
+    {
+        using var ms = new MemoryStream();
+        using (var gz = new GZipStream(ms, CompressionLevel.Fastest, leaveOpen: true)) gz.WriteByte(0);
+        return ms.Length > 9 ? ms.GetBuffer()[9] : (byte)255;
+    }
 
     private static void CompressFile(string path, Stream output, CompressionLevel level)
     {

@@ -409,9 +409,18 @@ Both strategies support `--` to end flag parsing. Value flags often support join
 
 Commands that accept both pipeline and file input follow this pattern:
 
+**INVARIANT: no operand (or `-`) means stdin, and no record arriving is EMPTY input, not "no stdin".** `gzip
+</dev/null` is GNU's 20-byte empty member (it was `gzip: missing file operand`, status 1), `md5sum </dev/null` the
+empty input's digest (it printed nothing), and decompress / `-t` / `-l` of empty stdin is
+`\ngzip: stdin: unexpected end of file` (1). Only a terminal is not input: `FileSystemHelpers.StdinIsTerminal`
+(nothing upstream, no stdin scope — `< file`, `< /dev/null` and the launcher's forwarded stdin each install one —
+and the console test `[ -t 0 ]` uses). There gzip gives GNU's `compressed data not written to a terminal` (or `not
+read from`) refusal and a bare checksum prints nothing. Oracle `RuntimeCommandParityDifferentialTests.
+Gzip_NoOperand_ReadsStdin_EmptyStdinIsEmptyInput`.
+
 ```powershell
-# Pipeline mode: no file operands, pipeline has data
-if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
+# Pipeline mode: no file operands (or `-`); zero records = empty input unless StdinIsTerminal
+if ($operands.Count -eq 0) {
     # process $pipelineInput via Get-BashText
     return
 }

@@ -147,10 +147,11 @@ internal static class ChecksumEngine
         var operands = plan.Operands;
         bool hadError = false;
 
-        // No operand, or a lone `-`: hash stdin. (Only when something was piped: a bare call prints nothing.)
+        // No operand, or a lone `-`: hash stdin. No record arriving is EMPTY input (`md5sum </dev/null` is the empty
+        // input's digest); only a bare call on the terminal prints nothing (it cannot read the keyboard).
         if (operands.Count == 0 || (operands.Count == 1 && operands[0] == "-" ))
         {
-            if (stdin.HasInput || operands.Count == 1)
+            if (stdin.HasInput || operands.Count == 1 || !FileSystemHelpers.StdinIsTerminal(cmdlet))
                 cmdlet.WriteObject(MakeOutput(stdin.Hex(), "-", algorithmLabel, plan));
             return;
         }
@@ -411,7 +412,7 @@ internal static class ChecksumEngine
         bool ok = true;
         if (properLines == 0)
         {
-            FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {listDisplay}: no properly formatted checksum lines found");
+            FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {GnuQuote.IfNeeded(listDisplay)}: no properly formatted checksum lines found");
             return false;
         }
         if (!plan.Status)

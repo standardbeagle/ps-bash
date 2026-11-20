@@ -1,0 +1,49 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 773
+stdout-length: 672
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; { gzip </dev/null | wc -c; echo "c ${PIPESTATUS[0]}"; gzip -c </dev/null | gzip -d | wc -c; echo "rt ${PIPESTATUS[*]}"; : | gzip | wc -c; echo "pipe ${PIPESTATUS[*]}"; gzip - </dev/null | wc -c; gzip -d </dev/null; echo "d $?"; gzip -t </dev/null; echo "t $?"; gzip -l </dev/null; echo "l $?"; zcat </dev/null; echo "zcat $?"; gunzip </dev/null; echo "gunzip $?"; printf 'ab\n' | gzip - | gzip -dc; printf '\x1f\x8b\x08\x08\x00\x00\x00\x00\x00\x03\x61\x00\xcb\x48\xcd\xc9\xc9\xe7\x02\x00\x20\x30\x3a\x36\x06\x00\x00\x00' | gzip -l; echo "l2 ${PIPESTATUS[1]}"; printf xx | gzip -t; echo "tb $?"; printf xx > b.gz; gzip -d b.gz; echo "fb $?"; md5sum </dev/null; sha1sum - </dev/null; sha256sum </dev/null; md5sum -c </dev/null; echo "mc $?"; } 2>&1
+==== STDOUT ====
+20
+c 0
+0
+rt 0 0 0
+20
+pipe 0 0 0
+20
+
+gzip: stdin: unexpected end of file
+d 1
+
+gzip: stdin: unexpected end of file
+t 1
+
+gzip: stdin: unexpected end of file
+l 1
+
+gzip: stdin: unexpected end of file
+zcat 1
+
+gzip: stdin: unexpected end of file
+gunzip 1
+ab
+         compressed        uncompressed  ratio uncompressed_name
+                 28                   6 -33.3% stdout
+l2 0
+
+gzip: stdin: not in gzip format
+tb 1
+
+gzip: b.gz: not in gzip format
+fb 1
+d41d8cd98f00b204e9800998ecf8427e  -
+da39a3ee5e6b4b0d3255bfef95601890afd80709  -
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  -
+md5sum: 'standard input': no properly formatted checksum lines found
+mc 1
+
+==== STDERR ====
+
