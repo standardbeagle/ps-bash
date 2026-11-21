@@ -1070,7 +1070,7 @@ public class BashTranspilerTests
         // Cascade repro: the dropped redirect used to also swallow the `| sort` stage.
         var result = BashTranspiler.Transpile("while read a; do echo $a; done < f | sort");
         Assert.Contains("in @(Invoke-BashCat f -RawStdinBytes | ForEach-Object {", result);
-        Assert.EndsWith("} | Invoke-BashSort", result);
+        Assert.EndsWith("} | Invoke-BashSort }", result); // inside PsBuild.WithPipeEntryStatus
     }
 
     [Fact]

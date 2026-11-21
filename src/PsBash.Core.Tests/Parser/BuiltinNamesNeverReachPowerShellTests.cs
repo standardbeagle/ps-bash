@@ -34,6 +34,10 @@ public class BuiltinNamesNeverReachPowerShellTests
     private static bool EmittedBare(string name)
     {
         string emitted = PsEmitter.Transpile(name + " zz | head -1") ?? "";
+        // A pipeline of shell code sits in PsBuild.WithPipeEntryStatus (`. { capture; ... }`): its `.` is not the builtin.
+        string entry = PsBuild.WithPipeEntryStatus("");
+        string open = entry[..(entry.Length - 2)];
+        if (emitted.StartsWith(open, StringComparison.Ordinal)) emitted = emitted[open.Length..];
         return emitted.StartsWith(name + " ", StringComparison.Ordinal);
     }
 

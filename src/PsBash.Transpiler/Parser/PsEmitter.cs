@@ -8453,12 +8453,13 @@ public static partial class PsEmitter
             if (p is WordPart.BracedVarSub { ArgWord: { } arg } && ContainsArithSub(arg)) return true;
             // `${a[1/0]}`: an indexed subscript is an arithmetic expression (`s.sh: line 6: 1/0: division by 0`).
             if (p is WordPart.BracedVarSub { Suffix: ['[', ..] suffix } && BashParser.FindSubscriptClose(suffix, 0) is > 1 and var close
-                && suffix.AsSpan(1, close - 1) is var sub && sub is not ("@" or "*") && !IsPlainInteger(sub)) return true;
+                && suffix.AsSpan(1, close - 1) is var sub && sub is not ("@" or "*") && !IsDigitsOnlySubscript(sub)) return true;
         }
         return false;
     }
 
-    private static bool IsPlainInteger(ReadOnlySpan<char> text)
+    /// <summary>A subscript of digits only (<c>a[3]</c>): evaluating it cannot fail, so it needs no diagnostic path. Not a bare-number decision (PsNumberLiteral owns those).</summary>
+    private static bool IsDigitsOnlySubscript(ReadOnlySpan<char> text)
     {
         if (text.IsEmpty) return false;
         foreach (char c in text) if (c is < '0' or > '9') return false;

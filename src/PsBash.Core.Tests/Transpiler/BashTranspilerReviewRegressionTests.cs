@@ -886,7 +886,7 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_LocalNamerefFromPositional_EmitsOneBodyPerLiteralCaller()
     {
         var ps = BashTranspiler.Transpile("setv() { local -n r=$1; r=x; }\nsetv foo\nsetv bar");
-        Assert.Contains("if ($__nrt -ceq 'foo') { $global:LASTEXITCODE = 0; $env:foo = \"x\" }", ps);
+        Assert.Contains("if ($__nrt -ceq 'foo') { [PsBash.Cmdlets.VarFrameStack]::SetLine(1); $global:LASTEXITCODE = 0; $env:foo = \"x\" }", ps);
         Assert.Contains("elseif ($__nrt -ceq 'bar') {", ps);
     }
 

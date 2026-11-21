@@ -635,7 +635,7 @@ public class PsEmitterTests
         Assert.Equal(
             "Invoke-BashEcho $(Invoke-BashArith ('' + "
             + "$((@(Invoke-BashEcho 5 | ConvertTo-BashCapture) -join [string][char]10).Trim())"
-            + " + ' + 60'))",
+            + " + ' + 60 '))", // left-trimmed only (bash: `2 + 1/0 : division by 0 (error token is "0 ")`)
             result);
         // The evaluator must never receive the un-expanded substitution text.
         Assert.DoesNotContain("Invoke-BashArith '$(", result);
@@ -646,7 +646,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $(( `echo 7` - 1 ))");
         Assert.Contains("Invoke-BashEcho 7 | ConvertTo-BashCapture", result);
-        Assert.Contains("+ ' - 1'", result);
+        Assert.Contains("+ ' - 1 '", result);
     }
 
     [Fact]
@@ -657,7 +657,7 @@ public class PsEmitterTests
         // evaluator's existing paren grouping already handles. It must NOT be
         // mistaken for a command sub and shelled out.
         var result = PsEmitter.Transpile("echo $(( $((2+3)) * 4 ))");
-        Assert.Equal("Invoke-BashEcho $(Invoke-BashArith '$((2+3)) * 4')", result);
+        Assert.Equal("Invoke-BashEcho $(Invoke-BashArith '$((2+3)) * 4 ')", result);
     }
 
     [Fact]
@@ -668,7 +668,7 @@ public class PsEmitterTests
         // in half and emit unparseable PowerShell).
         var result = PsEmitter.Transpile("echo $(( $(grep -c \"a)b\" f.txt) + 1 ))");
         Assert.Contains("Invoke-BashGrep '-c' \"a)b\" f.txt", result);
-        Assert.Contains("+ ' + 1'", result);
+        Assert.Contains("+ ' + 1 '", result); // the text keeps its trailing space: bash's error token is "1 "
     }
 
     [Fact]
