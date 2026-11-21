@@ -580,8 +580,11 @@ must do no work that the job's path to its first write does not also do.
   loaded full gate (beagle-ab, g45, load average about 50 on 12 cores). On the same host under the same load, the
   case repeated 288 times per run failed 3 and 7 times in two runs before the fix (10 of 576) and 0 of 576 after it.
 - **What it does not cover.** If the foreground's next command itself calls a .NET method, it pays an AMSI report that
-  the job may not. Compiling the job ahead does not move its own lock wait: every new `PowerShell` invocation takes
-  the lock (a precompiled function, the same script text and a cached script block each waited the full hold).
+  the job may not. `BeginInvoke` itself can wait on the lock (a new `Pipeline` closes the AMSI session), but that
+  happens before `OutputChannel.MarkStarted`. Since §12.5 cause 7 nothing after it on the job's way to its body
+  compiles, so the job no longer waits on the lock either (`LiveJobBody_RunsWhileTheAmsiLockIsHeldFromTheJobsStart`).
+  An earlier note here said that compiling ahead did not help; that measurement held the lock across `BeginInvoke`,
+  and `AddScript` text is compiled again by every invocation anyway.
 - **Guards.** `BackgroundJobLaunchGuardTests` (Host.Tests, an AST check of the psm1). The regression test is
   `BackgroundJobLiveOutputTests.LiveJobStart_ForegroundReachesItsNextCommand_WhileTheAmsiLockIsHeldFromTheJobsStart`.
   It holds the AMSI lock from the moment the job is started (`OutputMux.ProducerStarted`, raised by
@@ -626,8 +629,9 @@ paid this:
    delayed each of their starts by about 100 ms. When no runspace is idle but the warm-up thread is opening one, the
    launcher waits for it. Two opens at once each took about twice as long: a fresh host's first job took 2.3-3.0 s
    beside the warm-up's open, against 1.1-1.8 s for one open alone. When nothing is opening, the launcher opens one
-   itself (`ColdOpens`), late but still in launch order. A reused runspace keeps the last job's location, so
-   `BashStateSnapshot.BuildJobOptions` now begins with the parent's `Set-Location`.
+   itself (`ColdOpens`), late but still in launch order. A reused runspace keeps the last job's location, so the job
+   runs `Set-Location` to the parent's directory (`BashStateSnapshot.JobLocation`), but only when the runspace is
+   somewhere else (cause 7).
 2. *A new thread per invocation.* `RunspaceFactory.CreateRunspace` defaults to `PSThreadOptions.UseNewThread`: on a
    loaded host `BeginInvoke` took 40-100 ms and the first statement ran 35-150 ms after it. With `ReuseThread` the
    same steps took 0.3-10 ms and 2-30 ms (a pool's runspaces already work this way).
@@ -665,8 +669,8 @@ paid this:
    not on entry. Time the launcher spends waiting for a runspace (seconds on a cold host) delays the shell as much as
    the job, so it is not the job's to pay back. With the clock at entry, a cold host printed `a1 b1 b2 a2 fg` for
    `{ echo a1; sleep 3; echo a2; } & { sleep 1; echo b1; sleep 1; echo b2; } & sleep 2.5; echo fg`: the jobs were on
-   time and the foreground was late by both runspace waits. The job's head
-   stores it in the global `$__psbashJobClock`, and `Enter-BashJobTurn` begins it as the body starts, so the start lag
+   time and the foreground was late by both runspace waits. The launcher
+   stores it in the job runspace's global `$__psbashJobClock`, and `Enter-BashJobTurn` begins it as the body starts, so the start lag
    becomes the job's debt. `Invoke-BashSleep` settles each duration against the debt: it sleeps `max(0, D - debt)` and
    carries what is left to the next sleep. Time the body spends after it begins is never debt. A job that has no sleep,
    or whose start lag is zero, is unaffected. A job ends at `launch + D` exactly when its sleeps can absorb the lag
@@ -676,11 +680,36 @@ paid this:
    the job's other globals. Tests: `JobClockTests` (pure settlement) and `JobClockSleepTests` (wall clock, alone: a job
    launched 100 ms late sleeping 0.2 s ends 200 ms after its launch).
 
+7. *A compile on the job's way to its body.* The job ran `AddScript(head + options + body + tail)`. PowerShell parses
+   and**The two oils cases (measured, same host, with the start-lag clock of cause 6).** Phases of one job on a loaded
+host with ready runspaces: `NewJob` 0.1-0.3 ms; `BeginInvoke` 2-20 ms after it; the body's first statement 24-88 ms
+after the `&` (13-27 ms with less load), almost all of it the job script's compile under the AMSI lock; the
+`Enter-BashJobTurn` wait about 0; 2.5-15 ms between two launches.
+
+**After cause 7 (`tman dev`, this workstation loaded by other agents' builds; each case run 21 times in one script).**
+`&` → body: median 2.4-2.9 ms, p90 5.8-7.5 ms, max 11-35 ms (before: 45 / 64 / 135 ms in the same probe). Launches
+3.5-6 ms apart, with outliers of 10-35 ms. "wait -n" (90 and 30 ms): 21 of 21 in each of four runs, one of them with
+an in-process job compiling new script text the whole time (before: 3 of 21; 18 of 20 under 4 CPU-bound processes).
+Its mark is removed. "wait for N parallel jobs and check failure" (30, 20 and 10 ms): needs the three launches less
+than 10 ms apart. It passed 18, 16 and 13 (under the compile load) of 21 (before: 0 of 21). Every failure had a
+launch gap of 10 ms or more, and the gap is the foreground's own work between two `&`: about 4 ms of psm1 script per
+launch (`Invoke-BashBackground`, `Start-BashBgJob`, `pids=...`), with about five .NET calls, each an AMSI report that
+waits while another command compiles. It stays XFAIL until the launch path is a fraction of a millisecond. Because
+it now passes most runs, expect XPASS from it.
+nd runspace from the launcher through its session state (`BashJobRunspaces.Inherit`, about
+   0.1 ms). The directory is not set there: a location change costs 1-10 ms (PowerShell checks every component of
+   the path), which on the launcher widened the gap between launches from 4 to 10-15 ms. It stays a `Set-Location` in
+   the job, which is start lag the clock pays back, and runs only when the pooled runspace is elsewhere. Side
+   effect: `{ exit 0; } & wait $!` is 0, as in bash (the release gave 1). Tests: `JobScriptTests` (Cmdlets.Tests:
+   bodies compiled before the launch and shared, `Prepare` finds every in-process body, the function calls no method
+   before the body, no `AddScript` in `BashJobRunspaces`) and
+   `BackgroundJobLiveOutputTests.LiveJobBody_RunsWhileTheAmsiLockIsHeldFromTheJobsStart` (Host.Tests: the AMSI lock is
+   held from the job's start and the job's line must still arrive).
+
 **After (same host and load, warm daemon, 94 jobs).** Bind 0.7-3.3 ms. `BeginInvoke` 0.4-2 ms, rarely up to 25.
 `&` → first statement: median about 13 ms, 10.6-53 ms in bursts. The tail is the AMSI lock held by the other
 agents' test processes on this machine. A cold open (more concurrent jobs than `Spares`) still costs 700-900 ms.
-Single-digit ms was not reached under that load. The floor is the job pipeline's own compile, which waits on the
-AMSI lock (§12.4) and cannot be moved ahead.
+Single-digit ms was not reached under that load: the floor was the job pipeline's own compile. Cause 7 moved it ahead.
 
 **The two oils cases (measured, same host, with the start-lag clock of cause 6).** Phases of one job on a loaded
 host with ready runspaces: `NewJob` 0.1-0.3 ms; `BeginInvoke` 2-20 ms after it; the body's first statement 24-88 ms

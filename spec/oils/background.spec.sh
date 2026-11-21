@@ -73,7 +73,7 @@ status=2
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash arch-bg-job-start-latency a job's body starts 24-88 ms after its & on a loaded host (its script compile waits on PowerShell's process-wide AMSI lock); the start-lag clock pays that back only out of a sleep, and these sleeps (30/20/10 ms) are shorter, so the jobs end in launch order: 1 2 3 in 5/20 and 1/18 runs (docs/specs/background-jobs.md section 12.5)
+## XFAIL ps-bash arch-bg-job-start-latency the jobs' sleeps (30/20/10 ms) need the three launches under 10 ms apart; a job's body now starts 2-7 ms after its &, but each launch costs about 4 ms of psm1 script with AMSI-reported .NET calls (10-35 ms when another command compiles), so 1 2 3 in 13-18/21 runs, not 21/21 (docs/specs/background-jobs.md section 12.5)
 ## timeout: 10
 
 #### Builtin in background
@@ -361,7 +361,6 @@ status=3
 status=9
 ## END
 ## status: 0
-## XFAIL ps-bash arch-bg-job-start-latency a job's body starts 24-88 ms after its & on a loaded host (AMSI lock); the start-lag clock pays that back out of each sleep, so this fails only when the second job's lag passes its 90 ms window: 18/20 runs under 4 CPU-bound processes, not 20/20, and an XPASS is an error, so the mark stays (docs/specs/background-jobs.md section 12.5)
 ## timeout: 10
 ## real-launcher
 

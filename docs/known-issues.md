@@ -73,10 +73,11 @@ repeated here, under their area. Check both pages before you report a bug.
 - **A trapped signal runs at the next top-level statement.** A signal that arrives during one
   long command, or inside a `( )` or `$( )` body, waits for it to finish. With no trap, STOP,
   TSTP, TTIN, TTOU and CONT are ignored: a host command cannot be suspended.
-- **A job starts about 13 ms after its `&`** (median on Windows; 10-53 ms under load); bash
-  forks at once. A `sleep` in the job is shortened by that lag, so longer sleeps keep bash's
-  order. Jobs that differ by less than the lag can finish in another order than in bash. Two
-  spec cases stay XFAIL for this (`arch-bg-job-start-latency`), one of them `wait -n`.
+- **A job starts about 3 ms after its `&`** (median on Windows; up to about 35 ms under load),
+  and two `&` in a row are about 4 ms apart; bash forks at once. A `sleep` in the job is
+  shortened by its start lag, so longer sleeps keep bash's order. Jobs whose sleeps differ by
+  less than the gap between their launches can finish in another order than in bash. One spec
+  case stays XFAIL for this (`arch-bg-job-start-latency`, sleeps 10 ms apart).
 - **Some job output is still printed at `wait`.** A job streams its output as it runs when
   its stdout is the shell's own. A job started inside a function, a redirected group, a
   pipeline, `$( )`, `<( )`, `eval`, `source`, a trap, or after `exec > file` is collected and
