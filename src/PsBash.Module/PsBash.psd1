@@ -108,7 +108,6 @@ FunctionsToExport = @(
     'Get-LsEntryFromFsi',
     'Get-LsEntryFromPsItem',
     'Initialize-BrowseAdapters',
-    'Invoke-BashBackground',
     'Invoke-BashBg',
     # Invoke-BashEcho / Invoke-BashKill / Invoke-BashRedirect migrated to binary
     # cmdlets (PsBash.Cmdlets); they are no longer psm1 functions, so exporting them

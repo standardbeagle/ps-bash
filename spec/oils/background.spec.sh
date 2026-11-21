@@ -73,7 +73,7 @@ status=2
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash arch-bg-job-start-latency the jobs' sleeps (30/20/10 ms) need the three launches under 10 ms apart; a job's body now starts 2-7 ms after its &, but each launch costs about 4 ms of psm1 script with AMSI-reported .NET calls (10-35 ms when another command compiles), so 1 2 3 in 13-18/21 runs, not 21/21 (docs/specs/background-jobs.md section 12.5)
+## XFAIL ps-bash arch-bg-job-start-latency the jobs' sleeps (30/20/10 ms) need the three launches under 10 ms apart; the launch is C# now (median 1.7 ms apart, a body starts 0.9 ms after its &), but on a loaded host a launch or a job thread still stalls 10-47 ms now and then, so 1 2 3 in 14-18/21 runs, not 21/21 (docs/specs/background-jobs.md section 12.5)
 ## timeout: 10
 
 #### Builtin in background

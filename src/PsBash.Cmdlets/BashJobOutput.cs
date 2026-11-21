@@ -10,7 +10,7 @@ namespace PsBash.Cmdlets;
 /// <see cref="OutputMux"/> as the job produces it, so it reaches the shell's stdout/stderr live and in order with
 /// the foreground. The job's output and error collections are drained as they fill (nothing is retained), and a
 /// write blocks while the mux applies back-pressure, which blocks the job's pipeline thread like a full pipe.
-/// Driven from the module's <c>Invoke-BashBackground</c>.
+/// Driven from <c>Invoke-BashBackground</c> (<see cref="BashBgJobTable.LaunchInProcess"/>).
 /// </summary>
 public static class BashJobOutput
 {

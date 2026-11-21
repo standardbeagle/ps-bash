@@ -567,9 +567,10 @@ In bash, `echo a & echo b` prints `b` first: after `fork` the parent runs on at 
 before it writes. ps-bash keeps that order by the same margin. Once a job is started, the launcher's path back to the next command
 must do no work that the job's path to its first write does not also do.
 
-- **Invariant.** `Start-BashBgJob` (PsBash.psm1) is the only place a job starts (`BeginInvoke`, `BashJobOutput.BeginLive`,
-  `BashJobProcess.Start`). It records the job in the table and sets `$!` first, then starts the job, then does only
-  property and variable sets. Nothing follows a `Start-BashBgJob` call except `return`.
+- **Invariant.** A job starts in one of two places. An in-process job starts in `BashBgJobTable.LaunchInProcess` (C#,
+  §12.5 cause 8: `BeginInvoke` or `BashJobOutput.BeginLive`). A job in a host process of its own starts in
+  `Start-BashBgJob` (PsBash.psm1: `BashJobProcess.Start`). Each records the job in the table first, then starts it, then
+  does only property and variable sets (`$!` included). Nothing follows a `Start-BashBgJob` call except `return`.
 - **Why.** On Windows, PowerShell reports every script-to-.NET method call to AMSI under one process-wide lock
   (`AmsiUtils.s_amsiLockObject`); cmdlet calls, property reads and sets, and `[pscustomobject]` do not report (measured
   with the lock held 300 ms by another thread: `List.Add` and `[Math]::Abs` waited ~310 ms, the others 1-9 ms).
@@ -585,7 +586,8 @@ must do no work that the job's path to its first write does not also do.
   compiles, so the job no longer waits on the lock either (`LiveJobBody_RunsWhileTheAmsiLockIsHeldFromTheJobsStart`).
   An earlier note here said that compiling ahead did not help; that measurement held the lock across `BeginInvoke`,
   and `AddScript` text is compiled again by every invocation anyway.
-- **Guards.** `BackgroundJobLaunchGuardTests` (Host.Tests, an AST check of the psm1). The regression test is
+- **Guards.** `BackgroundJobLaunchGuardTests` (Host.Tests, an AST check of the psm1) and `BackgroundLaunchGuardTests`
+  (Cmdlets.Tests, the C# launch). The regression test is
   `BackgroundJobLiveOutputTests.LiveJobStart_ForegroundReachesItsNextCommand_WhileTheAmsiLockIsHeldFromTheJobsStart`.
   It holds the AMSI lock from the moment the job is started (`OutputMux.ProducerStarted`, raised by
   `OutputChannel.MarkStarted`) and requires the foreground's `word_b` to arrive while the lock is held. Before the fix
@@ -681,22 +683,18 @@ paid this:
    launched 100 ms late sleeping 0.2 s ends 200 ms after its launch).
 
 7. *A compile on the job's way to its body.* The job ran `AddScript(head + options + body + tail)`. PowerShell parses
-   and**The two oils cases (measured, same host, with the start-lag clock of cause 6).** Phases of one job on a loaded
-host with ready runspaces: `NewJob` 0.1-0.3 ms; `BeginInvoke` 2-20 ms after it; the body's first statement 24-88 ms
-after the `&` (13-27 ms with less load), almost all of it the job script's compile under the AMSI lock; the
-`Enter-BashJobTurn` wait about 0; 2.5-15 ms between two launches.
-
-**After cause 7 (`tman dev`, this workstation loaded by other agents' builds; each case run 21 times in one script).**
-`&` → body: median 2.4-2.9 ms, p90 5.8-7.5 ms, max 11-35 ms (before: 45 / 64 / 135 ms in the same probe). Launches
-3.5-6 ms apart, with outliers of 10-35 ms. "wait -n" (90 and 30 ms): 21 of 21 in each of four runs, one of them with
-an in-process job compiling new script text the whole time (before: 3 of 21; 18 of 20 under 4 CPU-bound processes).
-Its mark is removed. "wait for N parallel jobs and check failure" (30, 20 and 10 ms): needs the three launches less
-than 10 ms apart. It passed 18, 16 and 13 (under the compile load) of 21 (before: 0 of 21). Every failure had a
-launch gap of 10 ms or more, and the gap is the foreground's own work between two `&`: about 4 ms of psm1 script per
-launch (`Invoke-BashBackground`, `Start-BashBgJob`, `pids=...`), with about five .NET calls, each an AMSI report that
-waits while another command compiles. It stays XFAIL until the launch path is a fraction of a millisecond. Because
-it now passes most runs, expect XPASS from it.
-nd runspace from the launcher through its session state (`BashJobRunspaces.Inherit`, about
+   and compiles `AddScript` text again on every invocation, even when the text repeats, and each compile is an AMSI
+   scan under the process-wide lock (§12.4): 40-130 ms per job on a loaded host. That was almost all of cause 6's lag.
+   The launcher's next .NET call also waited behind the scan, so launches were 45-60 ms apart. **Invariant: nothing
+   is compiled between an in-process job's launch and its body.** The job runs the job runspace's function
+   `__psbashJob` (`PsBash.Cmdlets.JobScript.Text`: turn, body, tail). It is defined in the runspace's initial state and
+   compiled once per process when a job runspace opens. The body is passed as a script block from `JobScript.Body`:
+   PowerShell's script-block cache, so there is one compile per distinct body per process. It is compiled for a
+   dot-sourced run before the launch. The host compiles it as a command that uses `&` is about to run
+   (`JobScript.Prepare` from `Connection` via `SdkRunspace.PrepareJobBodies`), and `NewJob` compiles it otherwise.
+   The scan is not skipped; it runs earlier, on the shell's time. What differs between jobs arrives as values, never
+   as text. The globals (`BashStateSnapshot.JobGlobals`: options, ERR trap, `$BASHPID`, loop variables, stdin, clock)
+   are set in the bound runspace from the launcher through its session state (`BashJobRunspaces.Inherit`, about
    0.1 ms). The directory is not set there: a location change costs 1-10 ms (PowerShell checks every component of
    the path), which on the launcher widened the gap between launches from 4 to 10-15 ms. It stays a `Set-Location` in
    the job, which is start lag the clock pays back, and runs only when the pooled runspace is elsewhere. Side
@@ -705,8 +703,19 @@ nd runspace from the launcher through its session state (`BashJobRunspaces.Inher
    before the body, no `AddScript` in `BashJobRunspaces`) and
    `BackgroundJobLiveOutputTests.LiveJobBody_RunsWhileTheAmsiLockIsHeldFromTheJobsStart` (Host.Tests: the AMSI lock is
    held from the job's start and the job's line must still arrive).
-
-**After (same host and load, warm daemon, 94 jobs).** Bind 0.7-3.3 ms. `BeginInvoke` 0.4-2 ms, rarely up to 25.
+8. *Script on the launch path.* After cause 7 the gap between two `&` was the launch itself: about 4 ms of psm1 script
+   per job (`Invoke-BashBackground`, `Start-BashBgJob`), with five script→.NET calls, each an AMSI report that waited
+   10-35 ms whenever another command compiled. "wait for N parallel jobs" needs its three launches under 10 ms apart.
+   **Invariant: an in-process launch runs no PowerShell script and makes no script→.NET call.** `Invoke-BashBackground`
+   is a binary cmdlet (`InvokeBashBackgroundCommand`). The emitted `cmd &` is that one call with constant arguments.
+   `BashBgJobTable.LaunchInProcess` builds the job, takes its job number, records it, starts it and sets `$!`, all in
+   C#. The job table is still the module's (`$script:BashBgJobs`, which `jobs`, `wait`, `kill %N` and `fg` resolve
+   through `Find-BashBgJob`). The psm1 hands it over once, at load, as `$global:__psbashBgJobTable`, together with its
+   path, its reaper and `Start-BashBgProcessJob`. The cmdlet calls back into `Start-BashBgProcessJob` only for a job in a
+   host process of its own (§11). A psm1 function named `Invoke-BashBackground` would shadow the cmdlet, so the module
+   defines none. Guard: `BackgroundLaunchGuardTests` (Cmdlets.Tests). It checks that the emitted call has no method
+   call or type outside the body, that the cmdlet holds the name, that the psm1 has no launcher function and starts no
+   in-process job, and that `LaunchInProcess` runs no script.**After (same host and load, warm daemon, 94 jobs).** Bind 0.7-3.3 ms. `BeginInvoke` 0.4-2 ms, rarely up to 25.
 `&` → first statement: median about 13 ms, 10.6-53 ms in bursts. The tail is the AMSI lock held by the other
 agents' test processes on this machine. A cold open (more concurrent jobs than `Spares`) still costs 700-900 ms.
 Single-digit ms was not reached under that load: the floor was the job pipeline's own compile. Cause 7 moved it ahead.
@@ -714,16 +723,23 @@ Single-digit ms was not reached under that load: the floor was the job pipeline'
 **The two oils cases (measured, same host, with the start-lag clock of cause 6).** Phases of one job on a loaded
 host with ready runspaces: `NewJob` 0.1-0.3 ms; `BeginInvoke` 2-20 ms after it; the body's first statement 24-88 ms
 after the `&` (13-27 ms with less load), almost all of it the job script's compile under the AMSI lock; the
-`Enter-BashJobTurn` wait about 0; 2.5-15 ms between two launches. The clock pays back that lag, but only out of a
-sleep: a lag longer than the sleep leaves the sleep at 0 and the job ends when its body starts.
-"wait for N parallel jobs and check failure" sleeps 30, 20 and 10 ms, all shorter than the lag, so the jobs end in
-the order their bodies start, which is launch order: `1 2 3` in 5 of 20 and 1 of 18 runs. It stays XFAIL until the
-lag is under 10 ms. "wait -n" (90 and 30 ms) fails only when the second job's lag passes about 90 ms: 18 of 20 runs
-under 4 CPU-bound processes. An XPASS is an error, and it is not 20 of 20, so it stays XFAIL too. Opening the host's
-job runspaces before each case did not make either pass every time (tried in the harness, then reverted). Both marks
-carry these numbers. A fresh host opens up to `Spares` runspaces once. The first opens
-took 1.8-3.9 s while several spec hosts started together.
+`Enter-BashJobTurn` wait about 0; 2.5-15 ms between two launches. A fresh host opens up to `Spares` runspaces once.
+The first opens took 1.8-3.9 s while several spec hosts started together.
 
+**After cause 7 (`tman dev`, this workstation loaded by other agents' builds; each case run 21 times in one script).**
+`&` → body: median 2.4-2.9 ms, p90 5.8-7.5 ms, max 11-35 ms (before: 45 / 64 / 135 ms in the same probe). Launches
+3.5-6 ms apart, with outliers of 10-35 ms. "wait -n" (90 and 30 ms): 21 of 21 in each of four runs, one of them with
+an in-process job compiling new script text the whole time (before: 3 of 21; 18 of 20 under 4 CPU-bound processes).
+Its mark is removed. "wait for N parallel jobs and check failure" (30, 20 and 10 ms) passed 18, 16 and 13 of 21
+(before: 0 of 21). Every failure had a launch gap of 10 ms or more.
+
+**After cause 8 (same probe; the box at 79-94% CPU from other agents' work).** Launch to launch: median 1.7 ms, p90
+5.4 ms (160 gaps). `&` → body: median 0.9 ms, p90 4.8 ms (240 jobs). "wait -n": 21 of 21 in every run. "wait for N
+parallel jobs" passed 14, 18, 18 (with the in-process compile load), 17, 14 and 17 of 21. It is not 21 of 21, so its mark
+stays. Each run's first repetition fails on a fresh host: the spares are still opening, and the second launch came
+200-550 ms after the first. The other failures are 10-47 ms stalls that are not ps-bash work: a launcher held 10-20 ms
+inside `BeginInvoke`, or a job thread that woke 15-47 ms late from its sleep or at its start. Over those runs the
+host opened 4 runspaces and reused every one (104 releases, all clean), so no open competed with the launches.
 `background.spec.sh` took 44 s, as on main (45 s), with no case timeouts in 6 runs. `shell-grammar.spec.sh` "Invalid
 token" passes, where main failed it in 3 of 3 runs.
 

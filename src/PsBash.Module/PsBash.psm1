@@ -2937,12 +2937,11 @@ $script:BashTrapHandlers = $global:BashTrapHandlers
 $script:BashBgJobs = [System.Collections.Generic.List[object]]::new()
 # Alias view of $script:BashBgJobs sharing the SAME underlying List instance.
 # Tests reference $script:BashBgPids and expect items to expose HasExited and
-# Kill(). The job records produced by Invoke-BashBackground carry both via
-# ScriptProperty (HasExited proxies $job.Done) and ScriptMethod (Kill calls
-# $job.PowerShell.Stop()). Sharing one List means Add/Clear/index from
+# Kill(). The job records produced by Invoke-BashBackground carry both
+# (PsBash.Cmdlets.BashBgJobTable.NewRecord; Start-BashBgProcessJob for a process
+# job). Sharing one List means Add/Clear/index from
 # either name affects both views — no double-bookkeeping.
 $script:BashBgPids = $script:BashBgJobs
-$script:BashBgNextId = 1000
 $global:BashBgLastPid = $null
 # The host loads this psm1 by running its content as a script (SdkRunspace.cs:
 # AddScript(psm1Content)), so $PSCommandPath / $PSScriptRoot are empty there; it
@@ -3187,113 +3186,49 @@ $global:BASH_VERSINFO = $global:BashVersionInfo
 $global:BashFlags = 'hB'
 $global:BashLastArg = ''
 
-function Invoke-BashBackground {
+# `cmd &` is the binary cmdlet Invoke-BashBackground (PsBash.Cmdlets.InvokeBashBackgroundCommand): an in-process job is
+# launched in C# start to end (BashBgJobTable.LaunchInProcess), with no script and no script->.NET call, each of which
+# is an AMSI report under the process-wide lock (docs/specs/background-jobs.md section 12.5, cause 8). It finds this
+# module's job table in $global:__psbashBgJobTable (registered below Start-BashBgJob) and calls back here only for a
+# job in a host process of its own. Guard: BackgroundLaunchGuardTests (no Invoke-BashBackground function here).
+function Start-BashBgProcessJob {
     <#
     .SYNOPSIS
-        Run a command as a background process (bash & operator).
+        Start a background job in its own ps-bash-host process (private env/cwd, real pid): PSBASH_BG_MODE=process, or
+        an -Isolated job unless PSBASH_BG_MODE=inproc (docs/specs/background-jobs.md section 11). Called by
+        Invoke-BashBackground, only where the host exposes the launcher type.
     #>
-    param(
-        [Parameter(Mandatory)]
-        [scriptblock]$Command,
-        # The emitter found the job able to change shell state (assignments, cd, options, functions): it
-        # must not share this process's environment and cwd, so it gets a host of its own.
-        [switch]$Isolated,
-        # Loop variables the body reads, as of the launch (the loop moves on before the job runs): the body reads
-        # them as $name, and an in-process job's cmdlets (arithmetic) through BashVariableStore's job snapshot.
-        [hashtable]$Vars,
-        # The emitter found the job's stdout/stderr to be the shell's own (no enclosing redirect, pipe, command
-        # substitution or function): where the host provides the session's output mux, the job writes there live
-        # instead of holding its output until `wait` (docs/specs/background-jobs.md section 12).
-        [switch]$Live,
-        # The job's command as written (`sleep 5`): `fg` prints it when it brings the job back, as bash does.
-        [string]$Text
-    )
-
-    $__bgMux = if ($Live) { Get-Variable -Name __BashJobOutput -Scope Global -ValueOnly -ErrorAction Ignore } else { $null }
-
-    # PSBASH_BG_MODE=process: run the job in its own ps-bash-host process (private env/cwd, real pid).
-    # -Isolated jobs take it unless PSBASH_BG_MODE=inproc; other jobs stay in-process until it meets the
-    # latency bars (docs/specs/background-jobs.md section 11).
-    # Only where the host exposes the launcher type; the module (no daemon) and PSBASH_BG_MODE=inproc keep
-    # the in-process path below.
-    if (($env:PSBASH_BG_MODE -eq 'process' -or ($Isolated -and $env:PSBASH_BG_MODE -ne 'inproc')) -and ('PsBash.Host.Runtime.BashJobProcess' -as [type])) {
-        if ($Vars -and $Vars.Count) {
-            $__bgPrefix = ($Vars.GetEnumerator() | ForEach-Object { '$' + $_.Key + " = '" + ("$($_.Value)" -replace "'", "''") + "'" }) -join '; '
-            $Command = [scriptblock]::Create($__bgPrefix + "`n" + $Command.ToString())
-        }
-        if ($script:BashBgJobs.Count -ge $script:BashBgMaxJobs) { Remove-BashBgFinished }
-        $prelude = [PsBash.Cmdlets.BashStateSnapshot]::BuildPrelude($ExecutionContext.SessionState)
-        $__bgBody = $Command.ToString()
-        $__bgEnv = [PsBash.Cmdlets.BashStateSnapshot]::EnvironmentBlock()
-        $job = [pscustomobject]@{
-            Id = $null; PowerShell = $null; AsyncResult = $null; Done = $false
-            Status = $null; ExitCode = $null; Raw = $true; Live = $null -ne $__bgMux; Text = $Text; JobNumber = $null
-        }
-        $job | Add-Member -MemberType ScriptProperty -Name 'HasExited' -Value {
-            if ($this.Done) { return $true }
-            return $this.AsyncResult.IsCompleted
-        } -Force
-        $job | Add-Member -MemberType ScriptMethod -Name 'Kill' -Value {
-            try { $this.PowerShell.Stop() } catch { }
-            $this.Done = $true
-        } -Force
-        Start-BashBgJob -BgJob $job -Process -StartJob { [PsBash.Host.Runtime.BashJobProcess]::Start($prelude, $__bgBody, $__bgEnv, $__bgMux) }
-        return
+    param([Parameter(Mandatory)][scriptblock]$Command, [hashtable]$Vars, $Mux, [string]$Text)
+    $__bgMux = $Mux
+    if ($Vars -and $Vars.Count) {
+        $__bgPrefix = ($Vars.GetEnumerator() | ForEach-Object { '$' + $_.Key + " = '" + ("$($_.Value)" -replace "'", "''") + "'" }) -join '; '
+        $Command = [scriptblock]::Create($__bgPrefix + "`n" + $Command.ToString())
     }
-    # RC-2: run the background command as a PowerShell pipeline in an isolated runspace that is already open
-    # instead of spawning a fresh pwsh process. This eliminates the ~1-3s pwsh cold start per `&` and the
-    # WaitForExit hang in `wait`; a ready runspace (BashJobRunspaces, docs/specs/background-jobs.md section 12.5)
-    # removes the runspace open (hundreds of ms) that made jobs start late and out of launch order.
-    if ($script:BashBgJobs.Count -ge $script:BashBgMaxJobs) { Remove-BashBgFinished }
-    # The job's scalars are its own copy, taken at the & (BashJobRunspaces.NewJob, ScalarOverlay): it never writes the
-    # process environment the shell keeps them in (section 3). The wrapper reports the body's exit status for `wait`.
-    $status = [hashtable]::Synchronized(@{ Code = 0; At = 0L })
-    # One .NET call builds the job (runspace, options, body, arguments): each script->.NET call is an AMSI report
-    # under the process-wide lock the previous job's start waits on (section 12.4), and a dozen per launch spread
-    # the starts of jobs launched back to back. The job runs PsBash.Cmdlets.JobScript (head, body, tail), compiled
-    # before its launch: no script text is compiled on its way to its first statement (section 12.5).
-    $ps = [PsBash.Cmdlets.BashJobRunspaces]::NewJob($ExecutionContext.SessionState, $Command, $Vars, $status, [bool]$Isolated, $script:BashBgModulePath)
-    $synthId = $script:BashBgNextId
-    $script:BashBgNextId++
-
+    $prelude = [PsBash.Cmdlets.BashStateSnapshot]::BuildPrelude($ExecutionContext.SessionState)
+    $__bgBody = $Command.ToString()
+    $__bgEnv = [PsBash.Cmdlets.BashStateSnapshot]::EnvironmentBlock()
     $job = [pscustomobject]@{
-        Id          = $synthId
-        PowerShell  = $ps
-        AsyncResult = $null
-        Done        = $false
-        Status      = $status
-        ExitCode    = $null
-        Live        = $null -ne $__bgMux
-        Text        = $Text
-        JobNumber   = $null
+        Id = $null; PowerShell = $null; AsyncResult = $null; Done = $false
+        Status = $null; ExitCode = $null; Raw = $true; Live = $null -ne $__bgMux; Text = $Text; JobNumber = $null
     }
-    # HasExited / Kill() shape so tests asserting against $script:BashBgPids
-    # (the alias for $script:BashBgJobs) see Process-like surface. HasExited
-    # reflects $job.Done and also flips true once the AsyncResult completes
-    # so a polling test does not have to call Complete-BashBgJob first.
     $job | Add-Member -MemberType ScriptProperty -Name 'HasExited' -Value {
         if ($this.Done) { return $true }
-        if ($null -ne $this.AsyncResult -and $this.AsyncResult.IsCompleted) { return $true }
-        return $false
+        return $this.AsyncResult.IsCompleted
     } -Force
     $job | Add-Member -MemberType ScriptMethod -Name 'Kill' -Value {
         try { $this.PowerShell.Stop() } catch { }
         $this.Done = $true
     } -Force
-    # Live: the job's records go to the session's output mux as they are produced (nothing is kept for `wait`).
-    if ($null -ne $__bgMux) {
-        Start-BashBgJob -BgJob $job -StartJob { [PsBash.Cmdlets.BashJobOutput]::BeginLive($ps, $__bgMux, "job $synthId") }
-    } else {
-        Start-BashBgJob -BgJob $job -StartJob { $ps.BeginInvoke() }
-    }
+    Start-BashBgJob -BgJob $job -Process -StartJob { [PsBash.Host.Runtime.BashJobProcess]::Start($prelude, $__bgBody, $__bgEnv, $__bgMux) }
 }
 
 function Start-BashBgJob {
     <#
     .SYNOPSIS
-        The one place a background job (`cmd &`) is started. Registers the record ($BgJob) in the job table, then runs
-        $StartJob (BeginInvoke / BeginLive / BashJobProcess::Start) as the LAST act, keeping its result with property
-        sets only. Once the job runs, the launcher's way back to the next command must be work-free
+        The one place the module starts a background job (`cmd &`): a job in a host process of its own
+        (Start-BashBgProcessJob; an in-process job is started in C#, PsBash.Cmdlets.BashBgJobTable.LaunchInProcess, the same
+        way). Registers the record ($BgJob) in the job table, then runs $StartJob (BashJobProcess::Start) as the LAST act,
+        keeping its result with property sets only. Once the job runs, the launcher's way back to the next command must be work-free
         (docs/specs/background-jobs.md section 12.4): on Windows every script->.NET method call (the table's .Add) is
         reported to AMSI under PowerShell's process-wide lock, slow when Defender is loaded, while the job's way to its
         first write has no such call; under load the job then printed before the foreground's next command
@@ -3325,6 +3260,10 @@ function Start-BashBgJob {
     }
     $global:BashBgLastPid = $BgJob.Id
 }
+
+# The job table Invoke-BashBackground (a cmdlet) launches into: this module's list, path, process-job launcher and
+# reaper, one per runspace. A re-import replaces it with the new module's.
+$global:__psbashBgJobTable = [PsBash.Cmdlets.BashBgJobTable]::new($script:BashBgJobs, $script:BashBgModulePath, ${function:Start-BashBgProcessJob}, ${function:Remove-BashBgFinished})
 
 function Invoke-BashWait {
     <#

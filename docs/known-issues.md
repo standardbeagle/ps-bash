@@ -73,8 +73,8 @@ repeated here, under their area. Check both pages before you report a bug.
 - **A trapped signal runs at the next top-level statement.** A signal that arrives during one
   long command, or inside a `( )` or `$( )` body, waits for it to finish. With no trap, STOP,
   TSTP, TTIN, TTOU and CONT are ignored: a host command cannot be suspended.
-- **A job starts about 3 ms after its `&`** (median on Windows; up to about 35 ms under load),
-  and two `&` in a row are about 4 ms apart; bash forks at once. A `sleep` in the job is
+- **A job starts about 1 ms after its `&`** (median on Windows; up to about 35 ms under load),
+  and two `&` in a row are about 2 ms apart (10 ms or more now and then on a loaded host); bash forks at once. A `sleep` in the job is
   shortened by its start lag, so longer sleeps keep bash's order. Jobs whose sleeps differ by
   less than the gap between their launches can finish in another order than in bash. One spec
   case stays XFAIL for this (`arch-bg-job-start-latency`, sleeps 10 ms apart).
