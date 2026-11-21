@@ -956,6 +956,19 @@ general fallback path (`EmitSimple`) and the mapped passthrough path
    element is not allowed"). A compound stage after the first additionally opens a
    stdin scope (drains `$input` into `$global:__BashStdIn`) so EVERY stdin-reading
    command inside sees the piped records (see "Compound-command stdin").
+5. **A stage starts with the status from before the pipeline.** bash runs each stage in a subshell of the shell as
+   it was, so a bare `exit`/`return` or `$?` there sees the pipeline's entry status (`false; { exit; } | cat` is
+   PIPESTATUS `1 0`; `true; false | { exit; }` is 0). PowerShell starts the stages interleaved, and by the time a
+   stage's body runs the stages ahead have reset (`Invoke-BashPipeStage`, a cmdlet's start) or set the status. So
+   every stage whose body is shell code (a compound stage, and a function/eval/assigning stage the emitter scopes)
+   starts with `PsBuild.SeedStageStatus`, emitted only by `PsEmitter.SeedStageStatus`, and `EmitPipeline` then wraps
+   the pipeline in `PsBuild.WithPipeEntryStatus` (one dot-sourced block, like `PipefailPipeline`), which captures
+   `$__psbash_pst` before any stage starts; a pipeline inside a stage captures its own. A simple command stage needs
+   no seed: it sets its own status, and its words see the entry status: under per-stage status the first
+   `Invoke-BashPipeStage` reads it as it starts (keyed by the run's slot array), every stage restores it for its own
+   start, and the first stage's commands run from it (`false; echo $? | cat` prints 1); a stopped stage never reports
+   it as its own. Guards `Core.Tests/BashTranspilerReviewRegressionTests`
+   (`Transpile_PipeStageWithShellBody_StartsWithTheStatusBeforeThePipeline`), `Host.Tests/PipefailParseabilityTests`.
 
 Note: standalone commands are also mapped via `EmitSimple` (see Section 2.2),
 so mapping applies to both pipe targets and standalone invocations.

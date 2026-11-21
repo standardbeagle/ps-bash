@@ -1294,6 +1294,27 @@ public static class PsBuild
     public static string EvalReturnCheck(bool inFunction) =>
         "if (" + EvalReturnVar + ") { " + (inFunction ? EvalReturnVar + " = $false; " : "") + "return }";
 
+    // ─────────────────────── a pipe stage's starting status ────────────────────────
+
+    /// <summary>The status from before the pipeline, captured by <see cref="WithPipeEntryStatus"/>.</summary>
+    public const string PipeEntryStatusVar = "$__psbash_pst";
+
+    /// <summary>
+    /// The first statement of a pipe stage whose body is shell code: it starts with the status from before the
+    /// pipeline (bash: each stage is a subshell of the shell as it was), not what the stages started before it left.
+    /// </summary>
+    public const string SeedStageStatus = "$global:LASTEXITCODE = " + PipeEntryStatusVar + "; ";
+
+    /// <summary>
+    /// A pipeline whose stages <see cref="SeedStageStatus"/>: the status is captured before any stage starts, in a
+    /// dot-sourced block, so the capture is a statement wherever the pipeline sits and a stage's child scope reads it.
+    /// </summary>
+    public static string WithPipeEntryStatus(string pipelineText) =>
+        ". { " + PipeEntryCapture + "; " + pipelineText + " }";
+
+    /// <summary>The capture statement of <see cref="WithPipeEntryStatus"/>.</summary>
+    public const string PipeEntryCapture = PipeEntryStatusVar + " = $global:LASTEXITCODE";
+
     // ─────────────────────── pipefail / PIPESTATUS pipeline ────────────────────────
 
     /// <summary>The slot array each stage of a <see cref="PipefailPipeline"/> writes its status into (Invoke-BashPipeStage -Slot).</summary>

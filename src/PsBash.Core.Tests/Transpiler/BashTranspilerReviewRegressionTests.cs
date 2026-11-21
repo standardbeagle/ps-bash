@@ -1139,6 +1139,50 @@ public class BashTranspilerReviewRegressionTests
         Assert.DoesNotContain("exit 55", ps);
     }
 
+    // Oracle (bash 5.2): `false; { exit; } | cat; echo ${PIPESTATUS[*]}` prints `1 0`, `true; false | { exit; }; echo $?`
+    // prints 0: every pipe stage is a subshell that starts with the status from before the pipeline, which a bare
+    // `exit`/`return` or `$?` there sees. ps-bash printed `0 0` and 1: the stages started ahead had reset or set the status.
+    // The invariant: every stage whose body is shell code starts with PsBuild.SeedStageStatus, and the pipeline captures
+    // that status before any stage starts (PsBuild.WithPipeEntryStatus).
+    [Theory]
+    [InlineData("false; { exit; } | cat; echo ${PIPESTATUS[*]}", 1)]
+    [InlineData("false; ( exit ) | cat", 1)]
+    [InlineData("false; exit | cat", 1)]
+    [InlineData("true; false | { exit; }; echo $?", 1)]
+    [InlineData("false; { exit; } | { exit; } | cat", 2)]
+    [InlineData("f() { return; }; false; f | cat", 1)]
+    [InlineData("f() { echo $?; }; false; true | f", 1)]
+    [InlineData("false; for i in 1; do echo $?; done | cat", 1)]
+    [InlineData("false; while false; do :; done | if true; then exit; fi | case x in x) exit;; esac | cat", 3)]
+    [InlineData("set -o pipefail; false; { exit; } | cat", 1)]
+    [InlineData("false; true | echo $?", 1)]
+    [InlineData("false; true | cat < /dev/null", 1)]
+    public void Transpile_PipeStageWithShellBody_StartsWithTheStatusBeforeThePipeline(string bash, int seededStages)
+    {
+        var ps = BashTranspiler.Transpile(bash);
+        int capture = ps.IndexOf(". { " + PsBuild.PipeEntryCapture + "; ", StringComparison.Ordinal);
+        Assert.True(capture >= 0, ps);
+        Assert.Equal(seededStages, CountOf(ps, PsBuild.SeedStageStatus));
+        Assert.True(ps.IndexOf(PsBuild.SeedStageStatus, StringComparison.Ordinal) > capture, ps);
+    }
+
+    // A pipeline of simple commands only: each command sets its own status, so nothing is seeded or captured.
+    [Theory]
+    [InlineData("false; echo $? | cat")]
+    [InlineData("seq 3 | sort -r | head -n 1")]
+    public void Transpile_PipelineOfSimpleCommands_SeedsNoStage(string bash)
+    {
+        var ps = BashTranspiler.Transpile(bash);
+        Assert.DoesNotContain(PsBuild.SeedStageStatus, ps);
+        Assert.DoesNotContain(PsBuild.PipeEntryCapture, ps);
+    }
+
+    private static int CountOf(string text, string part)
+    {
+        int n = 0;
+        for (int i = text.IndexOf(part, StringComparison.Ordinal); i >= 0; i = text.IndexOf(part, i + part.Length, StringComparison.Ordinal)) n++;
+        return n;
+    }
     // Oracle: `f() { echo x; exit 3; }; f | cat; echo "after ${PIPESTATUS[*]}"` prints x, then `after 3 0`: a function
     // called as a pipe stage runs in that subshell, so exit in its body ends only the stage (it ended the whole script
     // with 3). The body is emitted once, so its exit decides at run time; the stage is the subshell scope that catches it.
@@ -1147,7 +1191,7 @@ public class BashTranspilerReviewRegressionTests
     {
         var ps = BashTranspiler.Transpile("f() { echo x; exit 3; }; f | cat; echo \"after ${PIPESTATUS[*]}\"");
         Assert.Contains(PsBuild.DynamicExit("$global:LASTEXITCODE"), ps);
-        Assert.Contains(PsBuild.ShellStateScope("f"), ps);
+        Assert.Contains(PsBuild.ShellStateScope(PsBuild.SeedStageStatus + "f"), ps);
     }
 
     // Oracle: `exit 3` ends the script with 3. Only a function body's exit is decided at run time; a top-level exit

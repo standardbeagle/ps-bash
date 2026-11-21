@@ -511,6 +511,8 @@ returns from a function or sourced script.
 
 **ps-bash**: `exit N` ends the script with status N. Inside `( )`, `$( )` or a
 compound pipe stage it ends only that scope, as in bash (`(exit 3); echo $?` is `3`).
+A bare `exit` (or `return`) leaves with `$?`, the last status in that context: a pipe stage starts with the status
+from before the pipeline (`false; { exit; } | cat` gives PIPESTATUS `1 0`; see `emitter-strategy.md`, pipe stages).
 `return` works within functions but has different scoping behavior when called
 from dot-sourced scripts.
 

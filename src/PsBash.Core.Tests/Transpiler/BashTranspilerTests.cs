@@ -541,8 +541,9 @@ public class BashTranspilerTests
         var result = BashTranspiler.Transpile("for d in a b; do echo $d; done | sort");
         // The loop stage must be wrapped so the pipe has a real left operand.
         // The broken form started with `$__psbash_iter = 0; foreach (...) {...} | ...`,
-        // a bare statement piped — which fails to parse. The wrapped form starts `& {`.
-        Assert.StartsWith("& {", result);
+        // a bare statement piped — which fails to parse. The wrapped form starts `& {` (inside the block that captures
+        // the status every stage starts with, PsBuild.WithPipeEntryStatus).
+        Assert.StartsWith(". { " + PsBuild.PipeEntryCapture + "; & {", result);
         Assert.Contains("foreach (", result);
         Assert.Contains("} | Invoke-BashSort", result);
     }
@@ -553,7 +554,7 @@ public class BashTranspilerTests
     public void Transpile_BraceGroupAsFirstPipeStage_WrapsInScriptBlock()
     {
         var result = BashTranspiler.Transpile("{ echo a; echo b; } | sort");
-        Assert.StartsWith("& {", result);
+        Assert.StartsWith(". { " + PsBuild.PipeEntryCapture + "; & {", result);
         Assert.Contains("| Invoke-BashSort", result);
     }
 
@@ -563,7 +564,7 @@ public class BashTranspilerTests
     public void Transpile_SubshellAsFirstPipeStage_WrapsInScriptBlock()
     {
         var result = BashTranspiler.Transpile("(echo a; echo b) | sort");
-        Assert.StartsWith("& {", result);
+        Assert.StartsWith(". { " + PsBuild.PipeEntryCapture + "; & {", result);
         Assert.Contains("| Invoke-BashSort", result);
     }
 

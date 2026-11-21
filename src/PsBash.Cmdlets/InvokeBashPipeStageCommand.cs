@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using System.Runtime.CompilerServices;
 
 namespace PsBash.Cmdlets;
 
@@ -58,17 +59,45 @@ public sealed class InvokeBashPipeStageCommand : BashCmdlet
         finally { t_running = prior; }
     }
 
+    /// <summary>
+    /// The status from before the pipeline, per run (keyed by its <see cref="Slot"/> array, new each run): the first
+    /// stage reads it as it starts, before any stage has reset it, and the later stages take it from there.
+    /// </summary>
+    private static readonly ConditionalWeakTable<int[], StrongBox<int>> s_entryStatus = new();
+
+    /// <summary>This run's status from before the pipeline (<see cref="s_entryStatus"/>).</summary>
+    private int _entryStatus;
+
+    /// <summary>Nothing of the stage set a status as it started: <see cref="_beginStatus"/> is not its own.</summary>
+    private bool _beganFromEntry;
+
     protected override void BeginProcessing()
     {
+        // Every stage starts with the status from before the pipeline (bash: a subshell of the shell as it was), so the
+        // words its commands expand as it starts see it: `false; echo $? | cat` prints 1. The reset below hid it (0).
+        int entry;
+        if (Index == 0) s_entryStatus.AddOrUpdate(Slot, new StrongBox<int>(entry = CurrentStatus()));
+        else entry = s_entryStatus.TryGetValue(Slot, out var box) ? box.Value : 0;
+        _entryStatus = entry;
         // A stage that sets no status of its own (a pure filter) reports success, never a predecessor's leftovers.
         FileSystemHelpers.SetLastExitCode(this, 0);
+        FileSystemHelpers.RestoreShellStatus(this, entry);
         _stage = Script.GetSteppablePipeline(CommandOrigin.Internal);
         // A later stage can have what it needs from what this one wrote as it started (`awk -Q 2>&1 | head -2`: the
         // usage text): the stop then comes out of Begin, and the stage's status must be recorded here as in ProcessRecord.
         try { Run(() => _stage!.Begin(this)); }
         catch (Exception ex) when (FileSystemHelpers.IsPipelineStop(ex)) { _beginStatus = CurrentStatus(); _finished = true; RecordStopped(); throw; }
-        // Read now: the later stages' own starts reset the status before this stage writes anything.
-        _beginStatus = CurrentStatus();
+        // Read now: the later stages' own starts reset the status before this stage writes anything. When nothing of the
+        // stage set one as it started, the later stages start from 0 as before, and the FIRST stage's commands run from
+        // the entry status (`false; echo $? | cat`: its words are expanded as it runs, after every stage has started).
+        if (_ownStatus is null && CurrentStatus() == entry)
+        {
+            _beganFromEntry = true;
+            FileSystemHelpers.RestoreShellStatus(this, 0);
+            _beginStatus = Index == 0 ? entry : 0;
+        }
+        else
+            _beginStatus = CurrentStatus();
     }
 
     /// <summary>A record reached this stage (its commands ran between its start and its end).</summary>
@@ -142,7 +171,10 @@ public sealed class InvokeBashPipeStageCommand : BashCmdlet
     private void RecordStopped()
     {
         int now = CurrentStatus();
-        Record(_ownStatus is int own && own != 0 ? own : now != 0 ? now : _beginStatus);
+        // The entry status the stage started from (BeginProcessing) is not a status its commands set: a producer that
+        // had set only its own 0 (`false; seq 1 100000 | head -1`) stays 0, never the 1 from before the pipeline.
+        bool ownNow = now != 0 && now != _entryStatus;
+        Record(_ownStatus is int own && own != 0 ? own : ownNow ? now : _beganFromEntry ? 0 : _beginStatus);
     }
 
     /// <summary>

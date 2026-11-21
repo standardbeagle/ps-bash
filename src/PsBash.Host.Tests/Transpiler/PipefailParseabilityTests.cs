@@ -62,6 +62,29 @@ public class PipefailParseabilityTests
     public void Transpile_UnderPipefail_PipelineInEveryPosition_EmitsParseablePowerShell(string bash)
         => ParseabilityContract.Assert(bash, "pipefail emission");
 
+    /// <summary>
+    /// A pipeline with a stage whose body is shell code captures the status before it starts and the stage starts with it
+    /// (PsBuild.WithPipeEntryStatus, one dot-sourced block like PsBuild.PipefailPipeline): every position still parses.
+    /// </summary>
+    [Theory]
+    [InlineData("true && { exit; } | cat && echo ok")]
+    [InlineData("false || ( exit ) | cat || echo no")]
+    [InlineData("! { exit; } | cat; echo $?")]
+    [InlineData("x=$({ exit; } | cat); echo \"$x\"")]
+    [InlineData("if echo a | { read l; exit; }; then echo t; fi")]
+    [InlineData("while { exit; } | cat; do break; done")]
+    [InlineData("echo \"$(false; { echo $?; } | cat)\"")]
+    [InlineData("time { exit; } | cat")]
+    [InlineData("{ exit; } | cat > /dev/null && echo ok")]
+    [InlineData("{ exit; } | cat &")]
+    [InlineData("f() { return; }; false; f | cat && echo ok")]
+    [InlineData("for i in 1; do echo $i; done | { while read l; do echo $l; done; } | cat")]
+    [InlineData("echo pre | { { exit; } | cat; echo $?; }")]
+    [InlineData("set -o pipefail; true && { exit; } | cat; echo \"${PIPESTATUS[@]}\"")]
+    [InlineData("set -e; { exit; } | cat; echo after")]
+    public void Transpile_SeededPipeStage_PipelineInEveryPosition_EmitsParseablePowerShell(string bash)
+        => ParseabilityContract.Assert(bash, "pipe stage entry status");
+
     /// <summary>The run-time runner of a builtin named at run time (BashBuiltins.RunAsSource) is valid PowerShell for every name.</summary>
     [Fact]
     public void BuiltinAsSourceScript_ParsesForEveryRunAsSourceBuiltin()

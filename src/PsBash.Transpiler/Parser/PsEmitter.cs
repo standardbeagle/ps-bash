@@ -12066,6 +12066,23 @@ public static partial class PsEmitter
 
     [ThreadStatic] private static int _timeDepth;
 
+    /// <summary>A stage of the pipeline being emitted seeds its status (<see cref="SeedStageStatus"/>).</summary>
+    [ThreadStatic] private static bool _stageSeedUsed;
+
+    /// <summary>
+    /// THE start of every pipe stage whose body is shell code (a compound command, a subshell, a function or eval stage):
+    /// bash runs each stage in a subshell that begins with the status from before the pipeline, so a bare <c>exit</c>
+    /// or <c>return</c> there, or <c>$?</c>, sees it (<c>false; { exit; } | cat</c>: PIPESTATUS <c>1 0</c>). The stages of
+    /// a PowerShell pipeline start interleaved, and the ones ahead had reset <c>$LASTEXITCODE</c> (a cmdlet's start,
+    /// <c>Invoke-BashPipeStage</c>) or set it (<c>true; false | { exit; }</c>) by the time a stage's body ran.
+    /// <see cref="EmitPipeline"/> captures the status before the pipeline starts (<see cref="PsBuild.WithPipeEntryStatus"/>).
+    /// </summary>
+    private static string SeedStageStatus()
+    {
+        _stageSeedUsed = true;
+        return PsBuild.SeedStageStatus;
+    }
+
     /// <summary>
     /// Set by <see cref="EmitStatementBody"/> for a pipeline at a statement position where <c>set -e</c> is armed
     /// (not a condition, an <c>&amp;&amp;</c>/<c>||</c> operand or a negation); <see cref="EmitPipeline"/> takes it.
@@ -12114,9 +12131,18 @@ public static partial class PsEmitter
         _armedStages = _pipelineAtArmedStatement && _errexitSetMode && pipeline.Commands.Length > 1 && !pipeline.Negated;
         _pipelineAtArmedStatement = false;
         if (exempt) _errexitExemptDepth++;
-        try { return EmitPipelineStages(pipeline, entryScope); }
+        // Every stage starts with the status from before the pipeline (SeedStageStatus): a stage that seeded it needs that
+        // status captured before the pipeline starts, and a pipeline inside a stage captures its own.
+        bool savedSeedUsed = _stageSeedUsed;
+        _stageSeedUsed = false;
+        try
+        {
+            string text = EmitPipelineStages(pipeline, entryScope);
+            return _stageSeedUsed ? PsBuild.WithPipeEntryStatus(text) : text;
+        }
         finally
         {
+            _stageSeedUsed = savedSeedUsed;
             _inStdinScope = entryScope;
             _armedStages = savedArmedStages;
             if (exempt) _errexitExemptDepth--;
@@ -12221,8 +12247,10 @@ public static partial class PsEmitter
                 // upstream records are drained and the command runs exactly as it would on its own.
                 bool ownStdin = HasOwnStdin(simple.Redirects)
                     || !simple.HereDocs.IsDefaultOrEmpty && simple.HereDocs.Any(h => h.Fd < 3);
+                // A command run inside the drain block expands its words when the block runs, after the stages ahead have
+                // set the status: the block starts with the status from before the pipeline (`false; true | echo $?`: 1).
                 if (ownStdin)
-                    sb.Append(PsBuild.DrainStageInput(WithPipeStageFeed(false, () => Emit(simple))));
+                    sb.Append(PsBuild.DrainStageInput(SeedStageStatus() + WithPipeStageFeed(false, () => Emit(simple))));
                 else
                 {
                     string stage;
@@ -12236,7 +12264,7 @@ public static partial class PsEmitter
                         stage = WrapEnvPairsForPipeStage(
                             simple.EnvPairs, WithEnvShadow(simple.EnvPairs, () => EmitSimplePipeStage(bare, isLastStage)));
                     }
-                    sb.Append(ignoresStdin ? PsBuild.DrainStageInput(stage) : stage);
+                    sb.Append(ignoresStdin ? PsBuild.DrainStageInput(SeedStageStatus() + stage) : stage);
                 }
             }
             else if (pipeline.Commands.Length > 1 && IsCompoundPipelineStage(cmd))
@@ -12319,7 +12347,10 @@ public static partial class PsEmitter
                     // errexit checks fire once the pipeline's suppression is lifted for the stage, and their run-time
                     // exit (PsBuild.DynamicExit) ends only the stage, as in a compound stage (EmitCompoundStage).
                     string Lifted(string stage) => functionStage && _armedStages ? LiftArmedStage(stage) : stage;
-                    sb.Append(i == 0 ? PsBuild.ShellStateScope(Lifted(rawStage)) : "& { " + PsBuild.ShellStateGuard(Lifted(PsBuild.ForwardStageInput(rawStage))) + " }");
+                    // Its body starts with the status from before the pipeline (`false; f | cat` with `f() { return; }`).
+                    sb.Append(i == 0
+                        ? PsBuild.ShellStateScope(SeedStageStatus() + Lifted(rawStage))
+                        : "& { " + PsBuild.ShellStateGuard(SeedStageStatus() + Lifted(PsBuild.ForwardStageInput(rawStage))) + " }");
                 }
             }
 
@@ -12509,9 +12540,11 @@ public static partial class PsEmitter
         // what its scoped `return` returns from. A lastpipe stage runs in the shell itself, and a function body is
         // not part of the stage.
         bool ownsExit = !lastpipeStage && cmd is not Command.ShFunction;
-        string Body(Func<string>? emit = null)
+        string Body(Func<string>? emitBody = null)
         {
-            emit ??= () => Emit(cmd);
+            emitBody ??= () => Emit(cmd);
+            // The stage starts with the status from before the pipeline (SeedStageStatus), whatever its form.
+            string emit() => SeedStageStatus() + emitBody();
             if (lastpipeStage)
             {
                 // It inherits -e like any stage, and being the shell itself its failing command ends the script.

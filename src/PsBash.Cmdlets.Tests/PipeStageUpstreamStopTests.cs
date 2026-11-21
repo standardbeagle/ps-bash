@@ -34,6 +34,42 @@ public class PipeStageUpstreamStopTests : IClassFixture<SharedPwshFixture>
     }
 
     /// <summary>
+    /// Every stage starts with the status from before the pipeline, so the words its commands expand as it starts see
+    /// it (bash: <c>false; echo $? | cat</c> prints 1, <c>false; true | echo $?</c> prints 1): the first stage's commands
+    /// run from it, and a later stage's start (here a ForEach-Object -Begin) sees it too. REGRESSION: each stage's start
+    /// reset the status first, and the words read 0. Behaviour against bash: PipeStageEntryStatusTests.Differential_StatusWordOfASimpleStage_*.
+    /// </summary>
+    [Fact]
+    public void PipeStage_StageWords_SeeTheStatusFromBeforeThePipeline()
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(),
+            "$s = [int[]]::new(3); $global:LASTEXITCODE = 3; "
+            + "Invoke-BashPipeStage -Slot $s -Index 0 -Script { & { 'first ' + $global:LASTEXITCODE; $global:LASTEXITCODE = 0 } } | "
+            + "Invoke-BashPipeStage -Slot $s -Index 1 -Script { ForEach-Object -Begin { 'second ' + $global:LASTEXITCODE } -Process { $_ } } | "
+            + "Invoke-BashPipeStage -Slot $s -Index 2 -Script { ForEach-Object -Process { $_ } }; "
+            + "'status ' + ($s -join ' ')").AssertSuccess();
+        var lines = r.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim()).ToArray();
+        Assert.Equal(new[] { "second 3", "first 3", "status 0 0 0" }, lines);
+    }
+
+    /// <summary>
+    /// A producer a later stage stops reports what its own commands set (seq: 0), never the status from before the
+    /// pipeline it started from (ps-bash-specific: bash reports 141, SIGPIPE; docs/specs/intentional-differences.md).
+    /// REGRESSION: with the first stage running from the entry status, <c>false; seq 1 100000 | head -1</c> gave
+    /// PIPESTATUS <c>1 0</c>.
+    /// </summary>
+    [Fact]
+    public void PipeStage_StoppedProducer_DoesNotReportTheStatusFromBeforeThePipeline()
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(),
+            "$s = [int[]]::new(2); $global:LASTEXITCODE = 5; "
+            + "Invoke-BashPipeStage -Slot $s -Index 0 -Script { & { Invoke-BashSeq 1 100000 } } | "
+            + "Invoke-BashPipeStage -Slot $s -Index 1 -Script { Invoke-BashHead '-1' } | Out-Null; "
+            + "'status ' + ($s -join ' ')").AssertSuccess();
+        Assert.Equal("status 0 0", r.Stdout.Trim());
+    }
+
+    /// <summary>
     /// Every host of a steppable pipeline must turn an inner command's raw stop request into its own (as
     /// InvokeBashPipeStageCommand does), or the outer pipeline ends nothing. The native-command wrapper and a job's
     /// program stand-in (JobProgramLookup, <c>Invoke-BashNative</c>) step a native program only, which never asks for

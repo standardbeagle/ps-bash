@@ -16,8 +16,6 @@ repeated here, under their area. Check both pages before you report a bug.
   signal and its status is not 141: `yes | head -n 1; echo ${PIPESTATUS[*]}` prints `141 0` in
   bash. `PIPESTATUS` and `pipefail` are otherwise implemented. Two spec cases stay XFAIL for
   this (`wontfix-sigpipe`).
-- **A bare `exit` in a pipe stage exits 0.** `false; { exit; } | cat; echo ${PIPESTATUS[*]}`
-  prints `0 0`; bash prints `1 0` (the status before the pipeline). `exit N` is correct.
 - **`f 2>&1` where the function `f` runs a program.** The program keeps separate stdout and
   stderr pipes, so lines it writes to both can change order. A program run directly under
   `2>&1`, `|&` or `&>` keeps its order.
