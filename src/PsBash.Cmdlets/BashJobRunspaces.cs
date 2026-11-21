@@ -57,56 +57,61 @@ public static class BashJobRunspaces
         => int.TryParse(Environment.GetEnvironmentVariable("PSBASH_JOB_SPARES"), out var n) && n is >= 0 and <= 16 ? n : 4;
 
     /// <summary>
-    /// The in-process job of <c>Invoke-BashBackground</c>, built and bound, not started: <paramref name="head"/>, the
-    /// parent's options (<see cref="BashStateSnapshot.BuildJobOptions"/>), the launch-time values of the loop variables
-    /// the body reads (<paramref name="vars"/>), <c>Enter-BashJobTurn</c> (launch order, <see cref="JobTurn"/>), the body,
-    /// <paramref name="tail"/>; arguments status, restore, stdin, vars (the job's <c>BashVariableStore</c> snapshot), turn,
-    /// clock (<see cref="JobClock"/>, launched once the job has its runspace: the head stores it in the job's global <see cref="JobClock.VariableName"/>).
-    /// One call, because every script-to-.NET call on the launch path is an AMSI report under PowerShell's process-wide
-    /// lock (docs/specs/background-jobs.md section 12.4) that the job launched just before waits on to start.
+    /// The in-process job of <c>Invoke-BashBackground</c>, built and bound, not started: the job runspace's function
+    /// <see cref="JobScript.FunctionName"/> (<c>Enter-BashJobTurn</c>, body, tail: <see cref="JobScript.Text"/>),
+    /// dot-sourced, with arguments status, turn (launch order, <see cref="JobTurn"/>) and the body
+    /// (<see cref="JobScript.Body"/>: compiled here if the host did not, before the launch). What the job inherits is set
+    /// in its runspace from here, before the launch, as values (<see cref="Inherit"/>): the parent's globals
+    /// (<see cref="BashStateSnapshot.JobGlobals"/>: options, ERR trap), the job's <c>$BASHPID</c>, the launch-time values of
+    /// the loop variables the body reads (<paramref name="vars"/>), its stdin and its clock (<see cref="JobClock"/>,
+    /// launched once the job has its runspace, in the job's global <see cref="JobClock.VariableName"/>); the parent's
+    /// directory is an argument, when the runspace is elsewhere.
+    /// No script text: PowerShell compiles <c>AddScript</c> text on every invocation, and each compile is an AMSI scan
+    /// under the process-wide lock, on the job's way to its first statement (section 12.5, cause 7). One call, because
+    /// every script-to-.NET call on the launch path is an AMSI report under that lock (section 12.4).
     /// </summary>
-    public static PowerShell NewJob(SessionState session, string head, ScriptBlock body, string tail, System.Collections.IDictionary? vars,
+    public static PowerShell NewJob(SessionState session, ScriptBlock body, System.Collections.IDictionary? vars,
         object status, bool restore, string? modulePath)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(body);
-        var text = new System.Text.StringBuilder(head).Append('\n').Append(BashStateSnapshot.BuildJobOptions(session));
+        // Before anything else: a body seen for the first time is compiled (scanned) on the shell's time, not the job's.
+        var block = JobScript.Body(body.ToString());
+        var globals = BashStateSnapshot.JobGlobals(session);
         // A job is a child process in bash, with a $BASHPID of its own: here a synthetic subshell id
         // (BashRuntime.SubshellPidVariable). Without one it read the shell's pid, and `kill -USR1 $BASHPID` in the job
-        // signalled the SHELL, which died of it. A literal, so the job's way to its body makes no .NET call (section 12.4).
-        text.Append("$global:").Append(BashRuntime.SubshellPidVariable).Append(" = ")
-            .Append(BashRuntime.NextSubshellPid().ToString(System.Globalization.CultureInfo.InvariantCulture)).Append('\n');
+        // signalled the SHELL, which died of it.
+        globals[BashRuntime.SubshellPidVariable] = BashRuntime.NextSubshellPid();
         if (vars is { Count: > 0 })
         {
-            bool first = true;
             foreach (System.Collections.DictionaryEntry e in vars)
-            {
-                if (!first) text.Append("; ");
-                first = false;
-                text.Append('$').Append(e.Key).Append(" = ").Append(PsBash.Core.Parser.PsBuild.SingleQuote(LanguagePrimitives.ConvertTo<string>(e.Value) ?? ""));
-            }
-            text.Append('\n');
+                globals[LanguagePrimitives.ConvertTo<string>(e.Key)] = LanguagePrimitives.ConvertTo<string>(e.Value) ?? "";
         }
-        // The body begins only after the job launched before it from the same runspace has begun (JobTurn); its clock
-        // begins there.
-        text.Append("Enter-BashJobTurn $__bgTurn $__bgClock\n");
-        text.Append(body.ToString()).Append('\n').Append(tail);
+        // A subshell body's state restore must not touch the process-wide variables the parent shares (BashShellState.Restore).
+        globals["__psbashBgRunspace"] = true;
+        // The job's stdin is the stdin of the compound command that started it, shared with the shell (BackgroundJobStdin).
+        globals["__BashStdIn"] = BackgroundJobStdin.Inherit(session);
+        // The job body is transpiled bash, whose operands the shell already globbed (FileSystemHelpers.OperandsShellExpanded).
+        globals["__BashOperandsExpanded"] = true;
+        string location = BashStateSnapshot.JobLocation(session);
         var turn = JobTurn.Next(Runspace.DefaultRunspace);
         // The job's scalars as of the `&` (section 3): copied here, on the launching thread, before the shell goes on.
         var scalars = PsBash.Core.ScalarOverlay.Capture();
         var ps = PowerShell.Create();
         try
         {
-            ps.AddScript(text.ToString()).AddArgument(status).AddArgument(restore).AddArgument(BackgroundJobStdin.Inherit(session))
-                .AddArgument(vars).AddArgument(turn);
+            // Dot-sourced (useLocalScope: false): the body runs at the runspace's global scope, as the script text did.
+            ps.AddCommand(JobScript.FunctionName, useLocalScope: false)
+                .AddParameter("__bgStatus", status).AddParameter("__bgTurn", turn).AddParameter("__bgBody", block);
             Bind(ps, modulePath, turn);
             scalars.Attach(ps.Runspace);
+            Inherit(ps, ps.Runspace, location, globals);
             // The launch: the job's sleeps count from here (JobClock), as a forked job's do in bash. After the bind: time the
             // launcher spent waiting for a runspace delays the shell as much as the job, so it is not the job's to pay back.
             turn?.AttachTo(ps);
             var clock = JobClock.Launch();
             clock.Turn = turn;
-            ps.AddArgument(clock);
+            ps.Runspace.SessionStateProxy.SetVariable(JobClock.VariableName, clock);
             return ps;
         }
         catch
@@ -115,6 +120,25 @@ public static class BashJobRunspaces
             ps.Dispose();
             throw;
         }
+    }
+
+    /// <summary>
+    /// Set what a job inherits in its runspace <paramref name="rs"/> (idle, bound, not started), from the launcher: a value
+    /// set through the runspace's session state costs microseconds and compiles nothing. The globals are created at the
+    /// runspace's global scope, as the job's own statements did; <see cref="EndJob"/> removes them. The directory is left
+    /// to the job's <c>Set-Location</c>, and only when the runspace is elsewhere (a pooled runspace keeps the last job's):
+    /// a location change costs 1-10 ms (PowerShell checks each component of the path), which on the launcher would
+    /// widen the gap between two launches (the jobs' clocks start at their launches), and in the job is start lag, which
+    /// its clock pays back from its sleeps (cause 6).
+    /// </summary>
+    private static void Inherit(PowerShell ps, Runspace rs, string location, System.Collections.IDictionary globals)
+    {
+        var proxy = rs.SessionStateProxy;
+        foreach (System.Collections.DictionaryEntry g in globals) proxy.SetVariable((string)g.Key, g.Value);
+        string? here = null;
+        try { here = proxy.Path.CurrentFileSystemLocation.ProviderPath; }
+        catch (Exception) { }
+        if (!string.Equals(here, location, StringComparison.Ordinal)) ps.AddParameter("__bgLocation", location);
     }
 
     /// <summary>
@@ -295,6 +319,8 @@ public static class BashJobRunspaces
         // A job runs bash too: only the runtime's own aliases, as the shell's runspace (PsBash.Core.PowerShellAliases).
         BashSessionState.RemoveForeignAliases(iss);
         if (!string.IsNullOrEmpty(modulePath) && File.Exists(modulePath)) iss.ImportPSModule([modulePath]);
+        // The function every job runs (JobScript): defined at open, so it is part of the runspace's baseline.
+        iss.Commands.Add(new SessionStateFunctionEntry(JobScript.FunctionName, JobScript.Text));
         return iss;
     }
 
@@ -308,6 +334,8 @@ public static class BashJobRunspaces
         try
         {
             rs.Open();
+            // Compiled once per process, here on the warm-up thread, not by the first job on its way to its body.
+            JobScript.CompileFunction();
             JobProgramLookup.Install(rs.SessionStateProxy.InvokeCommand);
             Baselines.AddOrUpdate(rs, Baseline.Capture(rs.SessionStateProxy.InvokeProvider, rs.SessionStateProxy.Path));
             lock (Gate) _owned++;

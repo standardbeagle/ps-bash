@@ -6,15 +6,15 @@ namespace PsBash.Cmdlets;
 /// <summary>
 /// The clock of one in-process background job (docs/specs/background-jobs.md section 12.5): its sleeps are measured
 /// from the moment <c>&amp;</c> ran, not from the moment its body began. Bash forks the job at <c>&amp;</c> and its first
-/// statement runs a millisecond later; here the body begins after a runspace bind, a pipeline compile under AMSI's
-/// process-wide lock and the launch-order turn, 10-50 ms that a <c>sleep 0.01</c> race cannot absorb. That start lag
+/// statement runs a millisecond later; here the body begins after a runspace bind, the pipeline's start and the
+/// launch-order turn, 2-10 ms (more on a loaded host) that a <c>sleep 0.01</c> race cannot always absorb. That start lag
 /// is the job's debt: each <c>sleep D</c> sleeps <c>max(0, D - debt)</c> and pays that much of it, and a debt larger
 /// than D carries to the next sleep. Only the lag before the body counts: time the body itself spends is never debt, so
 /// a job ends at <c>launch + its own time</c> whenever its sleeps can absorb the lag, and a job with no sleep is
 /// untouched.
 ///
 /// <para>Created at <c>&amp;</c> by <see cref="BashJobRunspaces.NewJob"/>, stored in the job runspace's global
-/// <see cref="VariableName"/> by the job's head (removed with the job's other globals by
+/// <see cref="VariableName"/> by the launcher before the job starts (removed with the job's other globals by
 /// <see cref="BashJobRunspaces.EndJob"/>), begun by <c>Enter-BashJobTurn</c> as the body starts, read by
 /// <c>Invoke-BashSleep</c>. The foreground shell and a job in a host of its own have none, so their sleeps are exact.</para>
 /// </summary>

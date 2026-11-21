@@ -305,8 +305,13 @@ internal sealed class Connection
             if (UsesBackgroundJobs(command))
             {
                 JobHostSpares.Prewarm(CountBackgroundJobs(command));
-                if (UsesInProcessJobs(command, Environment.GetEnvironmentVariable("PSBASH_BG_MODE")))
+                var bgMode = Environment.GetEnvironmentVariable("PSBASH_BG_MODE");
+                if (UsesInProcessJobs(command, bgMode))
+                {
+                    // The jobs' bodies compiled before the command starts, not between its launches (section 12.5).
+                    SdkRunspace.PrepareJobBodies(command, includeIsolated: bgMode == "inproc");
                     SdkRunspace.WarmJobRunspaces();
+                }
             }
 
             exitCode = await worker.ExecuteWithOutputAsync(

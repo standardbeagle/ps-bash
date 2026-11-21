@@ -3248,48 +3248,11 @@ function Invoke-BashBackground {
     # The job's scalars are its own copy, taken at the & (BashJobRunspaces.NewJob, ScalarOverlay): it never writes the
     # process environment the shell keeps them in (section 3). The wrapper reports the body's exit status for `wait`.
     $status = [hashtable]::Synchronized(@{ Code = 0; At = 0L })
-    $__bgHead = @'
-param($__bgStatus, $__bgRestore, $__bgStdin, $__bgVars, $__bgTurn, $__bgClock)
-# The job's sleeps count from its launch, not from this late start (JobClock, docs/specs/background-jobs.md section 12.5).
-$global:__psbashJobClock = $__bgClock
-# A subshell body's state restore must not touch the process-wide variables the parent shares (BashShellState.Restore).
-$global:__psbashBgRunspace = $true
-# The job's stdin is the stdin of the compound command that started it, shared with the shell (BackgroundJobStdin).
-$global:__BashStdIn = $__bgStdin
-# The job body is transpiled bash, whose operands the shell already globbed (FileSystemHelpers.OperandsShellExpanded).
-$global:__BashOperandsExpanded = $true
-# The job's scalars ($env:NAME) are its own copy, taken at the & (ScalarOverlay, docs/specs/background-jobs.md section 3).
-$__bgOk = $false
-try {
-'@
-    $__bgTail = @'
-    $__bgOk = $true
-} catch {
-    # A failure that ends the job (set -u, ${x:?}) was already reported on its error stream, where the job's own
-    # redirects apply; thrown on, it surfaced from EndInvoke in `wait` and the job's output was lost. Status 1, as bash's.
-    $__bgReported = $false
-    for ($__bgE = $_.Exception; $__bgE; $__bgE = $__bgE.InnerException) { if ($__bgE.Data['psbash.reported']) { $__bgReported = $true } }
-    if (-not $__bgReported) { Write-Error -ErrorRecord $_ -ErrorAction Continue }
-    $global:LASTEXITCODE = 1
-} finally {
-    # A body that ended early (`exit N` stops the pipeline) leaves its status in LASTEXITCODE; an error with none is 1.
-    $x = $global:LASTEXITCODE
-    $__bgCode = if ($__bgOk) { if ($null -eq $x) { 0 } else { [int]$x } } elseif ($x) { [int]$x } else { 1 }
-    # A pooled runspace must not keep the cursor for the next job.
-    $global:__BashStdIn = $null
-    $__bgStatus.Code = $__bgCode
-    # A signal the job sent itself (`kill -USR1 $BASHPID`; ShellSignalTraps.Terminate) ended it: `wait` reports it.
-    $__bgStatus.Signal = $global:__psbashJobSignal
-    $__bgStatus.At = [System.Diagnostics.Stopwatch]::GetTimestamp()
-    # Last: the runspace goes back for the next job without the globals this one created.
-    [PsBash.Cmdlets.BashJobRunspaces]::EndJob($ExecutionContext.SessionState)
-}
-'@
     # One .NET call builds the job (runspace, options, body, arguments): each script->.NET call is an AMSI report
     # under the process-wide lock the previous job's start waits on (section 12.4), and a dozen per launch spread
-    # the starts of jobs launched back to back.
-    $ps = [PsBash.Cmdlets.BashJobRunspaces]::NewJob($ExecutionContext.SessionState, $__bgHead, $Command, $__bgTail, $Vars, $status, [bool]$Isolated, $script:BashBgModulePath)
-
+    # the starts of jobs launched back to back. The job runs PsBash.Cmdlets.JobScript (head, body, tail), compiled
+    # before its launch: no script text is compiled on its way to its first statement (section 12.5).
+    $ps = [PsBash.Cmdlets.BashJobRunspaces]::NewJob($ExecutionContext.SessionState, $Command, $Vars, $status, [bool]$Isolated, $script:BashBgModulePath)
     $synthId = $script:BashBgNextId
     $script:BashBgNextId++
 

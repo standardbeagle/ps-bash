@@ -92,33 +92,40 @@ public static class BashStateSnapshot
         ["__BashErrexit", "__BashErrtrace", "__BashNounset", "__BashPipefail", "__BashNoclobber", "__BashNoglob", "__BashVerbose"];
 
     /// <summary>
-    /// What an in-process job (pooled runspace, no <see cref="BuildPrelude"/>) runs before its body: the parent's
-    /// directory, its <c>set</c> options and, under errtrace, its ERR trap. Without the options
-    /// <c>set -e; { false; echo x; } &amp;</c> printed x and the job's status was 0. The job runspace is reused
-    /// (BashJobRunspaces), so its PowerShell location is the last job's, or the host's start directory: without the
-    /// <c>Set-Location</c> a glob or relative path in the job resolved there.
+    /// The global variables an in-process job (pooled runspace, no <see cref="BuildPrelude"/>) sets before its body
+    /// (<see cref="JobScript.Text"/>): the parent's <c>set</c> options and, under errtrace, its ERR trap. Without the
+    /// options <c>set -e; { false; echo x; } &amp;</c> printed x and the job's status was 0. Each option is written on or
+    /// off: the runspace is reused (BashJobRunspaces) and keeps the previous job's. Values, not script text: a job's text
+    /// would be compiled (and scanned by AMSI) on the job's way to its first statement (section 12.5).
     /// </summary>
-    public static string BuildJobOptions(SessionState session)
+    public static System.Collections.Hashtable JobGlobals(SessionState session)
     {
-        var sb = new StringBuilder();
-        sb.Append("Set-Location -LiteralPath ").Append(PsBuild.SingleQuote(session.Path.CurrentFileSystemLocation.ProviderPath)).Append('\n');
+        var globals = new System.Collections.Hashtable(StringComparer.OrdinalIgnoreCase);
         foreach (var name in JobOptionGlobals)
-            sb.Append("$global:").Append(name).Append(" = ").Append(Unwrap(session.PSVariable.GetValue("global:" + name)) is true ? "$true" : "$false").Append('\n');
-        sb.Append("$global:__BashErrexitSuppress = 0\n");
-        sb.Append(ErrTrapStatement(session));
-        return sb.ToString();
+            globals[name] = Unwrap(session.PSVariable.GetValue("global:" + name)) is true;
+        globals["__BashErrexitSuppress"] = 0;
+        // Rebuilt from its text, unbound: a script block runs in the runspace that made it.
+        globals["__BashTrapERR"] = ErrTrapText(session) is { } trap ? ScriptBlock.Create(trap) : null;
+        return globals;
     }
+
+    /// <summary>
+    /// The directory an in-process job starts in: the parent's. The job runspace is reused, so its PowerShell location is
+    /// the last job's, or the host's start directory: without it a glob or relative path in the job resolved there.
+    /// </summary>
+    public static string JobLocation(SessionState session) => session.Path.CurrentFileSystemLocation.ProviderPath;
 
     /// <summary>
     /// A job is a subshell: its ERR trap is the parent's only under errtrace (<c>set -E</c>), else none. Rebuilt from its
     /// text, as a script block runs in the runspace that made it.
     /// </summary>
     internal static string ErrTrapStatement(SessionState session)
-    {
-        string? text = Unwrap(session.PSVariable.GetValue("global:__BashErrtrace")) is true
-            && Unwrap(session.PSVariable.GetValue("global:__BashTrapERR")) is ScriptBlock trap ? trap.ToString() : null;
-        return "$global:__BashTrapERR = " + (text is null ? "$null" : "[scriptblock]::Create(" + PsBuild.SingleQuote(text) + ")") + "\n";
-    }
+        => "$global:__BashTrapERR = " + (ErrTrapText(session) is { } text ? "[scriptblock]::Create(" + PsBuild.SingleQuote(text) + ")" : "$null") + "\n";
+
+    /// <summary>The text of the ERR trap a job inherits (<see cref="ErrTrapStatement"/>), or null.</summary>
+    private static string? ErrTrapText(SessionState session)
+        => Unwrap(session.PSVariable.GetValue("global:__BashErrtrace")) is true
+           && Unwrap(session.PSVariable.GetValue("global:__BashTrapERR")) is ScriptBlock trap ? trap.ToString() : null;
 
     private static object? Unwrap(object? v) => v is PSObject p ? p.BaseObject : v;
 

@@ -258,6 +258,38 @@ internal sealed class SdkRunspace : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Compile the bodies of the in-process jobs <paramref name="command"/> can start (<c>PsBash.Cmdlets.JobScript.Prepare</c>,
+    /// docs/specs/background-jobs.md section 12.5), before it runs: a body seen for the first time is scanned by AMSI
+    /// here, on the command's start, instead of between two of its <c>&amp;</c>s, where it delayed the second launch.
+    /// Synchronous, on purpose: it must be done before the first job is launched. Best effort.
+    /// </summary>
+    internal static void PrepareJobBodies(string command, bool includeIsolated)
+    {
+        try { PrepareJobBodiesCall.Value?.Invoke(command, includeIsolated); }
+        catch (Exception) { /* each job compiles its body at its launch */ }
+    }
+
+    private static readonly Lazy<Func<string, bool, int>?> PrepareJobBodiesCall = new(ResolvePrepareJobBodies);
+
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage(
+        "Trimming", "IL2075",
+        Justification = "PsBash.Cmdlets is loaded from disk at run time (Assembly.LoadFrom), never trimmed; a " +
+            "missing Prepare returns null and each job compiles its own body.")]
+    private static Func<string, bool, int>? ResolvePrepareJobBodies()
+    {
+        try
+        {
+            var cmdlets = Assembly.LoadFrom(ModuleExtractor.GetCmdletsDllPath());
+            var prepare = cmdlets.GetType("PsBash.Cmdlets.JobScript")?.GetMethod("Prepare", [typeof(string), typeof(bool)]);
+            return prepare is null ? null : (script, isolated) => (int)prepare.Invoke(null, [script, isolated])!;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
     internal static string ReadStartupModule(string path)
     {
         return BoundedTextFile.Read(

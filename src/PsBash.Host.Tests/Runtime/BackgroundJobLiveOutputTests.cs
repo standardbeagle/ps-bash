@@ -223,4 +223,73 @@ public class BackgroundJobLiveOutputTests : IAsyncLifetime
         lock (gate)
             Assert.Equal(["word_a", "word_b"], stdout.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Order());
     }
+
+    /// <summary>
+    /// A job's way from its start to its first statement compiles nothing (background-jobs.md section 12.5, cause 7):
+    /// its function and its body were compiled before the launch (<c>JobScript</c>). Each compile is an AMSI scan under
+    /// PowerShell's process-wide lock, slow when Defender is loaded: the job used to run <c>AddScript</c> text, compiled
+    /// afresh by every job after its start, so its body began 24-130 ms after its <c>&amp;</c> on a loaded host and the
+    /// oils cases "wait -n" and "wait for N parallel jobs" (sleeps of 10-90 ms) saw jobs end in launch order. Induced
+    /// here: the AMSI lock is held from the moment the job is started until the job's line arrives, or 10 s. Before the
+    /// fix the job's compile waited the whole 10 s. The body text is new to this process, so the launcher compiles it.
+    /// </summary>
+    [SkippableFact]
+    public async Task LiveJobBody_RunsWhileTheAmsiLockIsHeldFromTheJobsStart()
+    {
+        var amsiLock = typeof(System.Management.Automation.PSObject).Assembly
+            .GetType("System.Management.Automation.AmsiUtils")
+            ?.GetField("s_amsiLockObject", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+            ?.GetValue(null);
+        Skip.If(!OperatingSystem.IsWindows() || amsiLock is null, "AMSI and its process-wide lock exist on Windows only");
+
+        var worker = _fixture.CreateWorker();
+        // Open the job runspaces first (their psm1 import holds the lock for long stretches): this test is about the job.
+        await RunBashAsync(worker, "echo warm & wait");
+        string word = "job_" + Guid.NewGuid().ToString("N");
+        var jobArrived = new ManualResetEventSlim();
+        var arrivedWhileHeld = false;
+        Thread? holder = null;
+        void HoldAcrossJobStart(PsBash.Core.Stdio.OutputChannel _)
+        {
+            var acquired = new ManualResetEventSlim();
+            holder = new Thread(() =>
+            {
+                lock (amsiLock!)
+                {
+                    acquired.Set();
+                    arrivedWhileHeld = jobArrived.Wait(TimeSpan.FromSeconds(10));
+                }
+            }) { IsBackground = true };
+            holder.Start();
+            acquired.Wait();
+        }
+
+        var stdout = new StringBuilder();
+        var gate = new object();
+        worker.JobOutput.ProducerStarted += HoldAcrossJobStart;
+        int exit;
+        try
+        {
+            exit = await worker.ExecuteWithOutputAsync(
+                BashTranspiler.Transpile($"{{ echo {word}; }} & wait")!,
+                s =>
+                {
+                    lock (gate) stdout.Append(s);
+                    if (s.Contains(word, StringComparison.Ordinal)) jobArrived.Set();
+                },
+                _ => { });
+        }
+        finally
+        {
+            worker.JobOutput.ProducerStarted -= HoldAcrossJobStart;
+            jobArrived.Set();
+            holder?.Join();
+        }
+
+        Assert.True(arrivedWhileHeld,
+            "the job's body did not run while the AMSI lock was held from its start: something on its way to its first "
+            + "statement was compiled after the launch (JobScript: the job function and body are compiled before it)");
+        Assert.Equal(0, exit);
+        lock (gate) Assert.Equal(word + "\n", stdout.ToString());
+    }
 }

@@ -12,7 +12,7 @@ namespace PsBash.Cmdlets.Tests;
 /// (1) <c>BashJobRunspaces.NewJob</c> gives every in-process job a synthetic <c>$BASHPID</c>;
 /// (2) <c>ShellSignalTraps.Terminate</c> ends a job like its <c>exit</c> (output kept) before any pipeline stop, and
 /// records the signal in <c>ShellSignalTraps.JobSignalVariable</c>;
-/// (3) the psm1 job wrapper hands that variable to <c>wait</c>, and <c>Complete-BashBgJob</c> prints no exception text
+/// (3) the job wrapper (<c>JobScript.Text</c>) hands that variable to <c>wait</c>, and <c>Complete-BashBgJob</c> prints no exception text
 /// for a job a signal ended. Oracle note (qa-rubric Directive 1): a repo-structure invariant; the behaviour is
 /// BackgroundJobSelfSignalDifferentialTests.
 /// </summary>
@@ -58,8 +58,9 @@ public class JobSelfSignalGuardTests
     [Fact]
     public void JobWrapper_HandsTheSignalToWait_AndWaitPrintsNoExceptionText()
     {
+        Assert.Matches(new Regex(@"\$__bgStatus\.Signal\s*=\s*\$global:" + Regex.Escape(ShellSignalTraps.JobSignalVariable) + @"\b"), JobScript.Text);
+
         string psm1 = Read("src", "PsBash.Module", "PsBash.psm1");
-        Assert.Matches(new Regex(@"\$__bgStatus\.Signal\s*=\s*\$global:" + Regex.Escape(ShellSignalTraps.JobSignalVariable) + @"\b"), psm1);
 
         string complete = Body(psm1, "function Complete-BashBgJob {");
         var catchBlock = Regex.Match(complete, @"\}\s*catch\s*\{(?<c>.*?)\}\s*finally", RegexOptions.Singleline);
