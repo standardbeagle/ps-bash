@@ -102,8 +102,9 @@ public class HostRobustnessTests
     // 50,000 operands: emitted as a PowerShell -or chain, PowerShell's own compiler overflowed its
     // pipeline thread (VariableAnalysis.VisitBinaryExpression) and the host died; now a parse error.
     [InlineData("test-or-chain", "@TESTOR", null, "test expression too long")]
-    // Survival only: a runtime arithmetic error is currently swallowed as 0 (a separate parity gap).
-    [InlineData("arith-runtime", "@ARITH", "rc=", null)]
+    // Survival only: bash has no nesting limit here (20000 levels crash it, exit 139). ps-bash reports a recursion error,
+    // which like bash's own (`a=a; $((a))`) drops the rest of the line, so the status is echoed on the next line.
+    [InlineData("arith-runtime", "@ARITH", "rc=1", null)]
     public async Task RuntimeHostileInput_FailsOnlyThatCommand_HostSurvives(string name, string script, string? expectOut, string? expectErr)
     {
         Skip.If(InteractiveShellHarness.FindPsBashBinary() is null, "ps-bash binary not built");
@@ -118,7 +119,7 @@ public class HostRobustnessTests
                 // than the evaluator's nesting bound.
                 "@TESTPAREN" => "[ " + Rep("\\( ", 3000) + "x" + Rep(" \\)", 3000) + " ]; echo rc=$?",
                 "@TESTOR" => "[ " + Rep("a -o ", 50000) + "a ]; echo rc=$?",
-                "@ARITH" => "e='" + Rep("(", 20000) + "1" + Rep(")", 20000) + "'; echo $(( $e )); echo rc=$?",
+                "@ARITH" => "e='" + Rep("(", 20000) + "1" + Rep(")", 20000) + "'; echo $(( $e ))\necho rc=$?",
                 _ => script,
             };
             var file = Path.Combine(dir, name + ".sh");

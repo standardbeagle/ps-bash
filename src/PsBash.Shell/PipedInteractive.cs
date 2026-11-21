@@ -156,8 +156,9 @@ internal static class PipedInteractive
         if (rcFile is not null) sb.Append(ShellArgs.RcSourceCommand(rcFile)).Append('\n');
         sb.Append("set -o history\n");
         if (loadHistory) sb.Append("history -r 2>/dev/null\n");
+        // The status is put back INSIDE the branch: the `[ -n … ]` test is a command, so before it $? would be its 0.
         const string promptCommand =
-            "(exit $__psbash_status); if [ -n \"${PROMPT_COMMAND-}\" ]; then eval \"$PROMPT_COMMAND\"; fi\n";
+            "if [ -n \"${PROMPT_COMMAND-}\" ]; then (exit $__psbash_status); eval \"$PROMPT_COMMAND\"; fi\n";
         var session = new List<string>();
         foreach (var chunk in SplitCommands(input))
         {
