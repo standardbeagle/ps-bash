@@ -11,10 +11,19 @@ function Fails([string[]]$lines) { $lines | Select-String '^\s+Failed ' | ForEac
 
 S "start tag=$Tag"
 Set-Location C:\Users\andyb\work\core\ps-bash
-if (git status --porcelain --untracked-files=no) { S 'ABORT: the checkout has tracked changes'; S 'FINISHED'; exit 1 }
+# Tracked changes abort the run (someone's work). A change that is only line endings is not: a file committed with CRLF
+# under `eol=lf` shows as modified once a checkout rewrites it (s23k); such a checkout is forced, nothing is lost.
+$force = $false
+if (git status --porcelain --untracked-files=no) {
+    git -c core.safecrlf=false diff --ignore-cr-at-eol --quiet 2>$null
+    if ($LASTEXITCODE -ne 0) { S 'ABORT: the checkout has tracked changes'; S 'FINISHED'; exit 1 }
+    S 'tracked changes are line endings only: forcing the checkout'
+    $force = $true
+}
 git fetch -q $Bundle refs/fleet/snapshot 2>&1 | Add-Content (Join-Path $Out 'git.log')
 if ($LASTEXITCODE -ne 0) { S 'ABORT: fetch failed (git.log)'; S 'FINISHED'; exit 1 }
-git checkout -q --detach FETCH_HEAD 2>&1 | Add-Content (Join-Path $Out 'git.log')
+if ($force) { git checkout -q -f --detach FETCH_HEAD 2>&1 | Add-Content (Join-Path $Out 'git.log') }
+else { git checkout -q --detach FETCH_HEAD 2>&1 | Add-Content (Join-Path $Out 'git.log') }
 if ($LASTEXITCODE -ne 0) { S 'ABORT: checkout failed (git.log)'; S 'FINISHED'; exit 1 }
 S ('checked out ' + (git log --oneline -1))
 

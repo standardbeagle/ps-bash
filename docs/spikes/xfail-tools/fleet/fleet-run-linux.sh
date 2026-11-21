@@ -10,8 +10,14 @@ mkdir -p "$OUT"; SUM="$OUT/summary.txt"
 s() { echo "$(date +%H:%M:%S) $*" >> "$SUM"; }
 s "start tag=$TAG"
 cd ~/work/core/ps-bash || { s 'ABORT: no checkout at ~/work/core/ps-bash'; s FINISHED; exit 1; }
-if [ -n "$(git status --porcelain --untracked-files=no)" ]; then s 'ABORT: the checkout has tracked changes'; s FINISHED; exit 1; fi
-if ! { git fetch -q "$BUNDLE" refs/fleet/snapshot && git checkout -q --detach FETCH_HEAD; } >> "$OUT/git.log" 2>&1; then
+# Tracked changes abort the run; changes that are only line endings (a CRLF blob under eol=lf, rewritten by a
+# checkout: s23k) force the checkout instead.
+force=
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+    if ! git -c core.safecrlf=false diff --ignore-cr-at-eol --quiet 2>/dev/null; then s 'ABORT: the checkout has tracked changes'; s FINISHED; exit 1; fi
+    s 'tracked changes are line endings only: forcing the checkout'; force=-f
+fi
+if ! { git fetch -q "$BUNDLE" refs/fleet/snapshot && git checkout -q $force --detach FETCH_HEAD; } >> "$OUT/git.log" 2>&1; then
     s 'ABORT: fetch/checkout failed (git.log)'; s FINISHED; exit 1
 fi
 s "checked out $(git log --oneline -1)"
