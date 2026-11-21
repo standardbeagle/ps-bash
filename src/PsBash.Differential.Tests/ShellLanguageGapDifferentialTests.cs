@@ -160,4 +160,41 @@ public class ShellLanguageGapDifferentialTests
     public Task Help_PipeClosedEarly_InSourcedScript_DoesNotEndTheCaller() => Same(
         "cd \"$(mktemp -d)\" || exit\necho 'help cd | head -1; echo still' > s3\n"
         + "for f in s3 s3; do ( . \"./$f\" ) 2>&1 </dev/null; echo \"after $f rc=$?\"; done\necho done");
+
+    // --- Condition and loop status (PsBuild.ConditionStatus, EmitWhileLoop, EmitLoopControl) -------------------
+
+    /// <summary>A condition is a command: a test (<c>[[ ]]</c>, <c>[ ]</c>, <c>(( ))</c>, <c>true</c>) sets <c>$?</c> for the
+    /// branch, the <c>else</c>, an <c>elif</c> and the loop body, and an <c>if</c> whose branch is not taken is 0 (a <c>case</c>
+    /// that matches nothing, or whose arm runs nothing, is 0 too). Folding a test
+    /// to a bare boolean left the status of the command before it.</summary>
+    [SkippableFact]
+    public Task Condition_TestSetsTheStatusTheBranchSees() => Same(
+        "false; if true; then echo if=$?; fi\ntrue; if false; then :; else echo else=$?; fi\n"
+        + "false; if [[ a == a ]]; then echo dbl=$?; fi\ntrue; if [[ a == b ]]; then :; else echo dblf=$?; fi\n"
+        + "false; if [ a = a ]; then echo sgl=$?; fi\nfalse; if [ a -eq 1 ] 2>/dev/null; then :; else echo bad=$?; fi\n"
+        + "true; if (( 0 )); then :; else echo arithf=$?; fi\ntrue; if false; then :; elif true; then echo elif=$?; fi\n"
+        + "true; if true && [[ a == b ]]; then :; else echo andf=$?; fi\ntrue; if false; then :; fi; echo nobranch=$?\n"
+        + "false; while [[ x ]]; do echo wdbl=$?; break; done\ni=0; until (( i >= 2 )); do echo u-in=$?; i=$((i+1)); done\n"
+        + "false; case x in y) ;; esac; echo case-nomatch=$?\nfalse; case x in x) ;; esac; echo case-empty=$?\ncase x in x) false;; esac; echo case-body=$?");
+
+    /// <summary>A loop's status is its last body command's (0 when the body never ran), never the failed condition's or the
+    /// step's; <c>break</c> and <c>continue</c> are 0.</summary>
+    [SkippableFact]
+    public Task Loop_StatusIsTheBodysNotTheConditions() => Same(
+        "while true; do false; break; done; echo brk=$?\n"
+        + "i=0; while [ $i -lt 2 ]; do i=$((i+1)); false; continue; done; echo cont=$?\n"
+        + "i=0; while (( i < 2 )); do i=$((i+1)); false; done; echo body-last=$?\n"
+        + "i=0; while (( i < 2 )); do i=$((i+1)); done; echo body-ok=$?\n"
+        + "for ((i=0; i<2; i++)); do false; done; echo cfor=$?\nfalse; for ((i=0; i<0; i++)); do :; done; echo cfor-empty=$?\n"
+        + "false; while false; do :; done; echo wempty=$?\nfalse; until true; do :; done; echo uempty=$?\n"
+        + "for x in a b; do if [ $x = b ]; then break; fi; false; done; echo forin-brk=$?");
+
+    // --- Positional parameters (PsBuild.PositionalIsShells) ------------------------------------------------------
+
+    /// <summary>An empty positional list is still the shell's: <c>shift</c> to empty ends a function's
+    /// <c>while [ "$1" ]</c> loop, and <c>set --</c> empties <c>$1</c>/<c>$#</c>/<c>$@</c> at the top too.</summary>
+    [SkippableFact]
+    public Task ShiftToEmpty_InAFunction_EndsTheLoop() => Same(
+        "f() { while [ \"$1\" ]; do echo \"arg=$1\"; shift; done; echo \"left=$# [$1] [$*]\"; }\nf a b\n"
+        + "set -- x y; set --; echo \"top=$# [$1] [$@]\"\ng() { shift 2; echo \"g=$# [$1]\"; }\ng p q");
 }

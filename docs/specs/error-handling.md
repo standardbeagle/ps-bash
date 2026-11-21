@@ -194,6 +194,24 @@ if (line.StartsWith("<<<EXIT:", StringComparison.Ordinal)
 }
 ```
 
+### 2.3.1 Status of conditions and compound commands
+
+Invariant: a condition is a command, so it sets `$?`. A test in a condition (`[[ ]]`, `[ ]`, `(( ))`, `true`, `:`,
+`false`, an operand of `&&`/`||` there) is emitted through `PsBuild.ConditionStatus(status)`: it sets
+`$global:LASTEXITCODE` to the test's status (0, 1, or 2 for a bad `[ ]` operand), then compares it to 0. Never a bare
+`$true`/boolean: that ran nothing, so the branch, the `else` and the loop body saw the status from before the
+condition. Then, as bash:
+
+- an `if` whose branch is not taken is 0 (`else { $global:LASTEXITCODE = 0 }` on every `if` without an `else`);
+- a `while`/`until` loop's status is its last body command's, 0 when the body never ran, never the failed
+  condition's: the body's status is saved per pass (0 before it) and restored when the condition ends the loop
+  (`EmitWhileLoop`, one shape for a test and a command condition); `for ((;;))` likewise (the step does not count);
+- `break` and `continue` are 0 (a bad count sets 128, too many arguments 1);
+- a `case` that matches no pattern, or whose arm runs no command, is 0 (a `default` clause, `EmitCaseArmBody`).
+
+Differential: `ShellLanguageGapDifferentialTests.Condition_TestSetsTheStatusTheBranchSees`,
+`Loop_StatusIsTheBodysNotTheConditions`.
+
 ### 2.4 Shell Options
 
 The emitter translates `set` flags to PowerShell equivalents:

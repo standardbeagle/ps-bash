@@ -1237,11 +1237,13 @@ Maps redirects to PowerShell: `>file`, `>>file`, `2>&1`, etc. Calls
 Maps bash special variables to PowerShell equivalents:
 
 - `$?` -> `$LASTEXITCODE`
-- `$@` / `$*` -> `$args`
-- `$#` -> `$args.Count`
+- `$@` / `$*` / `$#` / `$1`..`$9` / `${10}`.. -> the shell's positional list `$global:BashPositional` (set by a function
+  call, `set --`, `shift`, `source` with arguments), or the script's `$args` when the shell has none. Invariant: the
+  choice is `PsBuild.PositionalIsShells` (`$null -ne $global:BashPositional`), never truthiness: an EMPTY list is
+  still the shell's (truthiness fell back to `$args` after a `shift` to empty, so a function's `while [ "$1" ]; do
+  shift; done` never ended). Guard `PositionalFallbackGuardTests`.
 - `$0` -> `$(if ($global:BashPositional0) { $global:BashPositional0 } else { 'bash' })` (the launcher's `-c CMD NAME` / script path as typed; it used to be `$MyInvocation.MyCommand.Name`, empty at top level)
 - `$$` / `$!` -> `$PID`
-- `$1`..`$9` -> `$args[0]`..`$args[8]`
 - `$HOME`, `$LASTEXITCODE`, `$null`, `$true`, `$false` -> kept as-is
 - Loop variables -> `$var` (not `$env:var`)
 - Everything else -> `$env:NAME`

@@ -1610,7 +1610,6 @@ public static partial class PsEmitter
     private static string EmitIfFromArm(Command.If ifCmd, int start)
     {
         var sb = new StringBuilder();
-        bool anyHoisted = false;
         for (int i = start; i < ifCmd.Arms.Length; i++)
         {
             var arm = ifCmd.Arms[i];
@@ -1620,7 +1619,6 @@ public static partial class PsEmitter
                 sb.Append(" else { ").Append(EmitIfFromArm(ifCmd, i)).Append(" }");
                 return sb.ToString();
             }
-            anyHoisted |= hoist;
             if (hoist)
                 sb.Append(EmitHoistedCondition(arm.Cond)).Append("if (").Append(PsBuild.LastStatusTest()).Append(')');
             else
@@ -1634,8 +1632,9 @@ public static partial class PsEmitter
             sb.Append(EmitBody(ifCmd.ElseBody));
             sb.Append(" }");
         }
-        else if (_errexitMode || anyHoisted)
+        else
         {
+            // Every condition sets the status (a test through PsBuild.ConditionStatus).
             // bash: an `if` whose branch is not taken has status 0. The failed condition's code
             // must not leak out — `f() { if false; then :; fi; }; set -e; f` keeps going, and
             // `if grep -q x f; then …; fi; echo $?` prints 0.
@@ -1800,7 +1799,9 @@ public static partial class PsEmitter
             keyword = "break";
         }
         var target = labels[Math.Max(0, labels.Count - n)];
-        return check + keyword + " " + (keyword == "break" ? target.Break : target.Continue);
+        // bash: a `break`/`continue` that leaves is status 0 (`while true; do false; break; done` is 0); a bad count
+        // set its own above.
+        return (check ?? PsBuild.SetStatus(0) + "; ") + keyword + " " + (keyword == "break" ? target.Break : target.Continue);
     }
 
     /// <summary>
@@ -2197,8 +2198,11 @@ public static partial class PsEmitter
             {
                 if (forArith.Line > 0 && DebugActive)
                     return ApplyCompoundRedirects(EmitDebugForArith(forArith, depth, label), forArith.Redirects);
+                // bash's loop status is the last body command's (0 when it never ran, or after `continue`/`break`), not
+                // the step's or the failed condition's: saved per pass and restored after the loop.
+                string st = "$__psbash_fst" + depth;
                 var sb = new StringBuilder();
-                sb.Append(IterGuardPrefix(depth));
+                sb.Append(IterGuardPrefix(depth)).Append(st).Append(" = 0; ");
                 sb.Append(label).Append("for (");
                 sb.Append(EmitForArithClause(forArith.Init, forArith.Line));
                 sb.Append("; ");
@@ -2207,8 +2211,9 @@ public static partial class PsEmitter
                 sb.Append(EmitForArithClause(forArith.Step, forArith.Line));
                 sb.Append(") { ");
                 sb.Append(IterGuardCheck(depth));
+                sb.Append(st).Append(" = 0; ");
                 sb.Append(EmitBody(forArith.Body));
-                sb.Append(" }");
+                sb.Append("; ").Append(st).Append(" = $global:LASTEXITCODE }; ").Append(PsBuild.SetStatusTo(st));
                 return ApplyCompoundRedirects(sb.ToString(), forArith.Redirects);
         }
         finally
@@ -2298,50 +2303,37 @@ public static partial class PsEmitter
             var sb = new StringBuilder();
             sb.Append(IterGuardPrefix(depth));
 
-            if (IsHoistedCondition(whileCmd.Cond))
+            // `while true` / `until false`: the condition never ends the loop; it only sets the status the body starts with.
+            if (!IsHoistedCondition(whileCmd.Cond) && whileCmd.Cond is Command.Simple { Words.Length: 1 } constant
+                && constant.EnvPairs.IsEmpty && constant.Redirects.IsEmpty
+                && IsConstantStatusBuiltin(constant, out var succeeds) && succeeds != whileCmd.IsUntil)
             {
-                // The condition runs as a statement at the top of each pass (its output streams;
-                // `continue` re-runs it, as bash does). bash's loop status is the last body
-                // command's, or 0 when the body never ran — never the failed condition's, so the
-                // body's status is saved per pass and restored on the way out.
-                string st = "$__psbash_wst" + depth;
-                sb.Append(st).Append(" = 0; ").Append(label).Append("while ($true) { ");
-                sb.Append(IterGuardCheck(depth));
-                sb.Append(EmitHoistedCondition(whileCmd.Cond));
-                sb.Append("if (").Append(PsBuild.LastStatusTest(negate: !whileCmd.IsUntil)).Append(") { ");
-                sb.Append("$global:LASTEXITCODE = ").Append(st).Append("; break }; ");
-                sb.Append(EmitBody(whileCmd.Body));
-                sb.Append("; ").Append(st).Append(" = $global:LASTEXITCODE }");
+                sb.Append(label).Append("while ($true) { ").Append(IterGuardCheck(depth));
+                sb.Append(PsBuild.SetStatus(succeeds ? 0 : 1)).Append("; ").Append(EmitBody(whileCmd.Body)).Append(" }");
                 return ApplyCompoundRedirects(sb.ToString(), whileCmd.Redirects);
             }
 
-            sb.Append(label).Append("while (");
-            var condText = EmitGuardedCondition(whileCmd.Cond, EmitWhileCondition);
-
-            if (whileCmd.IsUntil)
-            {
-                sb.Append("-not (");
-                sb.Append(condText);
-                sb.Append(')');
-            }
-            else
-            {
-                sb.Append(condText);
-            }
-
-            sb.Append(") { ");
+            // The condition is tested at the top of each pass (a hoisted one runs as a statement, so its output streams;
+            // `continue` re-runs it, as bash does) and sets the status the body starts with. bash's loop status is the
+            // last body command's, or 0 when the body never ran, never the failed condition's: the body's status is
+            // saved per pass (0 before it, so a `continue` leaves 0) and restored when the condition ends the loop.
+            string st = "$__psbash_wst" + depth;
+            sb.Append(st).Append(" = 0; ").Append(label).Append("while ($true) { ");
             sb.Append(IterGuardCheck(depth));
-            sb.Append(EmitBody(whileCmd.Body));
-            sb.Append(" }");
-            // bash: a loop ended by its condition has the last body command's status (0 here,
-            // or errexit would have left) — not the failed condition's, which must not leak out
-            // of a function ending in `while [ $i -lt 3 ]; do …; done`.
-            if (_errexitMode && whileCmd.Redirects.IsDefaultOrEmpty)
-                sb.Append("; $global:LASTEXITCODE = 0");
-            // A body that never ran makes the status 0 (`false; until [ x ]; do :; done` is 0): the status before the
-            // loop was left. The pass counter is per loop depth, so it is 0 only for this loop's empty run.
+            if (IsHoistedCondition(whileCmd.Cond))
+            {
+                sb.Append(EmitHoistedCondition(whileCmd.Cond));
+                sb.Append("if (").Append(PsBuild.LastStatusTest(negate: !whileCmd.IsUntil)).Append(") { ");
+            }
             else
-                sb.Append("; if (").Append(IterVar(depth)).Append(" -eq 0) { $global:LASTEXITCODE = 0 }");
+            {
+                string cond = EmitGuardedCondition(whileCmd.Cond, EmitCondition);
+                sb.Append(whileCmd.IsUntil ? "if (" + cond + ") { " : "if (-not (" + cond + ")) { ");
+            }
+            sb.Append(PsBuild.SetStatusTo(st)).Append("; break }; ");
+            sb.Append(st).Append(" = 0; ");
+            sb.Append(EmitBody(whileCmd.Body));
+            sb.Append("; ").Append(st).Append(" = $global:LASTEXITCODE }");
             return ApplyCompoundRedirects(sb.ToString(), whileCmd.Redirects);
         }
         finally
@@ -2572,7 +2564,8 @@ public static partial class PsEmitter
             }
         }
 
-        sb.Append(" }");
+        // bash: a case that matches no pattern is status 0, not the status from before it.
+        sb.Append(" default { ").Append(PsBuild.SetStatus(0)).Append(" } }");
         var caseText = subjectCanFail ? subjectPrelude + PsBuild.UnlessExpansionFailed(sb.ToString()) : sb.ToString();
         return ApplyCompoundRedirects(caseText, caseCmd.Redirects);
     }
@@ -2608,6 +2601,9 @@ public static partial class PsEmitter
             else
                 break;
         }
+        // An arm that runs no command (`x) ;;`) is status 0, not the status from before the case.
+        if (sb.ToString().AsSpan().Trim(" ;").IsEmpty)
+            sb.Clear().Append(PsBuild.SetStatus(0));
         // Bash runs only the first matching arm; PowerShell's switch runs EVERY
         // matching clause. Emit an explicit break so overlapping patterns don't
         // fire multiple arms. ;;& (ContinueTest) intentionally omits it (bash
@@ -3258,17 +3254,6 @@ public static partial class PsEmitter
         return true;
     }
 
-    private static string EmitWhileCondition(Command cond)
-    {
-        // Bare "true"/"false" commands map to PowerShell boolean constants
-        if (cond is Command.Simple simple && simple.Words.Length == 1
-            && simple.EnvPairs.IsEmpty && simple.Redirects.IsEmpty)
-        {
-            if (IsConstantStatusBuiltin(simple, out var succeeds)) return succeeds ? "$true" : "$false";
-        }
-
-        return EmitCondition(cond);
-    }
 
     private static bool IsWhileRead(Command cond, out List<string> varNames, out string? ifs)
     {
@@ -3554,16 +3539,16 @@ public static partial class PsEmitter
     private static string EmitCondition(Command cond)
     {
         if (cond is Command.BoolExpr boolExpr)
-            return WithConditionLine(cond, "(" + EmitBoolExprInner(boolExpr) + ")");
+            return WithConditionLine(cond, PsBuild.ConditionStatus(EmitBoolExprStatus(boolExpr)));
 
         if (cond is Command.Subshell subshell)
             return Emit(subshell.Body);
 
-        // Bare true/false as condition need raw $true/$false (not [void] wrapped)
+        // Bare true/:/false: a constant condition that still sets the status (PsBuild.ConstantStatusCondition)
         if (cond is Command.Simple simple && simple.Words.Length == 1
             && simple.EnvPairs.IsEmpty && simple.Redirects.IsEmpty)
         {
-            if (IsConstantStatusBuiltin(simple, out var succeeds)) return succeeds ? "$true" : "$false";
+            if (IsConstantStatusBuiltin(simple, out var succeeds)) return PsBuild.ConstantStatusCondition(succeeds);
         }
 
         // AndOrList (cmd1 && cmd2 / cmd1 || cmd2): PowerShell's && / || are pipeline
@@ -3596,7 +3581,7 @@ public static partial class PsEmitter
         // division, bitwise/shift, etc. are correct (the old native emission
         // mistranslated them — e.g. `if (( 2**10 > 1000 ))` was a parse error).
         if (cond is Command.ArithCommand arithCmd)
-            return WithConditionLine(cond, EmitArithConditionExpr(arithCmd.Expr));
+            return WithConditionLine(cond, PsBuild.ConditionStatus(PsBuild.BoolStatus(EmitArithConditionExpr(arithCmd.Expr))));
 
         return Emit(cond);
     }
@@ -3619,15 +3604,15 @@ public static partial class PsEmitter
     /// </summary>
     private static string EmitConditionAsExpr(Command cmd)
     {
-        // BoolExpr: already a PS boolean expression
+        // A test sets the status as it is evaluated (PsBuild.ConditionStatus), so `&&`/`||` leave the last one's.
         if (cmd is Command.BoolExpr boolExpr)
-            return "(" + EmitBoolExprInner(boolExpr) + ")";
+            return PsBuild.ConditionStatus(EmitBoolExprStatus(boolExpr));
 
         // Bare true/false
         if (cmd is Command.Simple simple && simple.Words.Length == 1
             && simple.EnvPairs.IsEmpty && simple.Redirects.IsEmpty)
         {
-            if (IsConstantStatusBuiltin(simple, out var succeeds)) return succeeds ? "$true" : "$false";
+            if (IsConstantStatusBuiltin(simple, out var succeeds)) return PsBuild.ConstantStatusCondition(succeeds);
         }
 
         // Nested AndOrList: recurse
@@ -3636,7 +3621,7 @@ public static partial class PsEmitter
 
         // Arithmetic (( expr )): non-zero result is true (see EmitCondition).
         if (cmd is Command.ArithCommand arithCmd)
-            return EmitArithConditionExpr(arithCmd.Expr);
+            return PsBuild.ConditionStatus(PsBuild.BoolStatus(EmitArithConditionExpr(arithCmd.Expr)));
 
         // General command: run it and evaluate the exit code (bash semantics).
         // PsBuild.ExitCodeTest wraps the command in [void](...) so its output does not
@@ -3673,11 +3658,23 @@ public static partial class PsEmitter
     private static string EmitBoolExpr(Command.BoolExpr expr)
     {
         string inner = EmitBoolExprInner(expr);
-        // A bad integer operand (`[ a -eq 1 ]`) is status 2, not just false.
-        if (inner.Contains("Invoke-BashTestInt") || inner.Contains("__BashTestBad"))
-            return "$($global:__BashTestBad = $false; $__psbTestR = (" + inner + "); $global:LASTEXITCODE = $(if ($global:__BashTestBad) { 2 } elseif ($__psbTestR) { 0 } else { 1 }))";
+        if (HasBadOperandStatus(inner))
+            return "$($global:LASTEXITCODE = " + BadOperandStatus(inner) + ")";
         return PsBuild.SilentExitFromBool("(" + inner + ")");
     }
+
+    /// <summary>The status a <c>[ ]</c>/<c>[[ ]]</c> leaves, as an int expression (a condition's, through PsBuild.ConditionStatus).</summary>
+    private static string EmitBoolExprStatus(Command.BoolExpr expr)
+    {
+        string inner = EmitBoolExprInner(expr);
+        return HasBadOperandStatus(inner) ? BadOperandStatus(inner) : PsBuild.BoolStatus(inner);
+    }
+
+    // A bad integer operand (`[ a -eq 1 ]`) is status 2, not just false.
+    private static bool HasBadOperandStatus(string inner) => inner.Contains("Invoke-BashTestInt") || inner.Contains("__BashTestBad");
+
+    private static string BadOperandStatus(string inner) =>
+        "$($global:__BashTestBad = $false; $__psbTestR = (" + inner + "); if ($global:__BashTestBad) { 2 } elseif ($__psbTestR) { 0 } else { 1 })";
 
     private static string EmitBoolExprInner(Command.BoolExpr expr)
     {
@@ -9534,16 +9531,16 @@ public static partial class PsEmitter
             else
             {
                 int idx = position - 1;
-                inner = $"if ($global:BashPositional) {{ $global:BashPositional[{idx}] }} else {{ $args[{idx}] }}";
+                inner = $"if ({PsBuild.PositionalIsShells}) {{ $global:BashPositional[{idx}] }} else {{ $args[{idx}] }}";
             }
         }
         else
         {
             inner = sigil switch
             {
-                "#" => "if ($global:BashPositional) { $global:BashPositional.Count } else { $args.Count }",
-                "@" => "if ($global:BashPositional) { $global:BashPositional -join ' ' } else { $args -join ' ' }",
-                "*" => "if ($global:BashPositional) { $global:BashPositional -join " + PsBuild.IfsJoinSeparator + " } else { $args -join " + PsBuild.IfsJoinSeparator + " }",
+                "#" => "if (" + PsBuild.PositionalIsShells + ") { $global:BashPositional.Count } else { $args.Count }",
+                "@" => "if (" + PsBuild.PositionalIsShells + ") { $global:BashPositional -join ' ' } else { $args -join ' ' }",
+                "*" => "if (" + PsBuild.PositionalIsShells + ") { $global:BashPositional -join " + PsBuild.IfsJoinSeparator + " } else { $args -join " + PsBuild.IfsJoinSeparator + " }",
                 "?" => "$global:LASTEXITCODE",
                 "$" => "$PID",
                 "!" => "$global:BashBgLastPid",
@@ -9611,7 +9608,7 @@ public static partial class PsEmitter
     /// <summary>`$1`..`$N` past the last positional parameter is unbound under nounset (`$@` `$*` `$#` `$0` never are).</summary>
     private static string StrictPositional(string name, string special)
         => name.Length > 0 && name[0] != '0' && name.All(char.IsAsciiDigit)
-            ? $"$(if ($global:__BashNounset -and @(if ($global:BashPositional) {{ $global:BashPositional }} else {{ $args }}).Count -lt {name}) {{ {PsBuild.ParamErrorThrowStatements(PsBuild.SingleQuote(name + ": "), "'unbound variable'")} }} else {{ {special} }})"
+            ? $"$(if ($global:__BashNounset -and @(if ({PsBuild.PositionalIsShells}) {{ $global:BashPositional }} else {{ $args }}).Count -lt {name}) {{ {PsBuild.ParamErrorThrowStatements(PsBuild.SingleQuote(name + ": "), "'unbound variable'")} }} else {{ {special} }})"
             : special;
 
     /// <summary>A read of <paramref name="name"/> that ends the script ("unbound variable") when nounset is on and it is unset.</summary>
@@ -10043,7 +10040,7 @@ public static partial class PsEmitter
     private static string EmitQuotedArrayElements(WordPart part) => part switch
     {
         WordPart.BracedVarSub { Name: "@", Suffix: null } or WordPart.SimpleVarSub { Name: "@" }
-            => "@($(if ($global:BashPositional) { $global:BashPositional } else { $args }))",
+            => "@($(if (" + PsBuild.PositionalIsShells + ") { $global:BashPositional } else { $args }))",
         _ => "@(" + EmitBracedVar((WordPart.BracedVarSub)part) + ")",
     };
 

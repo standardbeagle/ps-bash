@@ -154,7 +154,7 @@ public static partial class PsEmitter
     {
         var targets = NamerefCandidates(function, nameref.Index);
         if (targets.Count == 0 || _namerefs is null) return emitBody();
-        string positional = $"$(if ($global:BashPositional) {{ $global:BashPositional[{nameref.Index - 1}] }} else {{ $args[{nameref.Index - 1}] }})";
+        string positional = $"$(if ({PsBuild.PositionalIsShells}) {{ $global:BashPositional[{nameref.Index - 1}] }} else {{ $args[{nameref.Index - 1}] }})";
         var sb = new System.Text.StringBuilder("$__nrt = \"" + positional + "\"; ");
         for (int i = 0; i < targets.Count; i++)
         {

@@ -58,7 +58,7 @@ public class ShellBuiltinDiagnosticEmitTests
     [Fact]
     public void Transpile_ArithIfCondition_RecordsItsLineInsideTheCondition()
         // bash: `s.sh: line 2: ((: 1/0 : division by 0 (error token is "0 ")` -- it read line 1.
-        => Assert.Contains("if ($(" + PsBuild.SetCallLine(2) + "(@(Invoke-BashArith '1/0 ' -Label '((') -ne 0)))",
+        => Assert.Contains("if ($(" + PsBuild.SetCallLine(2) + PsBuild.ConditionStatus(PsBuild.BoolStatus("(@(Invoke-BashArith '1/0 ' -Label '((') -ne 0)")) + "))",
             T("echo a\nif (( 1/0 )); then :; fi"));
 
     [Fact]
@@ -66,7 +66,7 @@ public class ShellBuiltinDiagnosticEmitTests
     {
         // The body records line 3, then the condition fails: bash names line 2 (`[[: 1/0: division by 0`).
         var ps = T("echo a\nwhile [[ x -eq 1/0 ]]; do\n  cd /nonexist_zz\ndone");
-        Assert.Contains("while ($(" + PsBuild.SetCallLine(2), ps);
+        Assert.Contains("if (-not ($(" + PsBuild.SetCallLine(2), ps); // tested at the top of each pass (EmitWhileLoop)
         Assert.Contains(PsBuild.SetCallLine(3), ps);
     }
 

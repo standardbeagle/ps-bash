@@ -702,7 +702,29 @@ public static class PsBuild
         "$global:LASTEXITCODE " + (negate ? "-ne" : "-eq") + " 0";
 
     /// <summary>Set bash's <c>$?</c> to a fixed status: <c>$global:LASTEXITCODE = N</c>.</summary>
-    public static string SetStatus(int status) => "$global:LASTEXITCODE = " + status;
+    public static string SetStatus(int status) => SetStatusTo(status.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+    /// <summary>Set bash's <c>$?</c> to the value of a PowerShell expression (a saved status variable, an int expression).</summary>
+    public static string SetStatusTo(string statusExpr) => "$global:LASTEXITCODE = " + statusExpr;
+
+    /// <summary>
+    /// The condition of an <c>if</c>/<c>while</c>/<c>until</c> (or an operand in one) that is the builtin <c>true</c>,
+    /// <c>:</c> or <c>false</c>: an expression that sets the status as the builtin does, then tests it. A bare
+    /// <c>$true</c> ran no command, so the branch saw the status from before the condition (<c>false; if true; then echo
+    /// $?; fi</c> printed 1; bash prints 0).
+    /// </summary>
+    public static string ConstantStatusCondition(bool succeeds) => ConditionStatus(succeeds ? "0" : "1");
+
+    /// <summary>
+    /// A condition that is a test, not a command (<c>[[ ]]</c>, <c>[ ]</c>, <c>(( ))</c>, <c>true</c>): sets bash's
+    /// <c>$?</c> to <paramref name="statusExpr"/> (an int expression: 0, 1, or 2 for a bad <c>[ ]</c> operand) and is
+    /// true when it is 0. bash runs a condition like any command, so the branch, the loop body, and an <c>else</c> see
+    /// its status; a bare boolean left the status of the command before.
+    /// </summary>
+    public static string ConditionStatus(string statusExpr) => "((" + SetStatusTo(statusExpr) + ") -eq 0)";
+
+    /// <summary>The status of a PowerShell boolean expression: 0 when true, 1 when false.</summary>
+    public static string BoolStatus(string boolExpr) => "[int](-not (" + boolExpr + "))";
 
     /// <summary>
     /// A builtin usage error that discards the rest of the shell's input (<c>break 1 2</c> "too many arguments"): under
@@ -1907,6 +1929,16 @@ public static class PsBuild
     // ───────────────────────── Positional-parameter expansion ──────────────────────────
 
     /// <summary>
+    /// The positional parameters are the shell's own list (<c>$global:BashPositional</c>: set by a function call,
+    /// <c>set --</c>, <c>shift</c>, <c>source</c> with arguments), not the script's <c>$args</c>. A <c>$null</c> test, never
+    /// truthiness: an EMPTY list is still the shell's. The truthiness test read <c>shift</c>-ed-to-empty as "none" and fell
+    /// back to the function's own <c>$args</c>, so <c>while [ "$1" ]; do shift; done</c> in a function never ended and
+    /// <c>set --; echo "$1"</c> printed the script's first argument. Every positional site tests through this
+    /// (guard <c>PositionalFallbackGuardTests</c>).
+    /// </summary>
+    public const string PositionalIsShells = "$null -ne $global:BashPositional";
+
+    /// <summary>
     /// The PowerShell subexpression for a bash positional-parameter expansion:
     /// <c>$@</c>/<c>$*</c> (the whole list), <c>$#</c> (the count), or a 1-based
     /// positional index (<c>$1</c>..<c>$9</c>, <c>${10}</c>, …). Every site prefers
@@ -1920,10 +1952,10 @@ public static class PsBuild
     public static string BuildPositionalExpansion(string sigil) =>
         sigil switch
         {
-            "@" or "*" => "$(if ($global:BashPositional) { $global:BashPositional } else { $args })",
-            "#" => "$(if ($global:BashPositional) { $global:BashPositional.Count } else { $args.Count })",
+            "@" or "*" => "$(if (" + PsBuild.PositionalIsShells + ") { $global:BashPositional } else { $args })",
+            "#" => "$(if (" + PsBuild.PositionalIsShells + ") { $global:BashPositional.Count } else { $args.Count })",
             _ when PositionalIndex.TryParse(sigil, out int oneBased) =>
-                "$(if ($global:BashPositional) { $global:BashPositional[" + (oneBased - 1) + "] } "
+                "$(if (" + PsBuild.PositionalIsShells + ") { $global:BashPositional[" + (oneBased - 1) + "] } "
                 + "else { $args[" + (oneBased - 1) + "] })",
             _ => throw new System.ArgumentException($"Not a positional sigil: '{sigil}'", nameof(sigil)),
         };
@@ -2003,7 +2035,7 @@ public static class PsBuild
                 return SingleQuote(TrapLine.ToString(System.Globalization.CultureInfo.InvariantCulture));
             case "*" when inDoubleQuote:
                 // "$*" joins the positionals with the first character of IFS (a space by default).
-                return "$(@(if ($global:BashPositional) { $global:BashPositional } else { $args }) -join " + IfsJoinSeparator + ")";
+                return "$(@(if (" + PsBuild.PositionalIsShells + ") { $global:BashPositional } else { $args }) -join " + IfsJoinSeparator + ")";
             case "@":
             case "*":
             case "#":
