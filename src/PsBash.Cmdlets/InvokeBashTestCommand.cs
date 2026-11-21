@@ -75,7 +75,7 @@ public sealed class InvokeBashTestCommand : BashCmdlet
         {
             if (operands.Count == 0 || operands[^1] != "]")
             {
-                FileSystemHelpers.WriteBashError(this, "bash: [: missing `]'");
+                FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + "[: missing `]'");
                 FileSystemHelpers.SetLastExitCode(this, 2);
                 return;
             }
@@ -89,7 +89,7 @@ public sealed class InvokeBashTestCommand : BashCmdlet
         }
         catch (TestSyntaxException ex)
         {
-            FileSystemHelpers.WriteBashError(this, $"bash: {name}: {ex.Message}");
+            FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + $"{name}: {ex.Message}");
             FileSystemHelpers.SetLastExitCode(this, 2);
             return;
         }

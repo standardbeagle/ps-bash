@@ -10,28 +10,62 @@ public static class BashArith
     private static readonly System.Text.RegularExpressions.Regex UnbracedDigitSuffix =
         new(@"\$(?<key>[0-9])(?<suffix>[0-9]+)");
 
+    /// <summary>
+    /// Evaluates <paramref name="expression"/>. A failure is a <see cref="BashArithException"/> that names the expression
+    /// it belongs to and bash's error token (<see cref="BashArithException.Describe"/>): an operand variable whose value
+    /// is itself an expression (<c>y='1/0'; $(( y + 1 ))</c>) reports THAT expression, as bash does.
+    /// </summary>
     public static long Evaluate(string expression, Func<string, long> read, Action<string, long> write,
         Func<string, string?>? readRaw = null)
     {
-        try
-        {
-            return Evaluate(BashArithmeticParser.Parse(expression), read, write, readRaw);
-        }
-        catch (BashArithmeticParseException ex)
-        {
-            throw new BashArithException(ex.Message, ex);
-        }
+        var tokens = NewTokenMap();
+        ArithmeticSyntax syntax = ParseOrThrow(expression, tokens);
+        return EvaluateCore(syntax, tokens, read, write, readRaw);
     }
 
     /// <summary>Evaluates already-parsed syntax, allowing all arithmetic consumers to share one parse.</summary>
     public static long Evaluate(ArithmeticSyntax syntax, Func<string, long> read, Action<string, long> write,
         Func<string, string?>? readRaw = null)
+        => EvaluateCore(syntax, null, read, write, readRaw);
+
+    private static Dictionary<ArithmeticExpr, int> NewTokenMap() => new(ReferenceEqualityComparer.Instance);
+
+    private static ArithmeticSyntax ParseOrThrow(string expression, Dictionary<ArithmeticExpr, int> tokens)
     {
-        string expanded = ExpandUnbracedDigitSuffixes(syntax.Source, read, readRaw);
-        ArithmeticExpr root = expanded == syntax.Source
-            ? syntax.Root
-            : BashArithmeticParser.Parse(expanded).Root;
-        return Eval(root, read, write, readRaw);
+        try
+        {
+            return BashArithmeticParser.Parse(expression, tokens);
+        }
+        catch (BashArithmeticParseException ex)
+        {
+            // The parser's message already ends with the error token.
+            throw new BashArithException(ex.Message, ex) { Expression = ex.Expression ?? expression };
+        }
+    }
+
+    private static long EvaluateCore(ArithmeticSyntax syntax, Dictionary<ArithmeticExpr, int>? tokens,
+        Func<string, long> read, Action<string, long> write, Func<string, string?>? readRaw)
+    {
+        string source = syntax.Source;
+        try
+        {
+            string expanded = ExpandUnbracedDigitSuffixes(source, read, readRaw);
+            ArithmeticExpr root = syntax.Root;
+            if (expanded != source)
+            {
+                tokens = NewTokenMap();
+                source = expanded;
+                root = ParseOrThrow(expanded, tokens).Root;
+            }
+            return Eval(root, read, write, readRaw);
+        }
+        catch (BashArithException ex) when (ex.Expression is null)
+        {
+            // The innermost evaluation names the error: an operand's own expression has set it already.
+            ex.Expression = source;
+            if (ex.Node is not null && tokens is not null && tokens.TryGetValue(ex.Node, out int at)) ex.Token = source[at..];
+            throw;
+        }
     }
 
     private static string ExpandUnbracedDigitSuffixes(string source, Func<string, long> read,
@@ -135,14 +169,14 @@ public static class BashArith
                     ArithmeticAssignmentOp.Add => current + rhs,
                     ArithmeticAssignmentOp.Subtract => current - rhs,
                     ArithmeticAssignmentOp.Multiply => current * rhs,
-                    ArithmeticAssignmentOp.Divide => Divide(current, rhs),
-                    ArithmeticAssignmentOp.Modulo => Modulo(current, rhs),
+                    ArithmeticAssignmentOp.Divide => Divide(current, rhs, assignment),
+                    ArithmeticAssignmentOp.Modulo => Modulo(current, rhs, assignment),
                     ArithmeticAssignmentOp.ShiftLeft => current << (int)rhs,
                     ArithmeticAssignmentOp.ShiftRight => current >> (int)rhs,
                     ArithmeticAssignmentOp.BitwiseAnd => current & rhs,
                     ArithmeticAssignmentOp.BitwiseOr => current | rhs,
                     ArithmeticAssignmentOp.BitwiseXor => current ^ rhs,
-                    ArithmeticAssignmentOp.Power => Power(current, rhs),
+                    ArithmeticAssignmentOp.Power => Power(current, rhs, assignment),
                     _ => rhs,
                 };
                 write(assignment.Name, value);
@@ -186,28 +220,28 @@ public static class BashArith
             ArithmeticBinaryOp.Add => left + right,
             ArithmeticBinaryOp.Subtract => left - right,
             ArithmeticBinaryOp.Multiply => left * right,
-            ArithmeticBinaryOp.Divide => Divide(left, right),
-            ArithmeticBinaryOp.Modulo => Modulo(left, right),
-            ArithmeticBinaryOp.Power => Power(left, right),
+            ArithmeticBinaryOp.Divide => Divide(left, right, binary),
+            ArithmeticBinaryOp.Modulo => Modulo(left, right, binary),
+            ArithmeticBinaryOp.Power => Power(left, right, binary),
             _ => right,
         };
     }
 
-    private static long Divide(long left, long right)
+    private static long Divide(long left, long right, ArithmeticExpr node)
     {
-        if (right == 0) throw new BashArithException("division by 0");
+        if (right == 0) throw new BashArithException("division by 0") { Node = node };
         return left / right;
     }
 
-    private static long Modulo(long left, long right)
+    private static long Modulo(long left, long right, ArithmeticExpr node)
     {
-        if (right == 0) throw new BashArithException("division by 0");
+        if (right == 0) throw new BashArithException("division by 0") { Node = node };
         return left % right;
     }
 
-    private static long Power(long value, long exponent)
+    private static long Power(long value, long exponent, ArithmeticExpr node)
     {
-        if (exponent < 0) throw new BashArithException("exponent less than 0");
+        if (exponent < 0) throw new BashArithException("exponent less than 0") { Node = node };
         long result = 1;
         for (long i = 0; i < exponent; i++) result *= value;
         return result;
@@ -217,5 +251,22 @@ public static class BashArith
     {
         public BashArithException(string message) : base(message) { }
         public BashArithException(string message, Exception innerException) : base(message, innerException) { }
+
+        /// <summary>The node whose evaluation failed (division by 0, a negative exponent): it locates the error token.</summary>
+        public ArithmeticExpr? Node { get; init; }
+
+        /// <summary>The expression the error belongs to (the innermost one evaluated); null until an evaluation names it.</summary>
+        public string? Expression { get; set; }
+
+        /// <summary>bash's error token: the source text from the failing operand on (<c>1 / 0 + 2</c>: "0 + 2"); null when
+        /// unknown or already part of <see cref="Exception.Message"/> (a syntax error).</summary>
+        public string? Token { get; set; }
+
+        /// <summary>
+        /// bash's report after the shell's prefix and any label (expr.c <c>evalerror</c>):
+        /// <c>EXPR: MESSAGE (error token is "TOKEN")</c>. <paramref name="expression"/> stands in for an unnamed expression.
+        /// </summary>
+        public string Describe(string expression)
+            => (Expression ?? expression) + ": " + Message + (Token is null ? "" : " (error token is \"" + Token + "\")");
     }
 }

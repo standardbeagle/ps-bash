@@ -110,7 +110,7 @@ public sealed class InvokeBashCommandCommand : BashCmdlet
                     case 'p':
                         break; // default PATH: accepted, ignored
                     default:
-                        FileSystemHelpers.WriteBashError(this, $"command: -{a[k]}: invalid option\n" +
+                        FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + $"command: -{a[k]}: invalid option\n" +
                             "command: usage: command [-pVv] command [arg ...]");
                         FileSystemHelpers.SetLastExitCode(this, 2);
                         return;
@@ -140,7 +140,7 @@ public sealed class InvokeBashCommandCommand : BashCmdlet
             if (output is null)
             {
                 // bash: `command -V nosuch` reports the miss on stderr; `command -v nosuch` is silent.
-                if (_verboseText) FileSystemHelpers.WriteBashError(this, $"bash: command: {name}: not found");
+                if (_verboseText) FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + $"command: {name}: not found");
                 continue;
             }
             anyFound = true;

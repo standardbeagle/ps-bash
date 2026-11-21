@@ -104,7 +104,7 @@ public sealed class InvokeBashHelpCommand : BashCmdlet
             foreach (char c in args[i].AsSpan(1))
             {
                 if (c is 'd' or 's' or 'm') { form = c; continue; }
-                FileSystemHelpers.WriteBashError(this, $"bash: help: -{c}: invalid option");
+                FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + $"help: -{c}: invalid option");
                 FileSystemHelpers.WriteBashError(this, "help: usage: help [-dms] [pattern ...]");
                 FileSystemHelpers.SetLastExitCode(this, 2);
                 return;
@@ -140,7 +140,7 @@ public sealed class InvokeBashHelpCommand : BashCmdlet
             if (!any)
             {
                 FileSystemHelpers.WriteBashError(this,
-                    $"bash: help: no help topics match `{pattern}'.  Try `help help' or `man -k {pattern}' or `info {pattern}'.");
+                    ShellDiagnostic.Prefix(SessionState) + $"help: no help topics match `{pattern}'.  Try `help help' or `man -k {pattern}' or `info {pattern}'.");
                 status = 1;
             }
         }

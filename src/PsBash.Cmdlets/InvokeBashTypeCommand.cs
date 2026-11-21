@@ -100,7 +100,7 @@ public sealed class InvokeBashTypeCommand : BashCmdlet
             var matches = Resolve(this, name, mode == Mode.PathSearch, skipFunctions);
             if (matches.Count == 0)
             {
-                if (mode == Mode.Describe) FileSystemHelpers.WriteBashError(this, $"bash: type: {name}: not found");
+                if (mode == Mode.Describe) FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + $"type: {name}: not found");
                 FileSystemHelpers.SetLastExitCode(this, 1);
                 continue;
             }

@@ -33,7 +33,7 @@ public sealed class InvokeBashTestIntCommand : BashCmdlet
         }
         // bash stops at the first bad operand: report one error per test.
         if (SessionState.PSVariable.GetValue("__BashTestBad") is not true)
-            FileSystemHelpers.WriteBashError(this, $"[: {text}: integer expression expected");
+            FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + $"[: {text}: integer expression expected");
         SessionState.PSVariable.Set("global:__BashTestBad", true);
         WriteObject(0L);
     }

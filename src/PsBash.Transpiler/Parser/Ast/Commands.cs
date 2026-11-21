@@ -79,11 +79,15 @@ public abstract record Command : BashNode
     /// <summary>
     /// An if/elif/else statement.
     /// Modeled after oils command.If.
+    /// <see cref="EndLine"/> (here and on every compound command) is the source line the command ends on, its trailing
+    /// redirects and here-document bodies included; 0 = unknown. bash names the end line of the statement being run in a
+    /// compound command's redirect error (docs/specs/error-handling.md "Redirect open errors").
     /// </summary>
     public sealed record If(
         ImmutableArray<IfArm> Arms,
         Command? ElseBody,
-        ImmutableArray<Redirect> Redirects = default) : Command;
+        ImmutableArray<Redirect> Redirects = default,
+        int EndLine = 0) : Command;
 
     /// <summary>
     /// A test expression: <c>[ ... ]</c> or <c>[[ ... ]]</c>.
@@ -106,7 +110,8 @@ public abstract record Command : BashNode
         Command Body,
         ImmutableArray<Redirect> Redirects = default,
         bool ExplicitIn = false,
-        int Line = 0) : Command;
+        int Line = 0,
+        int EndLine = 0) : Command;
 
     /// <summary>
     /// A <c>select</c> menu loop: <c>select x in a b c; do body; done</c> —
@@ -119,7 +124,8 @@ public abstract record Command : BashNode
         string Var,
         ImmutableArray<CompoundWord> List,
         Command Body,
-        ImmutableArray<Redirect> Redirects = default) : Command;
+        ImmutableArray<Redirect> Redirects = default,
+        int EndLine = 0) : Command;
 
     /// <summary>
     /// A C-style arithmetic for loop: <c>for ((init; cond; step)); do body; done</c>.
@@ -132,7 +138,8 @@ public abstract record Command : BashNode
         ArithmeticSyntax? Step,
         Command Body,
         ImmutableArray<Redirect> Redirects = default,
-        int Line = 0) : Command
+        int Line = 0,
+        int EndLine = 0) : Command
     {
         /// <summary>
         /// Legacy source-compatible constructor; empty clauses remain explicitly absent.
@@ -154,7 +161,8 @@ public abstract record Command : BashNode
         bool IsUntil,
         Command Cond,
         Command Body,
-        ImmutableArray<Redirect> Redirects = default) : Command;
+        ImmutableArray<Redirect> Redirects = default,
+        int EndLine = 0) : Command;
 
     /// <summary>
     /// A case/esac statement: <c>case expr in pattern) body;; esac</c>.
@@ -164,7 +172,8 @@ public abstract record Command : BashNode
         CompoundWord Expr,
         ImmutableArray<CaseArm> Arms,
         ImmutableArray<Redirect> Redirects = default,
-        int Line = 0) : Command;
+        int Line = 0,
+        int EndLine = 0) : Command;
 
     /// <summary>
     /// A standalone arithmetic command: <c>(( expr ))</c>.
@@ -201,7 +210,8 @@ public abstract record Command : BashNode
     /// </summary>
     public sealed record Subshell(
         Command Body,
-        ImmutableArray<Redirect> Redirects) : Command;
+        ImmutableArray<Redirect> Redirects,
+        int EndLine = 0) : Command;
 
     /// <summary>
     /// A brace group: <c>{ cmd1; cmd2; }</c> runs commands in the current shell.
@@ -209,7 +219,8 @@ public abstract record Command : BashNode
     /// </summary>
     public sealed record BraceGroup(
         Command Body,
-        ImmutableArray<Redirect> Redirects = default) : Command;
+        ImmutableArray<Redirect> Redirects = default,
+        int EndLine = 0) : Command;
 
     /// <summary>
     /// A background command: <c>cmd &amp;</c> runs the inner command asynchronously.

@@ -21,23 +21,39 @@ public sealed class BashArithmeticParser
     // Where each token starts in _source: a syntax error names the text from there on, as bash does.
     private readonly List<int> _starts;
     private int _position;
+    // Where a node's run-time error token starts in _source (null: not wanted). See RuntimeErrorTokens.
+    private readonly IDictionary<ArithmeticExpr, int>? _errorTokens;
 
-    private BashArithmeticParser(string source)
+    private BashArithmeticParser(string source, IDictionary<ArithmeticExpr, int>? errorTokens)
     {
         _source = source;
+        _errorTokens = errorTokens;
         _starts = new List<int>();
         _tokens = Tokenize(source, _starts);
     }
 
-    public static ArithmeticSyntax Parse(string? source)
+    public static ArithmeticSyntax Parse(string? source) => Parse(source, null);
+
+    /// <summary>
+    /// <see cref="Parse(string?)"/>, also filling <paramref name="errorTokens"/> (give it a reference-equality comparer:
+    /// equal records are different nodes) with where each node that can fail when EVALUATED starts its error token in
+    /// <see cref="ArithmeticSyntax.Source"/>. bash (expr.c) names the text from there to the end: <c>1 / 0 + 2</c> reports
+    /// <c>division by 0 (error token is "0 + 2 ")</c>.
+    /// <list type="bullet">
+    /// <item><c>/</c> and <c>%</c> (division by 0): the right operand's first token (<c>10/(1-1)</c> -> "(1-1)").</item>
+    /// <item><c>**</c> (exponent less than 0) and <c>/=</c>, <c>%=</c>, <c>**=</c>: the token after the right operand, or
+    /// at the end the last token read (<c>2 ** -1 + 3</c> -> "+ 3", <c>2**-1</c> -> "1").</item>
+    /// </list>
+    /// </summary>
+    public static ArithmeticSyntax Parse(string? source, IDictionary<ArithmeticExpr, int>? errorTokens)
     {
-        var parser = new BashArithmeticParser(StripDoubleQuotes(source));
+        var parser = new BashArithmeticParser(StripDoubleQuotes(source), errorTokens);
         ArithmeticExpr root = parser.ParseComma();
         if (parser.Current.Kind != T.End) parser.Error("syntax error in expression");
         return new ArithmeticSyntax(parser._source, root);
     }
 
-    /// <summary>Like <see cref="Parse"/>, but an expression the static grammar rejects becomes a <see cref="ArithmeticExpr.Deferred"/>
+    /// <summary>Like <see cref="Parse(string?)"/>, but an expression the static grammar rejects becomes a <see cref="ArithmeticExpr.Deferred"/>
     /// node (bash expands its text and reports any syntax error only when it runs).</summary>
     public static ArithmeticSyntax ParseOrDefer(string? source)
     {
@@ -94,10 +110,22 @@ public sealed class BashArithmeticParser
     /// The caller puts <c>EXPR: </c> (and the shell's prefix) in front.
     /// </summary>
     private void Error(string message)
+        => throw new BashArithmeticParseException($"{message} (error token is \"{_source[LastTokenStart()..]}\")");
+
+    /// <summary>Where bash's last-token pointer is: the token being read, or at the end the last token read.</summary>
+    private int LastTokenStart()
     {
         int at = Current.Kind == T.End && _position > 0 ? _position - 1 : _position;
-        string token = at < _starts.Count ? _source[Math.Min(_starts[at], _source.Length)..] : "";
-        throw new BashArithmeticParseException($"{message} (error token is \"{token}\")");
+        return at < _starts.Count ? Math.Min(_starts[at], _source.Length) : _source.Length;
+    }
+
+    /// <summary>The start of the token at <see cref="_position"/> (the operand after an operator just read).</summary>
+    private int CurrentTokenStart() => _position < _starts.Count ? Math.Min(_starts[_position], _source.Length) : _source.Length;
+
+    private TNode NoteErrorToken<TNode>(TNode node, int start) where TNode : ArithmeticExpr
+    {
+        if (_errorTokens is not null) _errorTokens[node] = start;
+        return node;
     }
 
     private ArithmeticExpr ParseComma()
@@ -122,7 +150,10 @@ public sealed class BashArithmeticParser
         {
             string name = Current.Text!;
             _position += 2;
-            return new ArithmeticExpr.Assignment(name, op, ParseAssignment());
+            var assignment = new ArithmeticExpr.Assignment(name, op, ParseAssignment());
+            return op is ArithmeticAssignmentOp.Divide or ArithmeticAssignmentOp.Modulo or ArithmeticAssignmentOp.Power
+                ? NoteErrorToken(assignment, LastTokenStart())
+                : assignment;
         }
         return ParseConditional();
     }
@@ -160,7 +191,10 @@ public sealed class BashArithmeticParser
             // A flat run (1+1+…) becomes a left-deep tree, both here and in the PowerShell it emits.
             NestingGuard.CheckArithmeticBreadth(++count, NestingGuard.MaxChainLength, "operator chain");
             _position++;
-            value = new ArithmeticExpr.Binary(operators[index].Op, value, operand());
+            var op = operators[index].Op;
+            int rightStart = CurrentTokenStart();
+            value = new ArithmeticExpr.Binary(op, value, operand());
+            if (op is ArithmeticBinaryOp.Divide or ArithmeticBinaryOp.Modulo) NoteErrorToken(value, rightStart);
         }
     }
 
@@ -169,7 +203,7 @@ public sealed class BashArithmeticParser
         using var nesting = NestingGuard.EnterArithmetic();
         var value = ParseUnary();
         return Accept(T.StarStar)
-            ? new ArithmeticExpr.Binary(ArithmeticBinaryOp.Power, value, ParsePower())
+            ? NoteErrorToken(new ArithmeticExpr.Binary(ArithmeticBinaryOp.Power, value, ParsePower()), LastTokenStart())
             : value;
     }
 
@@ -286,7 +320,15 @@ public sealed class BashArithmeticParser
                     result.Add(new Tok(T.Parameter, Text: text + source[pStart..i], Key: source[pStart..i].Trim('$', '{', '}')));
                     continue;
                 }
-                result.Add(new Tok(T.Num, ParseNumber(text))); continue;
+                long number;
+                // bash: `1 + 08` -> `1 + 08: value too great for base (error token is "08")`: the expression it names ends
+                // with the bad constant, which is the error token.
+                try { number = ParseNumber(text); }
+                catch (BashArithmeticParseException ex)
+                {
+                    throw new BashArithmeticParseException($"{ex.Message} (error token is \"{text}\")") { Expression = source[..i] };
+                }
+                result.Add(new Tok(T.Num, number)); continue;
             }
             if (c == '`')
             {
@@ -429,33 +471,37 @@ public sealed class BashArithmeticParser
         return token != T.End;
     }
 
+    /// <summary>
+    /// An integer constant's value. A bad one is bash's message (expr.c <c>strlong</c>), without the error token:
+    /// <c>1#1</c>, <c>65#1</c> "invalid arithmetic base"; <c>02#011</c> "invalid number"; <c>2#</c> "invalid integer
+    /// constant"; <c>08</c>, <c>2#12</c>, <c>0xg</c>, <c>9a</c> "value too great for base". A decimal past 64 bits wraps.
+    /// </summary>
     internal static long ParseNumber(string token)
     {
         int hash = token.IndexOf('#');
         if (hash > 0)
         {
             // A base with a leading 0 (`02#0110`) is not a decimal base in bash: "invalid number".
-            if (token[0] == '0' || !int.TryParse(token[..hash], NumberStyles.None, CultureInfo.InvariantCulture, out int radix) || radix is < 2 or > 64)
-                throw new BashArithmeticParseException($"invalid arithmetic base in '{token}'");
-            return ParseDigits(token[(hash + 1)..], radix, token, true);
+            if (token[0] == '0') throw new BashArithmeticParseException("invalid number");
+            if (!int.TryParse(token[..hash], NumberStyles.None, CultureInfo.InvariantCulture, out int radix) || radix is < 2 or > 64)
+                throw new BashArithmeticParseException("invalid arithmetic base");
+            return ParseDigits(token[(hash + 1)..], radix, true);
         }
         // A bare `0x` (no hex digits) is 0 in bash, not an error: `q=0x; echo $((q+0))` prints 0.
         if (token.Length == 2 && token.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) return 0;
-        if (token.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) return ParseDigits(token[2..], 16, token, false);
-        if (token.Length > 1 && token[0] == '0') return ParseDigits(token, 8, token, false);
-        if (!long.TryParse(token, NumberStyles.None, CultureInfo.InvariantCulture, out long value))
-            throw new BashArithmeticParseException($"invalid arithmetic number '{token}'");
-        return value;
+        if (token.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) return ParseDigits(token[2..], 16, false);
+        if (token.Length > 1 && token[0] == '0') return ParseDigits(token, 8, false);
+        return ParseDigits(token, 10, false);
     }
 
-    private static long ParseDigits(string digits, int radix, string token, bool bashDigits)
+    private static long ParseDigits(string digits, int radix, bool bashDigits)
     {
-        if (digits.Length == 0) throw new BashArithmeticParseException($"invalid arithmetic number '{token}'");
+        if (digits.Length == 0) throw new BashArithmeticParseException("invalid integer constant");
         long value = 0;
         foreach (char digit in digits)
         {
             int d = bashDigits ? BashDigit(digit) : HexDigit(digit);
-            if (d < 0 || d >= radix) throw new BashArithmeticParseException($"invalid digit '{digit}' in '{token}'");
+            if (d < 0 || d >= radix) throw new BashArithmeticParseException("value too great for base");
             value = unchecked(value * radix + d);
         }
         return value;
@@ -468,4 +514,10 @@ public sealed class BashArithmeticParser
 public sealed class BashArithmeticParseException : Exception
 {
     public BashArithmeticParseException(string message) : base(message) { }
+
+    /// <summary>
+    /// The expression bash names before the message when it is not the whole text: a bad integer constant ends it
+    /// (<c>1 + 08 + 2</c> reports <c>1 + 08: value too great for base</c>). Null: the whole expression.
+    /// </summary>
+    public string? Expression { get; init; }
 }

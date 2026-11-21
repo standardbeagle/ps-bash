@@ -161,7 +161,7 @@ public sealed class InvokeBashAliasCommand : BashCmdlet
                 }
                 else
                 {
-                    FileSystemHelpers.WriteBashError(this, $"unalias: {name}: not found");
+                    FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + $"unalias: {name}: not found");
                 }
             }
             return;
@@ -270,7 +270,7 @@ public sealed class InvokeBashAliasCommand : BashCmdlet
                 }
                 else
                 {
-                    FileSystemHelpers.WriteBashError(this, $"bash: alias: {arg}: not found");
+                    FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + $"alias: {arg}: not found");
                 }
             }
         }

@@ -482,6 +482,37 @@ public sealed partial class BashParser
     private int LineHere() => BashLexer.LineAt(_input, Peek().Position);
 
     /// <summary>
+    /// <paramref name="parsed"/> (a compound command just parsed, its trailing redirects included) with its
+    /// <c>EndLine</c>: the line its last token is on, or a here-document's delimiter line when a body ends it.
+    /// </summary>
+    private TCommand StampEndLine<TCommand>(TCommand parsed) where TCommand : Command
+    {
+        int end = 0;
+        for (int t = Math.Min(_pos, _tokens.Count) - 1; t >= 0; t--)
+        {
+            var token = _tokens[t];
+            if (token.Kind is BashTokenKind.Newline or BashTokenKind.Eof) continue;
+            end = token.HasHereDocBodySpan ? Math.Max(token.BodyEnd, token.Position) : token.Position;
+            break;
+        }
+        if (end == 0 && _pos == 0) return parsed;
+        int line = BashLexer.LineAt(_input, end);
+        Command stamped = parsed switch
+        {
+            Command.If c => c with { EndLine = line },
+            Command.ForIn c => c with { EndLine = line },
+            Command.Select c => c with { EndLine = line },
+            Command.ForArith c => c with { EndLine = line },
+            Command.While c => c with { EndLine = line },
+            Command.Case c => c with { EndLine = line },
+            Command.Subshell c => c with { EndLine = line },
+            Command.BraceGroup c => c with { EndLine = line },
+            _ => parsed,
+        };
+        return (TCommand)stamped;
+    }
+
+    /// <summary>
     /// `[[ ... ]] 2>/dev/null` / `(( ... )) >f`: the test and arithmetic commands carry no redirect list of
     /// their own, so a trailing redirect makes them the single body of a redirected group (same scope).
     /// </summary>
@@ -627,7 +658,9 @@ public sealed partial class BashParser
         if (!extended && !closed)
             return new Command.Simple(
                 ImmutableArray.Create(new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal("[")))).AddRange(inner.ToImmutable()),
-                ImmutableArray<EnvPair>.Empty, ImmutableArray<Redirect>.Empty);
+                ImmutableArray<EnvPair>.Empty, ImmutableArray<Redirect>.Empty,
+                // Its line, as every command's: "missing `]'" names it (s.sh: line 7: [: missing `]').
+                Line: BashLexer.LineAt(_input, open.Position));
         return new Command.BoolExpr(inner.ToImmutable(), extended);
     }
 
@@ -916,7 +949,7 @@ public sealed partial class BashParser
         }
 
         Expect("fi");
-        return new Command.If(arms.ToImmutable(), elseBody, ParseTrailingRedirects());
+        return StampEndLine(new Command.If(arms.ToImmutable(), elseBody, ParseTrailingRedirects()));
     }
 
     /// <summary>The words that end an if/while condition list: its keyword, plus every closing
@@ -1082,7 +1115,7 @@ public sealed partial class BashParser
         var trailing = ParseTrailingRedirects();
         if (badName)
             return Parse("printf 'bash: line 1: `%s'\\'': not a valid identifier\n' " + "'" + varName.Replace("'", "'\\''") + "' >&2; false")!;
-        return new Command.ForIn(varName, list.ToImmutable(), body, trailing, explicitIn);
+        return StampEndLine(new Command.ForIn(varName, list.ToImmutable(), body, trailing, explicitIn));
     }
 
     /// <summary>
@@ -1119,7 +1152,7 @@ public sealed partial class BashParser
         var body = ParseCompoundBody("done");
         Expect("done");
 
-        return new Command.Select(varName, list.ToImmutable(), body, ParseTrailingRedirects());
+        return StampEndLine(new Command.Select(varName, list.ToImmutable(), body, ParseTrailingRedirects()));
     }
 
     private Command ParseForArith()
@@ -1167,12 +1200,12 @@ public sealed partial class BashParser
             Expect("done");
         }
 
-        return new Command.ForArith(
+        return StampEndLine(new Command.ForArith(
             ParseOptionalArithmetic(init),
             ParseOptionalArithmetic(cond),
             ParseOptionalArithmetic(step),
             body,
-            ParseTrailingRedirects());
+            ParseTrailingRedirects()));
     }
 
     /// <summary>
@@ -1224,7 +1257,7 @@ public sealed partial class BashParser
         var body = ParseCompoundBody("done");
         Expect("done");
 
-        return new Command.While(isUntil, cond, body, ParseTrailingRedirects());
+        return StampEndLine(new Command.While(isUntil, cond, body, ParseTrailingRedirects()));
     }
 
     private Command.Case ParseCase()
@@ -1251,7 +1284,7 @@ public sealed partial class BashParser
         }
 
         Expect("esac");
-        return new Command.Case(expr, arms.ToImmutable(), ParseTrailingRedirects());
+        return StampEndLine(new Command.Case(expr, arms.ToImmutable(), ParseTrailingRedirects()));
     }
 
     private CaseArm ParseCaseArm()
@@ -1587,13 +1620,13 @@ public sealed partial class BashParser
             : new Command.CommandList(commands.ToImmutable());
 
         // Trailing redirects (e.g. (cmd) > out.txt, (cmd) <<< word) — the one shared parser.
-        return new Command.Subshell(body, ParseTrailingRedirects());
+        return StampEndLine(new Command.Subshell(body, ParseTrailingRedirects()));
     }
 
     private Command.BraceGroup ParseStandaloneBraceGroup()
     {
         var body = ParseBraceGroup();
-        return new Command.BraceGroup(body, ParseTrailingRedirects());
+        return StampEndLine(new Command.BraceGroup(body, ParseTrailingRedirects()));
     }
 
     /// <summary>

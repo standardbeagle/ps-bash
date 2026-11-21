@@ -3386,7 +3386,7 @@ function Invoke-BashWait {
         }
         # bash reports each operand that names no job; the status is still 127 when nothing is left to wait for.
         foreach ($n in $named) {
-            if (-not (@($script:BashBgJobs) | Where-Object { [string]$_.Id -eq $n })) { Write-BashHostStderr "bash: wait: ${n}: no such job" }
+            if (-not (@($script:BashBgJobs) | Where-Object { [string]$_.Id -eq $n })) { Write-BashHostStderr ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + "wait: ${n}: no such job") }
         }
         if ($pool.Count -eq 0) { $global:LASTEXITCODE = 127; return }
         # The job that finished FIRST (bash reaps in completion order), not the first one launched.
@@ -3410,7 +3410,7 @@ function Invoke-BashWait {
             if ($pidArg -in '-f', '--') { continue }
             if ($pidArg -notlike '%*' -and $pidArg -notmatch '^\d+$') {
                 # bash: an operand that is neither a pid nor a jobspec is reported; status 1 unless a later operand sets it.
-                Write-BashHostStderr "bash: wait: ``${pidArg}': not a pid or valid job spec"
+                Write-BashHostStderr ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + "wait: ``${pidArg}': not a pid or valid job spec")
                 $global:LASTEXITCODE = 1
                 continue
             }
@@ -3423,10 +3423,10 @@ function Invoke-BashWait {
                 [void]$script:BashBgJobs.Remove($job)
                 $global:LASTEXITCODE = $code
             } elseif ($pidArg -like '%*') {
-                Write-BashHostStderr "bash: wait: ${pidArg}: no such job"
+                Write-BashHostStderr ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + "wait: ${pidArg}: no such job")
                 $global:LASTEXITCODE = 127
             } else {
-                Write-BashHostStderr "bash: wait: pid $pidArg is not a child of this shell"
+                Write-BashHostStderr ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + "wait: pid $pidArg is not a child of this shell")
                 $global:LASTEXITCODE = 127
             }
         }

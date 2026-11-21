@@ -591,7 +591,46 @@ public static partial class PsEmitter
     private static int _priorTrapLine;
 
     private static string EmitStatementCore(Command cmd)
-        => RecordLineFor(cmd, statement: true) + EmitStatementCoreBody(cmd);
+    {
+        int outerRedirectLine = _redirectLine;
+        // The outermost statement of the script sets the line (its end line); one inside it keeps it.
+        if (outerRedirectLine == 0 && _functionDepth == 0) _redirectLine = StatementEndLine(cmd);
+        try
+        {
+            string record = RecordLineFor(cmd, statement: true);
+            // or and case set bash's line to their own as they run their body (after their own redirects opened).
+            if (cmd is Command.ForIn { Line: > 0 } or Command.Case { Line: > 0 })
+                _redirectLine = cmd is Command.ForIn f ? f.Line : ((Command.Case)cmd).Line;
+            return record + EmitStatementCoreBody(cmd);
+        }
+        finally { _redirectLine = outerRedirectLine; }
+    }
+
+    /// <summary>
+    /// The line bash names in a redirect error of a compound command that sets no line of its own (<c>{ }</c>,
+    /// <c>while</c>, <c>if</c>, <c>( )</c>, <c>for (( ))</c>, a <c>for</c>'s own redirect): the line the outermost
+    /// statement being run ends on, or the line of the <c>for</c> / <c>case</c> whose body is running. 0 = unknown (a
+    /// function body, a substitution, eval text), where the compound's first line stands in (<see cref="CompoundStartLine"/>).
+    /// Relative to <see cref="_lineBase"/>. docs/specs/error-handling.md "Redirect open errors".
+    /// </summary>
+    [ThreadStatic]
+    private static int _redirectLine;
+
+    /// <summary>The line <paramref name="cmd"/> ends on (its redirects and here-document bodies included); 0 when unknown.</summary>
+    private static int StatementEndLine(Command cmd) => cmd switch
+    {
+        Command.If c => c.EndLine,
+        Command.ForIn c => c.EndLine,
+        Command.Select c => c.EndLine,
+        Command.ForArith c => c.EndLine,
+        Command.While c => c.EndLine,
+        Command.Case c => c.EndLine,
+        Command.Subshell c => c.EndLine,
+        Command.BraceGroup c => c.EndLine,
+        Command.AndOrList a when a.Commands.Length > 0 => StatementEndLine(a.Commands[^1]),
+        Command.Pipeline p when p.Commands.Length > 0 => StatementEndLine(p.Commands[^1]),
+        _ => LastSimpleLine(cmd),
+    };
 
     /// <summary>
     /// The <see cref="PsBuild.SetCallLine"/> that goes before <paramref name="cmd"/> at statement position -- a statement,
@@ -606,7 +645,7 @@ public static partial class PsEmitter
         _statementLine = (cmd is Command.Simple { Line: > 0 } ls ? SimpleCommandLine(ls) : FirstSimpleLine(cmd)) is > 0 and var line
             ? _lineBase + line
             // `{ ...; } > nodir/f`, `done < missing`: the redirect's open error names a line too.
-            : HasOpenableRedirect(CompoundRedirects(cmd)) && CompoundStartLine(cmd) is > 0 and var start ? _lineBase + start : 0;
+            : HasOpenableRedirect(CompoundRedirects(cmd)) && (_redirectLine > 0 ? _redirectLine : CompoundStartLine(cmd)) is > 0 and var start ? _lineBase + start : 0;
         // A loop that reaches past line 1 runs its line-1 statements again after later lines recorded theirs.
         if (statement && _functionDepth == 0 && _loopDepth == 0) _loopReachesPastLine1 = RunsPastLine1(cmd);
         bool lineAlreadyRecorded = _statementLine == 1 && _scriptRoot && _functionDepth == 0 && (_loopDepth == 0 || !_loopReachesPastLine1);
@@ -696,7 +735,10 @@ public static partial class PsEmitter
     /// simple command, an assignment or a compound command (whose redirects are applied before its body records
     /// anything);</item>
     /// <item>a builtin given an option word (it may be invalid: <c>pwd -Q</c>);</item>
-    /// <item>a builtin that reports its own errors with the prefix: <c>let</c>, <c>.</c> / <c>source</c>.</item>
+    /// <item>a builtin that reports its own errors with the prefix (<see cref="s_selfReportingBuiltins"/>: <c>let</c>,
+    /// <c>.</c> / <c>source</c>, <c>cd</c>, <c>type</c>, ...);</item>
+    /// <item>arithmetic, which may fail as it is evaluated (<c>((: 1/0 : division by 0</c>): <c>(( ... ))</c>, a word with
+    /// <c>$(( ... ))</c>, a <c>[[ ... ]]</c> with a numeric operator.</item>
     /// </list>
     /// Otherwise a compound command is not: its body's statements record their own lines.
     /// </summary>
@@ -704,21 +746,37 @@ public static partial class PsEmitter
     {
         _ when HasOpenableRedirect(CompoundRedirects(cmd)) => true,
         Command.Simple s when HasOpenableRedirect(s.Redirects) => true,
+        Command.ArithCommand => true,
+        // `[[ 1/0 -eq 1 ]]` (`[[: 1/0: division by 0`), `[ a -eq 1 ]` (`[: a: integer expression expected`).
+        Command.BoolExpr b => b.Inner.Any(w => GetLiteralValue(w) is "-eq" or "-ne" or "-lt" or "-le" or "-gt" or "-ge"
+            || ContainsCommandSub(w.Parts) || ContainsArithSub(w.Parts)),
         Command.Simple { Words.IsDefaultOrEmpty: false } s => GetLiteralValue(s.Words[0]) is not { Length: > 0 } name
-            || name is "let" or "." or "source"
+            || s_selfReportingBuiltins.Contains(name)
             || LooksUpACommand(s, name)
-            || s.Words.Any(w => ContainsCommandSub(w.Parts))
+            || s.Words.Any(w => ContainsCommandSub(w.Parts) || ContainsArithSub(w.Parts))
             // A builtin given an option word may reject it (`pwd -Q`: `script.sh: line N: pwd: -Q: invalid option`).
             || (BuiltinOptions.EmittedBuiltins.TryGetValue(name, out var emittedSpec) && BuiltinOptions.FindInvalid(s.Words.Skip(1).Select(TryGetStaticArgValue).ToList(), emittedSpec.Letters, emittedSpec.ValueLetters) is not null)
             || (s_optionDiagnosticBuiltins.Contains(name) && s.Words.Skip(1).Any(w => GetLiteralValue(w) is not { } v || v is ['-', not '-', ..] or ['-', '-', _, ..]))
             || (name == "set" && SetInvalidOption(s.Words.Skip(1).Select(TryGetStaticArgValue).ToList()) is not null)
             || !(s_posixSpecialBuiltins.Contains(name) || s_specialBuiltins.Contains(name)
                  || _definedFunctions is { } fns && fns.Contains(name) || IsMappedCommandName(name)),
-        // `x=$(missing)`, `x=$(< missing)`: the substitution's diagnostic reports the assignment's line.
-        Command.ShAssignment assign => ContainsCommandSub(assign) || HasOpenableRedirect(assign.Redirects),
+        // `x=$(missing)`, `x=$(< missing)`, `x=$(( 2 + ))`: the substitution's diagnostic reports the assignment's line.
+        Command.ShAssignment assign => assign.IsLocal || ContainsCommandSub(assign) || HasOpenableRedirect(assign.Redirects)
+            || assign.Pairs.Any(p => p.Value is { } v && ContainsArithSub(v.Parts)),
         Command.Pipeline p => p.Commands.Any(MayRaiseShellDiagnostic),
         Command.AndOrList a => a.Commands.Any(MayRaiseShellDiagnostic),
         _ => false,
+    };
+
+    /// <summary>
+    /// Builtins that report their own errors as the shell's diagnostic (<c>s.sh: line 3: cd: /x: No such file or
+    /// directory</c>, ShellDiagnostic): a statement that runs one records its line. docs/specs/error-handling.md
+    /// "Diagnostic prefix".
+    /// </summary>
+    private static readonly IReadOnlySet<string> s_selfReportingBuiltins = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "let", ".", "source", "cd", "type", "declare", "typeset", "local", "alias", "unalias", "wait", "command", "builtin", "help",
+        "[", "test",
     };
 
     /// <summary>
@@ -868,9 +926,9 @@ public static partial class PsEmitter
 
     /// <summary>
     /// The line a compound command without a line of its own (<c>while</c>, <c>{ }</c>, <c>( )</c>, <c>if</c>) starts
-    /// on: its first command's. The line of a redirect's open error (<see cref="MayRaiseShellDiagnostic"/>). bash names
-    /// the line the command ENDS on (where the redirect is written): the same for a one-line command; a multi-line one
-    /// reports its first line here (docs/specs/error-handling.md "Redirect open errors").
+    /// on: its first command's. The line of a redirect's open error where <see cref="_redirectLine"/> knows none (a
+    /// function body, a substitution): bash names the function's line there, which is this for a one-line function
+    /// (docs/specs/error-handling.md "Redirect open errors").
     /// </summary>
     private static int CompoundStartLine(Command cmd) => cmd switch
     {
@@ -1141,8 +1199,9 @@ public static partial class PsEmitter
         // `shopt -s inherit_errexit`: the substitution keeps -e. The body gets its checks; at run time they may fire only
         // while the option is on (PsBuild.InheritErrexitCapture). A scoped body returns from its own scope when one does.
         bool inheritErrexit = !ownErrexit && !trapInside && scoped && _errexitMode && _inheritErrexitMode;
-        int savedLineBase = _lineBase;
+        int savedLineBase = _lineBase, savedRedirectLine = _redirectLine;
         if (PsBuild.TrapLine > 0) _lineBase = PsBuild.TrapLine - 1;
+        _redirectLine = 0;
         if (ownErrexit || trapInside || inheritErrexit) { _errexitMode = true; _errexitExemptDepth = 0; }
         else _errexitExemptDepth++;
         // A substitution body is a SUBSHELL: `exit N` inside `$( … )` / `<( … )` leaves only it
@@ -1174,7 +1233,7 @@ public static partial class PsEmitter
         finally
         {
             _captureDepth--; _pipeStageFeedsInput = savedFeed; _subshellDepth--; PsBuild.ErrTrapNeedsErrtrace = savedErrTrapSub;
-            _errexitMode = savedMode; _errexitExemptDepth = savedExempt; _lineBase = savedLineBase;
+            _errexitMode = savedMode; _errexitExemptDepth = savedExempt; _lineBase = savedLineBase; _redirectLine = savedRedirectLine;
             _loopLabels = capOuterLabels; _loopBarrier = capOuterBarrier;
         }
     }
@@ -1344,6 +1403,9 @@ public static partial class PsEmitter
         }
         var priorScriptRoot = _scriptRoot;
         if (_transpileNesting++ == 0) _scriptRoot = context == TranspileContext.Default;
+        // Nested text (eval, source, a trap action) counts its own statements.
+        int priorRedirectLine = _redirectLine;
+        _redirectLine = 0;
         // Only the root script's input lines are read by the shell's reader; eval, sourced and inline text are not.
         var priorReaderMode = _readerMode;
         _readerMode = _transpileNesting == 1 && context == TranspileContext.Default ? ReaderModeFor(bash) : ReaderMode.Off;
@@ -1403,7 +1465,7 @@ public static partial class PsEmitter
         }
         finally
         {
-            _transpileNesting--; _scriptRoot = priorScriptRoot; _readerMode = priorReaderMode;
+            _transpileNesting--; _scriptRoot = priorScriptRoot; _readerMode = priorReaderMode; _redirectLine = priorRedirectLine;
             _context = prior;
             _intVars = priorIntVars;
             _assocVars = priorAssocVars;
@@ -2138,11 +2200,11 @@ public static partial class PsEmitter
                 var sb = new StringBuilder();
                 sb.Append(IterGuardPrefix(depth));
                 sb.Append(label).Append("for (");
-                sb.Append(EmitForArithClause(forArith.Init));
+                sb.Append(EmitForArithClause(forArith.Init, forArith.Line));
                 sb.Append("; ");
-                sb.Append(EmitForArithCondition(forArith.Cond));
+                sb.Append(EmitForArithCondition(forArith.Cond, forArith.Line));
                 sb.Append("; ");
-                sb.Append(EmitForArithClause(forArith.Step));
+                sb.Append(EmitForArithClause(forArith.Step, forArith.Line));
                 sb.Append(") { ");
                 sb.Append(IterGuardCheck(depth));
                 sb.Append(EmitBody(forArith.Body));
@@ -2171,7 +2233,7 @@ public static partial class PsEmitter
         int line = forArith.Line;
         string first = "$__psbash_af" + depth;
         var sb = new StringBuilder();
-        string init = EmitForArithClause(forArith.Init);
+        string init = EmitForArithClause(forArith.Init, line);
         if (forArith.Init is not null) sb.Append(DebugAt(line));
         if (init.Length > 0) sb.Append(init).Append("; ");
         sb.Append(first).Append(" = $true; ");
@@ -2179,10 +2241,10 @@ public static partial class PsEmitter
         sb.Append(IterGuardCheck(depth));
         sb.Append("if (-not ").Append(first).Append(") { ");
         if (forArith.Step is not null)
-            sb.Append(DebugAt(line)).Append(EmitForArithClause(forArith.Step)).Append("; ");
+            sb.Append(DebugAt(line)).Append(EmitForArithClause(forArith.Step, line)).Append("; ");
         sb.Append("}; ").Append(first).Append(" = $false; ");
         if (forArith.Cond is not null) sb.Append(DebugAt(line));
-        sb.Append("if (-not (").Append(EmitForArithCondition(forArith.Cond)).Append(")) { break }; ");
+        sb.Append("if (-not (").Append(EmitForArithCondition(forArith.Cond, line)).Append(")) { break }; ");
         sb.Append(EmitBody(forArith.Body));
         sb.Append(" }");
         return sb.ToString();
@@ -3166,15 +3228,21 @@ public static partial class PsEmitter
     /// (<c>if (( … ))</c> / <c>while (( … ))</c>) is handled in
     /// <see cref="EmitCondition"/> via <see cref="EmitArithConditionExpr"/>.
     /// </summary>
-    private static string EmitArithCommand(Command.ArithCommand arith, string? label = null)
+    /// <param name="arith">The command.</param>
+    /// <param name="label">The builtin bash names in an error: <c>((</c> (<c>s.sh: line 3: ((: 1/0 : division by 0 (error
+    /// token is "0 ")</c>), or <c>let</c> for the emitter's static <c>let</c>.</param>
+    private static string EmitArithCommand(Command.ArithCommand arith, string label = ArithCommandLabel)
         => PsBuild.SilentExitFromBool($"@({EmitArithmeticInvocation(arith.Expr, label)}) -ne 0");
+
+    /// <summary>The name bash gives the arithmetic command (and a <c>for ((...))</c> clause) in an error: <c>((: EXPR: ...</c>.</summary>
+    private const string ArithCommandLabel = "((";
 
     /// <summary>
     /// Boolean expression for <c>(( expr ))</c> used as an <c>if</c>/<c>while</c>
     /// condition: true iff the evaluated result is non-zero.
     /// </summary>
     private static string EmitArithConditionExpr(ArithmeticSyntax syntax)
-        => $"(@({EmitArithmeticInvocation(syntax)}) -ne 0)"; // a failed evaluation yields no value: false, status 1
+        => $"(@({EmitArithmeticInvocation(syntax, ArithCommandLabel)}) -ne 0)"; // a failed evaluation yields no value: false, status 1
 
     /// <summary>
     /// <c>true</c> / <c>:</c> (<paramref name="succeeds"/>) or <c>false</c> as the BUILTIN: the emitter may stand a constant
@@ -3266,7 +3334,7 @@ public static partial class PsEmitter
     /// <param name="recordTail">With <paramref name="sourceExpr"/>: a statement run after each record's lines are all done
     /// (skipped by a <c>break</c> or <c>return</c> out of the record).</param>
     private static string EmitWhileRead(List<string> varNames, string? ifs, Command body, string? sourceExpr = null, string? recordTail = null) =>
-        EmitWhileRead(varNames, ifs, () => Emit(body),
+        EmitWhileRead(varNames, ifs, () => EmitBody(body),
             () => sourceExpr is not null ? new ReadLoopFeed(ReadLoopFeedKind.Records, sourceExpr, recordTail) : ReadLoopFeed.Shared);
 
     /// <summary>Where a read loop takes its input from.</summary>
@@ -3293,9 +3361,9 @@ public static partial class PsEmitter
     /// </summary>
     private static (string Text, bool Reads) EmitReadLoopBody(Command body)
     {
-        var probe = ProbeStdinScope(() => Emit(body));
+        var probe = ProbeStdinScope(() => EmitBody(body));
         if (probe.Reads) return probe;
-        return (WithStdinScope(false, () => Emit(body)), false);
+        return (WithStdinScope(false, () => EmitBody(body)), false);
     }
 
     /// <param name="varNames">The <c>read</c> variables, bound per line as loop variables.</param>
@@ -3456,8 +3524,13 @@ public static partial class PsEmitter
     private static string? ExtractArithVar(ArithmeticSyntax? init) =>
         init?.Root is ArithmeticExpr.Assignment assignment ? assignment.Name : null;
 
-    private static string EmitForArithClause(ArithmeticSyntax? syntax)
-        => syntax is null ? "" : $"$null = {EmitArithmeticInvocation(syntax)}";
+    /// <summary>
+    /// The init or step clause of <c>for ((init; cond; step))</c> on line <paramref name="line"/>: a diagnostic in it
+    /// names the <c>for</c>'s line (<c>s.sh: line 6: ((: i&lt;1/0: division by 0</c>) -- recorded in the clause, which
+    /// runs again after the body recorded later lines.
+    /// </summary>
+    private static string EmitForArithClause(ArithmeticSyntax? syntax, int line)
+        => syntax is null ? "" : "$null = " + WithConditionLine(new Command.ArithCommand(syntax, line), EmitArithmeticInvocation(syntax, ArithCommandLabel));
 
     /// <summary>
     /// Condition clause of a C-style <c>for ((init; cond; step))</c> header.
@@ -3471,8 +3544,8 @@ public static partial class PsEmitter
     /// invalid PowerShell parse). Mirrors how a standalone/if/while
     /// <c>(( … ))</c> condition is emitted.
     /// </summary>
-    private static string EmitForArithCondition(ArithmeticSyntax? syntax) =>
-        syntax is null ? "" : EmitArithConditionExpr(syntax);
+    private static string EmitForArithCondition(ArithmeticSyntax? syntax, int line) =>
+        syntax is null ? "" : WithConditionLine(new Command.ArithCommand(syntax, line), EmitArithConditionExpr(syntax));
 
     /// <summary>
     /// Emit a condition expression for use inside <c>if</c>/<c>elif</c>.
@@ -3481,7 +3554,7 @@ public static partial class PsEmitter
     private static string EmitCondition(Command cond)
     {
         if (cond is Command.BoolExpr boolExpr)
-            return "(" + EmitBoolExprInner(boolExpr) + ")";
+            return WithConditionLine(cond, "(" + EmitBoolExprInner(boolExpr) + ")");
 
         if (cond is Command.Subshell subshell)
             return Emit(subshell.Body);
@@ -3523,9 +3596,21 @@ public static partial class PsEmitter
         // division, bitwise/shift, etc. are correct (the old native emission
         // mistranslated them — e.g. `if (( 2**10 > 1000 ))` was a parse error).
         if (cond is Command.ArithCommand arithCmd)
-            return EmitArithConditionExpr(arithCmd.Expr);
+            return WithConditionLine(cond, EmitArithConditionExpr(arithCmd.Expr));
 
         return Emit(cond);
+    }
+
+    /// <summary>
+    /// A condition that is an expression, not a hoisted statement (<c>if (( 1/0 ))</c>, <c>while [[ $a -eq 1 ]]</c>,
+    /// a <c>for ((;;))</c> clause): its diagnostic names its own line, and a loop tests it again after its body recorded
+    /// later lines, so the line is recorded inside the expression (as <see cref="EmitHoistedCondition"/> does before a
+    /// hoisted one).
+    /// </summary>
+    private static string WithConditionLine(Command cond, string expr)
+    {
+        string record = RecordLineFor(cond, statement: false);
+        return record.Length == 0 ? expr : PsBuild.Subexpr(record + expr);
     }
 
     /// <summary>
@@ -3926,7 +4011,9 @@ public static partial class PsEmitter
                     static string ArithOperand(string e) =>
                         e.Length > 0 && (char.IsDigit(e[0]) || e[0] == '-' || e[0] == '+') && !e.Contains('$')
                             ? "'" + e + "'" : e;
-                    return $"[long](Invoke-BashArith ([string]({ArithOperand(lhs)}))) {op} [long](Invoke-BashArith ([string]({ArithOperand(EmitTestOperand(words[2]))})))";
+                    // An operand's error is bash's `s.sh: line 3: [[: 1/0: division by 0 (error token is "0")`.
+                    return PsBuild.ArithCompare($"Invoke-BashArith ([string]({ArithOperand(lhs)})) -Label '[['", op,
+                        $"Invoke-BashArith ([string]({ArithOperand(EmitTestOperand(words[2]))})) -Label '[['");
                 }
                 return $"(Invoke-BashTestInt ({lhs})) {op} (Invoke-BashTestInt -Second ({EmitTestOperand(words[2])}))";
             }
@@ -3975,9 +4062,8 @@ public static partial class PsEmitter
             return PsBuild.ExitCodeTestFlaggingBad(EmitPassthrough("Invoke-BashTest", QuoteBareTestParens(words)));
 
         var opName = GetLiteralValue(words[0]) ?? "";
-        var message = PsBuild.SingleQuote(
-            $"ps-bash: [: {opName}: unsupported test operator");
-        return PsBuild.Subexpr($"Write-BashHostStderr {message}; $false");
+        var message = PsBuild.SingleQuote($"[[: {opName}: unsupported test operator");
+        return PsBuild.Subexpr($"Write-BashHostStderr ({PsBuild.DiagnosticPrefix} + {message}); $false");
     }
 
     private static bool IsBinaryTestOp(string op) => op is "=" or "==" or "!=" or "-eq" or "-ne" or "-lt"
@@ -4509,8 +4595,8 @@ public static partial class PsEmitter
             // `readonly y; f() { local x=1 y=2; }`: bash refuses the local (`local: y: readonly variable`, status 1).
             if (cmd.IsLocal && !cmd.IsNameref && pair.ArrayValue is null && !pair.Name.Contains('[') && _readonlyVars?.Contains(pair.Name) == true)
             {
-                sb.Append("Write-Error ").Append(PsBuild.SingleQuote($"ps-bash: local: {pair.Name}: readonly variable"))
-                  .Append(" -ErrorAction Continue; ").Append(PsBuild.SetStatus(1));
+                sb.Append(PsBuild.ShellDiagnosticLine(PsBuild.SingleQuote($"local: {pair.Name}: readonly variable")))
+                  .Append("; ").Append(PsBuild.SetStatus(1));
                 localRefused = true;
                 continue;
             }
@@ -4791,7 +4877,7 @@ public static partial class PsEmitter
         if (listed.Count > 0)
             parts.Add(EmitPassthrough("Invoke-BashDeclare", ImmutableArray.Create(Lit("-p")).AddRange(listed.Select(Lit))));
         foreach (var n in missing)
-            parts.Add(PsBuild.StderrLine("bash: local: " + n + ": not found"));
+            parts.Add(PsBuild.ShellDiagnosticLine(PsBuild.SingleQuote("local: " + n + ": not found")));
         if (missing.Count > 0)
             parts.Add(PsBuild.SetStatus(1));
         // The redirects (`local -p a b 2>/dev/null`) apply to the "not found" lines too, so they wrap the whole list.
@@ -6426,7 +6512,7 @@ public static partial class PsEmitter
             specialResult = EmitReadonly(cmd);
 
         // `local` / `local -p [NAME...]` inside a function: list the function's locals as `declare -- n="v"` lines.
-        else if (cmd0 == "local" && _functionDepth > 0 && _functionLocalNames is { Count: > 0 } fnLocals && IsLocalListing(cmd))
+        else if (cmd0 == "local" && _functionDepth > 0 && _functionLocalNames is { } fnLocals && IsLocalListing(cmd))
             specialResult = EmitLocalListing(cmd, fnLocals);
 
         // Bare `set` / `declare` / `typeset`: list the variables as `name=value` lines.
@@ -8357,6 +8443,28 @@ public static partial class PsEmitter
         return false;
     }
 
+    /// <summary>A word that expands <c>$(( ... ))</c> (which may fail with the shell's diagnostic).</summary>
+    private static bool ContainsArithSub(ImmutableArray<WordPart> parts)
+    {
+        foreach (var p in parts)
+        {
+            if (p is WordPart.ArithSub) return true;
+            if (p is WordPart.DoubleQuoted dq && ContainsArithSub(dq.Parts)) return true;
+            if (p is WordPart.BracedVarSub { ArgWord: { } arg } && ContainsArithSub(arg)) return true;
+            // `${a[1/0]}`: an indexed subscript is an arithmetic expression (`s.sh: line 6: 1/0: division by 0`).
+            if (p is WordPart.BracedVarSub { Suffix: ['[', ..] suffix } && BashParser.FindSubscriptClose(suffix, 0) is > 1 and var close
+                && suffix.AsSpan(1, close - 1) is var sub && sub is not ("@" or "*") && !IsPlainInteger(sub)) return true;
+        }
+        return false;
+    }
+
+    private static bool IsPlainInteger(ReadOnlySpan<char> text)
+    {
+        if (text.IsEmpty) return false;
+        foreach (char c in text) if (c is < '0' or > '9') return false;
+        return true;
+    }
+
     private static bool ContainsCommandSub(ImmutableArray<WordPart> parts)
     {
         foreach (var p in parts)
@@ -9207,12 +9315,14 @@ public static partial class PsEmitter
         => $"$({EmitArithmeticInvocation(arith.Expr)})";
 
     /// <param name="syntax">The expression.</param>
-    /// <param name="label">The builtin evaluating it (<c>let</c>): an error is then the shell's diagnostic,
+    /// <param name="label">The command evaluating it, which bash names in an error (<c>let</c>, <c>((</c>):
     /// <c>s.sh: line 3: let: 1/0: division by 0</c> (Invoke-BashArith -Label). After the expression, so the
     /// invocation still starts <c>Invoke-BashArith 'EXPR'</c>.</param>
     private static string EmitArithmeticInvocation(ArithmeticSyntax syntax, string? label = null)
     {
-        string expr = syntax.Source.Trim();
+        // Left-trimmed only: bash's error names the expression with its trailing blanks and its error token runs to the
+        // end (`$(( 1/0 ))`: `1/0 : division by 0 (error token is "0 ")`).
+        string expr = syntax.Source.TrimStart();
         var fragments = BuildArithFragments(expr, textual: syntax.Root is ArithmeticExpr.Deferred);
         string argument = fragments is null
             ? PsBuild.SingleQuote(expr)
@@ -13031,7 +13141,7 @@ public static partial class PsEmitter
         }
         // bash: `cd a b` is "too many arguments", status 1, and the directory does not change.
         if (args.Length > 1)
-            return $"Write-Error 'cd: too many arguments' -ErrorAction Continue; {PsBuild.SetStatus(1)}";
+            return PsBuild.ShellDiagnosticLine("'cd: too many arguments'") + "; " + PsBuild.SetStatus(1);
 
         string targetExpr;
         // `cd -` switches to the previous directory ($OLDPWD) and, like bash, echoes
@@ -13110,7 +13220,7 @@ public static partial class PsEmitter
             "Set-Location -LiteralPath $__psbash_cd_resolved -ErrorAction SilentlyContinue; " +
             (isDash ? "Write-Output $env:PWD; " : useCdPath ? "if ($__psbash_cd_via) { Write-Output $env:PWD }; " : "") +
             "$global:LASTEXITCODE = 0 " +
-            "} else { Write-Error -Message (\"cd: \" + $__psbash_cd_target + \": No such file or directory\") -ErrorAction Continue; $global:LASTEXITCODE = 1 }";
+            "} else { " + PsBuild.ShellDiagnosticLine("'cd: ' + $__psbash_cd_target + ': No such file or directory'") + "; $global:LASTEXITCODE = 1 }";
 
         // Relative targets resolve against bash's logical $PWD (BashRuntime.CdBase), not getcwd: on macOS that is physical.
         var prefix = "$__psbash_cd_target = " + targetExpr + "; $__psbash_cd_base = [PsBash.Cmdlets.BashRuntime]::CdBase($ExecutionContext.SessionState); " + (useCdPath
@@ -13123,7 +13233,7 @@ public static partial class PsEmitter
             // rather than trying to resolve an empty path (GetFullPath would throw).
             return prefix +
                 "if ([string]::IsNullOrEmpty([string]$__psbash_cd_target)) { " +
-                "Write-Error -Message 'cd: OLDPWD not set' -ErrorAction Continue; $global:LASTEXITCODE = 1 " +
+                PsBuild.ShellDiagnosticLine("'cd: OLDPWD not set'") + "; $global:LASTEXITCODE = 1 " +
                 "} else { " + resolveAndAct + " }";
         }
 
@@ -13714,7 +13824,7 @@ public static partial class PsEmitter
                 {
                     // One `. { }` group: the redirect EmitMappedStandalone appends (`2>/dev/null`) covers the report too.
                     result = PsBuild.WithRedirectTail(
-                        PsBuild.StderrLine("bash: builtin: " + named + ": not a shell builtin") + "; " + PsBuild.SetStatus(1),
+                        PsBuild.ShellDiagnosticLine(PsBuild.SingleQuote("builtin: " + named + ": not a shell builtin")) + "; " + PsBuild.SetStatus(1),
                         static _ => { });
                     return true;
                 }

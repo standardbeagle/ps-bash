@@ -590,7 +590,7 @@ public class PsEmitterTests
     public void Transpile_ArithWithVariableAndComparison_RoutesToInvokeBashArith()
     {
         var result = PsEmitter.Transpile("echo $(( n > 5 ? n * 100 : -1 ))");
-        Assert.Contains("Invoke-BashArith 'n > 5 ? n * 100 : -1'", result);
+        Assert.Contains("Invoke-BashArith 'n > 5 ? n * 100 : -1 '", result);
     }
 
     [Fact]
@@ -2892,7 +2892,7 @@ public class PsEmitterTests
 
         // Numeric operators cast both operands to [long] so the compare is integer, not
         // string ('10' -gt 9 must be true).
-        Assert.Equal("$(if (([long](Invoke-BashArith ([string]($env:a))) -eq [long](Invoke-BashArith ([string]($env:b))))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        Assert.Equal("$(if (($(if ($null -ne ($__psbash_al = Invoke-BashArith ([string]($env:a)) -Label '[[') -and $null -ne ($__psbash_ar = Invoke-BashArith ([string]($env:b)) -Label '[[')) { [long]$__psbash_al -eq [long]$__psbash_ar } else { $false }))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     // ── a double-quoted test operand keeps its expansions live ───────────────
@@ -3490,7 +3490,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a -lt $b ]]");
 
-        Assert.Equal("$(if (([long](Invoke-BashArith ([string]($env:a))) -lt [long](Invoke-BashArith ([string]($env:b))))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        Assert.Equal("$(if (($(if ($null -ne ($__psbash_al = Invoke-BashArith ([string]($env:a)) -Label '[[') -and $null -ne ($__psbash_ar = Invoke-BashArith ([string]($env:b)) -Label '[[')) { [long]$__psbash_al -lt [long]$__psbash_ar } else { $false }))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -3498,7 +3498,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a -gt $b ]]");
 
-        Assert.Equal("$(if (([long](Invoke-BashArith ([string]($env:a))) -gt [long](Invoke-BashArith ([string]($env:b))))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        Assert.Equal("$(if (($(if ($null -ne ($__psbash_al = Invoke-BashArith ([string]($env:a)) -Label '[[') -and $null -ne ($__psbash_ar = Invoke-BashArith ([string]($env:b)) -Label '[[')) { [long]$__psbash_al -gt [long]$__psbash_ar } else { $false }))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -3603,7 +3603,7 @@ public class PsEmitterTests
         // (( … )) condition) rather than the old naive </> string-replace, so the
         // full C operator set — including << / >> shifts — is honored. See
         // Transpile_ForArith_ShiftOperatorInCondition_NotShredded.
-        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 for ($null = Invoke-BashArith 'i=0'; (@(Invoke-BashArith 'i<10') -ne 0); $null = Invoke-BashArith 'i++') { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho $env:i }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 for ($null = Invoke-BashArith 'i=0' -Label '(('; (@(Invoke-BashArith 'i<10' -Label '((') -ne 0); $null = Invoke-BashArith 'i++' -Label '((') { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho $env:i }", result);
     }
 
     // Regression: TranslateArithCondition string-replaced < and > unconditionally,
@@ -3615,7 +3615,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for ((i=0; i < (n<<1); i++)); do echo $i; done");
 
-        Assert.Contains("(Invoke-BashArith 'i < (n<<1)') -ne 0", result);
+        Assert.Contains("(Invoke-BashArith 'i < (n<<1)' -Label '((') -ne 0", result);
         Assert.DoesNotContain("-lt -lt", result);
     }
 
@@ -4171,47 +4171,47 @@ public class PsEmitterTests
     // etc. are correct and `(( … )) && cmd` chains work. We assert the evaluator
     // routing; the exact $LASTEXITCODE wrapper is PsBuild.SilentExitFromBool.
     public void Transpile_ArithCommand_Increment()
-        => Assert.Contains("Invoke-BashArith 'x++'", PsEmitter.Transpile("(( x++ ))"));
+        => Assert.Contains("Invoke-BashArith 'x++ ' -Label '(('", PsEmitter.Transpile("(( x++ ))"));
 
     [Fact]
     public void Transpile_ArithCommand_Decrement()
-        => Assert.Contains("Invoke-BashArith 'x--'", PsEmitter.Transpile("(( x-- ))"));
+        => Assert.Contains("Invoke-BashArith 'x-- ' -Label '(('", PsEmitter.Transpile("(( x-- ))"));
 
     [Fact]
     public void Transpile_ArithCommand_PreIncrement()
-        => Assert.Contains("Invoke-BashArith '++x'", PsEmitter.Transpile("(( ++x ))"));
+        => Assert.Contains("Invoke-BashArith '++x ' -Label '(('", PsEmitter.Transpile("(( ++x ))"));
 
     [Fact]
     public void Transpile_ArithCommand_PreDecrement()
-        => Assert.Contains("Invoke-BashArith '--x'", PsEmitter.Transpile("(( --x ))"));
+        => Assert.Contains("Invoke-BashArith '--x ' -Label '(('", PsEmitter.Transpile("(( --x ))"));
 
     [Fact]
     public void Transpile_ArithCommand_Comparison_GreaterThan()
-        => Assert.Contains("Invoke-BashArith 'x > 5'", PsEmitter.Transpile("(( x > 5 ))"));
+        => Assert.Contains("Invoke-BashArith 'x > 5 ' -Label '(('", PsEmitter.Transpile("(( x > 5 ))"));
 
     [Fact]
     public void Transpile_ArithCommand_Comparison_LessThan()
-        => Assert.Contains("Invoke-BashArith 'x < 5'", PsEmitter.Transpile("(( x < 5 ))"));
+        => Assert.Contains("Invoke-BashArith 'x < 5 ' -Label '(('", PsEmitter.Transpile("(( x < 5 ))"));
 
     [Fact]
     public void Transpile_ArithCommand_Comparison_GreaterEqual()
-        => Assert.Contains("Invoke-BashArith 'x >= 5'", PsEmitter.Transpile("(( x >= 5 ))"));
+        => Assert.Contains("Invoke-BashArith 'x >= 5 ' -Label '(('", PsEmitter.Transpile("(( x >= 5 ))"));
 
     [Fact]
     public void Transpile_ArithCommand_Comparison_LessEqual()
-        => Assert.Contains("Invoke-BashArith 'x <= 5'", PsEmitter.Transpile("(( x <= 5 ))"));
+        => Assert.Contains("Invoke-BashArith 'x <= 5 ' -Label '(('", PsEmitter.Transpile("(( x <= 5 ))"));
 
     [Fact]
     public void Transpile_ArithCommand_Comparison_Equal()
-        => Assert.Contains("Invoke-BashArith 'x == 5'", PsEmitter.Transpile("(( x == 5 ))"));
+        => Assert.Contains("Invoke-BashArith 'x == 5 ' -Label '(('", PsEmitter.Transpile("(( x == 5 ))"));
 
     [Fact]
     public void Transpile_ArithCommand_Comparison_NotEqual()
-        => Assert.Contains("Invoke-BashArith 'x != 5'", PsEmitter.Transpile("(( x != 5 ))"));
+        => Assert.Contains("Invoke-BashArith 'x != 5 ' -Label '(('", PsEmitter.Transpile("(( x != 5 ))"));
 
     [Fact]
     public void Transpile_ArithCommand_Ternary()
-        => Assert.Contains("Invoke-BashArith 'x > 0 ? 1 : 0'", PsEmitter.Transpile("(( x > 0 ? 1 : 0 ))"));
+        => Assert.Contains("Invoke-BashArith 'x > 0 ? 1 : 0 ' -Label '(('", PsEmitter.Transpile("(( x > 0 ? 1 : 0 ))"));
 
     [Fact]
     public void Transpile_ArithCommand_Standalone_SetsExitCode()
@@ -4224,7 +4224,7 @@ public class PsEmitterTests
         // parse error (** ). Now the condition is true iff the evaluator result
         // is non-zero.
         var result = PsEmitter.Transpile("if (( 2 ** 10 > 1000 )); then echo big; fi");
-        Assert.Contains("(Invoke-BashArith '2 ** 10 > 1000') -ne 0", result);
+        Assert.Contains("(Invoke-BashArith '2 ** 10 > 1000 ' -Label '((') -ne 0", result);
     }
 
     [Fact]
@@ -4286,7 +4286,7 @@ public class PsEmitterTests
     [InlineData("echo $(($10 + 1))", "$global:BashPositional[0]", "'0 + 1'")]
     [InlineData("echo $((${10} + 1))", "$global:BashPositional[9]", "' + 1'")]
     [InlineData("echo $((${1}+1))", "$global:BashPositional[0]", "'+1'")]
-    [InlineData("(( ${1} > 0 ))", "$global:BashPositional[0]", "' > 0'")]
+    [InlineData("(( ${1} > 0 ))", "$global:BashPositional[0]", "' > 0 '")]
     [InlineData("for ((i=${1}; i<${10}; i++)); do echo $i; done", "$global:BashPositional[9]", "'i<'")]
     public void Transpile_ArithmeticParameters_PreserveExpansionBoundariesAcrossContexts(
         string source, string expectedReference, string expectedLiteral)
@@ -8386,7 +8386,7 @@ public class PsEmitterTests
         // bash: `local -p x y` in f prints f's local x; y (not a local of f) is "local: y: not found", status 1.
         var result = PsEmitter.Transpile("f() { local x=1; local -p x y; }")!;
         Assert.Contains("Invoke-BashDeclare '-p' x;", result);
-        Assert.Contains("bash: local: y: not found", result);
+        Assert.Contains(PsBuild.ShellDiagnosticLine("'local: y: not found'"), result);
         Assert.Contains(PsBuild.SetStatus(1), result);
     }
 

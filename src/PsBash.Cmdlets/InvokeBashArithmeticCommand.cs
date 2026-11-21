@@ -22,7 +22,9 @@ namespace PsBash.Cmdlets;
 /// environment so subsequent <c>$env:NAME</c> reads see them.
 ///
 /// On a malformed or runtime-invalid expression (division by zero, bad base) it
-/// writes a bash-style <c>ps-bash: …</c> diagnostic to stderr and sets exit
+/// writes bash's diagnostic to stderr -- the shell's prefix (<see cref="ShellDiagnostic"/>), the
+/// <see cref="Label"/>, the expression and the error token:
+/// <c>s.sh: line 3: ((: 1 / 0 : division by 0 (error token is "0 ")</c> -- and sets exit
 /// code 1, emitting no value — matching bash, where a failed arithmetic
 /// evaluation aborts the expansion.
 ///
@@ -39,21 +41,25 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
     public string[]? Tokens { get; set; }
 
     /// <summary>
-    /// The builtin evaluating the expression (<c>let</c>: Invoke-BashLet): an error is then the shell's diagnostic,
-    /// <c>s.sh: line 3: let: 1+: syntax error: operand expected (error token is "+")</c> (<see cref="ShellDiagnostic"/>).
-    /// Without it the report is <c>EXPR: MESSAGE</c>.
+    /// The command evaluating the expression, which bash names after the prefix: <c>let</c> (Invoke-BashLet),
+    /// <c>((</c> (the arithmetic command and the clauses of <c>for ((…))</c>), <c>[[</c> (an arithmetic operand of
+    /// <c>[[ … -eq … ]]</c>): <c>s.sh: line 3: let: 1+: syntax error: operand expected (error token is "+")</c>.
+    /// Without it (<c>$(( … ))</c>, a subscript) the report is <c>s.sh: line 3: EXPR: MESSAGE</c>.
     /// </summary>
     [Parameter]
     public string? Label { get; set; }
 
+    /// <summary>Every arithmetic error is the shell's diagnostic: its prefix, then the label (<see cref="ShellDiagnostic"/>).</summary>
     private void ReportError(string body)
-        => FileSystemHelpers.WriteBashError(this, Label is null ? body : ShellDiagnostic.Prefix(SessionState) + Label + ": " + body);
+        => FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + (Label is null ? "" : Label + ": ") + body);
 
     protected override void EndProcessing()
     {
         // The transpiler emits a single quoted argument, but accept multiple
         // tokens (joined with spaces) so an unquoted expression still works.
-        var expr = Tokens is { Length: > 0 } ? string.Join(" ", Tokens) : "0";
+        // bash names the expression without its leading blanks but WITH its trailing ones (`(( 1/0 ))` reports
+        // `((: 1/0 : division by 0 (error token is "0 ")`), so the emitter passes the text right-untrimmed.
+        var expr = Tokens is { Length: > 0 } ? string.Join(" ", Tokens).TrimStart() : "0";
         // An empty / blank expression is 0 in bash (`$(( ))`, `[[ "" -eq 0 ]]`).
         if (string.IsNullOrWhiteSpace(expr)) expr = "0";
 
@@ -77,7 +83,7 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
         catch (BashArith.BashArithException ex)
         {
             // A failed WORD abandons the command it belongs to (see PsBuild.AbandonIfExpansionFailed, echo).
-            ReportError($"{expr}: {ex.Message}");   // status 1
+            ReportError(ex.Describe(expr));   // status 1
             // Marked LAST: reporting the error goes through SetLastExitCode, which ends any mark.
             if (IsWordExpansion()) FileSystemHelpers.MarkExpansionFailed(this);
         }
@@ -145,7 +151,7 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
         {
             // Reported on the error stream here; the emitted wrapper (PsBuild.ArithNounsetGuard) sees the
             // global and ends the script -- a cmdlet exception would only end this statement.
-            FileSystemHelpers.WriteStderr(this, $"ps-bash: {name}: unbound variable");
+            FileSystemHelpers.WriteStderr(this, ShellDiagnostic.Prefix(SessionState) + $"{name}: unbound variable");
             FileSystemHelpers.SetLastExitCode(this, 1);
             SessionState.PSVariable.Set("global:__BashUnbound", name);
             throw new UnboundVariableException();
@@ -160,7 +166,8 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
 
         // Otherwise evaluate the value itself as an arithmetic expression. A value that is not one (x='a b',
         // x='a[<(echo)]=1') fails the whole expansion, as in bash ("syntax error in expression", status 1); it read as 0.
-        return BashArith.Evaluate(trimmed,
+        // bash names the value's expression with its trailing blanks (x=' 5 / 0  ': `5 / 0  : division by 0`).
+        return BashArith.Evaluate(raw!.TrimStart(),
             n => ReadVar(n, depth + 1),
             WriteVar,
             ReadRawVar);

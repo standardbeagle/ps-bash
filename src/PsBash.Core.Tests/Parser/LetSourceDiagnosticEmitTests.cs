@@ -38,8 +38,9 @@ public class LetSourceDiagnosticEmitTests
         => Assert.Contains("Invoke-BashArith 'x=1/0' -Label 'let'", T("let x=1/0"));
 
     [Fact]
-    public void Transpile_ArithCommand_HasNoLetLabel()
-        => Assert.DoesNotContain("-Label", T("(( x = 1 ))"));
+    public void Transpile_ArithCommand_EvaluatesWithTheArithCommandLabel()
+        // bash: ((: x = 1/0 : division by 0 (error token is "0 ") -- ((, the expression left-trimmed only.
+        => Assert.Contains("Invoke-BashArith 'x = 1 ' -Label '(('", T("(( x = 1 ))"));
 
     // ── . / source with no operand ──────────────────────────────────────────────────────────────
 

@@ -507,6 +507,16 @@ public static class PsBuild
     public static string Subexpr(string expr) => "$(" + expr + ")";
 
     /// <summary>
+    /// The numeric compare of two arithmetic operands of <c>[[ a OP b ]]</c> (<paramref name="lhs"/>/<paramref name="rhs"/>
+    /// are <c>Invoke-BashArith</c> invocations): false when an operand fails, as bash's <c>[[</c> is (status 1, the right
+    /// operand not evaluated after a failed left one). A failed operand writes no value; read as 0 it made
+    /// <c>while [[ x -eq 1/0 ]]</c> loop forever.
+    /// </summary>
+    public static string ArithCompare(string lhs, string op, string rhs) =>
+        "$(if ($null -ne ($__psbash_al = " + lhs + ") -and $null -ne ($__psbash_ar = " + rhs + ")) { [long]$__psbash_al "
+        + op + " [long]$__psbash_ar } else { $false })";
+
+    /// <summary>
     /// One element of an array that may be unset: <c>$(if ($null -ne $a) { $a[index] })</c>. Indexing <c>$null</c>
     /// throws "Cannot index into a null array" (it aborted the whole command line); bash reads an element of an
     /// unset array as empty.

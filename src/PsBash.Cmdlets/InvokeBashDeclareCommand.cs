@@ -59,7 +59,7 @@ public sealed class InvokeBashDeclareCommand : BashCmdlet
                         case 'p' or 'g': break;
                         case 'a' or 'A' or 'n' or 'r' or 'x': select.Add(c); break;
                         default:
-                            FileSystemHelpers.WriteBashError(this, $"bash: declare: -{c}: invalid option\n"
+                            FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + $"declare: -{c}: invalid option\n"
                                 + "declare: usage: declare [-aAfFgiIlnrtux] [name[=value] ...] or declare -p [-aAfFilnrtux] [name ...]");
                             FileSystemHelpers.SetLastExitCode(this, 2);
                             return;
@@ -210,7 +210,7 @@ public sealed class InvokeBashDeclareCommand : BashCmdlet
         foreach (var name in names)
         {
             if (DeclarePrinter.TryPrintVariable(this, name)) continue;
-            FileSystemHelpers.WriteBashError(this, $"bash: declare: {name}: not found");
+            FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + $"declare: {name}: not found");
             FileSystemHelpers.SetLastExitCode(this, 1);
         }
     }
