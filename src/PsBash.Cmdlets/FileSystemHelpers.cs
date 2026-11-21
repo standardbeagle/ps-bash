@@ -440,8 +440,18 @@ internal static class FileSystemHelpers
     /// word's source position (<c>line:column</c>) so the command it belongs to can abandon itself -- echo through
     /// <see cref="TakeExpansionFailed"/>, a hoisted word through the emitter's <c>PsBuild.AbandonIfExpansionFailed</c>.
     /// </summary>
-    public static void MarkExpansionFailed(PSCmdlet cmdlet)
+    public static void MarkExpansionFailed(PSCmdlet cmdlet) => MarkExpansionFailed(cmdlet, inSubscript: false);
+
+    /// <summary>
+    /// <see cref="MarkExpansionFailed(PSCmdlet)"/> for an arithmetic error that may lie in an array subscript
+    /// (<c>${a[1/0]}</c>, <c>a[1/0]=x</c>, <c>$(( a[1/0] ))</c>). Under <c>bash -c</c> bash ends the shell for that one,
+    /// status 1 (a <c>( )</c> or <c>$( )</c> ends only itself), where <c>$((1/0))</c> drops only its line; a script or
+    /// stdin drops the line for both. The error is already reported.
+    /// </summary>
+    public static void MarkExpansionFailed(PSCmdlet cmdlet, bool inSubscript)
     {
+        // Not a terminating error: that ended only the statement where no line scope re-threw it (`(( a[1/0] ))`).
+        if (inSubscript && ShellReader.DashC) throw ShellSignalTraps.EndShell(cmdlet, 1);
         // Inside a line scope (PsBuild.DiscardLineScope) bash's DISCARD: the rest of the input line is dropped (a loop, a
         // function and the line that called it), status 1; a subshell's scope stops it. The error is already reported.
         if (BashLineDiscard.Armed)

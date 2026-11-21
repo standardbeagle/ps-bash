@@ -254,6 +254,9 @@ public static class BashArith
         /// <summary>The node whose evaluation failed (division by 0, a negative exponent): it locates the error token.</summary>
         public ArithmeticExpr? Node { get; init; }
 
+        /// <summary>The failure was in an array subscript (<c>$(( a[1/0] ))</c>): under <c>bash -c</c> it ends the shell.</summary>
+        public bool InSubscript { get; set; }
+
         /// <summary>The expression the error belongs to (the innermost one evaluated); null until an evaluation names it.</summary>
         public string? Expression { get; set; }
 

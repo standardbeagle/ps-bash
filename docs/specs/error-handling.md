@@ -241,8 +241,18 @@ A bad substitution (`${x!y}`), an invalid indirect name (`${!r}` with `r` unset,
 arithmetic expansion error (`$((1/0))`, an indexed subscript `${a[1/0]}` / `${#a[1/0]}` / `a[1/0]=x`) is
 bash's DISCARD: the rest of the current input line is dropped, even from inside a function or loop that line called,
 status 1, and the shell reads the next line (a `-c` string, a script file, eval and sourced text alike; a `$( )` or
-`( )` ends only itself). The arithmetic COMMAND `(( 1/0 ))` and a `[[ 1/0 -eq 1 ]]` operand are not words: status 1,
-the line goes on. In an interactive shell (`bash -i -c`) an unbound variable or `${x:?}` under `set -u` does the same.
+`( )` ends only itself). One exception: under `bash -c` an error in an array SUBSCRIPT (`${a[1/0]}`,
+`a[1/0]=x`, `$(( a[1/0] ))`, in a function, eval or sourced file too) ends the whole shell, status 1, where a plain
+`$((1/0))` drops only its line. A script or stdin drops the line for both. ps-bash marks a subscript evaluation
+(`Invoke-BashArith -Subscript` from the emitter and `Set-BashElement`; `BashArithException.InSubscript` for an
+element inside an expression), and `FileSystemHelpers.MarkExpansionFailed(cmdlet, inSubscript)` is the one place that
+ends a `-c` shell for it (`PSBASH_DASH_C`, `ShellReader.DashC`), through `ShellSignalTraps.EndShell`: the cmdlet-side
+`exit` (innermost subshell scope, else the job, else `SetShouldExit`). A terminating error there ended only the
+statement where no line scope re-threw it. The arithmetic COMMAND `(( 1/0 ))` and a `[[ 1/0 -eq 1 ]]` operand are not words: status 1,
+the line goes on. A SUBSCRIPT error discards (or ends a `-c` shell) in every context, `(( a[1/0] ))`, `let`, `[[ ]]`,
+`declare a[1/0]=x`, `unset 'a[1/0]'`, `read 'a[1/0]'` alike. Not yet: in a script file those non-word forms get no line
+scope (`CanDiscardLine` does not see them), and `declare`/`unset`/`read`/`printf -v`/`test -v` catch the error as a
+plain failure. In an interactive shell (`bash -i -c`) an unbound variable or `${x:?}` under `set -u` does the same.
 When the text can raise one (`PsBuild.CanDiscardLine`: its emission holds `Get-BashIndirectValue`,
 `Write-BashExpansionError`, an arithmetic word `$(Invoke-BashArith` / `$__psbash_av = Invoke-BashArith`, or a
 `Set-BashElement` with a computed key; or it is interactive under nounset), every top-level command runs in

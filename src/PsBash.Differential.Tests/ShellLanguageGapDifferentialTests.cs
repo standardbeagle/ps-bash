@@ -215,8 +215,8 @@ public class ShellLanguageGapDifferentialTests
     /// <summary>An arithmetic expansion error is bash's DISCARD: the rest of the top-level command is dropped (the commands
     /// after it on its line, a function and the line that called it, a whole loop), status 1, and the next line runs; a
     /// subshell or command substitution stops it there. The arithmetic COMMAND <c>(( 1/0 ))</c> only fails. ps-bash ran
-    /// the rest of the line. An indexed subscript (<c>${a[1/0]}</c>, <c>a[i/0]=x</c>, <c>${#a[1/0]}</c>) is the same
-    /// arithmetic. stderr is closed: after a multi-line loop bash's own line numbers run low.</summary>
+    /// the rest of the line. stderr is closed: after a multi-line loop bash's own line numbers run low. (A script file
+    /// drops the line for an array subscript error too; under <c>bash -c</c>, as here, that one ends the shell: below.)</summary>
     [SkippableFact]
     public Task ArithmeticExpansionError_DiscardsTheRestOfTheLine() => Same(
         "exec 2>/dev/null\n"
@@ -226,8 +226,29 @@ public class ShellLanguageGapDifferentialTests
         + "x=$((1/0)); echo same8\n(( 1/0 )); echo \"same9 st=$?\"\n"
         + "if [ $((1/0)) ]; then echo then; fi; echo same10\n"
         + "y=$(echo $((1/0)); echo insub); echo \"same11 y=$y\"\n"
-        + "a=(1 2); echo ${a[1/0]}; echo same12\na[i/0]=x; echo same13\necho \"${#a[1/0]}\"; echo same14\necho \"a=${a[*]}\"\n"
+
         + "for i in 1 2; do\n  echo \"it$i $((1/0))\"\n  echo in\ndone\necho \"end st=$?\"");
+
+    /// <summary>
+    /// Under <c>bash -c</c> an arithmetic error in an array subscript ends the shell, status 1, wherever it happens (a
+    /// function, eval, a sourced file, inside <c>$(( ))</c>, the arithmetic command and <c>let</c>); a <c>( )</c> or
+    /// <c>$( )</c> ends only itself. A plain
+    /// <c>$((1/0))</c> drops only its line. (A script file or stdin drops the line for both.) ps-bash ran on.
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("echo ${a[1/0]}; echo same")]
+    [InlineData("a[i/0]=x; echo same")]
+    [InlineData("echo \"${#a[1/0]}\"; echo same")]
+    [InlineData("x=${a[1/0]}; echo same")]
+    [InlineData("f() { echo ${a[1/0]}; echo infn; }; f; echo same")]
+    [InlineData("eval 'echo ${a[1/0]}'; echo same")]
+    [InlineData("echo $(( a[1/0] + 1 )); echo same")]
+    [InlineData("( echo ${a[1/0]} ); y=$(echo ${a[1/0]}); echo \"same st=$? y=$y\"")]
+    [InlineData("(( a[1/0] )); echo same")]
+    [InlineData("let 'a[1/0]'; echo same")]
+    [InlineData("( (( a[1/0] )); echo in ); y=$( (( a[1/0] )); echo in2 ); echo \"same st=$? y=$y\"")]
+    public Task SubscriptArithmeticError_EndsADashCShell(string line) => Same(
+        "exec 2>/dev/null\na=(1 2)\n" + line + "\necho \"next a=${a[*]}\"");
 
     /// <summary>
     /// A failed clause of <c>for ((init; cond; step))</c> ends the loop with status 1: a bad init or condition before the

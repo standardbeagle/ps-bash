@@ -70,12 +70,26 @@ internal static class ShellSignalTraps
     internal static Exception Terminate(PSCmdlet cmdlet, int signal, bool innermostSubshell = false)
     {
         int status = 128 + signal;
+        // `( kill -TERM $BASHPID )`: the subshell signalled itself, and only it ends, with 128+N (bash's subshell is a
+        // child process).
+        return EndShell(cmdlet, status, innermostSubshell, signal);
+    }
+
+    /// <summary>
+    /// The shell ends with <paramref name="status"/> as bash <c>exit</c> ends it, from a cmdlet: the innermost
+    /// <c>( )</c> / <c>$( )</c> / pipe-stage subshell when one is open (a fatal error there ends only that child), else a
+    /// background job, else the script. Never returns. Used for a fatal shell error raised inside a cmdlet (an array
+    /// subscript error under <c>bash -c</c>, <see cref="FileSystemHelpers.MarkExpansionFailed(PSCmdlet, bool)"/>).
+    /// </summary>
+    internal static Exception EndShell(PSCmdlet cmdlet, int status) => EndShell(cmdlet, status, innermostSubshell: true, signal: 0);
+
+    private static Exception EndShell(PSCmdlet cmdlet, int status, bool innermostSubshell, int signal)
+    {
         FileSystemHelpers.SetLastExitCode(cmdlet, status);
         bool inJob = InBackgroundJob(cmdlet);
-        // `( kill -TERM $BASHPID )`: the subshell signalled itself, and only it ends, with 128+N (bash's subshell is a
-        // child process). Thrown the way PsBuild.DynamicExit throws a subshell's `exit`, for its scope
-        // (PsBuild.ShellStateGuard, `$__psbash_ss`) to catch. Not at a job's own top level: there $BASHPID is the job's
-        // (BashJobRunspaces.NewJob), and the job ends below.
+        // Thrown the way PsBuild.DynamicExit throws a subshell's `exit`, for its scope (PsBuild.ShellStateGuard,
+        // `$__psbash_ss`) to catch. Not at a job's own top level: there $BASHPID is the job's (BashJobRunspaces.NewJob),
+        // and the job ends below.
         if (innermostSubshell && cmdlet.SessionState.PSVariable.Get(SubshellScopeVariable) is not null
             && !(inJob && Equals(Unwrap(cmdlet.SessionState.PSVariable.GetValue("global:" + BashRuntime.SubshellPidVariable)), BashRuntime.BashPid(cmdlet.SessionState))))
             throw new BashSubshellExitException(status);
@@ -85,7 +99,7 @@ internal static class ShellSignalTraps
             // records the status, and `wait` reports the signal (JobSignalVariable, read by the wrapper's finally).
             // A pipeline stop there surfaced in `wait` as EndInvoke's "pipeline has been stopped" text, status 1,
             // and a non-live job's output was lost (docs/specs/background-jobs.md section 3).
-            cmdlet.SessionState.PSVariable.Set("global:" + JobSignalVariable, signal);
+            if (signal != 0) cmdlet.SessionState.PSVariable.Set("global:" + JobSignalVariable, signal);
             cmdlet.InvokeCommand.InvokeScript("exit " + status.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
         cmdlet.Host.SetShouldExit(status);

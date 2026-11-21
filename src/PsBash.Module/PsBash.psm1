@@ -1025,7 +1025,7 @@ function Set-BashElement {
     # prints nothing); outside a line scope it marks the expansion failed and nothing is assigned.
     if (-not [long]::TryParse($__psbashKey, [ref]$__psbashIdx)) {
         $global:__BashExpansionFailed = $false
-        $__psbashIdx = [long]$(Invoke-BashArith $__psbashKey)
+        $__psbashIdx = [long]$(Invoke-BashArith $__psbashKey -Subscript)
         if ($global:__BashExpansionFailed) { return $__psbashTarget }
     }
     if ($__psbashSparse) {

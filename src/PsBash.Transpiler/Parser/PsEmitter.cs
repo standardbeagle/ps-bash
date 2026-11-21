@@ -11504,7 +11504,7 @@ public static partial class PsEmitter
     // WORD (`$(Invoke-BashArith`): a subscript error discards the rest of the line in bash, as `$((1/0))` does
     // (InvokeBashArithmeticCommand.IsWordExpansion, PsBuild.CanDiscardLine).
     private static string EmitVarSubscript(string arrayVar, string valueRef)
-        => $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {valueRef} }} elseif ([string]{valueRef} -match '^-?[0-9]+$') {{ [long]{valueRef} }} else {{ [long]$(Invoke-BashArith ([string]{valueRef})) }})";
+        => $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {valueRef} }} elseif ([string]{valueRef} -match '^-?[0-9]+$') {{ [long]{valueRef} }} else {{ [long]$(Invoke-BashArith ([string]{valueRef}) -Subscript) }})";
 
     // `${a[i]}` / `${a[i+1]}`: on an indexed array the subscript is an arithmetic expression (bare names are
     // variables); on an associative array it is the literal key. The array kind is known only at run time.
@@ -11519,14 +11519,14 @@ public static partial class PsEmitter
         if (subscript.IndexOfAny(['$', '`', '"', '\'', '\\']) >= 0)
         {
             string dyn = FlattenPartsToDoubleQuotedString(BashParser.DecomposeWord(subscript));
-            return $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {dyn} }} else {{ [long]$(Invoke-BashArith {dyn}) }})";
+            return $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {dyn} }} else {{ [long]$(Invoke-BashArith {dyn} -Subscript) }})";
         }
         string key = PsBuild.SingleQuote(subscript);
         // `${a[b=2]}` / `${a[i<2?0:1]}` / `${a[i++]}`: every arithmetic operator (assignments too, whose side effect
         // persists) is evaluated on an indexed array; an associative array still takes the text as its key.
         if (!System.Text.RegularExpressions.Regex.IsMatch(subscript, @"^[\w+\-*/% ()\[\]=<>!&|^~?:,]+$"))
             return key;
-        return $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {key} }} else {{ [long]$(Invoke-BashArith {key}) }})";
+        return $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {key} }} else {{ [long]$(Invoke-BashArith {key} -Subscript) }})";
     }
 
     /// <summary>

@@ -23,7 +23,7 @@ public static class ShellReader
     private static State Current => Runspace.DefaultRunspace is { } rs ? PerRunspace.GetValue(rs, _ => new State()) : NoRunspace;
 
     /// <summary><c>bash -c</c> (the launcher's mark): bash runs the string without its reader loop, so <c>\#</c> stays 0.</summary>
-    private static bool DashC => Environment.GetEnvironmentVariable("PSBASH_DASH_C") == "1";
+    internal static bool DashC => Environment.GetEnvironmentVariable("PSBASH_DASH_C") == "1";
 
     /// <summary>
     /// An interactive shell's lines come from its front end (the line editor, or a piped <c>bash -i</c> replay), which

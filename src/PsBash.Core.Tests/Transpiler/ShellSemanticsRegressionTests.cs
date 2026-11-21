@@ -16,7 +16,7 @@ public class ShellSemanticsRegressionTests
     public void Transpile_ArraySubscriptWithAssignment_IsEvaluatedAsArithmetic()
     {
         var ps = BashTranspiler.Transpile("a=(1 2 3); echo ${a[b=2]}");
-        Assert.Contains("[long]$(Invoke-BashArith 'b=2')", ps);
+        Assert.Contains("[long]$(Invoke-BashArith 'b=2' -Subscript)", ps);
     }
 
     // Oracle: `b=break; for i in 1 2; do $b; echo no; done` prints nothing. A command name known only at run time goes

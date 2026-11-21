@@ -49,6 +49,11 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
     [Parameter]
     public string? Label { get; set; }
 
+    /// <summary>The expression is an array subscript (<c>${a[1/0]}</c>, <c>a[1/0]=x</c>): see
+    /// <see cref="FileSystemHelpers.MarkExpansionFailed(PSCmdlet, bool)"/>.</summary>
+    [Parameter]
+    public SwitchParameter Subscript { get; set; }
+
     /// <summary>Every arithmetic error is the shell's diagnostic: its prefix, then the label (<see cref="ShellDiagnostic"/>).</summary>
     private void ReportError(string body)
         => FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + (Label is null ? "" : Label + ": ") + body);
@@ -85,7 +90,8 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
             // A failed WORD abandons the command it belongs to (see PsBuild.AbandonIfExpansionFailed, echo).
             ReportError(ex.Describe(expr));   // status 1
             // Marked LAST: reporting the error goes through SetLastExitCode, which ends any mark.
-            if (IsWordExpansion()) FileSystemHelpers.MarkExpansionFailed(this);
+            bool inSubscript = Subscript.IsPresent || ex.InSubscript;
+            if (inSubscript || IsWordExpansion()) FileSystemHelpers.MarkExpansionFailed(this, inSubscript);
         }
     }
 
@@ -213,20 +219,25 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
             string key = BashArrayElement.AssocKey(subscript, expanded, ReadRawVar);
             return dict.Contains(key) ? dict[key]?.ToString() ?? "" : null;
         }
-        if (holder is System.Collections.IList list)
+        try
         {
-            long index = BashArrayElement.Index(subscript, list.Count, ElementVars);
-            return index >= 0 && index < list.Count ? list[(int)index]?.ToString() ?? "" : null;
+            if (holder is System.Collections.IList list)
+            {
+                long index = BashArrayElement.Index(subscript, list.Count, ElementVars);
+                return index >= 0 && index < list.Count ? list[(int)index]?.ToString() ?? "" : null;
+            }
+            // A scalar behaves as a one-element array.
+            string? scalar = BashVariableStore.Get(baseName);
+            return scalar is not null && BashArrayElement.Index(subscript, 1, ElementVars) == 0 ? scalar : null;
         }
-        // A scalar behaves as a one-element array.
-        string? scalar = BashVariableStore.Get(baseName);
-        return scalar is not null && BashArrayElement.Index(subscript, 1, ElementVars) == 0 ? scalar : null;
+        catch (BashArith.BashArithException ex) { ex.InSubscript = true; throw; }
     }
 
     private void WriteElement(string baseName, string subscript, string value)
     {
         subscript = ExpandSubscript(subscript, out bool expanded);
-        BashArrayElement.Write(SessionState, baseName, subscript, expanded, value, ElementVars);
+        try { BashArrayElement.Write(SessionState, baseName, subscript, expanded, value, ElementVars); }
+        catch (BashArith.BashArithException ex) { ex.InSubscript = true; throw; }
     }
 
     private string? ReadRawVar(string name)

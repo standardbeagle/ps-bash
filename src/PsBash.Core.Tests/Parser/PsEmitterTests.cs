@@ -2327,7 +2327,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo ${m[key]:+yes}");
         // The element read is guarded: an unset `m` is unset, not "Cannot index into a null array".
-        Assert.Equal(PsBuild.DiscardLineScope("Invoke-BashEcho ($(if ($null -eq $m) { $null } else { $m[$(if ($m -is [System.Collections.IDictionary]) { 'key' } else { [long]$(Invoke-BashArith 'key') })] }) ? \"yes\" : \"\")"), result);
+        Assert.Equal(PsBuild.DiscardLineScope("Invoke-BashEcho ($(if ($null -eq $m) { $null } else { $m[$(if ($m -is [System.Collections.IDictionary]) { 'key' } else { [long]$(Invoke-BashArith 'key' -Subscript) })] }) ? \"yes\" : \"\")"), result);
     }
 
     [Fact]
@@ -5171,7 +5171,7 @@ public class PsEmitterTests
     public void Transpile_AssociativeArrayAccess_EmitsHashtableAccess()
     {
         var result = PsEmitter.Transpile("echo \"${map[key]}\"");
-        Assert.Contains("$map[$(if ($map -is [System.Collections.IDictionary]) { 'key' } else { [long]$(Invoke-BashArith 'key') })]", result);
+        Assert.Contains("$map[$(if ($map -is [System.Collections.IDictionary]) { 'key' } else { [long]$(Invoke-BashArith 'key' -Subscript) })]", result);
     }
 
     [Fact]
