@@ -52,5 +52,5 @@ public enum ArithmeticBinaryOp
 public enum ArithmeticAssignmentOp
 {
     Assign, Add, Subtract, Multiply, Divide, Modulo, ShiftLeft, ShiftRight,
-    BitwiseAnd, BitwiseOr, BitwiseXor, Power,
+    BitwiseAnd, BitwiseOr, BitwiseXor,
 }

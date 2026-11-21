@@ -176,7 +176,6 @@ public static class BashArith
                     ArithmeticAssignmentOp.BitwiseAnd => current & rhs,
                     ArithmeticAssignmentOp.BitwiseOr => current | rhs,
                     ArithmeticAssignmentOp.BitwiseXor => current ^ rhs,
-                    ArithmeticAssignmentOp.Power => Power(current, rhs, assignment),
                     _ => rhs,
                 };
                 write(assignment.Name, value);

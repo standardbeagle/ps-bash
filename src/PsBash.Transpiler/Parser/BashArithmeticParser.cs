@@ -12,7 +12,7 @@ public sealed class BashArithmeticParser
         Amp, Pipe, Caret, Tilde, Shl, Shr, Lt, Le, Gt, Ge, EqEq, Ne,
         AndAnd, OrOr, Bang, Question, Colon, Comma, Assign, PlusEq,
         MinusEq, StarEq, SlashEq, PercentEq, ShlEq, ShrEq, AmpEq, PipeEq,
-        CaretEq, StarStarEq, Inc, Dec, LParen, RParen, CommandSub,
+        CaretEq, Inc, Dec, LParen, RParen, CommandSub,
     }
 
     private readonly record struct Tok(T Kind, long Number = 0, string? Text = null, string? Key = null, string? Suffix = null);
@@ -41,7 +41,7 @@ public sealed class BashArithmeticParser
     /// <c>division by 0 (error token is "0 + 2 ")</c>.
     /// <list type="bullet">
     /// <item><c>/</c> and <c>%</c> (division by 0): the right operand's first token (<c>10/(1-1)</c> -> "(1-1)").</item>
-    /// <item><c>**</c> (exponent less than 0) and <c>/=</c>, <c>%=</c>, <c>**=</c>: the token after the right operand, or
+    /// <item><c>**</c> (exponent less than 0) and <c>/=</c>, <c>%=</c>: the token after the right operand, or
     /// at the end the last token read (<c>2 ** -1 + 3</c> -> "+ 3", <c>2**-1</c> -> "1").</item>
     /// </list>
     /// </summary>
@@ -151,7 +151,7 @@ public sealed class BashArithmeticParser
             string name = Current.Text!;
             _position += 2;
             var assignment = new ArithmeticExpr.Assignment(name, op, ParseAssignment());
-            return op is ArithmeticAssignmentOp.Divide or ArithmeticAssignmentOp.Modulo or ArithmeticAssignmentOp.Power
+            return op is ArithmeticAssignmentOp.Divide or ArithmeticAssignmentOp.Modulo
                 ? NoteErrorToken(assignment, LastTokenStart())
                 : assignment;
         }
@@ -270,10 +270,10 @@ public sealed class BashArithmeticParser
             T.SlashEq => ArithmeticAssignmentOp.Divide, T.PercentEq => ArithmeticAssignmentOp.Modulo,
             T.ShlEq => ArithmeticAssignmentOp.ShiftLeft, T.ShrEq => ArithmeticAssignmentOp.ShiftRight,
             T.AmpEq => ArithmeticAssignmentOp.BitwiseAnd, T.PipeEq => ArithmeticAssignmentOp.BitwiseOr,
-            T.CaretEq => ArithmeticAssignmentOp.BitwiseXor, T.StarStarEq => ArithmeticAssignmentOp.Power,
+            T.CaretEq => ArithmeticAssignmentOp.BitwiseXor,
             _ => default,
         };
-        return token is >= T.Assign and <= T.StarStarEq;
+        return token is >= T.Assign and <= T.CaretEq;
     }
 
     private static List<Tok> Tokenize(string source, List<int> starts)
@@ -461,7 +461,8 @@ public sealed class BashArithmeticParser
     {
         token = text switch
         {
-            "<<=" => T.ShlEq, ">>=" => T.ShrEq, "**=" => T.StarStarEq,
+            // No `**=`: bash has none (expr.c); `x **= 2` is `x ** = 2`, "operand expected" at `= 2`.
+            "<<=" => T.ShlEq, ">>=" => T.ShrEq,
             "**" => T.StarStar, "<<" => T.Shl, ">>" => T.Shr, "<=" => T.Le, ">=" => T.Ge,
             "==" => T.EqEq, "!=" => T.Ne, "&&" => T.AndAnd, "||" => T.OrOr,
             "++" => T.Inc, "--" => T.Dec, "+=" => T.PlusEq, "-=" => T.MinusEq,

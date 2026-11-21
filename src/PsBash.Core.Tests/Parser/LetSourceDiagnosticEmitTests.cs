@@ -70,6 +70,9 @@ public class LetSourceDiagnosticEmitTests
     [InlineData("(1+2", "missing `)' (error token is \"2\")")]
     [InlineData("1?2", "`:' expected for conditional expression (error token is \"2\")")]
     [InlineData("1 @ 2", "syntax error: invalid arithmetic operator (error token is \"@ 2\")")]
+    // bash has no `**=`: `**` then `=` (was accepted as a power assignment: x=3; (( x **= 2 )) made x 9, status 0).
+    [InlineData("x **= 2 ", "syntax error: operand expected (error token is \"= 2 \")")]
+    [InlineData("x**=2", "syntax error: operand expected (error token is \"=2\")")]
     public void ParseArithmetic_SyntaxError_IsBashsMessage(string expr, string message)
         => Assert.Equal(message, Assert.Throws<BashArithmeticParseException>(() => BashArithmeticParser.Parse(expr)).Message);
 }
