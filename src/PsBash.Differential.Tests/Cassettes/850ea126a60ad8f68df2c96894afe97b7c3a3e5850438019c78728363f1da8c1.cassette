@@ -1,0 +1,27 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 317
+stdout-length: 60
+stderr-length: 0
+==== SCRIPT ====
+exec 2>/dev/null
+for ((i=1/0;;)); do echo body0; break; done; echo "s0 st=$?"
+for ((;1/0;)); do echo body1; break; done; echo "s1 st=$?"
+n=0; for ((;n<3;n=n/0)); do echo body2 $n; n=1; done; echo "s2 st=$?"
+for ((i=0;i<3;i++)); do echo ok$i; done; echo "s3 st=$?"
+for ((i=0;i<2;i++)); do false; done; echo "s4 st=$?"
+
+==== STDOUT ====
+s0 st=1
+s1 st=1
+body2 0
+s2 st=1
+ok0
+ok1
+ok2
+s3 st=0
+s4 st=1
+
+==== STDERR ====
+

@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 1
+script-length: 66
+stdout-length: 0
+stderr-length: 0
+==== SCRIPT ====
+exec 2>/dev/null
+a=(1 2)
+a[i/0]=x; echo same
+echo "next a=${a[*]}"
+==== STDOUT ====
+
+==== STDERR ====
+
