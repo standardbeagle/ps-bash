@@ -28,7 +28,16 @@ public class BashStateSnapshotJobInheritanceTests : IClassFixture<SharedPwshFixt
         var r = CmdResult.Run(_fixture.AcquireFresh(),
             set + $"; $__g = {Globals}; foreach ($__n in @({string.Join(", ", names.Select(n => "'" + n + "'"))})) " +
             "{ if ($__g.ContainsKey($__n)) { \"$__n=$($__g[$__n])\" } else { \"$__n=MISSING\" } }").AssertSuccess();
-        Assert.Equal(names.Select(n => $"{n}=mark-{n}"), r.Lines.Where(l => l.Contains('=')).ToList());
+        // The set options are then written on or off and the errexit suppression depth reset (JobOptions tests): those are
+        // present with their own values; every other name carries the parent's value.
+        var rewritten = new HashSet<string>(BashStateSnapshot.JobOptionGlobals) { "__BashErrexitSuppress" };
+        var lines = r.Lines.Where(l => l.Contains('=')).ToList();
+        Assert.Equal(names.Count, lines.Count);
+        for (int i = 0; i < names.Count; i++)
+        {
+            if (rewritten.Contains(names[i])) Assert.DoesNotContain("=MISSING", lines[i]);
+            else Assert.Equal($"{names[i]}=mark-{names[i]}", lines[i]);
+        }
     }
 
     [Fact]

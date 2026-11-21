@@ -1,0 +1,28 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 487
+stdout-length: 94
+stderr-length: 0
+==== SCRIPT ====
+set -- a1 a2; { echo "pos=$1 n=$#"; } & wait
+[[ abc =~ b(c) ]]; { echo "rem=${BASH_REMATCH[1]}"; } & wait
+g() { { echo "fpos=$1"; } & wait; }; g x
+a=(1 2 3); { echo "len=${#a[@]} all=${a[*]}"; } & wait
+declare -A m=([k]=v [j]=w); { echo "assoc=${m[k]}${m[j]} n=${#m[@]}"; } & wait
+{ a[0]=X; shift; echo "inner=${a[0]} $1"; } & wait; echo "outer=${a[0]} $1"
+h() { local -a la=(l1 l2); local -A lm=([x]=y); { echo "local=${la[1]} ${lm[x]}"; } & wait; }; h
+{ echo "again=${#a[@]}"; } & wait
+==== STDOUT ====
+pos=a1 n=2
+rem=c
+fpos=x
+len=3 all=1 2 3
+assoc=vw n=2
+inner=X a2
+outer=1 a1
+local=l2 y
+again=3
+
+==== STDERR ====
+
