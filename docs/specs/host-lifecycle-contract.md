@@ -152,8 +152,12 @@ recognises that it is a descendant of the busy host (`ProcessAncestry.IsDescenda
 it moves to slot k+1 at once: `IpcTransportFactory.ResolveSlotEndpoint(base, k)` = the endpoint plus `-x<k>`
 (a unix path that would overflow `sun_path` becomes a hashed name), brought up by the normal Daemon path
 (`EnsureHostReachableAsync`: HostSpawnLock single-flight, BuildIdentity replace, optimistic local reuse). A
-slot daemon is kept warm for repeated nested calls and idles out after 60 s (`PSBASH_HOST_IDLE_SECS`, unless
-the environment already asks for less) because nothing reaps it when its parent host goes away. When all
+slot daemon is kept warm for repeated nested calls and idles out after 60 s (the launcher passes it
+`--idle-secs=60`, or the user's `PSBASH_HOST_IDLE_SECS` when that is less: `HostIdleWindow.NestedHostArgument`;
+the host prefers the argument, `IdleShutdown.TimeoutFor`) because nothing reaps it when its parent host goes away.
+The launcher never sets the variable in its own process around the spawn: the process environment is every
+thread's, so a host or child another thread started meanwhile inherited it (guard
+`Core.Tests/ProcessEnvironmentWriteGuardTests`). When all
 `MaxExecSlots` (6) slots are occupied by an ancestor chain the launcher falls back to a private
 `PerInvocation` host. `PSBASH_PER_INVOCATION=1` is unchanged: such launchers always get a private host. After
 every framed command the host moves its process cwd out of the caller's directory (a persistent host must not

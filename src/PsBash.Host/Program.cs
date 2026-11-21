@@ -172,7 +172,7 @@ internal sealed class Program
         Environment.SetEnvironmentVariable(IpcTransportFactory.StatefulEnvVar, null);
         SdkWorker.StatefulSession = stateful;
         // A spill slot (endpoint -x{k}) serves bursts of parallel or nested commands and runs one at a time: one warm
-        // runspace, not two (its launcher already lowers its idle timeout to 60 s, IpcWorker.NestedIdleSecs).
+        // runspace, not two (its launcher passes --idle-secs=60, HostIdleWindow.NestedHostArgument).
         bool slotHost = IsSlotHost(args);
         await using var pool = WorkerPool.FromEnvironment(warmOverride: stateful ? 0 : null,
             defaultWarm: slotHost ? WorkerPool.SlotHostWarm : 2);
@@ -194,7 +194,7 @@ internal sealed class Program
         HostLog.SetEndpoint(scheme, endpoint);
         HostLog.Write($"start launcher-pid={GetNonInteractiveLauncherPid(args)?.ToString() ?? "-"} exe={Environment.ProcessPath}");
 
-        var idleTimeout = IdleShutdown.DefaultTimeout;
+        var idleTimeout = IdleShutdown.TimeoutFor(args);
         using var idle = new IdleShutdown(cts, idleTimeout);
 
         int? launcherPid = GetNonInteractiveLauncherPid(args);

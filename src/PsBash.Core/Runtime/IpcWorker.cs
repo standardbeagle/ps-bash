@@ -642,8 +642,6 @@ public sealed class IpcWorker : IWorker
     // PSBASH_SESSION, nested, or per-user daemons). Passed to a daemon this worker spawns so it
     // exits once the session is gone instead of idling out (GH #7).
     private ProcessIdentity? _sessionAnchor;
-    private const string NestedIdleEnvVar = "PSBASH_HOST_IDLE_SECS";
-    private const int NestedIdleSecs = 60;
 
     private async Task SpawnAndWaitAsync(CancellationToken ct)
     {
@@ -661,6 +659,12 @@ public sealed class IpcWorker : IWorker
         // daemon per call for the full idle timeout.
         else if (_sessionAnchor is { } anchor)
             args.Add($"{ProcessIdentity.SessionAnchorArg}={anchor.ToArgumentValue()}");
+        // A nested daemon (see StartAsync) idles out sooner than a top-level one: it only exists to serve repeated
+        // nested calls, and nothing reaps it when its parent host goes away. The window is THIS host's argument, never
+        // the launcher's own environment set around the spawn: that is the whole process's, so a host or child another
+        // thread started meanwhile inherited it, and the restore raced (HostIdleWindow).
+        if (_slot > 0)
+            args.Add(HostIdleWindow.NestedHostArgument(Environment.GetEnvironmentVariable(HostIdleWindow.EnvVar)));
 
         Process? proc = null;
         bool spawnSucceeded = false;
@@ -672,24 +676,7 @@ public sealed class IpcWorker : IWorker
             // PARENT from ever seeing EOF (the Bash tool hanging after every command;
             // `tman test` hanging after the suite). Each platform severs inheritance
             // at spawn — see StartHostProcess.
-            // A nested daemon (see StartAsync) idles out sooner than a top-level one: it only
-            // exists to serve repeated nested calls, and nothing reaps it when its parent host
-            // goes away. The host reads PSBASH_HOST_IDLE_SECS from its environment.
-            string? savedIdle = null;
-            bool lowerIdle = _slot > 0;
-            if (lowerIdle)
-            {
-                savedIdle = Environment.GetEnvironmentVariable(NestedIdleEnvVar);
-                if (!int.TryParse(savedIdle, out var cur) || cur <= 0 || cur > NestedIdleSecs)
-                    Environment.SetEnvironmentVariable(NestedIdleEnvVar, NestedIdleSecs.ToString());
-                else
-                    lowerIdle = false;
-            }
-            try { proc = StartHostProcess(args); }
-            finally
-            {
-                if (lowerIdle) Environment.SetEnvironmentVariable(NestedIdleEnvVar, savedIdle);
-            }
+            proc = StartHostProcess(args);
             // A shared host outlives this launcher, which may be killed before the host binds: record
             // it so the next spawn-lock holder waits for it rather than starting a second one.
             recordPending = _lifetime != Lifetime.PerInvocation && _scheme == "unix";

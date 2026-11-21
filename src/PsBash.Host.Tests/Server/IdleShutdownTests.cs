@@ -11,6 +11,19 @@ namespace PsBash.Host.Tests.Server;
 [Collection("SdkHost")]
 public sealed class IdleShutdownTests
 {
+    // A nested daemon's launcher hands it `--idle-secs=60` (HostIdleWindow.NestedHostArgument); the argument wins over
+    // PSBASH_HOST_IDLE_SECS, which the launcher once set around the spawn in its own, shared, process environment.
+    [Theory]
+    [InlineData(new[] { "--ipc-endpoint=unix:/x", "--idle-secs=60" }, 60)]
+    [InlineData(new[] { "--idle-secs", "45", "--ipc-endpoint=unix:/x" }, 45)]
+    [InlineData(new[] { "--idle-secs=7" }, 7)]
+    public void TimeoutFor_TheIdleSecsArgument_SetsTheWindow(string[] args, int expectedSecs)
+        => Assert.Equal(TimeSpan.FromSeconds(expectedSecs), IdleShutdown.TimeoutFor(args));
+
+    [Fact]
+    public void TimeoutFor_NoArgument_IsTheEnvironmentDefault()
+        => Assert.Equal(IdleShutdown.DefaultTimeout, IdleShutdown.TimeoutFor(["--ipc-endpoint=unix:/x", "--idle-secs=0"]));
+
     [Fact]
     public void NeverConnected_CancelsAfterTimeout()
     {

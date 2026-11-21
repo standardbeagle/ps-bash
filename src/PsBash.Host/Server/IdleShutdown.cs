@@ -20,8 +20,25 @@ namespace PsBash.Host.Server;
 /// </remarks>
 public sealed class IdleShutdown : IDisposable
 {
-    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(
-        int.TryParse(Environment.GetEnvironmentVariable("PSBASH_HOST_IDLE_SECS"), out var s) && s > 0 ? s : 600);
+    /// <summary>The window from <c>PSBASH_HOST_IDLE_SECS</c> alone (no <c>--idle-secs</c>): see <see cref="TimeoutFor"/>.</summary>
+    public static readonly TimeSpan DefaultTimeout = TimeoutFor([]);
+
+    /// <summary>
+    /// This host's window: its <c>--idle-secs=N</c> argument (a nested daemon's launcher passes 60), else
+    /// <c>PSBASH_HOST_IDLE_SECS</c>, else 600 s (<see cref="PsBash.Core.Runtime.Ipc.HostIdleWindow"/>).
+    /// </summary>
+    public static TimeSpan TimeoutFor(string[] args)
+    {
+        string? argValue = null;
+        var prefix = PsBash.Core.Runtime.Ipc.HostIdleWindow.Arg + "=";
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (args[i] == PsBash.Core.Runtime.Ipc.HostIdleWindow.Arg && i + 1 < args.Length) argValue = args[i + 1];
+            else if (args[i].StartsWith(prefix, StringComparison.Ordinal)) argValue = args[i][prefix.Length..];
+        }
+        return PsBash.Core.Runtime.Ipc.HostIdleWindow.Resolve(
+            argValue, Environment.GetEnvironmentVariable(PsBash.Core.Runtime.Ipc.HostIdleWindow.EnvVar));
+    }
 
     private readonly CancellationTokenSource _cts;
     private TimeSpan _timeout;

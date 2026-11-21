@@ -58,7 +58,8 @@ The sequential warm path is unchanged: slot 0, lease free, no extra round trip.
 
 - No deadlock by construction: a command never waits on a lease held by its own ancestor.
 - No process-wide queue: a busy host costs a launcher one tiny round trip, not a wait.
-- Idle slots exit after 60 s (the spawning launcher lowers `PSBASH_HOST_IDLE_SECS`, `IpcWorker.NestedIdleSecs`; slot 0
+- Idle slots exit after 60 s (the spawning launcher passes the host `--idle-secs=60`, `HostIdleWindow.NestedHostArgument`,
+  never its own environment set around the spawn, which every thread shares; slot 0
   keeps 600 s), so burst parallelism does not leave daemons behind. A slot host (endpoint `-x<k>`,
   `IpcTransportFactory.IsSlotEndpoint`) also warms 1 runspace, not 2 (`WorkerPool.SlotHostWarm`; `PSBASH_POOL_WARM`
   overrides): it runs one command at a time. `ps-bash host list` shows every host with its role and memory.
