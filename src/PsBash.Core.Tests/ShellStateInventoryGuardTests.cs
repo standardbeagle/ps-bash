@@ -38,6 +38,8 @@ public class ShellStateInventoryGuardTests
         ["__BashEvalDepth"] = "eval recursion counter; a job process starts at 0",
         ["__BashEvalReturn"] = "one-command hand-off: set by a return that eval text or a run-time command name ran, read and cleared by the check right after it",
         ["__BashBaselineFunctions"] = "names of the functions every host defines at startup; read by BashStateSnapshot",
+        ["__BashJobOutput"] = "host plumbing: the running command's OutputMux (SdkWorker sets it per runspace); Invoke-BashBackground gives a live job a channel of it",
+        ["__psbashBgJobTable"] = "module plumbing: the job table (BashBgJobTable) the psm1 builds at load; Invoke-BashBackground launches through it",
     };
 
     private static string RepoRoot()
