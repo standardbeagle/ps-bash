@@ -30,7 +30,7 @@ public class JobSelfSignalGuardTests
     [Fact]
     public void Terminate_EndsAJobLikeItsExit_BeforeAnyPipelineStop()
     {
-        string terminate = Body(Read("src", "PsBash.Cmdlets", "ShellSignalTraps.cs"), "internal static Exception Terminate(");
+        string terminate = EndShellBody();
         int job = terminate.IndexOf("InBackgroundJob(cmdlet)", StringComparison.Ordinal);
         int stop = terminate.IndexOf("new PipelineStoppedException", StringComparison.Ordinal);
         Assert.True(job >= 0 && stop > job, "Terminate must handle a background job before the pipeline stop");
@@ -44,7 +44,7 @@ public class JobSelfSignalGuardTests
     [Fact]
     public void ASubshellSignallingItself_EndsOnlyThatSubshell()
     {
-        string terminate = Body(Read("src", "PsBash.Cmdlets", "ShellSignalTraps.cs"), "internal static Exception Terminate(");
+        string terminate = EndShellBody();
         int sub = terminate.IndexOf("throw new BashSubshellExitException(status)", StringComparison.Ordinal);
         int job = terminate.IndexOf("if (inJob)", StringComparison.Ordinal);
         int stop = terminate.IndexOf("new PipelineStoppedException", StringComparison.Ordinal);
@@ -72,6 +72,15 @@ public class JobSelfSignalGuardTests
     }
 
     // The text from the declaration to its matching close brace.
+    // Terminate (a signal) and a fatal error raised in a cmdlet (an array subscript error under bash -c) end the shell
+    // through one EndShell: the subshell exit, then the job, then the script stop.
+    private static string EndShellBody()
+    {
+        string src = Read("src", "PsBash.Cmdlets", "ShellSignalTraps.cs");
+        Assert.Contains("return EndShell(cmdlet, status, innermostSubshell, signal);", Body(src, "internal static Exception Terminate("));
+        return Body(src, "private static Exception EndShell(");
+    }
+
     private static string Body(string src, string declaration)
     {
         int start = src.IndexOf(declaration, StringComparison.Ordinal);
