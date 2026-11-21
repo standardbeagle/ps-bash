@@ -1,0 +1,84 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 548
+stdout-length: 941
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"
+cat > s.sh <<'EOF'
+unalias
+echo "rc=$?"
+test a -eq 1
+echo "rc=$?"
+[ a -eq 1 ]
+echo "rc=$?"
+[ 1 -eq 1
+echo "rc=$?"
+test 1 -eq
+echo "rc=$?"
+wait %5
+echo "rc=$?"
+wait xyz
+echo "rc=$?"
+readonly y=1
+f() { local y=2; echo "in rc=$?"; }
+f
+help -Q
+echo "rc=$?"
+declare -Q
+echo "rc=$?"
+cd /nonexist_zz
+echo "rc=$?"
+cd a b
+echo "rc=$?"
+builtin nosuch
+echo "rc=$?"
+g() { local -p nosuchv; echo "rc=$?"; }
+g
+type nosuchcmd
+echo "rc=$?"
+alias nosuchal
+echo "rc=$?"
+EOF
+bash s.sh >out 2>err; cat err; echo ---; cat out
+cd /; rm -rf "$W"
+==== STDOUT ====
+unalias: usage: unalias [-a] name [name ...]
+s.sh: line 3: test: a: integer expression expected
+s.sh: line 5: [: a: integer expression expected
+s.sh: line 7: [: missing `]'
+s.sh: line 9: test: 1: unary operator expected
+s.sh: line 11: wait: %5: no such job
+s.sh: line 13: wait: `xyz': not a pid or valid job spec
+s.sh: line 16: local: y: readonly variable
+s.sh: line 18: help: -Q: invalid option
+help: usage: help [-dms] [pattern ...]
+s.sh: line 20: declare: -Q: invalid option
+declare: usage: declare [-aAfFgiIlnrtux] [name[=value] ...] or declare -p [-aAfFilnrtux] [name ...]
+s.sh: line 22: cd: /nonexist_zz: No such file or directory
+s.sh: line 24: cd: too many arguments
+s.sh: line 26: builtin: nosuch: not a shell builtin
+s.sh: line 28: local: nosuchv: not found
+s.sh: line 30: type: nosuchcmd: not found
+s.sh: line 32: alias: nosuchal: not found
+---
+rc=2
+rc=2
+rc=2
+rc=2
+rc=2
+rc=127
+rc=1
+in rc=1
+rc=2
+rc=2
+rc=1
+rc=1
+rc=1
+rc=1
+rc=1
+rc=1
+
+==== STDERR ====
+

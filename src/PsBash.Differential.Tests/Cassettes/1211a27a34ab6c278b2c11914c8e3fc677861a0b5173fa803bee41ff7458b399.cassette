@@ -1,0 +1,51 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 400
+stdout-length: 936
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"
+cat > s.sh <<'EOF'
+echo $((1/0+2))
+echo $(( 1 / 0 + 2 ))
+echo $(( 10/(1-1) ))
+echo $(( 2 ** -1 + 3 ))
+echo $(( 08 ))
+echo $(( 3#9 ))
+x=0; echo $(( 5 / x + 1 ))
+echo $(( 1, 2/0, 3 ))
+(( x = 4 / 0 ))
+echo "rc=$?"
+((   1+   ))
+echo "rc=$?"
+(( 1 @ 2 ))
+echo "rc=$?"
+echo $(( 2 + 3 4 ))
+y=$(( 2 + ))
+echo end
+EOF
+bash s.sh >out 2>err; cat err; echo ---; cat out
+cd /; rm -rf "$W"
+==== STDOUT ====
+s.sh: line 1: 1/0+2: division by 0 (error token is "0+2")
+s.sh: line 2: 1 / 0 + 2 : division by 0 (error token is "0 + 2 ")
+s.sh: line 3: 10/(1-1) : division by 0 (error token is "(1-1) ")
+s.sh: line 4: 2 ** -1 + 3 : exponent less than 0 (error token is "+ 3 ")
+s.sh: line 5: 08: value too great for base (error token is "08")
+s.sh: line 6: 3#9: value too great for base (error token is "3#9")
+s.sh: line 7: 5 / x + 1 : division by 0 (error token is "x + 1 ")
+s.sh: line 8: 1, 2/0, 3 : division by 0 (error token is "0, 3 ")
+s.sh: line 9: ((: x = 4 / 0 : division by 0 (error token is "0 ")
+s.sh: line 11: ((: 1+   : syntax error: operand expected (error token is "+   ")
+s.sh: line 13: ((: 1 @ 2 : syntax error: invalid arithmetic operator (error token is "@ 2 ")
+s.sh: line 15: 2 + 3 4 : syntax error in expression (error token is "4 ")
+s.sh: line 16: 2 + : syntax error: operand expected (error token is "+ ")
+---
+rc=1
+rc=1
+rc=1
+end
+
+==== STDERR ====
+

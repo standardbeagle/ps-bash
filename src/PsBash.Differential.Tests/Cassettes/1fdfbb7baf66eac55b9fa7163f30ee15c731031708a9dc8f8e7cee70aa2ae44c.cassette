@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 114
+stdout-length: 19
+stderr-length: 0
+==== SCRIPT ====
+false; echo "a $?" | cat; echo "ps=${PIPESTATUS[*]}"; false; true | echo "b $?"; (exit 3); echo "c $?" | cat | cat
+==== STDOUT ====
+a 1
+ps=0 0
+b 1
+c 3
+
+==== STDERR ====
+

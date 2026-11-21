@@ -1,0 +1,68 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 574
+stdout-length: 468
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"
+cat > s.sh <<'EOF'
+for i in 1; do
+  echo $i
+  { :; } < nofileA
+  echo after
+done
+if true; then
+  echo x
+  while false; do :; done < nofileB
+fi
+(
+  { :; } < nofileE
+)
+echo z | while read l; do
+  { :; } < nofileF
+done
+true && {
+  { :; } < nofileG
+}
+case x in
+  x)
+    { :; } < nofileH
+    ;;
+esac
+for ((i=0; i<1; i++)); do
+  echo $i
+  { :; } < nofileI
+done
+for i in 1; do
+  :
+done < nofileJ
+while read l; do
+  for j in 1; do :; done
+  { :; } < nofileK
+done <<EOF2
+a
+EOF2
+echo end
+EOF
+bash s.sh >out 2>err; cat err; echo ---; cat out
+cd /; rm -rf "$W"
+==== STDOUT ====
+s.sh: line 1: nofileA: No such file or directory
+s.sh: line 9: nofileB: No such file or directory
+s.sh: line 12: nofileE: No such file or directory
+s.sh: line 15: nofileF: No such file or directory
+s.sh: line 18: nofileG: No such file or directory
+s.sh: line 19: nofileH: No such file or directory
+s.sh: line 27: nofileI: No such file or directory
+s.sh: line 30: nofileJ: No such file or directory
+s.sh: line 36: nofileK: No such file or directory
+---
+1
+after
+x
+0
+end
+
+==== STDERR ====
+

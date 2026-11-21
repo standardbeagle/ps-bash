@@ -1,0 +1,40 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 422
+stdout-length: 441
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"
+cat > s.sh <<'EOF'
+i=0
+while (( i++ < 2 )); do
+  cd /nonexist_zz 2>/dev/null
+  (( i == 2 && 1/0 ))
+done
+for (( i=0; i<1/0; i++ )); do echo no; done
+if (( 1/0 )); then echo y; else echo n; fi
+while (( 2/0 )); do break; done
+if [[ 1/0 -eq 1 ]]; then :; fi
+while [[ x -eq 1/0 ]]; do :; done
+[[ 1/0 -eq 1 ]]
+echo "rc=$?"
+echo end
+EOF
+bash s.sh >out 2>err; cat err; echo ---; cat out
+cd /; rm -rf "$W"
+==== STDOUT ====
+s.sh: line 4: ((: i == 2 && 1/0 : division by 0 (error token is "0 ")
+s.sh: line 6: ((: i<1/0: division by 0 (error token is "0")
+s.sh: line 7: ((: 1/0 : division by 0 (error token is "0 ")
+s.sh: line 8: ((: 2/0 : division by 0 (error token is "0 ")
+s.sh: line 9: [[: 1/0: division by 0 (error token is "0")
+s.sh: line 10: [[: 1/0: division by 0 (error token is "0")
+s.sh: line 11: [[: 1/0: division by 0 (error token is "0")
+---
+n
+rc=1
+end
+
+==== STDERR ====
+
