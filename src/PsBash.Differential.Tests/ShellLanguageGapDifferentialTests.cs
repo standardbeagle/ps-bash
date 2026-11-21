@@ -211,4 +211,54 @@ public class ShellLanguageGapDifferentialTests
         + "{ a[0]=X; shift; echo \"inner=${a[0]} $1\"; } & wait; echo \"outer=${a[0]} $1\"\n"
         + "h() { local -a la=(l1 l2); local -A lm=([x]=y); { echo \"local=${la[1]} ${lm[x]}\"; } & wait; }; h\n"
         + "{ echo \"again=${#a[@]}\"; } & wait");
+
+    /// <summary>An arithmetic expansion error is bash's DISCARD: the rest of the top-level command is dropped (the commands
+    /// after it on its line, a function and the line that called it, a whole loop), status 1, and the next line runs; a
+    /// subshell or command substitution stops it there. The arithmetic COMMAND <c>(( 1/0 ))</c> only fails. ps-bash ran
+    /// the rest of the line. An indexed subscript (<c>${a[1/0]}</c>, <c>a[i/0]=x</c>, <c>${#a[1/0]}</c>) is the same
+    /// arithmetic. stderr is closed: after a multi-line loop bash's own line numbers run low.</summary>
+    [SkippableFact]
+    public Task ArithmeticExpansionError_DiscardsTheRestOfTheLine() => Same(
+        "exec 2>/dev/null\n"
+        + "echo a; echo $((1/0)); echo same1\necho \"L2 st=$?\"\n"
+        + "f() { echo $((1/0)); echo infn; }; f; echo same3\nf\necho L5\n"
+        + "( echo $((1/0)); echo sub ); echo \"same7 st=$?\"\n"
+        + "x=$((1/0)); echo same8\n(( 1/0 )); echo \"same9 st=$?\"\n"
+        + "if [ $((1/0)) ]; then echo then; fi; echo same10\n"
+        + "y=$(echo $((1/0)); echo insub); echo \"same11 y=$y\"\n"
+        + "a=(1 2); echo ${a[1/0]}; echo same12\na[i/0]=x; echo same13\necho \"${#a[1/0]}\"; echo same14\necho \"a=${a[*]}\"\n"
+        + "for i in 1 2; do\n  echo \"it$i $((1/0))\"\n  echo in\ndone\necho \"end st=$?\"");
+
+    /// <summary>
+    /// A failed clause of <c>for ((init; cond; step))</c> ends the loop with status 1: a bad init or condition before the
+    /// body ever runs, a bad step after that pass. ps-bash ran on (an empty condition is true: <c>for ((i=1/0;;))</c> hit
+    /// the loop limit) or kept the body's status.
+    /// </summary>
+    [SkippableFact]
+    public Task ForArithClauseError_EndsTheLoopWithStatus1() => Same(
+        "exec 2>/dev/null\n"
+        + "for ((i=1/0;;)); do echo body0; break; done; echo \"s0 st=$?\"\n"
+        + "for ((;1/0;)); do echo body1; break; done; echo \"s1 st=$?\"\n"
+        + "n=0; for ((;n<3;n=n/0)); do echo body2 $n; n=1; done; echo \"s2 st=$?\"\n"
+        + "for ((i=0;i<3;i++)); do echo ok$i; done; echo \"s3 st=$?\"\n"
+        + "for ((i=0;i<2;i++)); do false; done; echo \"s4 st=$?\"\n");
+
+    /// <summary>
+    /// With a DEBUG trap anywhere in the text a <c>for ((;;))</c> is emitted another way (EmitDebugForArith): it lost the
+    /// body's status (the step's was left), an empty condition did not parse (<c>if (-not ())</c>), and a failed clause
+    /// did not end it.
+    /// </summary>
+    [SkippableFact]
+    public Task ForArithUnderADebugTrap_KeepsBashStatus() => Same(
+        "exec 2>/dev/null\n"
+        + "for ((;1/0;)); do echo body1; break; done; echo \"s1 st=$?\"\n"
+        + "n=0; for ((;n<3;n=n/0)); do echo body2 $n; n=1; done; echo \"s2 st=$?\"\n"
+        + "for ((i=0;i<2;i++)); do false; done; echo \"s4 st=$?\"\n"
+        + "trap 'echo dbg' DEBUG\n"
+        + "for ((i=1/0;;)); do echo body5; break; done; echo \"s5 st=$?\"\n"
+        + "trap - DEBUG\n"
+        + "trap 'echo d2' DEBUG\n"
+        + "for ((i=0;i<2;i++)); do false; done; echo \"s6 st=$?\"\n"
+        + "for ((i=0;i<2;i++)); do continue; done; echo \"s7 st=$?\"\n"
+        + "trap - DEBUG\n");
 }

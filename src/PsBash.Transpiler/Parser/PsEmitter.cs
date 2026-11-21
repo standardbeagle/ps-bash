@@ -69,6 +69,9 @@ public static partial class PsEmitter
     /// which a discarding expansion error ends one at a time (PsBuild.DiscardLineScope, EmitCommandList).</summary>
     [ThreadStatic]
     private static Command? _rootCommand;
+
+    /// <summary>The statements after a top-level <c>exec &gt;f</c> (EmitCommandList): top-level commands too, each in its line scope.</summary>
+    [ThreadStatic] private static Command.CommandList? _execRestRoot;
     /// <summary><c>bash -i -c</c> (the launcher's psbash_interactive prelude) under <c>set -u</c>: an unbound variable
     /// discards its input line instead of ending the shell, so every top-level command gets the line scope.</summary>
     [ThreadStatic]
@@ -762,7 +765,8 @@ public static partial class PsEmitter
                  || _definedFunctions is { } fns && fns.Contains(name) || IsMappedCommandName(name)),
         // `x=$(missing)`, `x=$(< missing)`, `x=$(( 2 + ))`: the substitution's diagnostic reports the assignment's line.
         Command.ShAssignment assign => assign.IsLocal || ContainsCommandSub(assign) || HasOpenableRedirect(assign.Redirects)
-            || assign.Pairs.Any(p => p.Value is { } v && ContainsArithSub(v.Parts)),
+            || assign.Pairs.Any(p => (p.Value is { } v && ContainsArithSub(v.Parts))
+                || (p.Name.IndexOf('[') is > 0 and var open && IsArithmeticSubscript(p.Name[open..]))),
         Command.Pipeline p => p.Commands.Any(MayRaiseShellDiagnostic),
         Command.AndOrList a => a.Commands.Any(MayRaiseShellDiagnostic),
         _ => false,
@@ -2201,19 +2205,24 @@ public static partial class PsEmitter
                 // bash's loop status is the last body command's (0 when it never ran, or after `continue`/`break`), not
                 // the step's or the failed condition's: saved per pass and restored after the loop.
                 string st = "$__psbash_fst" + depth;
+                // A failed clause (`for ((i=1/0;;))`, `for ((;1/0;))`) ends the loop with status 1.
+                string failed = ForArithFailedVar(forArith, depth);
                 var sb = new StringBuilder();
                 sb.Append(IterGuardPrefix(depth)).Append(st).Append(" = 0; ");
+                if (failed.Length > 0) sb.Append(failed).Append(" = $false; ");
                 sb.Append(label).Append("for (");
-                sb.Append(EmitForArithClause(forArith.Init, forArith.Line));
+                sb.Append(EmitForArithClause(forArith.Init, forArith.Line, failed));
                 sb.Append("; ");
-                sb.Append(EmitForArithCondition(forArith.Cond, forArith.Line));
+                string cond = EmitForArithCondition(forArith.Cond, forArith.Line, failed);
+                sb.Append(failed.Length == 0 ? cond : cond.Length == 0 ? "-not " + failed : "-not " + failed + " -and (" + cond + ")");
                 sb.Append("; ");
-                sb.Append(EmitForArithClause(forArith.Step, forArith.Line));
+                sb.Append(EmitForArithClause(forArith.Step, forArith.Line, failed));
                 sb.Append(") { ");
                 sb.Append(IterGuardCheck(depth));
                 sb.Append(st).Append(" = 0; ");
                 sb.Append(EmitBody(forArith.Body));
                 sb.Append("; ").Append(st).Append(" = $global:LASTEXITCODE }; ").Append(PsBuild.SetStatusTo(st));
+                if (failed.Length > 0) sb.Append("; if (").Append(failed).Append(") { $global:LASTEXITCODE = 1 }");
                 return ApplyCompoundRedirects(sb.ToString(), forArith.Redirects);
         }
         finally
@@ -2237,8 +2246,13 @@ public static partial class PsEmitter
     {
         int line = forArith.Line;
         string first = "$__psbash_af" + depth;
+        string failed = ForArithFailedVar(forArith, depth);
+        // The loop's status is the last body command's, as in EmitForArith (the DEBUG form left the step's).
+        string st = "$__psbash_fst" + depth;
         var sb = new StringBuilder();
-        string init = EmitForArithClause(forArith.Init, line);
+        sb.Append(st).Append(" = 0; ");
+        if (failed.Length > 0) sb.Append(failed).Append(" = $false; ");
+        string init = EmitForArithClause(forArith.Init, line, failed);
         if (forArith.Init is not null) sb.Append(DebugAt(line));
         if (init.Length > 0) sb.Append(init).Append("; ");
         sb.Append(first).Append(" = $true; ");
@@ -2246,12 +2260,16 @@ public static partial class PsEmitter
         sb.Append(IterGuardCheck(depth));
         sb.Append("if (-not ").Append(first).Append(") { ");
         if (forArith.Step is not null)
-            sb.Append(DebugAt(line)).Append(EmitForArithClause(forArith.Step, line)).Append("; ");
+            sb.Append(DebugAt(line)).Append(EmitForArithClause(forArith.Step, line, failed)).Append("; ");
         sb.Append("}; ").Append(first).Append(" = $false; ");
-        if (forArith.Cond is not null) sb.Append(DebugAt(line));
-        sb.Append("if (-not (").Append(EmitForArithCondition(forArith.Cond, line)).Append(")) { break }; ");
+        if (failed.Length > 0) sb.Append("if (").Append(failed).Append(") { break }; ");
+        // An empty condition is true (`for ((;;))`): nothing to test (`if (-not ())` did not parse).
+        if (forArith.Cond is not null)
+            sb.Append(DebugAt(line)).Append("if (-not (").Append(EmitForArithCondition(forArith.Cond, line, failed)).Append(")) { break }; ");
+        sb.Append(st).Append(" = 0; ");
         sb.Append(EmitBody(forArith.Body));
-        sb.Append(" }");
+        sb.Append("; ").Append(st).Append(" = $global:LASTEXITCODE }; ").Append(PsBuild.SetStatusTo(st));
+        if (failed.Length > 0) sb.Append("; if (").Append(failed).Append(") { $global:LASTEXITCODE = 1 }");
         return sb.ToString();
     }
 
@@ -3514,8 +3532,18 @@ public static partial class PsEmitter
     /// names the <c>for</c>'s line (<c>s.sh: line 6: ((: i&lt;1/0: division by 0</c>) -- recorded in the clause, which
     /// runs again after the body recorded later lines.
     /// </summary>
-    private static string EmitForArithClause(ArithmeticSyntax? syntax, int line)
-        => syntax is null ? "" : "$null = " + WithConditionLine(new Command.ArithCommand(syntax, line), EmitArithmeticInvocation(syntax, ArithCommandLabel));
+    /// With <paramref name="failed"/>, the clause sets that variable to whether it failed: a failed evaluation yields no
+    /// value (the condition's test, <see cref="EmitArithConditionExpr"/>), and bash then ends the loop with status 1.
+    private static string EmitForArithClause(ArithmeticSyntax? syntax, int line, string failed = "")
+    {
+        if (syntax is null) return "";
+        string evaluation = WithConditionLine(new Command.ArithCommand(syntax, line), EmitArithmeticInvocation(syntax, ArithCommandLabel));
+        return failed.Length == 0 ? "$null = " + evaluation : failed + " = @(" + evaluation + ").Count -eq 0";
+    }
+
+    /// <summary>The variable that records a failed clause of a <c>for ((;;))</c> (none when all three are empty).</summary>
+    private static string ForArithFailedVar(Command.ForArith forArith, int depth)
+        => forArith.Init is null && forArith.Cond is null && forArith.Step is null ? "" : "$__psbash_afe" + depth;
 
     /// <summary>
     /// Condition clause of a C-style <c>for ((init; cond; step))</c> header.
@@ -3529,8 +3557,17 @@ public static partial class PsEmitter
     /// invalid PowerShell parse). Mirrors how a standalone/if/while
     /// <c>(( … ))</c> condition is emitted.
     /// </summary>
-    private static string EmitForArithCondition(ArithmeticSyntax? syntax, int line) =>
-        syntax is null ? "" : WithConditionLine(new Command.ArithCommand(syntax, line), EmitArithConditionExpr(syntax));
+    /// With <paramref name="failed"/>, a failed evaluation (no value: `for ((;1/0;))`) also sets that variable, so the
+    /// loop ends with status 1 rather than the last body command's.
+    private static string EmitForArithCondition(ArithmeticSyntax? syntax, int line, string failed = "")
+    {
+        if (syntax is null) return "";
+        var cmd = new Command.ArithCommand(syntax, line);
+        if (failed.Length == 0) return WithConditionLine(cmd, EmitArithConditionExpr(syntax));
+        string values = failed + "v";
+        return WithConditionLine(cmd, "(@(" + values + " = @(" + EmitArithmeticInvocation(syntax, ArithCommandLabel) + "); "
+            + failed + " = " + values + ".Count -eq 0; " + values + ") -ne 0)");
+    }
 
     /// <summary>
     /// Emit a condition expression for use inside <c>if</c>/<c>elif</c>.
@@ -8449,11 +8486,19 @@ public static partial class PsEmitter
             if (p is WordPart.DoubleQuoted dq && ContainsArithSub(dq.Parts)) return true;
             if (p is WordPart.BracedVarSub { ArgWord: { } arg } && ContainsArithSub(arg)) return true;
             // `${a[1/0]}`: an indexed subscript is an arithmetic expression (`s.sh: line 6: 1/0: division by 0`).
-            if (p is WordPart.BracedVarSub { Suffix: ['[', ..] suffix } && BashParser.FindSubscriptClose(suffix, 0) is > 1 and var close
-                && suffix.AsSpan(1, close - 1) is var sub && sub is not ("@" or "*") && !IsDigitsOnlySubscript(sub)) return true;
+            if (p is WordPart.BracedVarSub { Suffix: { } suffix } && IsArithmeticSubscript(suffix.StartsWith("#L[", StringComparison.Ordinal) ? suffix[2..] : suffix))
+                return true;
         }
         return false;
     }
+
+    /// <summary>
+    /// <paramref name="text"/> starts with an indexed subscript that is evaluated as arithmetic and so can fail
+    /// (<c>[1/0]</c>, <c>[i+1]</c>): not <c>[@]</c>, <c>[*]</c> or digits only.
+    /// </summary>
+    private static bool IsArithmeticSubscript(string text)
+        => text is ['[', ..] && BashParser.FindSubscriptClose(text, 0) is > 1 and var close
+           && text.AsSpan(1, close - 1) is var sub && sub is not ("@" or "*") && !IsDigitsOnlySubscript(sub);
 
     /// <summary>A subscript of digits only (<c>a[3]</c>): evaluating it cannot fail, so it needs no diagnostic path. Not a bare-number decision (PsNumberLiteral owns those).</summary>
     private static bool IsDigitsOnlySubscript(ReadOnlySpan<char> text)
@@ -11455,9 +11500,11 @@ public static partial class PsEmitter
         => EmitArraySlice(PsBuild.BuildPositionalExpansion("@"), suffix, inDoubleQuote, positional: true);
 
     // `${a[$i]}`: an associative array uses the value as the key; an indexed array evaluates it as an arithmetic
-    // expression (`code='1+2'; ${a[$code]}` is a[3]). A plain integer skips the evaluator.
+    // expression (`code='1+2'; ${a[$code]}` is a[3]). A plain integer skips the evaluator. The evaluator is written as a
+    // WORD (`$(Invoke-BashArith`): a subscript error discards the rest of the line in bash, as `$((1/0))` does
+    // (InvokeBashArithmeticCommand.IsWordExpansion, PsBuild.CanDiscardLine).
     private static string EmitVarSubscript(string arrayVar, string valueRef)
-        => $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {valueRef} }} elseif ([string]{valueRef} -match '^-?[0-9]+$') {{ [long]{valueRef} }} else {{ [long](Invoke-BashArith ([string]{valueRef})) }})";
+        => $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {valueRef} }} elseif ([string]{valueRef} -match '^-?[0-9]+$') {{ [long]{valueRef} }} else {{ [long]$(Invoke-BashArith ([string]{valueRef})) }})";
 
     // `${a[i]}` / `${a[i+1]}`: on an indexed array the subscript is an arithmetic expression (bare names are
     // variables); on an associative array it is the literal key. The array kind is known only at run time.
@@ -11472,14 +11519,14 @@ public static partial class PsEmitter
         if (subscript.IndexOfAny(['$', '`', '"', '\'', '\\']) >= 0)
         {
             string dyn = FlattenPartsToDoubleQuotedString(BashParser.DecomposeWord(subscript));
-            return $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {dyn} }} else {{ [long](Invoke-BashArith {dyn}) }})";
+            return $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {dyn} }} else {{ [long]$(Invoke-BashArith {dyn}) }})";
         }
         string key = PsBuild.SingleQuote(subscript);
         // `${a[b=2]}` / `${a[i<2?0:1]}` / `${a[i++]}`: every arithmetic operator (assignments too, whose side effect
         // persists) is evaluated on an indexed array; an associative array still takes the text as its key.
         if (!System.Text.RegularExpressions.Regex.IsMatch(subscript, @"^[\w+\-*/% ()\[\]=<>!&|^~?:,]+$"))
             return key;
-        return $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {key} }} else {{ [long](Invoke-BashArith {key}) }})";
+        return $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {key} }} else {{ [long]$(Invoke-BashArith {key}) }})";
     }
 
     /// <summary>
@@ -11858,7 +11905,8 @@ public static partial class PsEmitter
     {
         // The top-level commands of the text: each may need the line scope of a discarding expansion error, which is
         // known only once they are emitted (a function defined on one line and called on another), so they are kept.
-        var rootPieces = ReferenceEquals(list, _rootCommand) ? new List<(string Text, bool SameLine, bool LineStarts)>() : null;
+        var rootPieces = ReferenceEquals(list, _rootCommand) || ReferenceEquals(list, _execRestRoot)
+            ? new List<(string Text, bool SameLine, bool LineStarts)>() : null;
         bool[]? parsedLineStarts = rootPieces is not null ? BashParser.LineStartsOf(list) : null;
         // The root script reports each input line to the shell's reader as it starts (ReaderCommandFor; "" for most scripts).
         var root = list;
@@ -11874,10 +11922,27 @@ public static partial class PsEmitter
             // `exec >&2; rest`: the rest of the list runs under the shell-wide redirection.
             if (i + 1 < list.Commands.Length && StdExecRedirects(list.Commands[i]) is { } execRedirects)
             {
-                string underExec = readerCommand + EmitStatement(RestUnderExecRedirects(list.Commands.RemoveRange(0, i + 1), execRedirects));
-                sb.Append(underExec);
-                rootPieces?.Add((underExec, false, false));
-                break;
+                var rest = list.Commands.RemoveRange(0, i + 1);
+                if (rootPieces is null || rest.Length == 1)
+                {
+                    string underExec = readerCommand + EmitStatement(RestUnderExecRedirects(rest, execRedirects));
+                    sb.Append(underExec);
+                    rootPieces?.Add((underExec, false, false));
+                    break;
+                }
+                // At the top level the commands after the exec are still top-level commands, each its own input line's
+                // line scope (inside the redirection): as one scoped block, one discarding expansion error dropped the
+                // whole rest of the script (`exec 2>/dev/null` then `echo $((1/0))` ended it).
+                var restList = new Command.CommandList(rest);
+                BashParser.ShareLineStarts(root, i + 1, restList);   // `list` is a copy (ResolveLastArgRefs): the parser recorded `root`
+                var priorExecRest = _execRestRoot;
+                _execRestRoot = restList;
+                string scopedRest;
+                try { scopedRest = readerCommand + EmitStatement(new Command.BraceGroup(restList, execRedirects)); }
+                finally { _execRestRoot = priorExecRest; }
+                string head = rootPieces.Count == 0 ? ""
+                    : (_discardInteractive || rootPieces.Exists(p => PsBuild.CanDiscardLine(p.Text))) ? DiscardLineScopes(rootPieces) : sb.ToString().TrimEnd(' ', ';');
+                return head.Length == 0 ? scopedRest : head + "; " + scopedRest;
             }
             if (rootPieces is not null)
             {

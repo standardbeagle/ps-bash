@@ -76,7 +76,8 @@ public class ShellBuiltinDiagnosticEmitTests
         // bash: `s.sh: line 2: ((: i<1/0: division by 0 (error token is "0")` -- init, condition and step all name line 2.
         var ps = T("echo a\nfor (( i=0; i<1/0; i++ )); do\n  cd /nonexist_zz\ndone");
         Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(ps, System.Text.RegularExpressions.Regex.Escape(PsBuild.SetCallLine(2))).Count);
-        Assert.Contains("$null = $(" + PsBuild.SetCallLine(2) + "Invoke-BashArith 'i=0' -Label '((')", ps);
+        // The init records whether it failed (a failed clause ends the loop, status 1).
+        Assert.Contains("$__psbash_afe0 = @($(" + PsBuild.SetCallLine(2) + "Invoke-BashArith 'i=0' -Label '((')).Count -eq 0", ps);
     }
 
     // ── builtins report through the shared prefix ───────────────────────────────────────────────

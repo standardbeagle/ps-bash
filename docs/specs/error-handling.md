@@ -237,12 +237,17 @@ guard `PipeStageUpstreamStopTests`).
 
 ### 2.5 Errors that discard the input line
 
-A bad substitution (`${x!y}`) or an invalid indirect name (`${!r}` with `r` unset, `r='a b'`, `r='x:-foo'`) is
+A bad substitution (`${x!y}`), an invalid indirect name (`${!r}` with `r` unset, `r='a b'`, `r='x:-foo'`) or an
+arithmetic expansion error (`$((1/0))`, an indexed subscript `${a[1/0]}` / `${#a[1/0]}` / `a[1/0]=x`) is
 bash's DISCARD: the rest of the current input line is dropped, even from inside a function or loop that line called,
-status 1, and the shell reads the next line (a `-c` string, a script file, eval and sourced text alike; a `$( )` ends
-only itself). In an interactive shell (`bash -i -c`) an unbound variable or `${x:?}` under `set -u` does the same.
-When the text can raise one (its emission holds `Get-BashIndirectValue` / `Write-BashExpansionError`, or it is
-interactive under nounset), every top-level command runs in `PsBuild.DiscardLineScope`: the runtime throws
+status 1, and the shell reads the next line (a `-c` string, a script file, eval and sourced text alike; a `$( )` or
+`( )` ends only itself). The arithmetic COMMAND `(( 1/0 ))` and a `[[ 1/0 -eq 1 ]]` operand are not words: status 1,
+the line goes on. In an interactive shell (`bash -i -c`) an unbound variable or `${x:?}` under `set -u` does the same.
+When the text can raise one (`PsBuild.CanDiscardLine`: its emission holds `Get-BashIndirectValue`,
+`Write-BashExpansionError`, an arithmetic word `$(Invoke-BashArith` / `$__psbash_av = Invoke-BashArith`, or a
+`Set-BashElement` with a computed key; or it is interactive under nounset), every top-level command runs in
+`PsBuild.DiscardLineScope`. The commands after a top-level `exec 2>f` are still top-level: each keeps its own scope
+inside the redirection (one scope around them all ended the script at the first error). The runtime throws
 `BashParamErrorException.Discard` while `BashLineDiscard.Armed`, the scope catches it, and the line mark
 (`$global:__BashFailGlob`) drops the commands after it on its line. Outside any scope (a function defined by text
 that had none) the runtime keeps the older per-command abandon mark.
@@ -385,12 +390,8 @@ Known differences from bash:
   compound's first line (`CompoundStartLine`). A group that starts after another command on its line
   (`a; { …<nl>}`) names the group's end in bash, ps-bash the line it starts on. Inside a command substitution the
   first line is used too.
-- An arithmetic expansion error (`echo $(( 1/0 )); echo next`) discards the rest of the input line in bash
-  (non-interactive); ps-bash abandons only the command (`echo next` runs). `a=(1 2); echo ${a[1/0]}` reports the same
-  error but still runs `echo` (it prints `1`; bash prints nothing).
 - A variable spliced into an expression as text (`y='1/0'; $(( $y + 1 ))`) is padded with blanks: the report reads
   ` 1/0  + 1 ` where bash reads `1/0 + 1 `.
-- bash has no `**=` (`(( x **= 2 ))`: `syntax error: operand expected (error token is "= 2 ")`); ps-bash evaluates it.
 - A `for ((` clause written after a newline keeps the newline in bash's report (`((: <nl>  j<1/0`); ps-bash trims it.
 - The interactive host's own alias table (`Shell/AliasExpander.cs`, outside any runspace) still writes `ps-bash: `.
 

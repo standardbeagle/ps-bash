@@ -227,6 +227,7 @@ function Get-BashIndirectValue {
             $iv = Invoke-BashArith $rawSub
             if ($global:LASTEXITCODE -ne 0 -or $null -eq $iv) {
                 $global:LASTEXITCODE = 1
+                if ([PsBash.Cmdlets.BashLineDiscard]::Armed) { throw [PsBash.Cmdlets.BashParamErrorException]::Discard("${n}: ", 'arithmetic error') }
                 $global:__BashExpansionFailed = "$($at.ScriptLineNumber):$($at.OffsetInLine)"
                 return $null
             }
@@ -1020,7 +1021,13 @@ function Set-BashElement {
         return $__psbashTarget
     }
     $__psbashIdx = 0L
-    if (-not [long]::TryParse($__psbashKey, [ref]$__psbashIdx)) { $__psbashIdx = [long](Invoke-BashArith $__psbashKey) }
+    # Evaluated as a WORD (`$(`): a failed subscript discards the rest of the line, as in bash (`a[1/0]=x; echo no`
+    # prints nothing); outside a line scope it marks the expansion failed and nothing is assigned.
+    if (-not [long]::TryParse($__psbashKey, [ref]$__psbashIdx)) {
+        $global:__BashExpansionFailed = $false
+        $__psbashIdx = [long]$(Invoke-BashArith $__psbashKey)
+        if ($global:__BashExpansionFailed) { return $__psbashTarget }
+    }
     if ($__psbashSparse) {
         $__psbashAt = $__psbashTarget.Resolve($__psbashIdx)
         if ($null -eq $__psbashAt) { Write-BashHostStderr "bash: ${__psbashKey}: bad array subscript"; $global:LASTEXITCODE = 1; return $__psbashTarget }

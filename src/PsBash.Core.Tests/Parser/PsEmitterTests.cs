@@ -583,7 +583,7 @@ public class PsEmitterTests
         // evaluator, not a verbatim PowerShell $( ) subexpression (which
         // mistranslated **, integer /, bitwise, 1/0 comparisons, etc.).
         var result = PsEmitter.Transpile("echo $((2**10))");
-        Assert.Equal("Invoke-BashEcho $(Invoke-BashArith '2**10')", result);
+        Assert.Equal(PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith '2**10')"), result);
     }
 
     [Fact]
@@ -603,7 +603,7 @@ public class PsEmitterTests
         // uses — so bash-correct integer operators apply.
         var result = PsEmitter.Transpile("echo $(($1 + 1))");
         Assert.Equal(
-            "Invoke-BashEcho $(Invoke-BashArith ('' + $(\"$(if ($null -ne $global:BashPositional) { $global:BashPositional[0] } else { $args[0] })\" -replace '^$','0') + ' + 1'))",
+            PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith ('' + $(\"$(if ($null -ne $global:BashPositional) { $global:BashPositional[0] } else { $args[0] })\" -replace '^$','0') + ' + 1'))"),
             result);
     }
 
@@ -616,7 +616,7 @@ public class PsEmitterTests
         // the positional value substituted in.
         var result = PsEmitter.Transpile("echo $(($1 ** 2))");
         Assert.Equal(
-            "Invoke-BashEcho $(Invoke-BashArith ('' + $(\"$(if ($null -ne $global:BashPositional) { $global:BashPositional[0] } else { $args[0] })\" -replace '^$','0') + ' ** 2'))",
+            PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith ('' + $(\"$(if ($null -ne $global:BashPositional) { $global:BashPositional[0] } else { $args[0] })\" -replace '^$','0') + ' ** 2'))"),
             result);
         // The nonexistent-PowerShell-operator `**` must not appear as raw output.
         Assert.DoesNotContain("$($1 ** 2)", result);
@@ -632,10 +632,10 @@ public class PsEmitterTests
         // command must be spliced in as a value fragment ahead of Invoke-BashArith
         // rather than left in the string the evaluator parses.
         var result = PsEmitter.Transpile("echo $(( $(echo 5) + 60 ))");
-        Assert.Equal(
+        Assert.Equal(PsBuild.DiscardLineScope(
             "Invoke-BashEcho $(Invoke-BashArith ('' + "
             + "$((@(Invoke-BashEcho 5 | ConvertTo-BashCapture) -join [string][char]10).Trim())"
-            + " + ' + 60 '))", // left-trimmed only (bash: `2 + 1/0 : division by 0 (error token is "0 ")`)
+            + " + ' + 60 '))"), // left-trimmed only (bash: `2 + 1/0 : division by 0 (error token is "0 ")`)
             result);
         // The evaluator must never receive the un-expanded substitution text.
         Assert.DoesNotContain("Invoke-BashArith '$(", result);
@@ -657,7 +657,7 @@ public class PsEmitterTests
         // evaluator's existing paren grouping already handles. It must NOT be
         // mistaken for a command sub and shelled out.
         var result = PsEmitter.Transpile("echo $(( $((2+3)) * 4 ))");
-        Assert.Equal("Invoke-BashEcho $(Invoke-BashArith '$((2+3)) * 4 ')", result);
+        Assert.Equal(PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith '$((2+3)) * 4 ')"), result);
     }
 
     [Fact]
@@ -677,7 +677,7 @@ public class PsEmitterTests
         // $# (parameter count) is likewise substituted with its runtime value.
         var result = PsEmitter.Transpile("echo $(($# * 2))");
         Assert.Equal(
-            "Invoke-BashEcho $(Invoke-BashArith ('' + $(\"$(if ($null -ne $global:BashPositional) { $global:BashPositional.Count } else { $args.Count })\" -replace '^$','0') + ' * 2'))",
+            PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith ('' + $(\"$(if ($null -ne $global:BashPositional) { $global:BashPositional.Count } else { $args.Count })\" -replace '^$','0') + ' * 2'))"),
             result);
     }
 
@@ -691,7 +691,7 @@ public class PsEmitterTests
         // guard turns an empty ($null / out-of-range) substitution into "0".
         var result = PsEmitter.Transpile("echo $(($1 * 2))");
         Assert.Equal(
-            "Invoke-BashEcho $(Invoke-BashArith ('' + $(\"$(if ($null -ne $global:BashPositional) { $global:BashPositional[0] } else { $args[0] })\" -replace '^$','0') + ' * 2'))",
+            PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith ('' + $(\"$(if ($null -ne $global:BashPositional) { $global:BashPositional[0] } else { $args[0] })\" -replace '^$','0') + ' * 2'))"),
             result);
         // The empty-default guard is present so an unset positional never yields a
         // leading-operator (malformed) arithmetic string.
@@ -2327,7 +2327,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo ${m[key]:+yes}");
         // The element read is guarded: an unset `m` is unset, not "Cannot index into a null array".
-        Assert.Equal("Invoke-BashEcho ($(if ($null -eq $m) { $null } else { $m[$(if ($m -is [System.Collections.IDictionary]) { 'key' } else { [long](Invoke-BashArith 'key') })] }) ? \"yes\" : \"\")", result);
+        Assert.Equal(PsBuild.DiscardLineScope("Invoke-BashEcho ($(if ($null -eq $m) { $null } else { $m[$(if ($m -is [System.Collections.IDictionary]) { 'key' } else { [long]$(Invoke-BashArith 'key') })] }) ? \"yes\" : \"\")"), result);
     }
 
     [Fact]
@@ -3603,7 +3603,9 @@ public class PsEmitterTests
         // (( … )) condition) rather than the old naive </> string-replace, so the
         // full C operator set — including << / >> shifts — is honored. See
         // Transpile_ForArith_ShiftOperatorInCondition_NotShredded.
-        Assert.Equal("$__psbash_iter = 0; $__psbash_fst0 = 0; :__psbash_l0 for ($null = Invoke-BashArith 'i=0' -Label '(('; (@(Invoke-BashArith 'i<10' -Label '((') -ne 0); $null = Invoke-BashArith 'i++' -Label '((') { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; $__psbash_fst0 = 0; Invoke-BashEcho $env:i; $__psbash_fst0 = $global:LASTEXITCODE }; $global:LASTEXITCODE = $__psbash_fst0", result);
+        // Each clause records whether it failed: a failed init, condition or step ends the loop with status 1.
+        Assert.Equal("$__psbash_iter = 0; $__psbash_fst0 = 0; $__psbash_afe0 = $false; :__psbash_l0 for ($__psbash_afe0 = @(Invoke-BashArith 'i=0' -Label '((').Count -eq 0; -not $__psbash_afe0 -and ((@($__psbash_afe0v = @(Invoke-BashArith 'i<10' -Label '(('); $__psbash_afe0 = $__psbash_afe0v.Count -eq 0; $__psbash_afe0v) -ne 0)); $__psbash_afe0 = @(Invoke-BashArith 'i++' -Label '((').Count -eq 0) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; $__psbash_fst0 = 0; Invoke-BashEcho $env:i; $__psbash_fst0 = $global:LASTEXITCODE }; $global:LASTEXITCODE = $__psbash_fst0; if ($__psbash_afe0) { $global:LASTEXITCODE = 1 }", result);
+
     }
 
     // Regression: TranslateArithCondition string-replaced < and > unconditionally,
@@ -3615,7 +3617,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for ((i=0; i < (n<<1); i++)); do echo $i; done");
 
-        Assert.Contains("(Invoke-BashArith 'i < (n<<1)' -Label '((') -ne 0", result);
+        Assert.Contains("@(Invoke-BashArith 'i < (n<<1)' -Label '((');", result);
         Assert.DoesNotContain("-lt -lt", result);
     }
 
@@ -4144,21 +4146,21 @@ public class PsEmitterTests
     public void Transpile_ArithSub_BasicAddition()
     {
         var result = PsEmitter.Transpile("echo $((x + 1))");
-        Assert.Equal("Invoke-BashEcho $(Invoke-BashArith 'x + 1')", result);
+        Assert.Equal(PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith 'x + 1')"), result);
     }
 
     [Fact]
     public void Transpile_ArithSub_LiteralAddition()
     {
         var result = PsEmitter.Transpile("echo $((2 + 3))");
-        Assert.Equal("Invoke-BashEcho $(Invoke-BashArith '2 + 3')", result);
+        Assert.Equal(PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith '2 + 3')"), result);
     }
 
     [Fact]
     public void Transpile_ArithSub_Multiplication()
     {
         var result = PsEmitter.Transpile("echo $((x * y))");
-        Assert.Equal("Invoke-BashEcho $(Invoke-BashArith 'x * y')", result);
+        Assert.Equal(PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith 'x * y')"), result);
     }
 
     [Fact]
@@ -4228,7 +4230,42 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("result=$((x + 1))");
         // The trailing clear: a failed $(( )) marks the expansion as failed; an assignment consumes the mark.
-        Assert.Equal("$env:result = \"$(Invoke-BashArith 'x + 1')\"; " + PsBuild.ClearExpansionFailed, result);
+        Assert.Equal(PsBuild.DiscardLineScope("$env:result = \"$(Invoke-BashArith 'x + 1')\"; " + PsBuild.ClearExpansionFailed), result);
+    }
+
+    /// <summary>
+    /// An arithmetic WORD can end its top-level command (bash's DISCARD), so the emitter gives that command a line scope;
+    /// the arithmetic COMMAND only fails. Decided on the real emitted text, so a new emission of <c>$(( ))</c> that
+    /// <see cref="PsBuild.CanDiscardLine"/> no longer recognises fails here. Behavior against bash:
+    /// <c>ShellLanguageGapDifferentialTests.ArithmeticExpansionError_DiscardsTheRestOfTheLine</c>.
+    /// </summary>
+    [Theory]
+    [InlineData("echo $((1/0))", true)]
+    [InlineData("x=$((1/0))", true)]
+    [InlineData("set -u\necho $((y + 1))", true)]
+    [InlineData("for i in 1; do echo $((i/0)); done", true)]
+    [InlineData("(( 1/0 ))", false)]
+    [InlineData("echo $(( 1 ))x; (( 2 ))", true)]
+    [InlineData("a=(1); echo ${a[i/0]}", true)]
+    [InlineData("a=(1); echo \"${#a[1/0]}\"", true)]
+    [InlineData("a[1/0]=x", true)]
+    [InlineData("a[$i]=x", true)]
+    [InlineData("a=(1); echo ${a[0]}", false)]
+    [InlineData("a[3]=x", false)]
+    [InlineData("a[-1]=x", false)]
+    public void Transpile_ArithmeticWord_GetsALineScope(string bash, bool scoped)
+        => Assert.Equal(scoped, (PsEmitter.Transpile(bash) ?? "").Contains("[PsBash.Cmdlets.BashLineDiscard]::Enter()", StringComparison.Ordinal));
+
+    /// <summary>
+    /// After a top-level <c>exec 2&gt;f</c> the later commands are still top-level: each keeps its own line scope inside the
+    /// redirection. As one scoped block, one <c>$((1/0))</c> dropped the whole rest of the script.
+    /// </summary>
+    [Fact]
+    public void Transpile_ExecRedirectThenArithmeticError_LaterLinesKeepTheirOwnScope()
+    {
+        var result = PsEmitter.Transpile("exec 2>/dev/null\necho $((1/0)); echo same\necho next");
+        Assert.Contains(PsBuild.DiscardLineScope("Invoke-BashEcho next"), result);
+        Assert.EndsWith("2>$null", result);
     }
 
     [Fact]
@@ -4237,21 +4274,21 @@ public class PsEmitterTests
         // The old emission was a literal PowerShell `$(2 ** 3)`, which is a PARSE
         // ERROR (** is not a PowerShell operator). Now evaluated correctly = 8.
         var result = PsEmitter.Transpile("echo $((2 ** 3))");
-        Assert.Equal("Invoke-BashEcho $(Invoke-BashArith '2 ** 3')", result);
+        Assert.Equal(PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith '2 ** 3')"), result);
     }
 
     [Fact]
     public void Transpile_ArithSub_Modulo()
     {
         var result = PsEmitter.Transpile("echo $((10 % 3))");
-        Assert.Equal("Invoke-BashEcho $(Invoke-BashArith '10 % 3')", result);
+        Assert.Equal(PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith '10 % 3')"), result);
     }
 
     [Fact]
     public void Transpile_ArithSub_NestedInString()
     {
         var result = PsEmitter.Transpile("echo \"result is $((x + 1))\"");
-        Assert.Equal("Invoke-BashEcho \"result is $(Invoke-BashArith 'x + 1')\"", result);
+        Assert.Equal(PsBuild.DiscardLineScope("Invoke-BashEcho \"result is $(Invoke-BashArith 'x + 1')\""), result);
     }
 
     [Theory]
@@ -4296,7 +4333,7 @@ public class PsEmitterTests
 
     [Fact]
     public void Transpile_BracedNamedArithmeticParameter_RemainsEvaluatorResolvedSource()
-        => Assert.Equal("Invoke-BashEcho $(Invoke-BashArith '${x} + 1')",
+        => Assert.Equal(PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith '${x} + 1')"),
             PsEmitter.Transpile("echo $((${x} + 1))"));
 
     // A glob word is expanded by the SHELL (ConvertTo-BashGlob), so echo receives file names.
@@ -5115,7 +5152,8 @@ public class PsEmitterTests
     public void Transpile_AssociativeArrayAssignment_EmitsHashtableEntry()
     {
         var result = PsEmitter.Transpile("map[key]=val");
-        Assert.Equal("if ($null -eq $map -and $null -ne $env:map) { $map = @($env:map) }; $map = Set-BashElement $map \"key\" \"val\"", result);
+        // A key that is not a plain integer may be arithmetic on an indexed array (`a[1/0]=x` discards the line).
+        Assert.Equal(PsBuild.DiscardLineScope("if ($null -eq $map -and $null -ne $env:map) { $map = @($env:map) }; $map = Set-BashElement $map \"key\" \"val\""), result);
     }
 
     // Oracle: bash `c[$i]=v` assigns element $i (the subscript was the literal text '$i') and `a[2]=x` on a
@@ -5133,7 +5171,7 @@ public class PsEmitterTests
     public void Transpile_AssociativeArrayAccess_EmitsHashtableAccess()
     {
         var result = PsEmitter.Transpile("echo \"${map[key]}\"");
-        Assert.Contains("$map[$(if ($map -is [System.Collections.IDictionary]) { 'key' } else { [long](Invoke-BashArith 'key') })]", result);
+        Assert.Contains("$map[$(if ($map -is [System.Collections.IDictionary]) { 'key' } else { [long]$(Invoke-BashArith 'key') })]", result);
     }
 
     [Fact]
@@ -5347,7 +5385,7 @@ public class PsEmitterTests
         // tail must be a pipe to Invoke-BashTr, never text inside the body.
         Assert.Contains("@\"\nlower $(Invoke-BashArith '2+3')\n\n\"@", result);
         Assert.DoesNotContain("| tr a-z A-Z\\n", result);
-        Assert.EndsWith("Invoke-BashTr a-z A-Z", result);
+        Assert.EndsWith("Invoke-BashTr a-z A-Z" + PsBuild.DiscardLineScope("").Substring(PsBuild.DiscardLineScope("").IndexOf(" } catch", StringComparison.Ordinal)), result);
     }
 
     [Fact]

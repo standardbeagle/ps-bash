@@ -436,12 +436,17 @@ internal static class FileSystemHelpers
     }
 
     /// <summary>
-    /// A WORD failed to expand (<c>$((1/0))</c>): status 1, and <c>$global:__BashExpansionFailed</c> is set to the
+    /// A WORD failed to expand (<c>$((1/0))</c>): in a line scope the line is discarded (below); otherwise status 1, and <c>$global:__BashExpansionFailed</c> is set to the
     /// word's source position (<c>line:column</c>) so the command it belongs to can abandon itself -- echo through
     /// <see cref="TakeExpansionFailed"/>, a hoisted word through the emitter's <c>PsBuild.AbandonIfExpansionFailed</c>.
     /// </summary>
     public static void MarkExpansionFailed(PSCmdlet cmdlet)
     {
+        // Inside a line scope (PsBuild.DiscardLineScope) bash's DISCARD: the rest of the input line is dropped (a loop, a
+        // function and the line that called it), status 1; a subshell's scope stops it. The error is already reported.
+        if (BashLineDiscard.Armed)
+            cmdlet.ThrowTerminatingError(new ErrorRecord(BashParamErrorException.Discard("", "expansion error"),
+                "BashExpansionDiscard", ErrorCategory.InvalidResult, null));
         cmdlet.SessionState.PSVariable.Set(new PSVariable("global:LASTEXITCODE", 1));
         var at = cmdlet.MyInvocation;
         cmdlet.SessionState.PSVariable.Set("global:__BashExpansionFailed",

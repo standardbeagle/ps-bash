@@ -270,6 +270,18 @@ public sealed partial class BashParser
     internal static bool[]? LineStartsOf(Command.CommandList list)
         => s_lineStarts.TryGetValue(list, out var starts) && starts.Length == list.Commands.Length ? starts : null;
 
+    /// <summary>
+    /// <paramref name="tail"/> is <paramref name="list"/>'s commands from <paramref name="skip"/> on (the rest after a
+    /// top-level <c>exec &gt;f</c>): it gets their line starts, its first command beginning a line of its own scope.
+    /// </summary>
+    internal static void ShareLineStarts(Command.CommandList list, int skip, Command.CommandList tail)
+    {
+        if (LineStartsOf(list) is not { } starts || starts.Length - skip != tail.Commands.Length) return;
+        var mine = starts[skip..];
+        if (mine.Length > 0) mine[0] = true;
+        s_lineStarts.AddOrUpdate(tail, mine);
+    }
+
     /// <summary>The input lines of a parsed text, as written: the source and each line's span (sliced only when asked).</summary>
     internal sealed class InputLines(string source, (int Start, int End)[] spans)
     {

@@ -349,10 +349,24 @@ public static class PsBuild
         + " } catch [PsBash.Cmdlets.BashParamErrorException] { if (-not [PsBash.Cmdlets.BashLineDiscard]::Discards($_.Exception)) { throw }; "
         + "$global:LASTEXITCODE = 1; $global:__BashFailGlob = $true } finally { [PsBash.Cmdlets.BashLineDiscard]::Leave() }";
 
-    /// <summary>Emitted text that can raise a line discard (<see cref="DiscardLineScope"/>).</summary>
+    /// <summary>
+    /// Emitted text that can raise a line discard (<see cref="DiscardLineScope"/>): an indirect expansion, a bad
+    /// substitution, or an arithmetic WORD (<c>$((1/0))</c>, written <c>$(Invoke-BashArith ..)</c> or under nounset
+    /// <c>$__psbash_av = Invoke-BashArith ..</c>: the forms the cmdlet's IsWordExpansion recognises; an indexed
+    /// subscript <c>${a[1/0]}</c> is written the same way), or an element assignment whose subscript is not a plain
+    /// integer (<c>a[1/0]=x</c>: Set-BashElement evaluates it as a word). The arithmetic command <c>(( 1/0 ))</c> is not
+    /// a word: it fails with status 1 and the line goes on, as in bash.
+    /// </summary>
     public static bool CanDiscardLine(string emitted) =>
         emitted.Contains("Get-BashIndirectValue", StringComparison.Ordinal)
-        || emitted.Contains(ExpansionErrorFunction, StringComparison.Ordinal);
+        || emitted.Contains(ExpansionErrorFunction, StringComparison.Ordinal)
+        || emitted.Contains("$(Invoke-BashArith", StringComparison.Ordinal)
+        || emitted.Contains("$__psbash_av = Invoke-BashArith", StringComparison.Ordinal)
+        || (emitted.Contains("Set-BashElement ", StringComparison.Ordinal) && s_computedElementKey.IsMatch(emitted));
+
+    /// <summary>A <c>Set-BashElement $a "key"</c> whose key is not a plain integer literal (evaluated as arithmetic).</summary>
+    private static readonly System.Text.RegularExpressions.Regex s_computedElementKey =
+        new(@"Set-BashElement \$\S+ ""(?!-?[0-9]+"")", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     /// <summary>An assignment consumes the mark without abandoning anything: only its own status (1) records the failure.</summary>
     public const string ClearExpansionFailed = "$global:__BashExpansionFailed = $false";
