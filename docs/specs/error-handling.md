@@ -247,9 +247,25 @@ A diagnostic from the shell itself carries bash's source prefix (error.c `error_
   run-time `let` and from the emitter's static `let`, `PsEmitter.TryEmitLetAsArithmetic`)
 - `.` / `source` with no operand (emitted, `PsBuild.ShellDiagnosticLine`): `s.sh: line 3: .: filename argument required`,
   then `.: usage: . filename [arguments]` WITHOUT the prefix, status 2
+- arithmetic: `Invoke-BashArith` (`InvokeBashArithmeticCommand.ReportError`) writes
+  `PREFIX[LABEL: ]EXPR: MESSAGE (error token is "TOKEN")` (`BashArith.BashArithException.Describe`). LABEL is `((` for
+  `(( ))`, a `for ((;;))` clause and an `if`/`while` arithmetic condition (`PsEmitter.ArithCommandLabel`), `[[` for a
+  `[[ -eq ]]` operand, `let`, and none for `$(( ))` or a subscript. EXPR is left-trimmed only (`(( 1/0 ))` →
+  `1/0 `). TOKEN is the source from the failing node on (`BashArithmeticParser.Parse(text, tokens)` records each node's
+  start; a division names its right operand, a negative exponent the token after it); a syntax error's message ends
+  with its own token. A variable whose value is an expression (`y='1/0'; $(( y + 1 ))`) reports that expression.
+  A failed `[[ -eq ]]` operand makes the test false, status 1 (`PsBuild.ArithCompare`); read as 0 it made
+  `while [[ x -eq 1/0 ]]` loop forever.
+- builtins: cd (emitted), type, declare/typeset, alias, unalias, command -V, builtin (emitted), help, local (emitted),
+  wait (psm1), `[`/`test` (`Invoke-BashTest`, `Invoke-BashTestInt`). Their usage line after `invalid option` has no
+  prefix, as in bash.
 
-`CommandNotFoundReport.Describe` builds only the reason after the prefix. Guard: Core.Tests
-`ShellDiagnosticPrefixGuardTests` fails on a line that spells "command not found" without the primitive.
+`CommandNotFoundReport.Describe` builds only the reason after the prefix. Guards (Core.Tests):
+`ShellDiagnosticPrefixGuardTests` fails on a line that spells "command not found" without the primitive;
+`ShellBuiltinDiagnosticGuardTests` fails on a product line that spells a builtin's or arithmetic error
+(`cd: … No such file`, `type: … not found`, `((: … division by`) after a hard-coded `bash: ` / `ps-bash: ` or with no
+prefix at all. **Invariant:** every shell-level message is `ShellDiagnostic.Prefix(...) + text`; nothing else spells a
+shell name.
 
 **The line N** is `VarFrameStack.Line`.
 
@@ -259,11 +275,18 @@ A diagnostic from the shell itself carries bash's source prefix (error.c `error_
   - A statement "may raise it" (`PsEmitter.MayRaiseShellDiagnostic`) when it names a non-builtin, non-mapped,
     non-function command or a run-time name. `command x`, `builtin x`, `exec x` and a run-time `eval` count too. So do
     a redirect that may fail to open (`PsEmitter.MayFailToOpen`: `< > >> >| &> &>> >&word`, not a dup, a here-document
-    or `/dev/null`) on a simple command, an assignment or a compound command, and `let`, `.` and `source`.
-  - A compound command with such a redirect and no line of its own (`while`, `{ }`, `( )`, `if`) gets its first
-    command's line (`PsEmitter.CompoundStartLine`). bash names the line it ENDS on, where the redirect is written: the
-    same line for a one-line command; known difference for a multi-line one. Likewise a compound nested in a multi-line
-    compound (`{ … while …; done < nofile … } 2>&1`): bash names the OUTER one's end line, ps-bash the nested one's.
+    or `/dev/null`) on a simple command, an assignment or a compound command, and `let`, `.` and `source`. So do the
+    self-reporting builtins (`PsEmitter.s_selfReportingBuiltins`: cd, type, declare, local, alias, wait, `[`, …), any
+    `local` assignment, `(( ))`, a `[[ ]]` with a numeric operator, and a word holding `$(( ))` or a computed
+    subscript (`${a[i+1]}`; `PsEmitter.ContainsArithSub`).
+  - A condition that is an expression, not a hoisted statement (`if (( 1/0 ))`, `while [[ $a -eq 1 ]]`, each
+    `for ((init; cond; step))` clause, which names the `for` line), records its line INSIDE the expression
+    (`PsEmitter.WithConditionLine`): a loop tests it again after its body recorded later lines.
+  - A redirect error inside a compound command names the line the OUTERMOST statement ends on (`fi`, `done`, `)`,
+    `}`, a trailing here-document's last line), as bash does; inside a `for` or `case` body, the `for` / `case` line.
+    The parser stamps `EndLine` on every compound record (`BashParser.StampEndLine`); `PsEmitter.EmitStatementCore`
+    sets `_redirectLine` from the top-level statement (`StatementEndLine`) and `RecordLineFor` uses it.
+    `CompoundStartLine` (the first command's line) is the fallback where none is set: a function body, a substitution.
   - A script that reads `BASH_LINENO` records the line before every statement.
   - Every host command starts on line 1 (`VarFrameStack.ResetFor`). So a top-level line-1 statement of the script
     records nothing. The exception is a loop that reaches past line 1 (`RunsPastLine1`): its line-1 statements run
@@ -287,7 +310,10 @@ A diagnostic from the shell itself carries bash's source prefix (error.c `error_
 
 Covered: command not found, from any site (all four). Differential `ShellDiagnosticLineDifferentialTests` tests the
 script file, `-c`, `$0`, sourced files, conditions, evals and continuations. Redirect open errors:
-Differential `RedirectOpenErrorDifferentialTests`; `let`, `.`/`source`: `LetSourceDiagnosticDifferentialTests`.
+Differential `RedirectOpenErrorDifferentialTests`, `CompoundRedirectLineDifferentialTests`; `let`, `.`/`source`:
+`LetSourceDiagnosticDifferentialTests`; arithmetic: `ArithDiagnosticDifferentialTests`; builtins:
+`BuiltinDiagnosticDifferentialTests`. Emitter shape: Core.Tests `ShellBuiltinDiagnosticEmitTests`; the arithmetic
+report and the builtins' prefix: Cmdlets.Tests `ShellBuiltinDiagnosticTests`.
 
 #### Redirect open errors
 
@@ -321,17 +347,12 @@ POINTS AT THAT MOMENT, and the redirects after it are never opened (bash 5.2, WS
 
 Not yet through the primitive: the other shell diagnostics still hard-code `bash: ` or `ps-bash: ` (no NAME, no line).
 
-- builtin errors, e.g. `cd: …`, `declare: …`, `type: …`, `alias: …`, `wait: …`, `local: …`, `builtin: …`
-- arithmetic errors outside `let`: `((: 1+ : …` and `$(( 1/0 ))` (bash prints the expression with its trailing
-  blanks and an error token; the emitter trims the text), and the error token of a run-time error (`division by 0
-  (error token is "0")`)
 - the `${x:?}`, unbound-variable and bad-substitution messages (`Write-BashExpansionError`, `PsBuild` param errors)
 - bad array subscript
 - readonly variable
 - not a valid identifier
 - ambiguous redirect
 - eval and source parse errors
-- `[: missing ]`
 
 Routing each one through `ShellDiagnostic.Prefix` is mechanical. It changes expectations across Cmdlets.Tests, Pester
 and the spec corpus, so that work is tracked separately.
@@ -342,6 +363,18 @@ Known differences from bash:
   function defined in a sourced file names that file. ps-bash's `BASH_SOURCE` has no per-function frames, so both
   print the caller's name.
 - A function defined inside a run-time eval numbers its body from 1.
+- A redirect error in a multi-line function body names the function's line in bash; ps-bash names the inner
+  compound's first line (`CompoundStartLine`). A group that starts after another command on its line
+  (`a; { …<nl>}`) names the group's end in bash, ps-bash the line it starts on. Inside a command substitution the
+  first line is used too.
+- An arithmetic expansion error (`echo $(( 1/0 )); echo next`) discards the rest of the input line in bash
+  (non-interactive); ps-bash abandons only the command (`echo next` runs). `a=(1 2); echo ${a[1/0]}` reports the same
+  error but still runs `echo` (it prints `1`; bash prints nothing).
+- A variable spliced into an expression as text (`y='1/0'; $(( $y + 1 ))`) is padded with blanks: the report reads
+  ` 1/0  + 1 ` where bash reads `1/0 + 1 `.
+- bash has no `**=` (`(( x **= 2 ))`: `syntax error: operand expected (error token is "= 2 ")`); ps-bash evaluates it.
+- A `for ((` clause written after a newline keeps the newline in bash's report (`((: <nl>  j<1/0`); ps-bash trims it.
+- The interactive host's own alias table (`Shell/AliasExpander.cs`, outside any runspace) still writes `ps-bash: `.
 
 ---
 
