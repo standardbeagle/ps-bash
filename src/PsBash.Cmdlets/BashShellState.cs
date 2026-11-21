@@ -358,14 +358,16 @@ public static class BashShellState
     private static bool IsTrue(object? v) => LanguagePrimitives.IsTrue(v);
 
     /// <summary>A copy of a collection value the body could mutate in place (<c>shift</c> on the positional
-    /// array, <c>trap</c> on the handler table); scalars and strings are immutable and kept as-is.</summary>
-    private static object? CloneMutable(object? value)
+    /// array, <c>trap</c> on the handler table); scalars and strings are immutable and kept as-is. Also the copy an
+    /// in-process job gets (<see cref="BashStateSnapshot.JobGlobals"/>): it shares the process, not the objects.</summary>
+    internal static object? CloneMutable(object? value)
     {
         var raw = value is PSObject pso ? pso.BaseObject : value;
         return raw switch
         {
             object[] a => a.Clone(),
-            Hashtable h => h.Clone(),   // shallow, keeps the table's key comparer
+            Hashtable h => h.Clone(),   // shallow, keeps the table's key comparer (and BashAssoc's type)
+            Dictionary<string, string> sd => new Dictionary<string, string>(sd, sd.Comparer),   // the alias table
             IDictionary d => new Hashtable(d),
             ArrayList l => new ArrayList(l),
             IList l => new ArrayList(l),

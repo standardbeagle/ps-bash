@@ -67,15 +67,8 @@ public static class BashStateSnapshot
               .Append(" -Value ([scriptblock]::Create(").Append(PsBuild.SingleQuote(fn.ScriptBlock.ToString())).Append("))\n");
         }
 
-        // Bash arrays and associative arrays are PowerShell variables (object[] / hashtable). Scalars are env vars
-        // and travel in EnvironmentBlock(), so only collections are written here. Runspace-owned variables are skipped.
-        foreach (var item in session.InvokeProvider.ChildItem.Get("Variable:", false))
-        {
-            if (item.BaseObject is not PSVariable pv || !IsUserVariable(pv)) continue;
-            var raw = pv.Value is PSObject p ? p.BaseObject : pv.Value;
-            if (raw is not (object[] or IDictionary)) continue;
-            sb.Append("$global:").Append(pv.Name).Append(" = ").Append(Literal(raw, 0)).Append('\n');
-        }
+        foreach (var (name, value) in UserCollections(session))
+            sb.Append("$global:").Append(name).Append(" = ").Append(Literal(value, 0)).Append('\n');
         // The job's request environment carries every variable (a job is a forked subshell: it keeps the unexported
         // ones), and its host starts with all of them exported; the ones that are not exported here are marked so.
         var unexported = PsBash.Core.ShellExports.UnexportedNames();
@@ -93,7 +86,9 @@ public static class BashStateSnapshot
 
     /// <summary>
     /// The global variables an in-process job (pooled runspace, no <see cref="BuildPrelude"/>) sets before its body
-    /// (<see cref="JobScript.Text"/>): the parent's <c>set</c> options and, under errtrace, its ERR trap. Without the
+    /// (<see cref="JobScript.Text"/>): copies of the parent's inherited shell-state globals
+    /// (<see cref="BashShellState.InheritedGlobalNames"/>: positional parameters, BASH_REMATCH, ...) and of its arrays
+    /// (<see cref="UserCollections"/>), the parent's <c>set</c> options and, under errtrace, its ERR trap. Without the
     /// options <c>set -e; { false; echo x; } &amp;</c> printed x and the job's status was 0. Each option is written on or
     /// off: the runspace is reused (BashJobRunspaces) and keeps the previous job's. Values, not script text: a job's text
     /// would be compiled (and scanned by AMSI) on the job's way to its first statement (section 12.5).
@@ -101,6 +96,20 @@ public static class BashStateSnapshot
     public static System.Collections.Hashtable JobGlobals(SessionState session)
     {
         var globals = new System.Collections.Hashtable(StringComparer.OrdinalIgnoreCase);
+        // The same inventory a job in its own process gets (BuildPrelude), as copies: the job shares this process, not
+        // the parent's objects (its `shift` or `a[0]=x` must not reach the shell). Without it an in-process job saw no
+        // arrays, no BASH_REMATCH and no positional parameters (`a=(p q); { echo "${a[1]}"; } &` printed an empty line).
+        foreach (var name in BashShellState.InheritedGlobalNames)
+        {
+            var v = session.PSVariable.Get("global:" + name);
+            if (v is not null) globals[name] = BashShellState.CloneMutable(v.Value);
+        }
+        // No shell list (top level, no `set --`): the job's $1.. are the script's arguments, the caller's $args. The job's
+        // own $args is its wrapper's and empty.
+        if (globals["BashPositional"] is null && Unwrap(session.PSVariable.GetValue("args")) is object[] scriptArgs)
+            globals["BashPositional"] = scriptArgs.Clone();
+        foreach (var (name, value) in UserCollections(session))
+            globals[name] = BashShellState.CloneMutable(value);
         foreach (var name in JobOptionGlobals)
             globals[name] = Unwrap(session.PSVariable.GetValue("global:" + name)) is true;
         globals["__BashErrexitSuppress"] = 0;
@@ -128,6 +137,21 @@ public static class BashStateSnapshot
            && Unwrap(session.PSVariable.GetValue("global:__BashTrapERR")) is ScriptBlock trap ? trap.ToString() : null;
 
     private static object? Unwrap(object? v) => v is PSObject p ? p.BaseObject : v;
+
+    /// <summary>
+    /// The shell's arrays and associative arrays visible from <paramref name="session"/>: bash collections are PowerShell
+    /// variables (object[] / hashtable), where scalars are env vars (EnvironmentBlock, ScalarOverlay). Runspace-owned
+    /// variables are skipped (<see cref="IsUserVariable"/>). Both kinds of job take them from here.
+    /// </summary>
+    internal static IEnumerable<(string Name, object Value)> UserCollections(SessionState session)
+    {
+        foreach (var item in session.InvokeProvider.ChildItem.Get("Variable:", false))
+        {
+            if (item.BaseObject is not PSVariable pv || !IsUserVariable(pv)) continue;
+            var raw = pv.Value is PSObject p ? p.BaseObject : pv.Value;
+            if (raw is object[] or IDictionary) yield return (pv.Name, raw);
+        }
+    }
 
     private static readonly HashSet<string> RunspaceVariables = new(StringComparer.OrdinalIgnoreCase)
     {

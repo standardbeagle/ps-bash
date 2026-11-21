@@ -216,6 +216,18 @@ appears without an explicit snapshot/not-snapshotted decision — the `BashVaria
 | Traps | **not** inherited (bash resets caught traps in subshells); ignored (`trap '' SIG`) are |
 | Open fds beyond 0/1/2 | not supported v1; emitter rejects with a clear error rather than silently dropping |
 
+**Invariant: both kinds of job inherit one inventory.** An in-process job (pooled runspace, no prelude) gets the
+same state as values set in its runspace before the launch (`BashStateSnapshot.JobGlobals`): every
+`BashShellState.InheritedGlobalNames` entry (positional parameters, falling back to the script's `$args` when the
+shell has no list; `BASH_REMATCH`; `$-`; ...), the shell's arrays and associative arrays (`UserCollections`, shared
+with the prelude), a function's locals passed by the emitter (`-Vars`, arrays kept as arrays), then the options and
+ERR trap. Each collection is a COPY (`BashShellState.CloneMutable`): the job shares the process, not the parent's
+objects, so its `shift` or `a[0]=X` does not reach the shell; `EndJob` puts the runspace's own values back. A new
+shell-state global is inherited by being in `GlobalNames`, never by a hand-picked list (the old `JobGlobals` copied
+only the options and the trap: every array, `BASH_REMATCH` and `$1` read empty in a job). Guards:
+`BashStateSnapshotJobInheritanceTests` (Cmdlets.Tests); bash behaviour:
+`ShellLanguageGapDifferentialTests.BackgroundJob_InheritsArraysPositionalsAndRematch`.
+
 Size: functions + arrays can exceed 1 MB for large scripts → spill to a 0700 temp file in the runtime
 dir (`PsBashRuntimeDirectory`), referenced by `STATE-FILE:`; deleted by the job host after load and by
 the registry on job end.

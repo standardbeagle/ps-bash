@@ -197,4 +197,18 @@ public class ShellLanguageGapDifferentialTests
     public Task ShiftToEmpty_InAFunction_EndsTheLoop() => Same(
         "f() { while [ \"$1\" ]; do echo \"arg=$1\"; shift; done; echo \"left=$# [$1] [$*]\"; }\nf a b\n"
         + "set -- x y; set --; echo \"top=$# [$1] [$@]\"\ng() { shift 2; echo \"g=$# [$1]\"; }\ng p q");
+
+    /// <summary>A background job is a forked subshell: it sees the shell's arrays, associative arrays, a function's local
+    /// arrays, <c>BASH_REMATCH</c> and the positional parameters, as copies its changes do not leave. An in-process job
+    /// got only the shell's options, so every one of these read empty in it.</summary>
+    [SkippableFact]
+    public Task BackgroundJob_InheritsArraysPositionalsAndRematch() => Same(
+        "set -- a1 a2; { echo \"pos=$1 n=$#\"; } & wait\n"
+        + "[[ abc =~ b(c) ]]; { echo \"rem=${BASH_REMATCH[1]}\"; } & wait\n"
+        + "g() { { echo \"fpos=$1\"; } & wait; }; g x\n"
+        + "a=(1 2 3); { echo \"len=${#a[@]} all=${a[*]}\"; } & wait\n"
+        + "declare -A m=([k]=v [j]=w); { echo \"assoc=${m[k]}${m[j]} n=${#m[@]}\"; } & wait\n"
+        + "{ a[0]=X; shift; echo \"inner=${a[0]} $1\"; } & wait; echo \"outer=${a[0]} $1\"\n"
+        + "h() { local -a la=(l1 l2); local -A lm=([x]=y); { echo \"local=${la[1]} ${lm[x]}\"; } & wait; }; h\n"
+        + "{ echo \"again=${#a[@]}\"; } & wait");
 }

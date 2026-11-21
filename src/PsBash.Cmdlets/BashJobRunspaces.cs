@@ -62,7 +62,7 @@ public static class BashJobRunspaces
     /// dot-sourced, with arguments status, turn (launch order, <see cref="JobTurn"/>) and the body
     /// (<see cref="JobScript.Body"/>: compiled here if the host did not, before the launch). What the job inherits is set
     /// in its runspace from here, before the launch, as values (<see cref="Inherit"/>): the parent's globals
-    /// (<see cref="BashStateSnapshot.JobGlobals"/>: options, ERR trap), the job's <c>$BASHPID</c>, the launch-time values of
+    /// (<see cref="BashStateSnapshot.JobGlobals"/>: shell-state globals, arrays, options, ERR trap), the job's <c>$BASHPID</c>, the launch-time values of
     /// the loop variables the body reads (<paramref name="vars"/>), its stdin and its clock (<see cref="JobClock"/>,
     /// launched once the job has its runspace, in the job's global <see cref="JobClock.VariableName"/>); the parent's
     /// directory is an argument, when the runspace is elsewhere.
@@ -84,8 +84,12 @@ public static class BashJobRunspaces
         globals[BashRuntime.SubshellPidVariable] = BashRuntime.NextSubshellPid();
         if (vars is { Count: > 0 })
         {
+            // A function's local array arrives here too (`local -a la=(..)`): copied as an array. Made a string, `${la[1]}`
+            // in the job indexed the joined text's characters.
             foreach (System.Collections.DictionaryEntry e in vars)
-                globals[LanguagePrimitives.ConvertTo<string>(e.Key)] = LanguagePrimitives.ConvertTo<string>(e.Value) ?? "";
+                globals[LanguagePrimitives.ConvertTo<string>(e.Key)] = (e.Value is PSObject p ? p.BaseObject : e.Value) is object[] or System.Collections.IDictionary
+                    ? BashShellState.CloneMutable(e.Value)
+                    : LanguagePrimitives.ConvertTo<string>(e.Value) ?? "";
         }
         // A subshell body's state restore must not touch the process-wide variables the parent shares (BashShellState.Restore).
         globals["__psbashBgRunspace"] = true;
