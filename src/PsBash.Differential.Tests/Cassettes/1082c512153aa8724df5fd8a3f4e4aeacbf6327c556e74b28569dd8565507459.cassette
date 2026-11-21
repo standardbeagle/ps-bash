@@ -1,0 +1,42 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 751
+stdout-length: 132
+stderr-length: 0
+==== SCRIPT ====
+false; if true; then echo if=$?; fi
+true; if false; then :; else echo else=$?; fi
+false; if [[ a == a ]]; then echo dbl=$?; fi
+true; if [[ a == b ]]; then :; else echo dblf=$?; fi
+false; if [ a = a ]; then echo sgl=$?; fi
+false; if [ a -eq 1 ] 2>/dev/null; then :; else echo bad=$?; fi
+true; if (( 0 )); then :; else echo arithf=$?; fi
+true; if false; then :; elif true; then echo elif=$?; fi
+true; if true && [[ a == b ]]; then :; else echo andf=$?; fi
+true; if false; then :; fi; echo nobranch=$?
+false; while [[ x ]]; do echo wdbl=$?; break; done
+i=0; until (( i >= 2 )); do echo u-in=$?; i=$((i+1)); done
+false; case x in y) ;; esac; echo case-nomatch=$?
+false; case x in x) ;; esac; echo case-empty=$?
+case x in x) false;; esac; echo case-body=$?
+==== STDOUT ====
+if=0
+else=1
+dbl=0
+dblf=1
+sgl=0
+bad=2
+arithf=1
+elif=0
+andf=1
+nobranch=0
+wdbl=0
+u-in=1
+u-in=1
+case-nomatch=0
+case-empty=0
+case-body=1
+
+==== STDERR ====
+

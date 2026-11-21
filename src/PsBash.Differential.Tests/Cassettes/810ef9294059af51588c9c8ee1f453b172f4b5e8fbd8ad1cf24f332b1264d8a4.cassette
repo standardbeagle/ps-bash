@@ -1,0 +1,21 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 171
+stdout-length: 44
+stderr-length: 0
+==== SCRIPT ====
+f() { while [ "$1" ]; do echo "arg=$1"; shift; done; echo "left=$# [$1] [$*]"; }
+f a b
+set -- x y; set --; echo "top=$# [$1] [$@]"
+g() { shift 2; echo "g=$# [$1]"; }
+g p q
+==== STDOUT ====
+arg=a
+arg=b
+left=0 [] []
+top=0 [] []
+g=0 []
+
+==== STDERR ====
+

@@ -1,0 +1,29 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 538
+stdout-length: 85
+stderr-length: 0
+==== SCRIPT ====
+while true; do false; break; done; echo brk=$?
+i=0; while [ $i -lt 2 ]; do i=$((i+1)); false; continue; done; echo cont=$?
+i=0; while (( i < 2 )); do i=$((i+1)); false; done; echo body-last=$?
+i=0; while (( i < 2 )); do i=$((i+1)); done; echo body-ok=$?
+for ((i=0; i<2; i++)); do false; done; echo cfor=$?
+false; for ((i=0; i<0; i++)); do :; done; echo cfor-empty=$?
+false; while false; do :; done; echo wempty=$?
+false; until true; do :; done; echo uempty=$?
+for x in a b; do if [ $x = b ]; then break; fi; false; done; echo forin-brk=$?
+==== STDOUT ====
+brk=0
+cont=0
+body-last=1
+body-ok=0
+cfor=1
+cfor-empty=0
+wempty=0
+uempty=0
+forin-brk=0
+
+==== STDERR ====
+
