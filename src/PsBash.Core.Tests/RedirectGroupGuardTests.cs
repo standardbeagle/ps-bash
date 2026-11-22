@@ -220,6 +220,26 @@ public class RedirectGroupGuardTests
     }
 
     /// <summary>
+    /// errexit's final operand that emits a statement list (a redirected compound, a loop, an eval, an env-pair command) sits
+    /// in the operand's own block as is. REGRESSION: it was first wrapped in <c>$( )</c> to be a chain operand, which the block
+    /// already is, so <c>set -e; true &amp;&amp; { tail -f log; } 2&gt;x</c> showed nothing until it ended.
+    /// </summary>
+    [Theory]
+    [InlineData("set -e\ntrue && { echo a; } 2>x")]
+    [InlineData("set -e\ntrue && { echo a; } > out")]
+    [InlineData("trap : ERR\ntrue && while false; do :; done")]
+    [InlineData("set -e\ntrue && eval 'echo a'")]
+    [InlineData("set -e\ntrue && X=1 printenv X")]
+    [InlineData("set -e\nf() { true && { return 6; } 2>x; }")]
+    public void Transpile_ErrexitFinalOperandThatIsAStatementList_IsNotASubexpression(string script)
+    {
+        var ps = PsEmitter.Transpile(script)!;
+        int block = ps.IndexOf(FinalOperandBlock, StringComparison.Ordinal);
+        Assert.True(block >= 0, ps);
+        Assert.False(ps.AsSpan(block + FinalOperandBlock.Length).StartsWith("$("), ps);
+    }
+
+    /// <summary>
     /// errexit's final and-or operand with no return of its own is the plain block, whatever came before it. REGRESSION: the
     /// operand compared the return count against the enclosing statement's mark, so one earlier <c>x || return 1</c> (or a
     /// <c>$( exit )</c>, a pipe stage's exit, a function's return) made every later final operand "pass", in <c>$( )</c>.
