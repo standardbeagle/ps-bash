@@ -12932,6 +12932,9 @@ public static partial class PsEmitter
         for (int i = 0; i < andOr.Commands.Length; i++)
         {
             bool isFinal = i == andOr.Commands.Length - 1;
+            // errexit's final operand goes into ErrexitFinalOperand's dot-sourced block, itself the chain operand: a statement
+            // list in it needs no `$( )`, which would hold back all its output until it ended (`true && { tail -f log; } 2>x`).
+            bool inOperandBlock = isFinal && errexitFinalOperand;
             // bash exempts every operand but the last from errexit.
             if (!isFinal) _errexitExemptDepth++;
             int operandStart = sb.Length;
@@ -13002,7 +13005,8 @@ public static partial class PsEmitter
                 // as the actual chain-operator LHS. PowerShell's $(if ...) correctly
                 // propagates $?=false to the && / || operator when the else-branch
                 // calls Write-Error. A $(& { ... }) wrapper does NOT propagate $?.
-                sb.Append(ChainPipelineOperand(EmitPipeline(pipeline)));
+                var pipelineText = EmitPipeline(pipeline);
+                sb.Append(inOperandBlock ? pipelineText : ChainPipelineOperand(pipelineText));
                 sb.Append("; " + PsBuild.SignalFailIfNonZero());
             }
             else if (cmd is Command.Simple simple)
@@ -13011,7 +13015,7 @@ public static partial class PsEmitter
                 // such as assignments plus if/else blocks. Pipeline-chain operators
                 // require a pipeline operand, so wrap only those statement rewrites.
                 var simpleText = EmitSimpleFed(simple);
-                sb.Append(NeedsChainOperandSubexpression(simpleText) ? $"$({simpleText})" : simpleText);
+                sb.Append(!inOperandBlock && NeedsChainOperandSubexpression(simpleText) ? $"$({simpleText})" : simpleText);
                 // `&&`/`||` test PowerShell's $?, which a bash function's `return 3` (or a cmdlet
                 // that sets only the exit code) leaves true — `f || echo fb` never fell back.
                 // Bridge the exit code exactly as the pipeline operand does; the final operand's
@@ -13029,7 +13033,7 @@ public static partial class PsEmitter
                 // `& { … }` it runs in the CURRENT scope, so assignments inside the
                 // body still persist the way bash's do.
                 var compoundText = Emit(cmd);
-                sb.Append(NeedsChainOperandSubexpression(compoundText)
+                sb.Append(!inOperandBlock && NeedsChainOperandSubexpression(compoundText)
                     ? PsBuild.Subexpr(compoundText)
                     : compoundText);
                 // A `$( … )` operand never propagates $? (see the pipeline case), so `(exit 4) ||
