@@ -50,9 +50,28 @@ public class QuotedBuiltinNameTests
     [InlineData("x='a b'; f() { \\local w=$x; }", "x='a b'; f() { builtin local w=$x; }")]
     [InlineData("x='a b'; f() { \"declare\" d=$x; }", "x='a b'; f() { builtin declare d=$x; }")]
     [InlineData("x='a b'; 'readonly' r=$x", "x='a b'; builtin readonly r=$x")]
-    [InlineData("'typeset' t=\"$x\"", "builtin typeset t=\"$x\"")]
+    [InlineData("'typeset' t=\"$x\"$y", "builtin typeset t=\"$x\"$y")]
     public void Transpile_QuotedDeclarationBuiltinWithAnExpansion_IsTheWrapperForm(string quoted, string wrapped)
         => Assert.Equal(T(wrapped), T(quoted));
+
+    // A value expanded only inside double quotes is neither split nor globbed, so it is the bare declaration (no run-time
+    // transpile per call: conda's activate script runs `\local cmd="${1-__missing__}"` on every prompt).
+    [Theory]
+    [InlineData("f() { \\local cmd=\"${1-__missing__}\"; }", "f() { local cmd=\"${1-__missing__}\"; }")]
+    [InlineData("'typeset' t=\"$x\"", "typeset t=\"$x\"")]
+    [InlineData("\\export v=\"a $x\" w", "export v=\"a $x\" w")]
+    public void Transpile_QuotedDeclarationBuiltinWithAQuotedValue_IsTheBareDeclaration(string quoted, string bare)
+        => Assert.Equal(T(bare), T(quoted));
+
+    // REGRESSION (review of the port): a run-time `local` (a quoted builtin, a wrapper, `local "$x"`) assigned the
+    // variable without the function's local frame, so it outlived the function. Its eval hands over `local 'm=a b*'`,
+    // which is the declaration. Behavior: Differential QuotedBuiltinNameDifferentialTests.
+    [Theory]
+    [InlineData("f() { local 'm=a b*'; }", "f() { local m='a b*'; }")]
+    [InlineData("f() { local -i 'n=1+2' k; }", "f() { local -i n='1+2' k; }")]
+    [InlineData("f() { local \"s+=x y\"; }", "f() { local s+=\"x y\"; }")]
+    public void Transpile_QuotedStaticLocalOperand_IsTheDeclaration(string quoted, string bare)
+        => Assert.Equal(T(bare), T(quoted));
 
     [Theory]
     [InlineData("'export' v=$x")]
@@ -78,7 +97,8 @@ public class QuotedBuiltinNameTests
     public void Parse_QuotedDeclarationBuiltin_IsAnAssignment(string decl, string? builtin, bool isLocal)
     {
         var fn = Assert.IsType<Command.ShFunction>(BashParser.Parse("f() { " + decl + "; }"));
-        var body = Assert.IsType<Command.BraceGroup>(fn.Body).Body;
+        // A one-command body with no redirect is the command itself (Parse_DeclareAssignmentInAFunction_IsLocalUnlessGlobalFlag).
+        var body = fn.Body is Command.BraceGroup group ? group.Body : fn.Body;
         var asg = Assert.IsType<Command.ShAssignment>(body is Command.CommandList list ? Assert.Single(list.Commands) : body);
         Assert.Equal(isLocal, asg.IsLocal);
         Assert.Equal(!isLocal, asg.IsExport);
@@ -99,7 +119,9 @@ public class QuotedBuiltinNameTests
     [InlineData("local", "x='a b'; f() { 'local' z=$x; }")]
     [InlineData("export", "x='a b'; builtin export z=$x")]
     public void Transpile_QuotedBuiltinName_SkipsTheAlias(string alias, string use)
-        => Assert.DoesNotContain("Invoke-BashPrintf", T("shopt -s expand_aliases\nalias " + alias + "='printf A'\n" + use));
+        // The alias's expansion, not just printf: a run-time declaration's field quoting runs printf itself (and the
+        // alias definition itself carries the text).
+        => Assert.DoesNotContain("Invoke-BashPrintf ALIASED", T("shopt -s expand_aliases\nalias " + alias + "='printf ALIASED'\n" + use));
 
     [Theory]
     [InlineData("\\eval \"$c\"")]
@@ -110,5 +132,5 @@ public class QuotedBuiltinNameTests
 
     [Fact]
     public void Transpile_BareName_StillTakesTheAlias()
-        => Assert.Contains("Invoke-BashPrintf", T("shopt -s expand_aliases\nalias echo='printf A'\necho hi"));
+        => Assert.Contains("Invoke-BashPrintf ALIASED hi", T("shopt -s expand_aliases\nalias echo='printf ALIASED'\necho hi"));
 }

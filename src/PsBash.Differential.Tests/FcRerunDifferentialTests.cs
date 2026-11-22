@@ -57,6 +57,12 @@ public class FcRerunDifferentialTests
     public Task FcList_MinusZero_IsTheCurrentLine() => Same(
         "set -o history\necho one\necho two\nfc -l -0\nfc -l 0\nfc -l -2 -0\n");
 
+    // REGRESSION (review): with this fc line the only entry, bash clamps the range to it ("per POSIX"); fc -l 0 printed
+    // nothing.
+    [SkippableFact]
+    public Task FcList_OnlyThisLine_ListsIt() => Same(
+        "set -o history\nhistory -c\nfc -l 0\nhistory -c\nfc -l\nhistory -c\nfc -l -1 5\nhistory -c\nfc -ln 0\necho \"st=$?\"\n");
+
     [SkippableFact]
     public Task HistoryPrint_ChainedGlobalAndRepeatedModifiers() => Same(
         "history -c; history -s 'echo three tee'\n"

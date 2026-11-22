@@ -113,24 +113,25 @@ public sealed class InvokeBashFcCommand : BashCmdlet
         }
 
         if (count == 0) return Done(0);
+        // bash's fc_gethnum: a last entry before the first is the first ("per POSIX"), so when this fc line is the only
+        // entry every listing names it (`history -c` then `fc -l 0` prints "1\t fc -l 0").
+        int listLast = Math.Max(1, last);
         int from, end;
         if (operands.Count == 0)
         {
-            if (last == 0) return Done(0);
-            end = last;
-            from = Math.Max(1, last - 15);
+            end = listLast;
+            from = Math.Max(1, listLast - 15);
         }
         else
         {
-            if (Resolve(operands[0], history, last, first: true, listing: true) is not int f) return Fail(1, "no command found");
+            if (Resolve(operands[0], history, listLast, first: true, listing: true) is not int f) return Fail(1, "no command found");
             // One operand: up to the last entry, or the current line itself when that is what it named (`fc -l -0`).
-            int? l = operands.Count > 1 ? Resolve(operands[1], history, last, first: false, listing: true) : f == count ? count : last;
+            int? l = operands.Count > 1 ? Resolve(operands[1], history, listLast, first: false, listing: true) : f == count ? count : listLast;
             if (l is null) return Fail(1, "no command found");
             from = f;
             end = l.Value;
         }
         if (from > end) { (from, end) = (end, from); reverse = true; }   // -r never un-reverses
-        if (from < 1) return Done(0);   // only this fc line is recorded, and the range does not name it
         for (int k = 0; k <= end - from; k++)
         {
             int n = reverse ? end - k : from + k;

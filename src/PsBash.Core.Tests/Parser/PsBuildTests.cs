@@ -600,28 +600,20 @@ public class PsBuildTests
         Assert.Equal("__BashFcRerun", PsBuild.FcRerunVariable);
     }
 
-    // A return inside eval text leaves only the redirect's `. { }` group; the flag carries it to the caller.
-    // REGRESSION: `f() { fc -s 2>/dev/null; echo no; }` with a re-run `return 7` printed no (bash: status 7).
+    // A return inside a redirect's `. { }` / `& { }` block leaves only the block; the flag carries it to the caller. It is
+    // cleared before the block, raised when the body starts and cleared at its end, so only a return (which skips the end)
+    // leaves it raised: a redirect that fails before the body runs leaves it clear (`{ return 6; } >/nonexistent/x` goes
+    // on, status 1). It is raised again for an enclosing body's check.
+    // REGRESSION: `f() { { return 6; } 2>/dev/null; echo no; }` printed no (bash: status 6).
     [Fact]
-    public void WithRedirectTailPassingReturn_ClearsTheFlagAtTheGroupsEndOnly()
+    public void GroupPassingReturn_RaisesTheFlagOnlyWhileTheBodyRuns()
     {
-        Assert.Equal("$__psbash_grp_ret = $true; . { a; b; $__psbash_grp_ret = $false } 2>$null; if ($__psbash_grp_ret) { return }",
-            PsBuild.WithRedirectTailPassingReturn("a; b; ", sb => sb.Append(" 2>$null")));
+        Assert.Equal(PsBuild.GroupReturnVar + " = $true; a; b; " + PsBuild.GroupReturnVar + " = $false", PsBuild.GroupBody("a; b; "));
+        Assert.Equal(PsBuild.GroupReturnVar + " = $false; . { x } 2>$null; if (" + PsBuild.GroupReturnVar + ") { return }; "
+                + PsBuild.GroupReturnVar + " = $true",
+            PsBuild.GroupPassingReturn(". { x } 2>$null"));
+        Assert.StartsWith("$global:", PsBuild.GroupReturnVar);   // a `& { }` block (scoped fds) must reach it too
     }
-
-    [Theory]
-    [InlineData("f() { eval 'return 7' 2>/dev/null; }")]
-    [InlineData("f() { fc -s >out; }")]
-    [InlineData("c=x; f() { eval \"$c\" 2>/dev/null; }")]
-    public void Transpile_RedirectedEvalTextInAFunction_PassesAReturnOut(string script)
-        => Assert.Contains("if ($__psbash_grp_ret) { return }", PsEmitter.Transpile(script)!);
-
-    [Theory]
-    [InlineData("eval 'return 7' 2>/dev/null")]                      // top of a script: nothing to return from
-    [InlineData("f() { source ./rc 2>/dev/null; }")]                 // a sourced file's return ends only the file
-    [InlineData("f() { ( eval 'return 7' 2>/dev/null ); }")]        // a subshell's return ends the subshell
-    public void Transpile_RedirectedTextWithNoCallerToLeave_KeepsThePlainGroup(string script)
-        => Assert.DoesNotContain("__psbash_grp_ret", PsEmitter.Transpile(script)!);
 
     /// <summary>The one run-time call of bash text: skips blank text, bounds the nesting under the label, restores the
     /// depth, then the return check.</summary>

@@ -27,9 +27,26 @@ public class DeclarationWrapperTests
     [InlineData("command readonly c=$x")]
     [InlineData("\\builtin declare d=$x")]
     [InlineData("'builtin' declare e=$x")]
-    [InlineData("command command local f=\"$x\"")]
+    [InlineData("command command local f=$x\"$y\"")]
+    [InlineData("builtin local \"f=$x\"")]          // the whole word quoted: the eval reads NAME=VALUE from it
+    [InlineData("builtin local \"$n\"=1")]          // a run-time name
+    [InlineData("builtin local f='$x'$y")]
     public void Parse_WrappedDeclarationWithExpansion_StaysACommand(string bash)
         => Assert.IsType<PsBash.Core.Parser.Ast.Command.Simple>(BashParser.Parse(bash));
+
+    // bash 5.2: an operand expanded only inside double quotes after NAME= is neither split nor globbed, so the ordinary
+    // word is the same as the declaration's (`\local cmd="${1-__missing__}"` in conda's activate script). It keeps the
+    // static declaration: no run-time transpile per call. Behavior: Differential QuotedBuiltinNameDifferentialTests.
+    [Theory]
+    [InlineData("builtin export z=\"$x\"", "export z=\"$x\"")]
+    [InlineData("command declare -x d=\"a $x `echo b`\"", "declare -x d=\"a $x `echo b`\"")]
+    [InlineData("f() { builtin local m=\"${1-__missing__}\" n='$q'; }", "f() { local m=\"${1-__missing__}\" n='$q'; }")]
+    public void Transpile_WrappedDeclarationQuotedValue_IsTheDeclaration(string wrapped, string bare)
+    {
+        // A function definition carries its bash text for `declare -f` (PsBuild.FunctionSourceMark): only that differs.
+        static string Code(string bash) => System.Text.RegularExpressions.Regex.Replace(T(bash), "<#bash:[A-Za-z0-9+/=]*#> ", "");
+        Assert.Equal(Code(bare), Code(wrapped));
+    }
 
     [Fact]
     public void Transpile_WrappedDeclarationWithExpansion_SplitsTheOperand()

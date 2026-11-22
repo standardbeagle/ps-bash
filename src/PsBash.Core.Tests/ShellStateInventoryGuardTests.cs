@@ -37,6 +37,12 @@ public class ShellStateInventoryGuardTests
         ["BashHookErrors"] ="diagnostic buffer, per runspace",
         ["__BashEvalDepth"] = "eval recursion counter; a job process starts at 0",
         ["__BashEvalReturn"] = "one-command hand-off: set by a return that eval text or a run-time command name ran, read and cleared by the check right after it",
+        // Cleared by PsBuild.FcTakeRerun before Invoke-BashFc runs, set in its EndProcessing, taken and cleared by the next
+        // statement of the same emitted text: nothing runs in between (a job or subshell starts only at a later statement).
+        ["__BashFcRerun"] = "one-command hand-off: fc -s's command, from Invoke-BashFc to the emitted run-time call, cleared before and after",
+        // Emitted only (PsBuild.GroupPassingReturn, not in a cmdlet): set before a redirect's block, cleared at its body's end,
+        // read right after it and set again; a return that skips the body's end is all it carries.
+        ["__PsBashGroupReturn"] = "one-construct hand-off: a return inside a redirect's script block, read right after the block",
         ["__BashBaselineFunctions"] = "names of the functions every host defines at startup; read by BashStateSnapshot",
         ["__BashJobOutput"] = "host plumbing: the running command's OutputMux (SdkWorker sets it per runspace); Invoke-BashBackground gives a live job a channel of it",
         ["__psbashBgJobTable"] = "module plumbing: the job table (BashBgJobTable) the psm1 builds at load; Invoke-BashBackground launches through it",

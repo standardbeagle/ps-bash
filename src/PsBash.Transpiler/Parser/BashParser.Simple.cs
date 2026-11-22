@@ -61,9 +61,10 @@ public sealed partial class BashParser
         if (_tokens[_pos + k] is { Kind: BashTokenKind.Word } d && CommandWordName(d) is "export" or "local" or "declare" or "typeset" or "readonly")
         {
             // `builtin export z=$x`: behind a wrapper the operands are ordinary words (split, globbed), not assignments.
-            // An operand with an expansion keeps the wrapper; the emitter runs it through the run-time declaration.
+            // An operand with an expansion keeps the wrapper; the emitter runs it through the run-time declaration. One
+            // expanded only inside double quotes after NAME= is the same as the declaration (OperandExpandsAsAWord).
             for (int j = _pos + k + 1; j < _tokens.Count && _tokens[j].Kind is BashTokenKind.Word or BashTokenKind.AssignmentWord; j++)
-                if (_tokens[j].Value.AsSpan().IndexOfAny('$', '`') >= 0) return;
+                if (OperandExpandsAsAWord(_tokens[j].Value)) return;
             // `builtin declare a=(x y)` is a syntax error in bash (an array literal needs the bare declaration builtin).
             int saved = _pos;
             _pos += k;
@@ -85,8 +86,41 @@ public sealed partial class BashParser
         string name = CommandWordName(t);
         if (name == t.Value || name is not ("export" or "local" or "declare" or "typeset" or "readonly")) return false;
         for (int j = _pos + 1; j < _tokens.Count && _tokens[j].Kind is BashTokenKind.Word or BashTokenKind.AssignmentWord; j++)
-            if (_tokens[j].Value.AsSpan().IndexOfAny('$', '`') >= 0) return true;
+            if (OperandExpandsAsAWord(_tokens[j].Value)) return true;
         return DeclarationHasArrayInitializer();
+    }
+
+    /// <summary>
+    /// Whether an operand of a quoted or wrapped declaration builtin (an ordinary word there) expands differently from
+    /// the same operand of the bare declaration: an expansion (<c>$</c>, backquote) outside double quotes is split and
+    /// globbed (<c>\local m=$x</c>), and one in the NAME makes the name a run-time one (<c>\local "$n"=1</c>,
+    /// <c>"m=$1"</c>). A value whose every expansion is inside double quotes after the unquoted <c>=</c> is neither
+    /// (<c>\local cmd="${1-__missing__}"</c>, conda's activate script), so that operand keeps the static declaration
+    /// and the call pays no run-time transpile. Single-quoted text and a backslash-escaped character are literal.
+    /// </summary>
+    private static bool OperandExpandsAsAWord(string raw)
+    {
+        bool inDouble = false, sawEquals = false;
+        for (int i = 0; i < raw.Length; i++)
+        {
+            char c = raw[i];
+            if (c == '\\') { i++; continue; }
+            if (c == '\'' && !inDouble)
+            {
+                int close = raw.IndexOf('\'', i + 1);
+                if (close < 0) return true;
+                i = close;
+                continue;
+            }
+            if (c == '"') { inDouble = !inDouble; continue; }
+            if (c is '$' or '`')
+            {
+                if (!inDouble || !sawEquals) return true;
+                continue;
+            }
+            if (c == '=' && !inDouble) sawEquals = true;
+        }
+        return false;
     }
 
     /// <summary>`export` / `local` NAME=VAL … (see ParseDeclarationPairs for the shape); null leaves the cursor where it was.</summary>

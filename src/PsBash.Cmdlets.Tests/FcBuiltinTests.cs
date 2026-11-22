@@ -69,7 +69,21 @@ public class FcBuiltinTests
         Assert.Equal([2, 3, 4], Numbers(List(history, true, "-l", "-3")));
         Assert.Equal([2, 3], Numbers(List(history, true, "-l", "-3", "-2")));
         Assert.Equal([4, 3, 2, 1], Numbers(List(history, true, "-lr")));
-        Assert.Empty(List(["fc -l"], true, "-l"));
+    }
+
+    // bash 5.2, also bash -i: when this fc line is the only entry (`history -c` before it), the last entry before it is
+    // clamped to the first ("per POSIX"), so every listing names the line itself. REGRESSION: `fc -l 0` printed nothing.
+    [Theory]
+    [InlineData("fc -l")]
+    [InlineData("fc -l 0")]
+    [InlineData("fc -l -1")]
+    [InlineData("fc -l 5")]
+    [InlineData("fc -l 0 1")]
+    [InlineData("fc -l -0 0")]
+    public void List_OnlyThisLine_ListsIt(string line)
+    {
+        var args = line.Split(' ')[1..];
+        Assert.Equal(["1\t " + line], List([line], true, args));
     }
 
     // bash 5.2 (fc_gethnum's real_last): a listing's -0 is the very last entry, which with history recording on is this fc

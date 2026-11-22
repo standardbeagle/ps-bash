@@ -11,8 +11,8 @@ public static partial class PsEmitter
     /// <para>
     /// <b>Invariant</b>: decided on the parsed commands, never on the source text. A text scan for <c>trap</c> missed
     /// <c>t=tr; eval "${t}ap 'echo T' USR1"</c> (the trap never ran) and polled for <c>echo trap</c>. Code the emitter
-    /// cannot see is: run-time <c>eval</c> text, a sourced file, a command named at run time (<c>$cmd</c>), and an alias
-    /// (its text is read at run time). A static <c>eval</c>'s text is parsed and judged the same way. Guard:
+    /// cannot see is: run-time <c>eval</c> text, a history entry <c>fc</c> re-runs, a sourced file, a command named at run
+    /// time (<c>$cmd</c>), and an alias (its text is read at run time). A static <c>eval</c>'s text is parsed and judged the same way. Guard:
     /// <c>Core.Tests/SignalTrapPollEmitterTests</c>.
     /// </para>
     /// </summary>
@@ -40,6 +40,8 @@ public static partial class PsEmitter
             case "source":
             case ".":
             case "alias":
+            // `fc -s` / `fc -e -` re-run a history entry: text known only at run time, as eval's.
+            case "fc":
                 return true;
             case "eval":
                 return EvalTextCanSetTrap(s.Words.AsSpan().Slice(i + 1));
