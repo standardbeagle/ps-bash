@@ -23,7 +23,9 @@ internal static class DeclarePrinter
         string shown = PsBash.Core.BashNameCase.ToBash(name);              // bash prints `path`, never its store name
         if (BashShellState.NamerefTarget(name) is { } refTarget)
         {
-            foreach (var line in BashRuntime.EmitBashLines($"declare -n {shown}={QuoteValue(refTarget)}\n"))
+            // `declare -n r` with no target yet: bash prints the attribute alone.
+            string assigned = refTarget.Length == 0 ? "" : "=" + QuoteValue(refTarget);
+            foreach (var line in BashRuntime.EmitBashLines($"declare -n {shown}{assigned}\n"))
                 cmdlet.WriteObject(line);
             return true;
         }

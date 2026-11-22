@@ -204,6 +204,13 @@ public sealed class InvokeBashUnsetCommand : BashCmdlet
                 UnsetReference(store);
                 continue;
             }
+            // A nameref with no target yet names no variable, so a plain `unset r` removes the reference itself
+            // (bash: `declare -n r; unset r; declare -p r` is not found).
+            if (!functionMode && BashShellState.NamerefTarget(store) is { Length: 0 })
+            {
+                UnsetReference(store);
+                continue;
+            }
             if (!functionMode && TryUnsetElement(store)) continue;
             // A temp binding (`v=t f`) or a caller's local (`unlocal() { unset -v "$1"; }`): the frame goes and the value
             // it hid comes back, as in bash. A local of the current function falls through: unset, still local.

@@ -190,6 +190,11 @@ back what the local hid.**
   `local -n s=s` warns `circular name reference` with status 0, and an invalid target is refused with status 1.
   The name itself is the frame's, as for a plain local, so after `local +n r` the plain r (holding the target name)
   ends with the function.
+- **A nameref with no target** (`declare -n r`, `local -n r`) is held in the run-time table with an empty target.
+  `declare -p r` prints `declare -n r`, `declare -n` and `declare -p` list it, `set` does not, and `$r` reads as
+  unset. The first literal assignment (`r=x`) names the target. A local one hides an outer reference of that name
+  until the function returns. `declare +n r` leaves a declared, unset scalar (`declare -- r`). A plain `unset r`
+  removes the reference itself, because there is no target to unset.
 - **`unset -n NAME`** removes NAME's reference with its attributes, never the variable it names. On a name that is
   no nameref it changes nothing (bash 5.2: no variable, no function), except that a readonly NAME is still refused.
   The emitter's static table and `Invoke-BashUnset` read the options one way: `-n` holds for every name after it,
@@ -212,11 +217,9 @@ Known gaps:
   refuses it with status 1 and keeps the indexed array; only the no-value form is guarded.
 - Arrays live as PowerShell variables, which are case-insensitive on every OS, so `ta` and `tA` are one array
   (`intentional-differences.md`).
-- A nameref declared with no target (`typeset -n r`) is known only to the emitter until a literal names its target,
-  so `declare -p r` reports `not found` where bash prints `declare -n r`.
 
 Behavior: `ShellLanguageGapDifferentialTests.FunctionLocal*`, `FunctionDeclare_*`, `FunctionNameref_*`,
-`Declare_NoValueIsDeclaredButUnset`, `UnsetLocals_ExistAndUnsetArraysAreUnbound`, `UnsetNamerefTests`.
+`Declare_NoValueIsDeclaredButUnset`, `UnsetLocals_ExistAndUnsetArraysAreUnbound`, `UnsetNamerefTests`, `NamerefNoTargetTests`.
 
 ## 9. Shell-owned variables
 

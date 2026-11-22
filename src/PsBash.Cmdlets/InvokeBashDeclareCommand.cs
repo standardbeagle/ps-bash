@@ -106,8 +106,9 @@ public sealed class InvokeBashDeclareCommand : BashCmdlet
         var env = new Dictionary<string, string>(PsBash.Core.ShellExports.NameComparer);
         foreach (var (name, value) in BashVariableStore.Enumerate()) env[name] = value;
         var keys = new List<string>(env.Keys);
+        // `set` lists a nameref as NAME=TARGET; one with no target yet has no value to list (bash prints nothing).
         foreach (var nr in BashShellState.NamerefNames())
-            if (!keys.Contains(nr)) keys.Add(nr);
+            if (!keys.Contains(nr) && BashShellState.NamerefTarget(nr) is { Length: > 0 }) keys.Add(nr);
         var arrays = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (an, av) in AllVariables())
         {

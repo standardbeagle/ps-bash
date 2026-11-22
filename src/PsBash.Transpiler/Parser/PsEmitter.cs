@@ -2938,6 +2938,7 @@ public static partial class PsEmitter
         var priorLocalAttrNames = _localAttrNames;
         _localAttrNames = null;
         var priorNamerefs = _namerefs is null ? null : new Dictionary<string, string>(_namerefs, VarNameKeys);
+        var priorPendingNamerefs = _pendingNamerefs is null ? null : new HashSet<string>(_pendingNamerefs, VarNameKeys);
         _functionLocalNames = new HashSet<string>(localVars.Concat(dynLocals), VarNameKeys);
         var vars = _lexicalLocals ??= new HashSet<string>(VarNameKeys);
         var added = new List<string>();
@@ -3055,6 +3056,12 @@ public static partial class PsEmitter
             {
                 _namerefs.Clear();
                 foreach (var kv in priorNamerefs) _namerefs[kv.Key] = kv.Value;
+            }
+            // A `local -n r` with no target ends with the body like a local with one (`r=x` after the call is plain).
+            if (_pendingNamerefs is not null)
+            {
+                _pendingNamerefs.Clear();
+                if (priorPendingNamerefs is not null) _pendingNamerefs.UnionWith(priorPendingNamerefs);
             }
             _loopLabels = outerLabels;
             _loopBarrier = outerBarrier;
@@ -4872,6 +4879,21 @@ public static partial class PsEmitter
                 }
                 continue;
             }
+            // `local -n r` with no target, in a function: a nameref local to it, whose target the next literal assignment
+            // names (`r=x` then reads and writes x); until then it hides an outer reference of that name and r is unset.
+            // EmitFunction puts the static sets back when the body ends. REGRESSION: it was a plain local, so `r=x` set r.
+            if (cmd.IsLocal && cmd.IsNameref && _functionDepth > 0 && _namerefs is not null
+                && pair.ArrayValue is null && pair.Value is null && IsValidVarName(pair.Name))
+            {
+                _namerefs.Remove(pair.Name);
+                (_pendingNamerefs ??= new HashSet<string>(VarNameKeys)).Add(pair.Name);
+                if (_dynLocals?.Contains(pair.Name) == true)
+                    sb.Append($"if ($null -eq $__lsd_{pair.Name}) {{ $__lsd_{pair.Name} = @{{ v = $env:{pair.Name} }} }}; $env:{pair.Name} = ")
+                      .Append(PsBuild.DeclareLocal(pair.Name)).Append("; ");
+                sb.Append("[PsBash.Cmdlets.VarFrameStack]::LocalAttributes(").Append(PsBuild.SingleQuote(pair.Name)).Append("); ")
+                  .Append(NamerefMark(pair.Name, "")).Append("; ").Append(PsBuild.SetStatus(0));
+                continue;
+            }
             // `local -n r=$1` in a variant where r is already resolved to its target: nothing to declare.
             if (cmd.IsLocal && cmd.IsNameref && _namerefs is not null && _namerefs.ContainsKey(pair.Name))
             {
@@ -6211,13 +6233,16 @@ public static partial class PsEmitter
             result = PsBuild.ClearNameref(varName) + "; " + PsBuild.SetStatus(0);
             return true;
         }
-        // `typeset -n ref` with no target: a string assigned earlier (`ref=x`) becomes the target; otherwise the next literal assignment names it.
+        // `typeset -n ref` with no target: a string assigned earlier (`ref=x`) becomes the target; otherwise the next literal
+        // assignment names it, and until then the run-time table holds it with no target (`declare -p ref` prints
+        // `declare -n ref`, as bash does; REGRESSION: it was "not found").
         if (isNameref && !isPrint && varName is not null && IsValidVarName(varName) && _namerefs is not null && !_namerefs.ContainsKey(varName))
         {
             string nrMark = "";
             if (_litAssigned is not null && _litAssigned.TryGetValue(varName, out var known) && IsValidVarName(known) && !VarNameKeys.Equals(known, varName))
             { _namerefs[varName] = known; nrMark = NamerefMark(varName, known) + "; "; }
-            else if (_litAssigned is null || !_litAssigned.ContainsKey(varName)) _pendingNamerefs?.Add(varName);
+            else if (_litAssigned is null || !_litAssigned.ContainsKey(varName))
+            { _pendingNamerefs?.Add(varName); nrMark = NamerefMark(varName, "") + "; "; }
             result = nrMark + PsBuild.SetStatus(0);
             return true;
         }
@@ -6711,7 +6736,8 @@ public static partial class PsEmitter
         // `unset -n ref` removes the reference itself, so later reads of `ref` are plain again; `unset ref` on a nameref
         // unsets the variable it names (bash). The options as Invoke-BashUnset reads them: -f / -v set the mode for the
         // names after them, -n holds for the rest, and -f overrides it (`unset -n -f ref` keeps the reference).
-        if (cmd0 == "unset" && _namerefs is { Count: > 0 } && cmd.Words.Length >= 2)
+        // A nameref with no target yet (pending) names no variable: `unset r` removes the reference itself.
+        if (cmd0 == "unset" && (_namerefs is { Count: > 0 } || _pendingNamerefs is { Count: > 0 }) && cmd.Words.Length >= 2)
         {
             bool functions = false, byReference = false, rewrote = false;
             var words = cmd.Words.ToBuilder();
@@ -6722,8 +6748,9 @@ public static partial class PsEmitter
                 if (lit == "-v") { functions = false; continue; }
                 if (lit == "-n") { byReference = true; continue; }
                 if (lit is null || lit.StartsWith('-') || functions) continue;
-                if (byReference) { _namerefs.Remove(lit); _pendingNamerefs?.Remove(lit); }
-                else if (_namerefs.ContainsKey(lit)) { words[i] = new CompoundWord([new WordPart.Literal(ResolveNameref(lit))]); rewrote = true; }
+                if (byReference) { _namerefs?.Remove(lit); _pendingNamerefs?.Remove(lit); }
+                else if (_namerefs?.ContainsKey(lit) == true) { words[i] = new CompoundWord([new WordPart.Literal(ResolveNameref(lit))]); rewrote = true; }
+                else _pendingNamerefs?.Remove(lit);
             }
             if (rewrote) cmd = new Command.Simple(words.ToImmutable(), cmd.EnvPairs, cmd.Redirects);
         }

@@ -59,7 +59,9 @@ public static class BashShellState
     private static readonly Dictionary<string, string> Namerefs = new(StringComparer.Ordinal);
 
     /// <summary>Records <c>declare -n NAME=TARGET</c> so <c>declare -p</c> can list it (the emitter resolves the reference itself).
-    /// The target is kept as its bash name: it is printed (<c>declare -p</c>) and handed back as a value (<c>typeset +n</c>).</summary>
+    /// The target is kept as its bash name: it is printed (<c>declare -p</c>) and handed back as a value (<c>typeset +n</c>).
+    /// An empty target is a nameref declared with no target yet (<c>declare -n r</c>): <c>declare -p</c> prints
+    /// <c>declare -n r</c>, <c>set</c> lists nothing, and resolving it gives the name itself (<see cref="ResolveNameref"/>).</summary>
     public static void SetNameref(string name, string target)
     {
         lock (Namerefs) Namerefs[Key(name)] = PsBash.Core.BashNameCase.ToBash(target);
@@ -67,12 +69,18 @@ public static class BashShellState
 
     /// <summary>
     /// <c>declare +n NAME</c>: the name is a plain variable again, whose value is the reference's own: the target name
-    /// (<c>typeset -n ref=x; typeset +n ref</c> leaves ref=x; it was left unset). Not a nameref: <paramref name="current"/>.
+    /// (<c>typeset -n ref=x; typeset +n ref</c> leaves ref=x; it was left unset). A nameref with no target leaves a
+    /// declared, unset scalar (bash: <c>declare -n r; declare +n r; declare -p r</c> prints <c>declare -- r</c>). Not a
+    /// nameref: <paramref name="current"/>.
     /// </summary>
     public static string? ClearNameref(string name, object? current)
     {
+        string? target;
         lock (Namerefs)
-            return Namerefs.Remove(Key(name), out var target) ? target : current?.ToString();
+            if (!Namerefs.Remove(Key(name), out target)) return current?.ToString();
+        if (target.Length > 0) return target;
+        MarkAttribute(name, "-");
+        return null;
     }
 
     internal static string? NamerefTarget(string name) { lock (Namerefs) return Namerefs.TryGetValue(Key(name), out var t) ? t : null; }

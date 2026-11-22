@@ -126,6 +126,30 @@ public class BashShellStateTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void NamerefWithNoTarget_IsListed_PlusNLeavesADeclaredScalar_UnsetRemovesIt()
+    {
+        // bash: `declare -n r; declare -p r` prints `declare -n r`; `declare +n r` leaves `declare -- r`; `declare -n q;
+        // unset q` removes q. REGRESSION: the run-time table never held a nameref with no target ("not found").
+        var r = Run(
+            "[PsBash.Cmdlets.BashShellState]::SetNameref('psbt_nt_r', ''); "
+            + "[PsBash.Cmdlets.BashShellState]::SetNameref('psbt_nt_q', ''); "
+            + "Invoke-BashDeclare -p psbt_nt_r | ForEach-Object { \"a: $_\" }; "
+            + "\"resolve=$([PsBash.Cmdlets.BashShellState]::ResolveNameref('psbt_nt_r'))\"; "
+            + "$env:psbt_nt_r = [PsBash.Cmdlets.BashShellState]::ClearNameref('psbt_nt_r', $env:psbt_nt_r); "
+            + "Invoke-BashDeclare -p psbt_nt_r | ForEach-Object { \"b: $_\" }; "
+            + "Invoke-BashUnset psbt_nt_q; Invoke-BashDeclare -p psbt_nt_q 2>&1 | ForEach-Object { \"c: $_\" }; "
+            + "Invoke-BashUnset psbt_nt_r; $global:LASTEXITCODE = 0").AssertSuccess();
+
+        Assert.Contains("a: declare -n psbt_nt_r", r.Stdout);
+        Assert.DoesNotContain("a: declare -n psbt_nt_r=", r.Stdout);
+        Assert.Contains("resolve=psbt_nt_r", r.Stdout);
+        Assert.Contains("b: declare -- psbt_nt_r", r.Stdout);
+        Assert.DoesNotContain("b: declare -- psbt_nt_r=", r.Stdout);
+        Assert.Contains("c: ", r.Stdout);
+        Assert.Contains("psbt_nt_q: not found", r.Stdout);
+    }
+
+    [Fact]
     public void ClearReadonly_LetsTheNextInvocationUnset()
     {
         // A daemon runs many scripts; `readonly v` in one must not block `unset v` in the next.
