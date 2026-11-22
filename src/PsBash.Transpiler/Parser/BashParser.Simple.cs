@@ -30,7 +30,11 @@ public sealed partial class BashParser
         // which writes globals, so `f() { declare -a e; }` left e set after f returned.
         int k = _pos + 1;
         for (; k < _tokens.Count && _tokens[k] is { Kind: BashTokenKind.Word } flag && flag.Value.Length > 1 && flag.Value[0] == '-'; k++)
+        {
+            // `declare -- v=1`: the end of the options, as for `local -- v=1`. REGRESSION: it was a global declaration.
+            if (flag.Value == "--") { k++; break; }
             if (flag.Value.AsSpan(1).IndexOfAnyExcept(LocalDeclareFlags) >= 0) return false;
+        }
         return k < _tokens.Count
                && _tokens[k] is { Kind: BashTokenKind.Word or BashTokenKind.AssignmentWord } next
                && !next.Value.StartsWith('-');

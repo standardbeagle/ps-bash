@@ -87,6 +87,32 @@ public class RedirectGroupReturnDifferentialTests
         + "n3(){ g(){ { return 2; } 2>x; }; { g; echo \"g=$?\"; return 8; } 2>x; echo no; }; n3; echo \"n3=$?\"\n"
         + "n4(){ { :; } >/nonexistent/x; { return 6; } 2>x; echo no; }; n4 2>/dev/null; echo \"n4=$?\"\n");
 
+    // A return in a condition, a `!` pipeline or an and-or left operand leaves the function under set -e (each case in a
+    // subshell that turns it on: the status 6 then ends the subshell) and under an ERR trap, also from run-time text.
+    // Guard: RedirectGroupGuardTests.Transpile_ReturnInAnErrexitCondition_StaysAStatement.
+    [SkippableFact]
+    public Task Return_InAConditionUnderErrexitOrAnErrTrap_LeavesTheFunction() => Same(
+        "c1(){ if return 6; then echo t; fi; echo no; }\n"
+        + "c2(){ while return 6; do :; done; echo no; }\n"
+        + "c3(){ until return 6; do :; done; echo no; }\n"
+        + "c4(){ ! return 6; echo no; }\n"
+        + "c5(){ return 6 && echo and; echo no; }\n"
+        + "c6(){ return 6 || echo or; echo no; }\n"
+        + "c7(){ if { return 6; }; then :; fi; echo no; }\n"
+        + "c8(){ if ! return 6; then :; fi; echo no; }\n"
+        + "c9(){ while { return 6; } 2>x; do :; done; echo no; }\n"
+        + "c10(){ if [[ 1 ]] && return 6; then :; fi; echo no; }\n"
+        + "c11(){ if false; then :; elif return 6; then :; fi; echo no; }\n"
+        + "c12(){ if eval 'return 6'; then :; fi; echo no; }\n"
+        + "c13(){ ! { return 6; } 2>x; echo no; }\n"
+        + "c14(){ [[ 1 ]] && ! return 6; echo no; }\n"
+        + "c15(){ while :; do if return 6; then :; fi; done; echo no; }\n"
+        + "cc='if return 6; then :; fi; until ! return 7; do :; done'; c16(){ eval \"$cc\"; echo no; }\n"
+        + "se(){ ( set -e; \"$@\"; echo after ); echo \"se-$1=$?\"; }\n"
+        + "for k in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do se c$k; done\n"
+        + "trap ':' ERR\n"
+        + "for k in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do c$k; echo \"err-c$k=$?\"; done\n");
+
     // Controls: what bash does NOT pass on.
     [SkippableFact]
     public Task Controls_BreakContinueCallsAndSource() => Same(

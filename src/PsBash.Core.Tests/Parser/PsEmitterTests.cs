@@ -442,6 +442,24 @@ public class PsEmitterTests
         Assert.Contains("$env:r = $env:r + 'bar'", ps);
     }
 
+    // Oracle: `s=a; declare s+=x` is ax; `n=3; declare -i n+=2` is 5; `u=ab; declare -u u+=cd` is ABCD. REGRESSION: the
+    // declaration emitted `$env:s+ = 'x'`, which failed the parse of the whole script.
+    [Theory]
+    [InlineData("declare s+=x", "$env:s = $env:s + 'x'")]
+    [InlineData("typeset s+=x", "$env:s = $env:s + 'x'")]
+    [InlineData("declare -x s+=x", "[PsBash.Cmdlets.BashShellState]::MarkAttribute('s', 'x')")]
+    [InlineData("declare -i n+=2", "$env:n = [string](Invoke-BashArith 'n+(2)')")]
+    [InlineData("declare -u u+=cd", "$env:u = ([string]($env:u + 'cd')).ToUpperInvariant()")]
+    [InlineData("declare -r s+=x", "[PsBash.Cmdlets.BashShellState]::MarkReadonly('s')")]
+    public void Transpile_DeclarePlusEquals_AppendsToTheValue(string bash, string expected)
+    {
+        var ps = PsEmitter.Transpile(bash)!;
+        Assert.DoesNotContain("s+'", ps);
+        Assert.DoesNotContain("$env:s+", ps);
+        Assert.DoesNotContain("$env:n+", ps);
+        Assert.Contains(expected, ps);
+    }
+
     [Fact]
     public void Transpile_LocalPlusEquals_StartsEmptyThenAppendsWithinTheCall()
     {
