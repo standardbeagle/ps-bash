@@ -426,6 +426,10 @@ public class BashTranspilerReviewRegressionTests
     [InlineData("push() { st+=(\"$1\"); }; push a", "[PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'st').Value = Add-BashArray ([PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'st').Value ?? ${env:st}) @(")]
     [InlineData("f() { a=(x y); }; f", "[PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a').Value = @(")]
     [InlineData("f() { a[2]=z; }; f", "[PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a').Value = Set-BashElement ([PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a').Value)")]
+    // A function defined inside a subshell too (the slot is then the subshell's, at run time). REGRESSION: it wrote `$a`,
+    // a variable of its own, so `( f() { a=(x y); }; f; echo "${a[*]}" )` printed the old value.
+    [InlineData("( f() { a=(x y); }; f )", "[PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a').Value = @(")]
+    [InlineData("g() { ( f() { a+=(z); }; f ); }; g", "[PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a').Value = Add-BashArray (")]
     public void Transpile_ArrayWrittenInFunction_TargetsTheCallersSlot(string bash, string expected)
         => Assert.Contains(expected, BashTranspiler.Transpile(bash + "\ndeclare -p"));
 

@@ -502,6 +502,28 @@ public class ShellLanguageGapDifferentialTests
         """);
 
     /// <summary>
+    /// An array the subshell inherited and then writes (<c>mapfile</c>, <c>read -a</c>, a function defined in it, a
+    /// nameref) is the subshell's own: it sees the write, and the caller does not. REGRESSION: <c>mapfile</c> / <c>read
+    /// -a</c> wrote the caller's array in place, and a function defined in the subshell wrote a variable of its own.
+    /// </summary>
+    [SkippableFact]
+    public Task Subshell_ArrayWritesToAnInheritedArrayStayInIt() => SameAsScript(
+        """
+        {
+        arr=(a b)
+        ( mapfile -t arr <<< x; echo "1 in=${arr[*]}" ); echo "1 out=${arr[*]}"
+        ( read -ra arr <<< "p q"; echo "2 in=${arr[*]}" ); echo "2 out=${arr[*]}"
+        ( f() { arr=(x y); }; f; echo "3 in=${arr[*]}" ); echo "3 out=${arr[*]}"
+        ( m() { local -n mr=$1; mr=(x y); }; m arr; echo "4 in=${arr[*]}" ); echo "4 out=${arr[*]}"
+        ( m5() { local -n mr=$1; mr+=(z); }; nm=arr; m5 "$nm"; echo "5 in=${arr[*]}" ); echo "5 out=${arr[*]}"
+        ( w=arr; declare -n e6=$w; e6+=(q); echo "6 in=${arr[*]}" ); echo "6 out=${arr[*]}"
+        ( g() { mapfile -t arr <<< z; }; g; echo "7 in=${arr[*]}" ); echo "7 out=${arr[*]}"
+        h() { local -a la=(1 2); ( mapfile -t la <<< 9; echo "8 in=${la[*]}" ); echo "8 out=${la[*]}"; }; h
+        k() { mapfile -t arr <<< K; }; k; echo "9 ${arr[*]}"
+        } 2>&1
+        """);
+
+    /// <summary>
     /// <c>exec CMD</c> reads its own here-string / <c>&lt;</c> file when it has one, else the stdin it inherits (a pipe, a
     /// group's redirect, a subshell's), and ends only its subshell. REGRESSION: <c>echo q | exec cat</c> and
     /// <c>{ exec cat; } &lt; f</c> printed nothing; the fix's first cut displaced <c>( exec cat &lt;&lt;&lt; q )</c>'s own input.

@@ -210,6 +210,32 @@ public class BashShellStateTests : IClassFixture<SharedPwshFixture>
         Assert.Contains("to=psbt_bl_e[1]", r.Stdout);
     }
 
+    [Fact]
+    public void ViewNameref_TheVariableFollowsTheReference_ReadAndWrite()
+    {
+        // bash: `declare -n r; w=arr; r=$w; arr=(a b)` makes ${r[@]} `a b` and `r+=(z)` grow arr. Every array form the emitter
+        // writes reads `$r`, so `$r` itself follows the reference. REGRESSION: `${r[@]}` read r's own (unset) array.
+        var r = Run(
+            "[PsBash.Cmdlets.BashShellState]::SetNameref('psbt_vw_r', ''); [PsBash.Cmdlets.BashVariableLookup]::ViewNameref($ExecutionContext.SessionState, 'psbt_vw_r'); "
+            + "\"none=[$($null -eq $psbt_vw_r)]\"; "
+            + "[void][PsBash.Cmdlets.BashVariableLookup]::AssignThroughNameref($ExecutionContext.SessionState, 'psbt_vw_r', 'psbt_vw_arr', $false); "
+            + "$global:psbt_vw_arr = @('a', 'b'); \"read=[$($psbt_vw_r -join ',')] n=$($psbt_vw_r.Count)\"; "
+            + "$psbt_vw_r = @('x', 'y', 'z'); \"wrote=[$($global:psbt_vw_arr -join ',')]\"; "
+            + "\"listed=$(@(Invoke-BashDeclare -p | Where-Object { $_ -like 'declare -a psbt_vw_r=*' }).Count)\"; "
+            + "Invoke-BashTest '-v' psbt_vw_r; \"v=$global:LASTEXITCODE\"; Invoke-BashTest '-v' 'psbt_vw_r[2]'; \"v2=$global:LASTEXITCODE\"; "
+            + "\"name=$([PsBash.Cmdlets.BashVariableLookup]::NamerefName('psbt_vw_r'))\"; "
+            + "Invoke-BashUnset -n psbt_vw_r; \"after=[$($null -eq $psbt_vw_r)] arr=[$($global:psbt_vw_arr -join ',')]\"; "
+            + "Remove-Variable -Name psbt_vw_arr -Scope Global; $global:LASTEXITCODE = 0").AssertSuccess();
+        Assert.Contains("none=[True]", r.Stdout);
+        Assert.Contains("read=[a,b] n=2", r.Stdout);
+        Assert.Contains("wrote=[x,y,z]", r.Stdout);
+        Assert.Contains("listed=0", r.Stdout);
+        Assert.Contains("v=0", r.Stdout);
+        Assert.Contains("v2=0", r.Stdout);
+        Assert.Contains("name=psbt_vw_arr", r.Stdout);
+        Assert.Contains("after=[True] arr=[x,y,z]", r.Stdout);
+    }
+
     [Theory]
     [InlineData("-vn")]
     [InlineData("-nv")]

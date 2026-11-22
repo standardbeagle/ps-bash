@@ -187,9 +187,24 @@ public sealed class InvokeBashTestCommand : BashCmdlet
 
     private static bool Exists(string p) => File.Exists(p) || Directory.Exists(p);
 
+    /// <summary>
+    /// A nameref answers for the variable it names, to the end of its chain (`declare -n r; r=$v; [[ -v r ]]` tests
+    /// $v's variable; `[[ -v r[1] ]]` its element). One with no target names nothing, so it is unset.
+    /// </summary>
+    private static string ThroughNameref(string operand)
+    {
+        int open = operand.IndexOf('[');
+        string name = open > 0 ? operand[..open] : operand;
+        if (BashShellState.NamerefTarget(name) is not { Length: > 0 }) return operand;
+        string target = BashShellState.ResolveNameref(name);
+        if (open < 0) return target;
+        return target.Contains('[') ? operand : target + operand[open..];
+    }
+
     /// <summary>`[[ -v name ]]`, `-v arr[i]`, `-v map[key]`: is the variable (or that element) set?</summary>
     private bool VariableIsSet(string operand)
     {
+        operand = ThroughNameref(operand);
         int open = operand.IndexOf('[');
         if (open > 0 && operand.EndsWith(']'))
         {

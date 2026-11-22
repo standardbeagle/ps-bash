@@ -231,7 +231,7 @@ public static partial class PsEmitter
     /// <summary>The emitter's per-shell attribute tables as a subshell body found them (<see cref="EnterSubshellTables"/>).</summary>
     private readonly record struct SubshellTables(HashSet<string>? Readonly, Dictionary<string, string>? Namerefs,
         HashSet<string>? PendingNamerefs, HashSet<string>? RuntimeNamerefs, Dictionary<string, string>? LitAssigned,
-        HashSet<string>? IntVars, Dictionary<string, bool>? CaseVars, HashSet<string>? AssocVars);
+        HashSet<string>? IntVars, Dictionary<string, bool>? CaseVars, HashSet<string>? AssocVars, int FunctionDepth);
 
     /// <summary>
     /// A subshell body starts (<c>( )</c>, <c>$( )</c>, <c>&lt;( )</c>, <c>cmd &amp;</c>, a pipe stage): it gets a copy of
@@ -243,7 +243,8 @@ public static partial class PsEmitter
     /// </summary>
     private static SubshellTables EnterSubshellTables()
     {
-        var outer = new SubshellTables(_readonlyVars, _namerefs, _pendingNamerefs, _runtimeNamerefs, _litAssigned, _intVars, _caseVars, _assocVars);
+        var outer = new SubshellTables(_readonlyVars, _namerefs, _pendingNamerefs, _runtimeNamerefs, _litAssigned, _intVars, _caseVars, _assocVars, _subshellFunctionDepth);
+        _subshellFunctionDepth = _functionDepth;
         if (_readonlyVars is { } ro) _readonlyVars = new HashSet<string>(ro, VarNameKeys);
         if (_namerefs is { } refs) _namerefs = new Dictionary<string, string>(refs, VarNameKeys);
         if (_pendingNamerefs is { } pending) _pendingNamerefs = new HashSet<string>(pending, VarNameKeys);
@@ -255,11 +256,17 @@ public static partial class PsEmitter
         return outer;
     }
 
+    /// <summary>
+    /// <see cref="_functionDepth"/> when the innermost subshell body started (0 outside one): a function body deeper than
+    /// that was defined inside the subshell, so its array writes go to the subshell's array, not to one of its own.
+    /// </summary>
+    [ThreadStatic] private static int _subshellFunctionDepth;
+
     /// <summary>The subshell body ended: the tables are the ones <see cref="EnterSubshellTables"/> found.</summary>
     private static void LeaveSubshellTables(SubshellTables outer)
     {
         _readonlyVars = outer.Readonly; _namerefs = outer.Namerefs; _pendingNamerefs = outer.PendingNamerefs; _runtimeNamerefs = outer.RuntimeNamerefs;
-        _litAssigned = outer.LitAssigned; _intVars = outer.IntVars; _caseVars = outer.CaseVars; _assocVars = outer.AssocVars;
+        _litAssigned = outer.LitAssigned; _intVars = outer.IntVars; _caseVars = outer.CaseVars; _assocVars = outer.AssocVars; _subshellFunctionDepth = outer.FunctionDepth;
     }
     /// <summary>True when the script text reads `$?` somewhere: only then does a bare assignment need to reset the status to 0.</summary>
     [ThreadStatic] private static bool _scriptReadsStatus;
@@ -2936,8 +2943,9 @@ public static partial class PsEmitter
         // eval'd text runs in the calling function's scope: an array it assigns is the shell's own unless that function declared it `local`.
         _context == TranspileContext.Eval && _functionDepth == 0 && _subshellDepth == 0
             ? (EvalLocalNames?.Contains(name) == true ? "$" + name : "$global:" + name) :
-        // Not this function's local: a calling function's local array of the name, else the global (bash's dynamic scope).
-        _functionDepth > 0 && _subshellDepth == 0 && _functionLocalNames is { } locals && !locals.Contains(name)
+        // Not this function's local: a calling function's local array of the name, else the global (bash's dynamic scope);
+        // in a function defined inside a subshell, the subshell's own array (a subshell body's `$name` is its copy already).
+        _functionDepth > _subshellFunctionDepth && _functionLocalNames is { } locals && !locals.Contains(name)
             ? PsBuild.ArraySlot(name)
         // A lastpipe stage runs in the shell, but inside the stage's `& { }`: `... | while read l; do a+=("$l"); done`
         // must append to the shell's array, not to one local to that block.
@@ -4706,8 +4714,18 @@ public static partial class PsEmitter
     /// A bare assignment statement ends with status 0 (`false; x=1; echo $?` prints 0), unless a command substitution
     /// supplies the status or the target is readonly (the refusal sets 1).
     /// </summary>
+    /// <summary>
+    /// The scalar value of <paramref name="name"/> an array write builds on (<c>s=x; s+=(y)</c>, <c>s[1]=y</c> keep x as
+    /// element 0): the shell variable, or for a nameref whose target is known only at run time the target's
+    /// (PsBuild.ReadThroughNameref), never r's own.
+    /// </summary>
+    private static string ScalarValueOf(string name, bool braced) =>
+        IsRuntimeNameref(name) ? PsBuild.ReadThroughNameref(name) : braced ? "${env:" + name + "}" : "$env:" + name;
+
     private static string NamerefMark(string name, string target) =>
-        "[PsBash.Cmdlets.BashShellState]::SetNameref(" + PsBuild.SingleQuote(name) + ", " + PsBuild.SingleQuote(target) + ")";
+        "[PsBash.Cmdlets.BashShellState]::SetNameref(" + PsBuild.SingleQuote(name) + ", " + PsBuild.SingleQuote(target) + ")"
+        // No target: it is named at run time, and the array forms of the name read `$name` (BashVariableLookup.ViewNameref).
+        + (target.Length == 0 ? "; " + PsBuild.ViewNameref(name) : "");
 
     private static string EmitShAssignmentStatement(Command.ShAssignment cmd)
     {
@@ -4964,6 +4982,21 @@ public static partial class PsEmitter
                 sb.Append(PsBuild.SetStatus(0));
                 continue;
             }
+            // `local -n r=$1` / `local -n r="$name"`: a reference local to the function whose target is known only at run
+            // time (PsBuild.DeclareNameref); every expansion and write of r then goes through the run time. REGRESSION: it
+            // was a plain local holding the value, so `r=x`, `${r[@]}` and `r+=(z)` used r, not the variable it names.
+            if (cmd.IsLocal && cmd.IsNameref && _functionDepth > 0 && _namerefs is not null
+                && pair.ArrayValue is null && pair.Op == AssignOp.Equal && pair.Value is not null && IsValidVarName(pair.Name))
+            {
+                _namerefs.Remove(pair.Name); _pendingNamerefs?.Remove(pair.Name); _litAssigned?.Remove(pair.Name);
+                (_runtimeNamerefs ??= new HashSet<string>(VarNameKeys)).Add(pair.Name);
+                if (_dynLocals?.Contains(pair.Name) == true)
+                    sb.Append($"if ($null -eq $__lsd_{pair.Name}) {{ $__lsd_{pair.Name} = @{{ v = $env:{pair.Name} }} }}; $env:{pair.Name} = ")
+                      .Append(PsBuild.DeclareLocal(pair.Name)).Append("; ");
+                sb.Append("[PsBash.Cmdlets.VarFrameStack]::LocalAttributes(").Append(PsBuild.SingleQuote(pair.Name)).Append("); ")
+                  .Append(PsBuild.DeclareNameref(cmd.Builtin ?? "local", pair.Name, EmitAssignmentValue(pair.Value), inFunction: true));
+                continue;
+            }
             // `readonly y; f() { local x=1 y=2; }`: bash refuses the local (`local: y: readonly variable`, status 1).
             if (cmd.IsLocal && !cmd.IsNameref && pair.ArrayValue is null && !pair.Name.Contains('[') && _readonlyVars?.Contains(pair.Name) == true)
             {
@@ -5072,7 +5105,7 @@ public static partial class PsEmitter
                     // `a+=([k]=v)` merges into the existing table (a changed value keeps its place, a new key joins).
                     sb.Append(ArrayWriteTarget(pair.Name)).Append(" = ");
                     sb.Append(pair.Op == AssignOp.PlusEqual
-                        ? "[PsBash.Cmdlets.BashAssoc]::Merge(" + PsBuild.ArrayAppendBase(ArrayWriteTarget(pair.Name), ResolveNameref(pair.Name)) + ", " + assoc + ")"
+                        ? "[PsBash.Cmdlets.BashAssoc]::Merge(" + PsBuild.ArrayAppendBase(ArrayWriteTarget(pair.Name), ScalarValueOf(ResolveNameref(pair.Name), braced: true)) + ", " + assoc + ")"
                         // `a=([k1]=v1)` with no `declare -A a` in sight: indexed (arithmetic subscripts) unless a is
                         // associative at run time.
                         : knownAssoc ? assoc : PsBuild.AssocOrIndexed(ArrayWriteTarget(pair.Name), assoc, assocAsIndexed));
@@ -5099,7 +5132,7 @@ public static partial class PsEmitter
                 sb.Append(ArrayWriteTarget(pair.Name));
                 // `a+=(x)` goes through Add-BashArray: a sparse array appends after its highest subscript,
                 // which PowerShell's own `+=` cannot do on a dictionary.
-                sb.Append(pair.Op == AssignOp.PlusEqual ? " = Add-BashArray " + PsBuild.ArrayAppendBase(ArrayWriteTarget(pair.Name), ResolveNameref(pair.Name)) + " @("
+                sb.Append(pair.Op == AssignOp.PlusEqual ? " = Add-BashArray " + PsBuild.ArrayAppendBase(ArrayWriteTarget(pair.Name), ScalarValueOf(ResolveNameref(pair.Name), braced: true)) + " @("
                     : wordsArePairs ? " = [PsBash.Cmdlets.BashAssoc]::FromWords(@("
                     : kindAtRunTime ? " = [PsBash.Cmdlets.BashAssoc]::ListOrPairs(" + ArrayWriteTarget(pair.Name) + ", @("
                     : " = @(");
@@ -5148,7 +5181,7 @@ public static partial class PsEmitter
                     // `c=s; c[1]=t`: a scalar becomes element 0 of the array.
                     if ((target.StartsWith('$') || PsBuild.IsArraySlot(target)) && _assocVars?.Contains(baseName) != true && EnvShadowName(baseName) is null
                         && PsBuild.TryMapSpecialVar(baseName, braced: false, false) is null)
-                        sb.Append(PsBuild.SeedArrayFromScalar(target, "$env:" + baseName)).Append("; ");
+                        sb.Append(PsBuild.SeedArrayFromScalar(target, ScalarValueOf(baseName, braced: false))).Append("; ");
                 }
                 string key = FlattenPartsToDoubleQuotedString(BashParser.DecomposeWord(subscript.StartsWith('~') ? "\\" + subscript : subscript));
                 // `a[a[0]=1]=X`: a subscript that assigns runs first, here, so the array read below already has its
@@ -6479,6 +6512,16 @@ public static partial class PsEmitter
         {
             _namerefs[varName[..neq]] = varName[(neq + 1)..]; _runtimeNamerefs?.Remove(varName[..neq]); _pendingNamerefs?.Remove(varName[..neq]);
             result = NamerefMark(varName[..neq], varName[(neq + 1)..]) + "; " + PsBuild.SetStatus(0);
+            return true;
+        }
+        // `declare -n r=$v`: a target known only at run time (PsBuild.DeclareNameref); every expansion and write of r then
+        // goes through the run time. REGRESSION: the attribute was dropped, so r held v's value.
+        if (isNameref && !isPrint && exprName is not null && IsValidVarName(exprName) && exprValue is not null && _namerefs is not null
+            && ExtractSingleQuotedOrLiteralValue(exprValue) is null)
+        {
+            _namerefs.Remove(exprName); _pendingNamerefs?.Remove(exprName); _litAssigned?.Remove(exprName);
+            (_runtimeNamerefs ??= new HashSet<string>(VarNameKeys)).Add(exprName);
+            result = PsBuild.DeclareNameref(name, exprName, EmitAssignmentValue(exprValue), inFunction: _functionDepth > 0);
             return true;
         }
         if (!isPrint && exprName is not null && !isAssoc)
@@ -11514,6 +11557,13 @@ public static partial class PsEmitter
             if (bvs.Name.Contains('[') && bvs.Suffix is ['#', 'L', '[', ..]) // ${#r[@]}: no elements
                 return inDoubleQuote ? "$('0')" : "'0'";
         }
+        // A nameref whose target is known only at run time: `${!r}` is the name it stands for. Every other form reads it
+        // through the run time, so no form needs a case of its own here: the scalar forms apply their operator to
+        // EmitSimpleVar's PsBuild.ReadThroughNameref (AssignDefault and ParamErrorThrow recognize it), the array forms read
+        // `$r`, which follows the reference (BashVariableLookup.ViewNameref), and `${r@a}` names the variable it stands for.
+        bool runtimeNameref = IsRuntimeNameref(bvs.Name);
+        if (runtimeNameref && bvs.Suffix == "!indirect")
+            return PsBuild.IndirectThroughNameref(bvs.Name);
         if (bvs.Suffix is null)
             return EmitSimpleVar(bvs.Name, strict: true);
 
@@ -11543,7 +11593,8 @@ public static partial class PsEmitter
         if (System.Text.RegularExpressions.Regex.IsMatch(bvs.Name, @"^[A-Za-z_]\w*$")
             && System.Text.RegularExpressions.Regex.IsMatch(bvs.Suffix, @"^(\[[^@*\]]*\])?@a$"))
         {
-            string attrs = $"[PsBash.Cmdlets.BashQuoteText]::Attributes({PsBuild.SingleQuote(bvs.Name)}, (Get-Variable -Name {PsBuild.SingleQuote(bvs.Name)} -ValueOnly -ErrorAction Ignore))";
+            string attrName = runtimeNameref ? PsBuild.NamerefTargetName(bvs.Name) : PsBuild.SingleQuote(bvs.Name);
+            string attrs = $"[PsBash.Cmdlets.BashQuoteText]::Attributes({attrName}, (Get-Variable -Name {PsBuild.SingleQuote(bvs.Name)} -ValueOnly -ErrorAction Ignore))";
             // `set -u; ${undef@a}`: an unset name is unbound here too (bash ends the shell or subshell, status 1).
             if (_nounsetMode && bvs.Suffix == "@a")
                 return $"$(if ($global:__BashNounset -and $null -eq {EmitSimpleVar(bvs.Name)}) {{ {PsBuild.ParamErrorThrowStatements(PsBuild.SingleQuote(bvs.Name + ": "), "'unbound variable'")} }} else {{ {attrs} }})";
@@ -11848,6 +11899,8 @@ public static partial class PsEmitter
     /// <c>Set-BashElement</c>, which grows the array; a plain PowerShell index assignment throws past the end.</summary>
     private static string AssignDefault(string varRef, string value)
     {
+        if (PsBuild.ReadThroughNamerefName(varRef) is { } nameref)
+            return PsBuild.AssignDefaultThroughNameref(nameref, value);
         var m = System.Text.RegularExpressions.Regex.Match(varRef, @"^\$([A-Za-z_]\w*)\[(.+)\]$");
         if (!m.Success) return $"({varRef} = {value})";
         string arr = "$" + m.Groups[1].Value;
@@ -11856,7 +11909,8 @@ public static partial class PsEmitter
 
     private static string ParamErrorThrow(string varRef, string argVal)
     {
-        var name = varRef.StartsWith("$env:", StringComparison.Ordinal) ? varRef[5..].Trim('{', '}', '(', ')') : "";
+        var name = varRef.StartsWith("$env:", StringComparison.Ordinal) ? varRef[5..].Trim('{', '}', '(', ')')
+            : PsBuild.ReadThroughNamerefName(varRef) ?? "";
         var prefix = name.Length > 0 ? PsBuild.SingleQuote(name + ": ") : "''";
         return "$(" + PsBuild.ParamErrorThrowStatements(prefix, argVal) + ")";
     }
@@ -11953,8 +12007,9 @@ public static partial class PsEmitter
         if (suffix.StartsWith("+"))
             // Set-but-EMPTY counts as set here (an array element can hold ""), so test for $null, not truthiness.
             return $"{open}$null -ne {varRef} ? {ArgVal(suffix[1..])} : {q}{q})";
+        // With no word bash says "parameter not set" (the colon form's default is "parameter null or not set").
         if (suffix.StartsWith("?"))
-            return $"{open}{varRef} ?? {ParamErrorThrow(varRef, ArgVal(suffix[1..]))})";
+            return $"{open}{varRef} ?? {ParamErrorThrow(varRef, suffix.Length == 1 ? "'parameter not set'" : ArgVal(suffix[1..]))})";
 
         // Remove suffix: ${VAR%%pattern} (longest) / ${VAR%pattern} (shortest).
         // Both anchor the pattern at end-of-string ($). For the LONGEST match a

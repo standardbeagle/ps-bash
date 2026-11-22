@@ -97,7 +97,7 @@ public class NamerefNoTargetEmitterTests
     public void Transpile_ForOverANameref_RetargetsItEachPass(string bash)
     {
         var ps = T(bash);
-        Assert.Contains("[PsBash.Cmdlets.BashShellState]::BindLoopNameref('r', [string]($__psbash_lv0))", ps);
+        Assert.Contains("[PsBash.Cmdlets.BashVariableLookup]::BindLoopNameref($ExecutionContext.SessionState, 'r', [string]($__psbash_lv0))", ps);
         Assert.DoesNotContain("BashVariableStore]::Set('r'", ps);
         Assert.Contains(AssignThrough, ps);
         Assert.Contains(ReadThrough, ps);

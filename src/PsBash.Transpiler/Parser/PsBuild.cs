@@ -1023,9 +1023,10 @@ public static class PsBuild
     /// The current value an array append (<c>s+=(x)</c>, <c>declare -A s+=([k]=v)</c>) builds on: the array, else the
     /// variable's SCALAR value, which lives in the environment. bash keeps it as element 0
     /// (<c>s=world; s+=(x)</c> is <c>([0]="world" [1]="x")</c>); the append started from nothing and lost it.
+    /// <paramref name="scalarExpr"/> is that scalar value (<c>${env:s}</c>, or the target's for a run-time nameref).
     /// </summary>
-    public static string ArrayAppendBase(string arrayTarget, string name) =>
-        "(" + arrayTarget + " ?? ${env:" + name + "})";
+    public static string ArrayAppendBase(string arrayTarget, string scalarExpr) =>
+        "(" + arrayTarget + " ?? " + scalarExpr + ")";
 
     /// <summary>
     /// <c>a=([k]=v …)</c> on a variable the emitter does not know to be associative: an associative <c>a</c> (declared
@@ -1776,16 +1777,75 @@ public static class PsBuild
            + ", [string](" + valueExpr + "), " + (append ? "$true" : "$false") + ")) { "
            + ShellDiagnosticLine("$__psbNr") + "; " + SetStatus(1) + "; " + AssignmentDiscardMark + " }";
 
-    /// <summary><c>$name</c> where <paramref name="name"/> is a nameref whose target is known only at run time: the target's value.</summary>
+    /// <summary>
+    /// <c>$name</c> where <paramref name="name"/> is a nameref whose target is known only at run time: the target's value.
+    /// THE scalar read of such a name: every scalar expansion form (<c>${r:-x}</c>, <c>${#r}</c>, <c>${r#p}</c>,
+    /// <c>${r/a/b}</c>, <c>${r^^}</c>, <c>${r@Q}</c>, a slice) applies its operator to this value, and the assigning
+    /// (<c>${r:=x}</c>) and error (<c>${r?}</c>) forms recognize it (<see cref="ReadThroughNamerefName"/>). Its array
+    /// forms read <c>$name</c>, which follows the reference (<c>BashVariableLookup.ViewNameref</c>).
+    /// </summary>
     public static string ReadThroughNameref(string name)
-        => "$([PsBash.Cmdlets.BashVariableLookup]::ReadThroughNameref($ExecutionContext.SessionState, " + SingleQuote(name) + "))";
+        => ReadThroughNamerefPrefix + SingleQuote(name) + "))";
+
+    private const string ReadThroughNamerefPrefix = "$([PsBash.Cmdlets.BashVariableLookup]::ReadThroughNameref($ExecutionContext.SessionState, ";
+
+    /// <summary>The name a <see cref="ReadThroughNameref"/> expression reads, or null when <paramref name="varRef"/> is none.</summary>
+    public static string? ReadThroughNamerefName(string varRef)
+    {
+        if (!varRef.StartsWith(ReadThroughNamerefPrefix + "'", StringComparison.Ordinal) || !varRef.EndsWith("'))", StringComparison.Ordinal))
+            return null;
+        string name = varRef[(ReadThroughNamerefPrefix.Length + 1)..^3];
+        return name.Length > 0 && name.AsSpan().IndexOfAny('\'', ')') < 0 ? name : null;
+    }
+
+    /// <summary>
+    /// <c>${name=word}</c> / <c>${name:=word}</c>'s assignment where <paramref name="name"/> is a nameref whose target is
+    /// known only at run time: the value goes to the target (or names it, while there is none), and is the expansion.
+    /// </summary>
+    public static string AssignDefaultThroughNameref(string name, string valueExpr)
+        => "$($__psbV = [string](" + valueExpr + "); if ($__psbNr = [PsBash.Cmdlets.BashVariableLookup]::AssignThroughNameref($ExecutionContext.SessionState, "
+           + SingleQuote(name) + ", $__psbV, $false)) { " + ShellDiagnosticLine("$__psbNr") + " }; $__psbV)";
+
+    /// <summary>
+    /// <c>${!name}</c> where <paramref name="name"/> is a nameref whose target is known only at run time: the name of the
+    /// variable it stands for (bash inverts <c>!</c> for a nameref); one with no target is "invalid indirect expansion".
+    /// </summary>
+    public static string IndirectThroughNameref(string name)
+        => "$(if ($null -ne ($__psbNn = [PsBash.Cmdlets.BashVariableLookup]::NamerefName(" + SingleQuote(name) + "))) { $__psbNn } else { "
+           + ExpansionError(SingleQuote(name + ": "), "'invalid indirect expansion'") + " })";
+
+    /// <summary>The name of the variable <paramref name="name"/> stands for at run time (itself when it is no nameref), as a PowerShell expression.</summary>
+    public static string NamerefTargetName(string name)
+        => "([PsBash.Cmdlets.BashShellState]::ResolveNameref(" + SingleQuote(name) + "))";
+
+    /// <summary>
+    /// <c>declare -n name</c> / <c>local -n name</c> with no target: <c>$name</c> follows the reference from here on
+    /// (<c>BashVariableLookup.ViewNameref</c>), in the scope of the declaration. Dot-sourced on purpose: a script block
+    /// that dot-sources anything is compiled without local slots, and in a block WITH them (a subshell's or function's
+    /// body that assigns <c>$name</c>, as <c>r+=(z)</c> does) <c>$name</c> would hold a copy of the view's value taken when it
+    /// was made, and an assignment would replace the view instead of writing the target.
+    /// </summary>
+    public static string ViewNameref(string name)
+        => ". { [PsBash.Cmdlets.BashVariableLookup]::ViewNameref($ExecutionContext.SessionState, " + SingleQuote(name) + ") }";
+
+    /// <summary>
+    /// <c>declare -n name=$v</c> / <c>local -n name=$1</c> (<paramref name="builtin"/>): a reference to the variable the value
+    /// names at run time (<c>BashVariableLookup.DeclareNameref</c>), whose <c>$name</c> follows it (<see cref="ViewNameref"/>,
+    /// made first so the block is compiled without local slots). A value that names no variable is bash's diagnostic and
+    /// status 1 (a warning and 0 for a function's reference to itself); the command goes on.
+    /// </summary>
+    public static string DeclareNameref(string builtin, string name, string valueExpr, bool inFunction)
+        => ViewNameref(name) + "; if ($__psbNr = [PsBash.Cmdlets.BashVariableLookup]::DeclareNameref($ExecutionContext.SessionState, " + SingleQuote(name)
+           + ", [string](" + valueExpr + "), " + (inFunction ? "$true" : "$false") + ")) { "
+           + ShellDiagnosticLine(SingleQuote(builtin + ": ") + " + $__psbNr") + "; " + SetStatusTo("($__psbNr -like 'warning:*' ? 0 : 1)")
+           + " } else { " + SetStatus(0) + " }";
 
     /// <summary>
     /// One pass of <c>for name in ...</c> where <paramref name="name"/> is a nameref: the word (<paramref name="valueExpr"/>)
     /// becomes its target. A word that names no variable ends the loop with bash's diagnostic, status 1.
     /// </summary>
     public static string BindLoopNameref(string name, string valueExpr)
-        => "if (-not [PsBash.Cmdlets.BashShellState]::BindLoopNameref(" + SingleQuote(name) + ", [string](" + valueExpr + "))) { "
+        => "if (-not [PsBash.Cmdlets.BashVariableLookup]::BindLoopNameref($ExecutionContext.SessionState, " + SingleQuote(name) + ", [string](" + valueExpr + "))) { "
            + ShellDiagnosticLine("('`' + " + valueExpr + " + ''': not a valid identifier')") + "; " + SetStatus(1) + "; break }; ";
 
     /// <summary><c>typeset +n name</c>: no longer a nameref; the variable takes the reference's target name as its value.</summary>

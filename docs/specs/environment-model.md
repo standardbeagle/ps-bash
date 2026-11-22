@@ -207,11 +207,27 @@ back what the local hid.**
   an assignment drops the rest of its line, read/printf -v fail with status 1, and the target stays unset. The rule
   lives in one place, `BashShellState.WriteTarget`, which every run-time writer goes through
   (`BashVariableLookup.AssignThroughNameref`, `BashArrayElement.Assign`, the arithmetic cmdlet). A literal `r=x`
-  still names it at transpile time. After any other first write the emitter cannot know the target, so the name
-  joins `_runtimeNamerefs` and its later writes and `$r`/`${r}` reads go through the run time
-  (`PsBuild.AssignThroughNameref`/`ReadThroughNameref`). Known gap: other expansions of such a name (`${r:-x}`,
-  `${#r}`, `${!r}`) still read r's own value. A local one hides an outer reference of that name until the function
-  returns. `declare +n r` leaves a declared, unset scalar (`declare -- r`). A plain `unset r` removes the reference
+  still names it at transpile time. After any other first write the emitter cannot know the target, and neither can
+  it for `declare -n r=$v` / `local -n r=$1` (`PsBuild.DeclareNameref` → `BashVariableLookup.DeclareNameref`, with
+  bash's "invalid variable name for name reference"; a function whose callers pass literal names still gets static
+  variants, `PsEmitter.Namerefs.cs`, and this is their fallback). Such a name joins `_runtimeNamerefs`, its later
+  writes go through `PsBuild.AssignThroughNameref`, and EVERY expansion reads the target through the run time, never
+  r's own storage:
+  - scalar forms (`$r`, `${r:-x}`, `${#r}`, `${r#p}`, `${r/a/b}`, `${r^^}`, `${r@Q}`, a slice) apply their operator
+    to the one scalar read, `PsBuild.ReadThroughNameref`; `${r:=x}`/`${r=x}` assign through the reference
+    (`AssignDefaultThroughNameref`) and `${r?}` names r, both by recognizing that read (`ReadThroughNamerefName`);
+  - array forms (`${r[@]}`, `${r[1]}`, `${#r[@]}`, `${!r[@]}`, `"${r[@]}"` in a `for` list or `x=(...)`, slices,
+    per-element operators, `r+=(z)`, `r[0]=A`) read and write `$r`, a PowerShell variable whose value follows the
+    reference (`BashVariableLookup.ViewNameref`, made in the scope of the `declare -n`/`local -n`, or by the first
+    write or `for` pass): the target's array, null for a scalar target, so the forms fall back to the scalar read
+    (an array write builds on it too: `PsEmitter.ScalarValueOf`). The view is made DOT-SOURCED (`PsBuild.ViewNameref`):
+    a PowerShell block that assigns `$r` (`r+=(z)` in a subshell or function) is otherwise compiled with a local slot,
+    which holds a copy of the view's value and takes assignments itself;
+  - `${!r}` is the name it stands for, at the end of its chain (`BashVariableLookup.NamerefName`; none: "invalid
+    indirect expansion"); `${r@a}` is the target's attributes; `[[ -v r ]]` tests the target (`Invoke-BashTest`).
+  Guard: `Core.Tests/Parser/NamerefRuntimeReadGuardTests` (no form of such a name reads `$env:r` or the store).
+  `declare -p` lists r as a nameref, never as its target's array. A local one hides an outer reference of that name
+  until the function returns. `declare +n r` leaves a declared, unset scalar (`declare -- r`). A plain `unset r` removes the reference
   itself, because there is no target to unset.
 - **`for r in WORDS` over a nameref** (with a target or without) makes each word r's target in turn
   (`BashShellState.BindLoopNameref`); a word that names no variable ends the loop with status 1. The body and what
@@ -231,6 +247,14 @@ back what the local hid.**
   compile-time copies (readonly names, namerefs, `-i`, `-l`/`-u`, `-A`) follow the same rule at every subshell form
   (`( )`, `$( )`, `<( )`, `cmd &`, a pipe stage): `PsEmitter.EnterSubshellTables` copies them and
   `LeaveSubshellTables` puts them back, so `( declare -i x ); x=1+1` stores `1+1`.
+- **A subshell's arrays** are PowerShell variables, so they end with its block only when they are made in its scope.
+  A subshell body's own `arr=(...)` is (`$arr` there). Every other write finds the subshell's scope at run time, the
+  nearest one holding `BashRuntime.SubshellDepthVariable` (`BashShellState.Save` sets it there): `mapfile`, `read -a`
+  and a write through a nameref (`BashVariableLookup.SetArray`/`ReplaceArray` → `SetInSubshellScope`), and a
+  function defined inside the subshell (`PsEmitter._subshellFunctionDepth` routes its writes through
+  `VarFrameStack.ArraySlot` → `ArrayWriteSlot` → `SlotInSubshellScope`, which makes the variable there holding what
+  that scope sees). So the subshell sees the write and its caller does not (`( mapfile -t arr <<< x )`,
+  `( f() { arr=(x y); }; f; echo "${arr[*]}" )`).
 
 Known gaps:
 
@@ -244,7 +268,7 @@ Known gaps:
 
 Behavior: `ShellLanguageGapDifferentialTests.FunctionLocal*`, `FunctionDeclare_*`, `FunctionNameref_*`,
 `Declare_NoValueIsDeclaredButUnset`, `UnsetLocals_ExistAndUnsetArraysAreUnbound`, `UnsetNamerefTests`, `NamerefNoTargetTests`,
-`NamerefRuntimeTargetTests`; options: `Core.Tests/Parser/UnsetOptionsTests`.
+`NamerefRuntimeTargetTests`, `NamerefRuntimeReadTests`, `Subshell_ArrayWritesToAnInheritedArrayStayInIt`; options: `Core.Tests/Parser/UnsetOptionsTests`.
 
 ## 9. Shell-owned variables
 

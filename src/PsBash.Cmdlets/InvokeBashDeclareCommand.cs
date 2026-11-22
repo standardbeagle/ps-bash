@@ -174,6 +174,8 @@ public sealed class InvokeBashDeclareCommand : BashCmdlet
                 string name = pv.Name;
                 if (NotBashVariables.Contains(name) || (IsInternalName(name) && !PsBash.Core.BashNameCase.IsMangled(name)) || name.StartsWith("PS", StringComparison.Ordinal)
                     || name.StartsWith("Bash", StringComparison.Ordinal) || BashShellState.AllGlobalNames.Contains(name)) continue;
+                // A nameref's variable holds its TARGET's array (BashVariableLookup.ViewNameref): it is listed as a nameref below.
+                if (BashShellState.NamerefTarget(name) is not null) continue;
                 if (pv.Value is System.Collections.IDictionary || (pv.Value is System.Collections.IList && pv.Value is not string))
                 {
                     if (seen.Add(name)) result.Add((name, pv.Value));
