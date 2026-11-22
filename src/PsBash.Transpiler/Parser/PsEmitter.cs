@@ -6142,9 +6142,12 @@ public static partial class PsEmitter
             result = guarded ? InputRedirectGuarded(target, fed, Feed, failTail) : RedirectGroup(fed, Feed);
             return true;
         }
+        // The command is a pipe stage: `true < f` / `: < f` emit an expression, which PowerShell allows only first in a
+        // pipeline. REGRESSION: `... | $($global:LASTEXITCODE = 0; [void]$true)` failed the parse of the whole script.
+        var stage = WrapPipelineStageIfStatementList(inner);
         result = mappedConsumer
-            ? $"Invoke-BashCat {target} -RawStdinBytes | {inner}"
-            : $"Invoke-BashCat {target} -RawStdinBytes | {NativeStdinFeedStage(innerCmd)}{inner}";
+            ? $"Invoke-BashCat {target} -RawStdinBytes | {stage}"
+            : $"Invoke-BashCat {target} -RawStdinBytes | {NativeStdinFeedStage(innerCmd)}{stage}";
         if (guarded)
             result = InputRedirectGuarded(target, result, static r => r, failTail);
         return true;
