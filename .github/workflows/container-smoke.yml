@@ -1,0 +1,142 @@
+# Builds the documented container setups (docker/windows, docker/linux; docs/agent-setup.md "Docker") from a
+# published release and runs docker/smoke.sh in each. Also times a command in a running container: the first one
+# (the host starts) and the next ones (the host is up), and with PSBASH_PER_INVOCATION=1 (a fresh host each time).
+name: Container smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'ps-bash release to install, e.g. 0.15.1 (empty = the latest release)'
+        required: false
+  push:
+    branches: [ci/container-smoke]
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      v: ${{ steps.v.outputs.v }}
+    steps:
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT: ${{ inputs.version }}
+        run: |
+          v="${INPUT#v}"
+          [ -n "$v" ] || v=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          v="${v#v}"; echo "ps-bash $v"; echo "v=$v" >> "$GITHUB_OUTPUT"
+
+  windows:
+    name: windows (${{ matrix.name }})
+    needs: version
+    runs-on: windows-2022
+    timeout-minutes: 40
+    env:
+      VERSION: ${{ needs.version.outputs.v }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: nanoserver
+            base: mcr.microsoft.com/windows/nanoserver:ltsc2022
+            runas: ContainerUser
+          - name: servercore
+            base: mcr.microsoft.com/windows/servercore:ltsc2022
+            runas: ContainerAdministrator
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: |
+          docker build -f docker/windows/Dockerfile --build-arg "BASE=${{ matrix.base }}" `
+            --build-arg "RUNAS=${{ matrix.runas }}" --build-arg "PSBASH_VERSION=$env:VERSION" -t psb .
+          if ($LASTEXITCODE -ne 0) { throw "docker build failed: $LASTEXITCODE" }
+          docker images psb
+
+      - name: Version
+        run: |
+          $v = (docker run --rm psb C:\ps-bash\ps-bash.exe --version) -join "`n"
+          $v
+          if ($v -notmatch [regex]::Escape($env:VERSION)) { throw "expected version $env:VERSION" }
+
+      - name: Smoke script
+        run: |
+          $out = docker run --rm -v "${{ github.workspace }}\docker:C:\smoke" psb C:\ps-bash\ps-bash.exe C:/smoke/smoke.sh 2>&1
+          $code = $LASTEXITCODE
+          $out
+          if ($code -ne 0 -or -not ($out -contains "SMOKE-OK")) { throw "smoke failed (exit $code)" }
+
+      # A container whose ps-bash used the shared host must still commit (docker commit = what a build step does).
+      # The shared host is killed with the container; what it leaves behind is listed either way.
+      - name: Container commits after ps-bash
+        run: |
+          $bad = @()
+          foreach ($mode in 'shared', 'per-invocation') {
+            $envArgs = if ($mode -eq 'per-invocation') { @('-e', 'PSBASH_PER_INVOCATION=1') } else { @() }
+            docker run --name "psb-$mode" @envArgs psb C:\ps-bash\ps-bash.exe -c 'echo hi' | Out-Null
+            $left = docker diff "psb-$mode" | Where-Object { $_ -match '\\ps-bash\\[^\\]+$' }
+            docker commit "psb-$mode" "psb-$mode-img" 2>&1 | Out-Null; $ok = $LASTEXITCODE -eq 0
+            "### windows (${{ matrix.name }}) $mode host: commit $(if ($ok) { 'OK' } else { 'FAILED' })", '', '```', ($left -join "`n"), '```', '' |
+              Tee-Object -Append -FilePath $env:GITHUB_STEP_SUMMARY
+            docker rm -f "psb-$mode" | Out-Null
+            if (-not $ok) { $bad += $mode }
+          }
+          if ($bad -contains 'shared') { "::warning::docker commit failed after a shared-host ps-bash (the Dockerfile builds with PSBASH_PER_INVOCATION=1 for this reason)" }
+          if ($bad -contains 'per-invocation') { throw 'docker commit failed after a per-invocation ps-bash' }
+
+      - name: Command timing
+        run: |
+          docker run -d --name psb-timing psb cmd.exe /d /c "ping -t localhost > NUL" | Out-Null
+          function Time([string[]]$cmd) { (Measure-Command { docker exec @cmd | Out-Null }).TotalMilliseconds }
+          $rows = @()
+          $rows += "| docker exec cmd /c echo (overhead) | {0:N0} |" -f (Time @('psb-timing', 'cmd.exe', '/d', '/c', 'echo hi'))
+          foreach ($i in 1..4) { $rows += "| ps-bash -c echo, run $i (host kept) | {0:N0} |" -f (Time @('psb-timing', 'C:\ps-bash\ps-bash.exe', '-c', 'echo hi')) }
+          foreach ($i in 1..3) { $rows += "| ps-bash -c echo, PSBASH_PER_INVOCATION=1, run $i | {0:N0} |" -f (Time @('-e', 'PSBASH_PER_INVOCATION=1', 'psb-timing', 'C:\ps-bash\ps-bash.exe', '-c', 'echo hi')) }
+          docker rm -f psb-timing | Out-Null
+          $table = @("### windows (${{ matrix.name }}) ps-bash $env:VERSION", '', '| command | ms |', '|---|---:|') + $rows
+          $table -join "`n" | Tee-Object -Append -FilePath $env:GITHUB_STEP_SUMMARY
+
+  linux:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.version.outputs.v }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: |
+          docker build -f docker/linux/Dockerfile --build-arg "PSBASH_VERSION=$VERSION" -t psb .
+          docker images psb
+
+      - name: Version
+        run: |
+          v=$(docker run --rm psb ps-bash --version); echo "$v"
+          case "$v" in *"$VERSION"*) ;; *) echo "::error::expected version $VERSION"; exit 1 ;; esac
+
+      - name: Smoke script
+        run: |
+          set +e
+          out=$(docker run --rm -v "$GITHUB_WORKSPACE/docker:/smoke:ro" psb ps-bash /smoke/smoke.sh 2>&1); code=$?
+          echo "$out"
+          [ "$code" -eq 0 ] && printf '%s\n' "$out" | grep -qx 'SMOKE-OK' || { echo "::error::smoke failed (exit $code)"; exit 1; }
+
+      - name: Command timing
+        run: |
+          docker run -d --name psb-timing psb sleep infinity > /dev/null
+          ms() { local s e; s=$(date +%s%N); docker exec "$@" > /dev/null; e=$(date +%s%N); echo $(( (e - s) / 1000000 )); }
+          {
+            echo "### linux ps-bash $VERSION"; echo; echo '| command | ms |'; echo '|---|---:|'
+            echo "| docker exec /bin/echo (overhead) | $(ms psb-timing /bin/echo hi) |"
+            for i in 1 2 3 4; do echo "| ps-bash -c echo, run $i (host kept) | $(ms psb-timing ps-bash -c 'echo hi') |"; done
+            for i in 1 2 3; do echo "| ps-bash -c echo, PSBASH_PER_INVOCATION=1, run $i | $(ms -e PSBASH_PER_INVOCATION=1 psb-timing ps-bash -c 'echo hi') |"; done
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          docker rm -f psb-timing > /dev/null

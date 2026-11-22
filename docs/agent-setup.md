@@ -136,24 +136,57 @@ This works because ps-bash's interactive shell runs external commands directly o
 
 ## Docker
 
-### Windows Container
+Working Dockerfiles live in [`docker/windows`](../docker/windows/Dockerfile) and
+[`docker/linux`](../docker/linux/Dockerfile). The `Container smoke` workflow
+(`.github/workflows/container-smoke.yml`) builds both from a published release and runs
+[`docker/smoke.sh`](../docker/smoke.sh) in each, on Nano Server and Server Core (ltsc2022) and on Linux.
 
-```dockerfile
-FROM mcr.microsoft.com/windows/nanoserver:ltsc2022
-COPY ps-bash.exe C:/ps-bash/
-ENV SHELL=C:/ps-bash/ps-bash.exe
-RUN C:/ps-bash/ps-bash.exe -c "echo ready"
+A release is self-contained: it carries its own .NET runtime and PowerShell SDK, so the image needs
+neither pwsh nor .NET. Install the **whole release folder**: the launcher (`ps-bash.exe`) starts the
+host (`ps-bash-host.exe`), which loads the runtime and SDK beside it, so the launcher alone does not
+run. The win-x64 release is 59 MB zipped and 143 MB unpacked.
+
+```bash
+docker build -f docker/windows/Dockerfile --build-arg PSBASH_VERSION=0.15.1 -t ps-bash:win .
+docker build -f docker/windows/Dockerfile --build-arg BASE=mcr.microsoft.com/windows/servercore:ltsc2022 \
+  --build-arg RUNAS=ContainerAdministrator -t ps-bash:win-core .
+docker build -f docker/linux/Dockerfile --build-arg PSBASH_VERSION=0.15.1 -t ps-bash:linux .
 ```
 
-### Linux Container
+Both images set `SHELL` to ps-bash, so every `RUN` line after that is bash, also on Windows.
+
+### Windows: build steps use a private host
+
+A Windows image build fails with `hcsshim::ImportLayer failed in Win32: The system cannot find the
+path specified` when a build step used the shared host. That host outlives the command, so it is
+killed when the build container stops, and the socket file it listens on (under
+`%TEMP%\ps-bash`) stays in the layer. Windows cannot commit a layer that holds a socket file.
+With `PSBASH_PER_INVOCATION=1`, ps-bash stops its private host and removes the socket before the
+command ends. The Windows Dockerfile therefore declares:
 
 ```dockerfile
-FROM mcr.microsoft.com/powershell:latest
-COPY ps-bash /usr/local/bin/
-RUN chmod +x /usr/local/bin/ps-bash
-ENV SHELL=/usr/local/bin/ps-bash
-RUN ps-bash -c "echo ready"
+ARG PSBASH_PER_INVOCATION=1
 ```
+
+An `ARG` reaches `RUN` steps as an environment variable but is not kept in the image, so containers
+run from it still share one host across commands. The same applies to `docker commit` of a running
+Windows container: run its ps-bash commands with `PSBASH_PER_INVOCATION=1`, or the commit fails.
+Linux layers can hold socket files, so the Linux image needs neither.
+
+### Startup cost
+
+The first ps-bash command in a container starts the host; later ones reuse it. Measured with
+`docker exec` on GitHub runners (the numbers include `docker exec` itself):
+
+| | Linux | Nano Server | Server Core |
+|---|---:|---:|---:|
+| First command (the host starts) | 0.8–0.95 s | 1.6 s | 1.9 s |
+| Later commands (the host is up) | 45–70 ms | 70–110 ms | 85–120 ms |
+| Every command with `PSBASH_PER_INVOCATION=1` | 0.8–0.95 s | 1.45–1.5 s | 1.6 s |
+| `docker exec` alone, for comparison | 40–50 ms | 130 ms | 130 ms |
+
+So a long-running container (an agent sandbox, a dev container) pays the start-up once. Each
+Dockerfile `RUN` step is a new container and pays it every time; merge short steps into one `RUN`.
 
 ## Quick Reference
 
