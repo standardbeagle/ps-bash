@@ -5972,6 +5972,7 @@ public class PsEmitterTests
     [InlineData("for i in 1; do echo y; done >> log")]
     [InlineData("if true; then false; fi &> log")]
     [InlineData("while false; do :; done >| log")]
+    [InlineData("{ false; } 2> /nodir/log")] // bash: a stderr file that cannot open is an ERR too
     public void Transpile_RedirectedCompoundUnderErrTrap_ChecksAFailedOpen(string compound)
     {
         var ps = PsEmitter.Transpile("trap 'echo $LINENO' ERR\n" + compound);
@@ -5980,10 +5981,9 @@ public class PsEmitterTests
 
     [Theory]
     [InlineData("trap 'echo $LINENO' ERR\n{ false; } > /dev/null")]
-    [InlineData("trap 'echo $LINENO' ERR\n{ false; } 2> log")]
     [InlineData("trap 'echo $LINENO' ERR\n{ false; }")]
     [InlineData("{ false; } > log")]
-    public void Transpile_CompoundWithoutAnOpenedStdoutFile_HasNoRedirectCheck(string script)
+    public void Transpile_CompoundWithoutAnOpenedFile_HasNoRedirectCheck(string script)
         => Assert.DoesNotContain("__BashRedirectFailed", PsEmitter.Transpile(script));
 
     [Theory]
