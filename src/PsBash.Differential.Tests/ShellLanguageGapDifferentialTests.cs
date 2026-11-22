@@ -524,6 +524,25 @@ public class ShellLanguageGapDifferentialTests
         """);
 
     /// <summary>
+    /// A function's array write in a pipe stage, a <c>$( )</c> or a nested subshell is undone when that subshell ends
+    /// (the subshell's journal, <c>BashVariableLookup.ArrayWriteJournal</c>), and one it made there is gone after it.
+    /// Found with the hot-path fix: the write is now in place, so every undo is exercised here.
+    /// </summary>
+    [SkippableFact]
+    public Task Subshell_ArrayWritesInPipeStagesAndNestedSubshells_AreUndoneAtTheirEnd() => SameAsScript(
+        """
+        {
+        add() { items+=("$1"); }
+        items=(a); ( add b; ( add c; echo "in2 ${items[*]}" ); echo "in1 ${items[*]}" ); echo "out ${items[*]}"
+        seq 3 | while read n; do add "$n"; done; echo "pipe ${items[*]}"
+        for i in 1 2; do add "t$i"; done; echo "top ${items[*]}"
+        ver() { IFS=. read -ra vv <<< "$1"; echo "${vv[0]}-${#vv[@]}"; }; x=$(ver 1.2.3); echo "x=$x vv=[${vv[*]}]"
+        ( unset made; mk() { made+=(1); }; mk; echo "made in=${made[*]}" ); echo "made out=[${made[*]-}] ${#made[@]}"
+        g() { local -a la=(1); ( add2() { la+=(2); }; add2; echo "la in=${la[*]}" ); echo "la out=${la[*]}"; }; g
+        } 2>&1
+        """);
+
+    /// <summary>
     /// <c>exec CMD</c> reads its own here-string / <c>&lt;</c> file when it has one, else the stdin it inherits (a pipe, a
     /// group's redirect, a subshell's), and ends only its subshell. REGRESSION: <c>echo q | exec cat</c> and
     /// <c>{ exec cat; } &lt; f</c> printed nothing; the fix's first cut displaced <c>( exec cat &lt;&lt;&lt; q )</c>'s own input.

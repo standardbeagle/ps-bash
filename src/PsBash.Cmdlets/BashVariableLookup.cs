@@ -30,21 +30,99 @@ public static class BashVariableLookup
     /// <summary>
     /// The PowerShell variable an array write to <paramref name="name"/> goes to (<c>VarFrameStack.ArraySlot</c> decides
     /// the frame): with <paramref name="callerLocal"/> the nearest one the scope chain sees (a calling function's local),
-    /// else the shell's global, made (unset) when missing. In a subshell, neither is past the subshell's own scope: there
-    /// the variable is made holding what that scope sees, and ends with it. REGRESSION: <c>( f() { arr=(x y); }; f )</c>
-    /// wrote a variable local to f, so the subshell never saw x y.
+    /// else the shell's global, made (unset) when missing. In a subshell it is always the nearest one (the subshell's
+    /// own, a caller's local or the shell's: the one the subshell's code reads), and the subshell's
+    /// <see cref="ArrayWriteJournal"/> notes it, so the write ends with the subshell. REGRESSION: <c>( f() { arr=(x y); };
+    /// f )</c> wrote a variable local to f, so the subshell never saw x y.
     /// </summary>
     public static PSVariable ArrayWriteSlot(SessionState state, string name, bool callerLocal)
     {
         name = BashNameCase.ToStore(name);
-        if (BashRuntime.SubshellDepth(state) > 0
-            && state.InvokeCommand.InvokeScript(true, SlotInSubshellScope, null, name, callerLocal) is [{ BaseObject: PSVariable slot }])
-            return slot;
-        if (callerLocal && state.PSVariable.Get(name) is { } nearest) return nearest;
+        ArrayWriteJournal? journal = Journal(state);
+        if ((callerLocal || journal is not null && !PowerShellOwnedVariables.Contains(name))
+            && state.PSVariable.Get(name) is { } nearest && Writable(nearest))
+        {
+            journal?.Note(nearest, made: null);
+            return nearest;
+        }
         string global = "global:" + name;
-        if (state.PSVariable.Get(global) is { } existing) return existing;
+        if (state.PSVariable.Get(global) is { } existing)
+        {
+            journal?.Note(existing, made: null);
+            return existing;
+        }
         state.PSVariable.Set(global, null);
-        return state.PSVariable.Get(global)!;
+        PSVariable created = state.PSVariable.Get(global)!;
+        journal?.Note(created, made: name);
+        return created;
+    }
+
+    private static bool Writable(PSVariable variable)
+        => (variable.Options & (ScopedItemOptions.ReadOnly | ScopedItemOptions.Constant)) == 0;
+
+    // The variable a subshell's journal sits in (BashShellState.Save opens one in the subshell's scope).
+    private const string JournalVariable = "__psbash_subshell_arrays";
+
+    /// <summary>
+    /// The innermost subshell's <see cref="ArrayWriteJournal"/>, null outside a subshell: one variable lookup, no
+    /// exception and no script, since every array write in a pipe stage, <c>$( )</c> or <c>( )</c> asks.
+    /// </summary>
+    private static ArrayWriteJournal? Journal(SessionState state)
+    {
+        object? value = null;
+        try { value = state.PSVariable.GetValue(JournalVariable); } catch (InvalidOperationException) { }
+        return (value is PSObject wrapped ? wrapped.BaseObject : value) as ArrayWriteJournal;
+    }
+
+    /// <summary>
+    /// A subshell starts (<see cref="BashShellState.Save"/>, in the subshell's scope): its array writes are journaled
+    /// from here until <see cref="ArrayWriteJournal.Undo"/>.
+    /// </summary>
+    internal static ArrayWriteJournal OpenJournal(SessionState state)
+    {
+        var journal = new ArrayWriteJournal();
+        state.PSVariable.Set(JournalVariable, journal);
+        return journal;
+    }
+
+    /// <summary>
+    /// The arrays a subshell wrote that are not its own (the shell's, a caller's local), each with the value it held
+    /// before the first write: bash forks, so the subshell writes its copy. ps-bash writes the variable itself (the one
+    /// the subshell's code reads, found as any write finds it: no scope walk) and puts each back when the subshell ends.
+    /// A variable the subshell made global is removed then. REGRESSION: a scope walk per write (<c>Get-Variable -Scope
+    /// $i</c> in a script, each miss an exception) made <c>seq 10000 | while read n; do add "$n"; done</c> with
+    /// <c>add() { items+=("$1"); }</c> pay two scripts per append.
+    /// </summary>
+    internal sealed class ArrayWriteJournal
+    {
+        private readonly List<(PSVariable Variable, object? Before, string? Made)> _writes = [];
+
+        /// <summary>
+        /// A write to <paramref name="variable"/> follows; <paramref name="made"/> is its name when this write made it
+        /// global. Only the first write to a variable counts. A function's local is a new <see cref="PSVariable"/> per
+        /// lookup, so one is known by its name and the value it holds (every array write stores a new array).
+        /// </summary>
+        public void Note(PSVariable variable, string? made)
+        {
+            object? now = variable.Value;
+            foreach (var (seen, _, _) in _writes)
+                if (ReferenceEquals(seen, variable)
+                    || now is not null && ReferenceEquals(seen.Value, now) && string.Equals(seen.Name, variable.Name, StringComparison.OrdinalIgnoreCase))
+                    return;
+            _writes.Add((variable, now, made));
+        }
+
+        /// <summary>The subshell ended: every variable it wrote holds what it held before, newest first.</summary>
+        public void Undo(SessionState state)
+        {
+            for (int i = _writes.Count - 1; i >= 0; i--)
+            {
+                var (variable, before, made) = _writes[i];
+                if (made is not null) state.PSVariable.Remove("global:" + made);
+                else variable.Value = before;
+            }
+            _writes.Clear();
+        }
     }
 
     /// <summary>
@@ -113,12 +191,7 @@ public static class BashVariableLookup
             return invalid ? "`" + value + "': not a valid identifier" : null;
         int br = target.IndexOf('[');
         if (br > 0 && target[^1] == ']')
-        {
-            string baseName = target[..br], subscript = target[(br + 1)..^1];
-            var vars = BashArrayElement.ReadOnly(state);
-            string old = append ? BashArrayElement.Read(state, baseName, subscript, vars) ?? "" : "";
-            return BashArrayElement.Write(state, baseName, subscript, false, old + value, vars) ? null : target + ": bad array subscript";
-        }
+            return BashArrayElement.WriteThroughReference(state, target[..br], target[(br + 1)..^1], value, append);
         SetScalar(state, target, append ? Scalar(state, target) + value : value);
         return null;
     }
@@ -171,6 +244,19 @@ public static class BashVariableLookup
     {
         ViewNameref(state, name);
         return BashShellState.BindLoopNameref(name, word);
+    }
+
+    /// <summary>
+    /// An array assignment to NAME while it is a nameref with no target (<c>typeset -n ref; ref=(x y)</c>): bash removes
+    /// the nameref attribute, with a warning, and assigns the array to NAME itself. True when NAME was such a nameref
+    /// (the emitted code then prints the warning: <c>PsBuild.ArrayAssignToNameref</c>). Its <see cref="ViewNameref"/>
+    /// variable, no nameref's view any more, then holds the array as a plain variable does.
+    /// </summary>
+    public static bool DropTargetlessNameref(string name)
+    {
+        if (BashShellState.NamerefTarget(name) is not { Length: 0 }) return false;
+        BashShellState.TakeNameref(name);
+        return true;
     }
 
     /// <summary>
@@ -237,64 +323,36 @@ public static class BashVariableLookup
         PSVariable? existing = null;
         try { existing = state.PSVariable.Get(name); }
         catch (Exception e) when (e is ArgumentException or SessionStateException) { /* not a PowerShell name */ }
-        // In a subshell (`( mapfile -t m <<< x )`, `x=$(read -a a <<< "1 2")`, a write through a nameref) the array is
-        // the subshell's own and ends with it, as an assigned one (`( arr=(1 2) )`) does. REGRESSION: a new one was made
-        // global, and an existing one the subshell inherited was written in place; both leaked out of it.
-        if (BashRuntime.SubshellDepth(state) > 0)
-            WriteInSubshell(state, name, holder);
-        else if (existing is not null && !PowerShellOwnedVariables.Contains(name)
-            && (existing.Options & (ScopedItemOptions.ReadOnly | ScopedItemOptions.Constant)) == 0)
+        // In a subshell (`( mapfile -t m <<< x )`, `x=$(read -a a <<< "1 2")`, a write through a nameref) the write ends
+        // with it, as an assigned one (`( arr=(1 2) )`) does: its journal puts the variable back. REGRESSION: a new one
+        // was made global, and an existing one the subshell inherited was written in place; both leaked out of it.
+        ArrayWriteJournal? journal = Journal(state);
+        if (existing is not null && !PowerShellOwnedVariables.Contains(name) && Writable(existing))
+        {
+            journal?.Note(existing, made: null);
             existing.Value = holder;
-        else
-            state.PSVariable.Set("global:" + name, holder);
+            return;
+        }
+        string global = "global:" + name;
+        PSVariable? before = journal is null ? null : state.PSVariable.Get(global);
+        if (before is not null) journal!.Note(before, made: null);
+        state.PSVariable.Set(global, holder);
+        if (journal is not null && before is null && state.PSVariable.Get(global) is { } created) journal.Note(created, made: name);
     }
-
-    // A PowerShell-owned name (`$args`, which every scope has) is never looked for nearer than the subshell's own scope.
-    private static void WriteInSubshell(SessionState state, string name, object holder)
-        => state.InvokeCommand.InvokeScript(true, SetInSubshellScope, null, name, holder, !PowerShellOwnedVariables.Contains(name));
-
-    /// <summary>
-    /// Sets variable <c>$args[0]</c> = <c>$args[1]</c> within the innermost subshell: in the nearest scope, out to that
-    /// subshell's, that holds the variable itself (when <c>$args[2]</c>), else in the subshell's own scope, the nearest
-    /// one holding <see cref="BashRuntime.SubshellDepthVariable"/> itself (BashShellState.Save sets it there); past the
-    /// global scope, the global one. Run in a child scope (its own variables stay there); scope numbers count up from it.
-    /// </summary>
-    private static readonly ScriptBlock SetInSubshellScope = ScriptBlock.Create(
-        "for ($i = 1; ; $i++) { try { "
-        + "if ($args[2] -and $null -ne (Get-Variable -Name $args[0] -Scope $i -ErrorAction Ignore)) { Set-Variable -Name $args[0] -Value $args[1] -Scope $i; return }; "
-        + "$null = Get-Variable -Name '" + BashRuntime.SubshellDepthVariable + "' -Scope $i -ErrorAction Stop; "
-        + "Set-Variable -Name $args[0] -Value $args[1] -Scope $i; return } "
-        + "catch [System.Management.Automation.ItemNotFoundException] { } "
-        + "catch { Set-Variable -Name $args[0] -Value $args[1] -Scope Global; return } }");
-
-    /// <summary>
-    /// The variable <c>$args[0]</c> within the innermost subshell (see <see cref="SetInSubshellScope"/>): the nearest one
-    /// out to that subshell's scope (when <c>$args[1]</c>), else the one in the subshell's own scope, made there holding
-    /// what that scope sees when missing; nothing past the global scope.
-    /// </summary>
-    private static readonly ScriptBlock SlotInSubshellScope = ScriptBlock.Create(
-        "for ($i = 1; ; $i++) { try { "
-        + "$__psbSlot = Get-Variable -Name $args[0] -Scope $i -ErrorAction Ignore; "
-        + "if ($args[1] -and $null -ne $__psbSlot) { return $__psbSlot }; "
-        + "$null = Get-Variable -Name '" + BashRuntime.SubshellDepthVariable + "' -Scope $i -ErrorAction Stop; "
-        + "if ($null -ne $__psbSlot) { return $__psbSlot }; "
-        + "$__psbSeen = $null; "
-        + "for ($j = $i + 1; ; $j++) { try { $__psbSeen = (Get-Variable -Name $args[0] -Scope $j -ErrorAction Stop).Value; break } "
-        + "catch [System.Management.Automation.ItemNotFoundException] { } catch { break } }; "
-        + "Set-Variable -Name $args[0] -Value $__psbSeen -Scope $i; return (Get-Variable -Name $args[0] -Scope $i) } "
-        + "catch [System.Management.Automation.ItemNotFoundException] { } "
-        + "catch { return } }");
 
     /// <summary>
     /// Replace the array <paramref name="name"/> holds with <paramref name="holder"/> in the scope that owns it (the
-    /// caller's array when a function edits one element), else in the caller's own scope; in a subshell, within it
-    /// (see <see cref="SetArray"/>).
+    /// caller's array when a function edits one element), else in the caller's own scope; in a subshell, until it
+    /// ends (see <see cref="SetArray"/>).
     /// </summary>
     public static void ReplaceArray(SessionState state, string name, object holder)
     {
         name = BashNameCase.ToStore(name);
-        if (BashRuntime.SubshellDepth(state) > 0) WriteInSubshell(state, name, holder);
-        else if (ArrayVariable(state, name) is { } owner) owner.Value = holder;
+        if (ArrayVariable(state, name) is { } owner)
+        {
+            Journal(state)?.Note(owner, made: null);
+            owner.Value = holder;
+        }
         else state.PSVariable.Set(name, holder);
     }
 

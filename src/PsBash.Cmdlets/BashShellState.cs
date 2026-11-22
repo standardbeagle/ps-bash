@@ -317,6 +317,10 @@ public static class BashShellState
 
         /// <summary>The file-creation mask: <c>umask 077</c> in the body ends with it.</summary>
         internal int Umask { get; init; }
+
+        /// <summary>The arrays outside the body that it writes (<see cref="BashVariableLookup.ArrayWriteJournal"/>):
+        /// each is put back when it ends.</summary>
+        internal BashVariableLookup.ArrayWriteJournal? ArrayWrites { get; init; }
     }
 
     /// <summary>The working directory a subshell must put back (see <see cref="SaveWorkingDirectory"/>).</summary>
@@ -416,7 +420,7 @@ public static class BashShellState
         return new Snapshot(env, globals, InvokeBashShoptCommand.SnapshotOptions(),
             IsTrue(session.PSVariable.GetValue("global:__BashXtrace")), SaveTables(), SaveAliasFunctions(session),
             VarFrameStack.Current.Save(), PsBash.Core.ShellExports.Save(), SaveWorkingDirectory(session))
-        { Umask = InvokeBashUmaskCommand.ShellMask };
+        { Umask = InvokeBashUmaskCommand.ShellMask, ArrayWrites = BashVariableLookup.OpenJournal(session) };
     }
 
     /// <summary>
@@ -463,6 +467,8 @@ public static class BashShellState
     // location; the process cwd is put back with it, after the variables (it rewrites $PWD).
     private static object? RestoreRunspaceGlobals(SessionState session, Snapshot saved)
     {
+        // `( mapfile -t arr <<< x )`, `( f )` with `f() { arr+=(z); }`: the arrays are the runspace's, so in a job too.
+        saved.ArrayWrites?.Undo(session);
         RestoreWorkingDirectory(session, saved.Cwd);
         // REGRESSION: `( umask 077 ); umask` printed 0077 - the mask was not part of the snapshot.
         InvokeBashUmaskCommand.ShellMask = saved.Umask;

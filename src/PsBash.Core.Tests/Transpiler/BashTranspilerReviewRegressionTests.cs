@@ -422,14 +422,15 @@ public class BashTranspilerReviewRegressionTests
 
     // Oracle: an array a function writes without declaring it `local` is the nearest caller's local, else the shell's
     // own - push() { st+=("$1"); } must reach the caller (VarFrameStack.ArraySlot decides at run time).
+    // The slot is looked up once per write statement (`$__psbSlot`), not once for the target and again for the base.
     [Theory]
-    [InlineData("push() { st+=(\"$1\"); }; push a", "[PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'st').Value = Add-BashArray ([PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'st').Value ?? ${env:st}) @(")]
-    [InlineData("f() { a=(x y); }; f", "[PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a').Value = @(")]
-    [InlineData("f() { a[2]=z; }; f", "[PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a').Value = Set-BashElement ([PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a').Value)")]
+    [InlineData("push() { st+=(\"$1\"); }; push a", "$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'st'); $__psbSlot.Value = Add-BashArray ($__psbSlot.Value ?? ${env:st}) @(")]
+    [InlineData("f() { a=(x y); }; f", "$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a'); $__psbSlot.Value = @(")]
+    [InlineData("f() { a[2]=z; }; f", "$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a'); if ($null -eq $__psbSlot.Value -and $null -ne $env:a) { $__psbSlot.Value = @($env:a) }; $__psbSlot.Value = Set-BashElement ($__psbSlot.Value)")]
     // A function defined inside a subshell too (the slot is then the subshell's, at run time). REGRESSION: it wrote `$a`,
     // a variable of its own, so `( f() { a=(x y); }; f; echo "${a[*]}" )` printed the old value.
-    [InlineData("( f() { a=(x y); }; f )", "[PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a').Value = @(")]
-    [InlineData("g() { ( f() { a+=(z); }; f ); }; g", "[PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a').Value = Add-BashArray (")]
+    [InlineData("( f() { a=(x y); }; f )", "$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a'); $__psbSlot.Value = @(")]
+    [InlineData("g() { ( f() { a+=(z); }; f ); }; g", "$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a'); $__psbSlot.Value = Add-BashArray (")]
     public void Transpile_ArrayWrittenInFunction_TargetsTheCallersSlot(string bash, string expected)
         => Assert.Contains(expected, BashTranspiler.Transpile(bash + "\ndeclare -p"));
 
@@ -881,6 +882,19 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_IntegerAndExportDeclarations_RecordTheirAttribute(string bash, string expected)
         => Assert.Contains(expected, BashTranspiler.Transpile(bash + "\ndeclare -p"));
 
+    // Oracle: `declare -i ti=3; declare -n ri; w=ti; ri=$w; echo "[${ri@a}]"` prints [i]. The run-time `${r@a}` reads the
+    // run-time table, so a script with an attribute transform records -i / -l / -u there too. REGRESSION: it printed [].
+    [Theory]
+    [InlineData("declare -i ti=3; declare -n ri; w=ti; ri=$w; echo \"[${ri@a}]\"", "MarkAttribute('ti', 'i')")]
+    [InlineData("declare -u up=a; declare -n ru; w=up; ru=$w; echo \"${ru@A}\"", "MarkAttribute('up', 'u')")]
+    [InlineData("declare -l lo=A; echo \"${lo@a}\"", "MarkAttribute('lo', 'l')")]
+    public void Transpile_AScriptReadingAttributesAtRunTime_RecordsThemThere(string bash, string expected)
+        => Assert.Contains(expected, BashTranspiler.Transpile(bash));
+
+    [Fact]
+    public void Transpile_IntegerDeclarationWithNoAttributeReader_RecordsNothing()
+        => Assert.DoesNotContain("MarkAttribute", BashTranspiler.Transpile("declare -i ti=3; echo $ti"));
+
     [Fact]
     public void Transpile_ExportInAScriptWithoutDeclareP_RecordsNothing()
         => Assert.DoesNotContain("MarkAttribute", BashTranspiler.Transpile("export E=1"));
@@ -899,7 +913,7 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_LocalNamerefToAnArray_AppendsToTheCallersArray()
     {
         var ps = BashTranspiler.Transpile("addto() { local -n a=$1; a+=(\"$2\"); }\nl=(a)\naddto l c");
-        Assert.Contains("[PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'l').Value = Add-BashArray ([PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'l').Value ?? ${env:l}) @(", ps);
+        Assert.Contains("$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'l'); $__psbSlot.Value = Add-BashArray ($__psbSlot.Value ?? ${env:l}) @(", ps);
     }
 
     [Fact]

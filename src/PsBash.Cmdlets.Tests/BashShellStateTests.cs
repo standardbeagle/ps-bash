@@ -159,7 +159,8 @@ public class BashShellStateTests : IClassFixture<SharedPwshFixture>
             "foreach ($n in 'psbt_wt_a','psbt_wt_b','psbt_wt_c','psbt_wt_d','psbt_wt_e') { [PsBash.Cmdlets.BashShellState]::SetNameref($n, '') }; "
             + "'psbt_wt_ta' | Invoke-BashRead psbt_wt_a; "
             + "Invoke-BashPrintf '-v' psbt_wt_b '%s' psbt_wt_tb; "
-            + "Invoke-BashGetopts ab psbt_wt_c -a; "
+            // `'-a'` quoted, as the emitter writes it: a bare -a binds to the cmdlet's -Arguments parameter.
+            + "Invoke-BashGetopts ab psbt_wt_c '-a'; "
             + "\"assign=[$([PsBash.Cmdlets.BashVariableLookup]::AssignThroughNameref($ExecutionContext.SessionState, 'psbt_wt_d', 'psbt_wt_td', $false))]\"; "
             + "[void][PsBash.Cmdlets.BashVariableLookup]::AssignThroughNameref($ExecutionContext.SessionState, 'psbt_wt_d', 'five', $false); "
             + "[void][PsBash.Cmdlets.BashVariableLookup]::AssignThroughNameref($ExecutionContext.SessionState, 'psbt_wt_d', '+', $true); "
@@ -180,6 +181,23 @@ public class BashShellStateTests : IClassFixture<SharedPwshFixture>
         Assert.Contains("est=1", r.Stdout);
         Assert.Contains("bad=[`5': not a valid identifier]", r.Stdout);
         Assert.Contains("p: declare -n psbt_wt_e\n", r.Stdout.Replace("\r\n", "\n") + "\n");
+    }
+
+    [Fact]
+    public void NamerefToAnElementWithABadSubscript_ReturnsBashsDiagnostic_AndMarksASubscriptError()
+    {
+        // bash: `a=(1); declare -n r; v='a[1/0]'; r=$v; r=x` reports `1/0: division by 0 (error token is "0")`, an expansion
+        // error. REGRESSION: the arithmetic exception escaped AssignThroughNameref as a PowerShell error.
+        var r = Run(
+            "$global:psbt_se_a = @('1');[PsBash.Cmdlets.BashShellState]::SetNameref('psbt_se_r', 'psbt_se_a[1/0]'); "
+            + "\"msg=[$([PsBash.Cmdlets.BashVariableLookup]::AssignThroughNameref($ExecutionContext.SessionState, 'psbt_se_r', 'x', $false))]\"; "
+            + "\"sub=$([PsBash.Cmdlets.BashArrayElement]::TakeSubscriptError()) again=$([PsBash.Cmdlets.BashArrayElement]::TakeSubscriptError())\"; "
+            + "[PsBash.Cmdlets.BashShellState]::SetNameref('psbt_se_r', 'psbt_se_a[0]'); "
+            + "\"ok=[$([PsBash.Cmdlets.BashVariableLookup]::AssignThroughNameref($ExecutionContext.SessionState, 'psbt_se_r', 'y', $false))] sub=$([PsBash.Cmdlets.BashArrayElement]::TakeSubscriptError()) a0=$($global:psbt_se_a[0])\"; "
+            + "Invoke-BashUnset -n psbt_se_r; Remove-Variable -Scope Global psbt_se_a; $global:LASTEXITCODE = 0").AssertSuccess();
+        Assert.Contains("msg=[1/0: division by 0 (error token is \"0\")]", r.Stdout);
+        Assert.Contains("sub=True again=False", r.Stdout);
+        Assert.Contains("ok=[] sub=False a0=y", r.Stdout);
     }
 
     [Fact]

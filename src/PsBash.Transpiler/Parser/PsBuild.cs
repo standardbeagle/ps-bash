@@ -591,8 +591,20 @@ public static class PsBuild
     /// </summary>
     public static string TargetArg(string target) => IsArraySlot(target) ? "(" + target + ")" : target;
 
-    /// <summary>True for a write target <see cref="ArraySlot"/> made.</summary>
-    public static bool IsArraySlot(string target) => target.StartsWith("[PsBash.Cmdlets.VarFrameStack]::ArraySlot(", StringComparison.Ordinal);
+    /// <summary>True for a write target <see cref="ArraySlot"/> made, or the one <see cref="BindArraySlot"/> bound.</summary>
+    public static bool IsArraySlot(string target)
+        => target.StartsWith("[PsBash.Cmdlets.VarFrameStack]::ArraySlot(", StringComparison.Ordinal) || target == BoundArraySlot;
+
+    /// <summary>The write target after <see cref="BindArraySlot"/>: the bound slot's value.</summary>
+    public const string BoundArraySlot = "$__psbSlot.Value";
+
+    /// <summary>
+    /// A statement binding an <see cref="ArraySlot"/> target's variable to <c>$__psbSlot</c>, so a write that mentions
+    /// the target more than once (<c>a+=(x)</c> reads and assigns it; <c>a[1]=x</c> seeds, reads and assigns it) looks
+    /// it up once (<see cref="BoundArraySlot"/>). REGRESSION: every mention was a run-time lookup.
+    /// </summary>
+    public static string BindArraySlot(string slotTarget)
+        => "$__psbSlot = " + slotTarget[..^".Value".Length];
 
     /// <summary>A function body's first statement: the locals it holds as PowerShell variables, which its callees' array writes reach (<see cref="ArraySlot"/>).</summary>
     public static string LocalArrays(IEnumerable<string> names)
@@ -1775,7 +1787,20 @@ public static class PsBuild
     public static string AssignThroughNameref(string name, string valueExpr, bool append)
         => "if ($__psbNr = [PsBash.Cmdlets.BashVariableLookup]::AssignThroughNameref($ExecutionContext.SessionState, " + SingleQuote(name)
            + ", [string](" + valueExpr + "), " + (append ? "$true" : "$false") + ")) { "
-           + ShellDiagnosticLine("$__psbNr") + "; " + SetStatus(1) + "; " + AssignmentDiscardMark + " }";
+           + ShellDiagnosticLine("$__psbNr") + "; " + SetStatus(1) + "; "
+           // A target `a[1/0]`: bash's subscript expansion error, which also ends `bash -c` (BashArrayElement.FailSubscript).
+           + "if ([PsBash.Cmdlets.BashArrayElement]::TakeSubscriptError()) { " + UsageDiscardMark + " }; "
+           + AssignmentDiscardMark + " }";
+
+    /// <summary>
+    /// Before <c>name=(...)</c> / <c>name+=(...)</c> where <paramref name="name"/> is a nameref the run time resolves: one
+    /// with no target yet stops being a nameref, with bash's warning, and the array is its own
+    /// (<c>typeset -n ref; ref=(x y); echo $ref</c> warns "ref: removing nameref attribute" and prints x). One with a
+    /// target is left alone: the write goes to the target. REGRESSION: the array went nowhere and <c>$ref</c> was empty.
+    /// </summary>
+    public static string ArrayAssignToNameref(string name)
+        => "if ([PsBash.Cmdlets.BashVariableLookup]::DropTargetlessNameref(" + SingleQuote(name) + ")) { "
+           + ShellDiagnosticLine(SingleQuote("warning: " + name + ": removing nameref attribute")) + " }";
 
     /// <summary>
     /// <c>$name</c> where <paramref name="name"/> is a nameref whose target is known only at run time: the target's value.

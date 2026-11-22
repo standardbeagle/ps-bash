@@ -89,7 +89,13 @@ public static partial class PsEmitter
     // A lone `trap 'cmd' DEBUG` (an interactive prompt hook) keeps its directory-change mapping (SetsDebugTrapForOtherCommands).
     [ThreadStatic]
     private static bool _debugTrapMode;
-    /// <summary>The script prints variables with <c>declare -p</c>: <c>export</c> and <c>declare -i</c> record their attribute for it.</summary>
+    /// <summary>
+    /// The script reads attributes at run time: <c>declare -p</c>, or <c>${v@a}</c> / <c>${v@A}</c> (whose v may be a nameref
+    /// the run time resolves). Then <c>export</c>, <c>declare -i</c> and <c>-l</c>/<c>-u</c> record their letter in the one
+    /// run-time table (<c>BashShellState.MarkAttribute</c>); otherwise only the emitter's own tables hold them, which keeps
+    /// the common script's declarations free of the call. REGRESSION: <c>declare -i ti=3; declare -n ri; ri=$w; ${ri@a}</c>
+    /// printed nothing, as the -i lived only in the compile-time table.
+    /// </summary>
     [ThreadStatic]
     private static bool _declarePrintMode;
     // The script can turn nounset on: simple `$x` / `${x}` reads then check the flag at runtime.
@@ -1607,7 +1613,8 @@ public static partial class PsEmitter
         // they always record the attributes.
         _declarePrintMode = _context == TranspileContext.Eval
             || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\b(?:declare|typeset)\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*p")
-            || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bexport\s*(?:-p\s*)?(?:[|;&)}]|\r?\n|$)");
+            || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bexport\s*(?:-p\s*)?(?:[|;&)}]|\r?\n|$)")
+            || bash.Contains("@a}", StringComparison.Ordinal) || bash.Contains("@A}", StringComparison.Ordinal);
         _trapMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\btrap\b");
         _xtraceMode = false;
         _pipefailMode = priorPipefail || InheritedPipefail;
@@ -2937,6 +2944,17 @@ public static partial class PsEmitter
     /// <summary>A body run in this shell with the block's pipe as its stdin scope (eval / source text fed a file).</summary>
     private static string DotStdinBlock(string body) =>
         ". { " + PsBuild.StdinScope(body, "__psbash_evin_prev" + (++_evalStdinSeq)) + " }";
+
+    /// <summary>
+    /// <paramref name="target"/>, or for an <see cref="PsBuild.ArraySlot"/> the slot bound once (<see cref="PsBuild.BindArraySlot"/>,
+    /// a statement appended to <paramref name="sb"/>): the write mentions its target up to four times, each a run-time lookup.
+    /// </summary>
+    private static string BindArrayTarget(StringBuilder sb, string target)
+    {
+        if (!PsBuild.IsArraySlot(target) || target == PsBuild.BoundArraySlot) return target;
+        sb.Append(PsBuild.BindArraySlot(target)).Append("; ");
+        return PsBuild.BoundArraySlot;
+    }
 
     private static string ArrayWriteTarget(string name) =>
         ResolveNameref(name) is var resolved && resolved != name ? ArrayWriteTarget(resolved) :
@@ -5091,6 +5109,15 @@ public static partial class PsEmitter
             // Array append:     arr+=('x')  -> $arr += @('x')
             if (pair.ArrayValue is not null)
             {
+                // `typeset -n ref; ref=(x y)`: a nameref with no target stops being one (bash warns) and the array is ref's
+                // own; one with a target takes the array (PsBuild.ArrayAssignToNameref). Known only at run time, so a pending
+                // name is resolved there from now on.
+                if (!(cmd.IsLocal || cmd.IsExport || cmd.IsReadonly || cmd.IsNameref || cmd.IsDeclare || cmd.IsAssoc || cmd.IsIndexed)
+                    && IsRuntimeNameref(pair.Name))
+                {
+                    sb.Append(PsBuild.ArrayAssignToNameref(pair.Name)).Append("; ");
+                    if (_pendingNamerefs?.Remove(pair.Name) == true) (_runtimeNamerefs ??= new HashSet<string>(VarNameKeys)).Add(pair.Name);
+                }
                 if (cmd.IsAssoc) _assocVars?.Add(pair.Name);
                 if (IsValidVarName(pair.Name)) _arrayVars?.Add(pair.Name);
                 bool knownAssoc = cmd.IsAssoc || _assocVars?.Contains(pair.Name) == true;
@@ -5100,27 +5127,28 @@ public static partial class PsEmitter
                     pair = pair with { ArrayValue = plainElements };
                 // A mixed `b=([n]=x [0]=z)` has a numeric key too: it takes this path (all-numeric ones the sparse literal below).
                 bool keyedNumericOk = knownAssoc || pair.Op == AssignOp.Equal && HasNonNumericSubscript(pair.ArrayValue);
+                string arrTarget = BindArrayTarget(sb, ArrayWriteTarget(pair.Name));
                 if (pair.Op is AssignOp.Equal or AssignOp.PlusEqual && TryEmitAssocLiteral(pair.ArrayValue, out var assoc, out var assocAsIndexed, keyedNumericOk))
                 {
                     // `a+=([k]=v)` merges into the existing table (a changed value keeps its place, a new key joins).
-                    sb.Append(ArrayWriteTarget(pair.Name)).Append(" = ");
+                    sb.Append(arrTarget).Append(" = ");
                     sb.Append(pair.Op == AssignOp.PlusEqual
-                        ? "[PsBash.Cmdlets.BashAssoc]::Merge(" + PsBuild.ArrayAppendBase(ArrayWriteTarget(pair.Name), ScalarValueOf(ResolveNameref(pair.Name), braced: true)) + ", " + assoc + ")"
+                        ? "[PsBash.Cmdlets.BashAssoc]::Merge(" + PsBuild.ArrayAppendBase(arrTarget, ScalarValueOf(ResolveNameref(pair.Name), braced: true)) + ", " + assoc + ")"
                         // `a=([k1]=v1)` with no `declare -A a` in sight: indexed (arithmetic subscripts) unless a is
                         // associative at run time.
-                        : knownAssoc ? assoc : PsBuild.AssocOrIndexed(ArrayWriteTarget(pair.Name), assoc, assocAsIndexed));
+                        : knownAssoc ? assoc : PsBuild.AssocOrIndexed(arrTarget, assoc, assocAsIndexed));
                     continue;
                 }
                 // `a=([2]=p [5]=q)`: explicit numeric subscripts; the gaps stay UNSET (a sparse array), as in bash.
                 if (pair.Op == AssignOp.Equal && !cmd.IsAssoc && _assocVars?.Contains(pair.Name) != true && TryEmitIndexedLiteral(pair.ArrayValue, out var indexed))
                 {
-                    sb.Append(ArrayWriteTarget(pair.Name)).Append(" = ").Append(indexed);
+                    sb.Append(arrTarget).Append(" = ").Append(indexed);
                     continue;
                 }
                 // `declare -A m=()` is an EMPTY ASSOCIATIVE array, not an empty indexed one.
                 if (cmd.IsAssoc && pair.Op == AssignOp.Equal && pair.ArrayValue.Elements.IsEmpty)
                 {
-                    sb.Append(ArrayWriteTarget(pair.Name)).Append(" = [PsBash.Cmdlets.BashAssoc]::new()");
+                    sb.Append(arrTarget).Append(" = [PsBash.Cmdlets.BashAssoc]::new()");
                     continue;
                 }
                 // `declare -A a; a=(k v k2 v2)` (bash 5.1+): bare words are key/value pairs, a lone last key gets "".
@@ -5129,12 +5157,12 @@ public static partial class PsEmitter
                 // eval'd text cannot see the caller's `declare -A a`: the run time picks pairs or list by a's kind.
                 bool kindAtRunTime = pair.Op == AssignOp.Equal && !wordsArePairs && !cmd.IsAssoc && !cmd.IsDeclare
                     && _context == TranspileContext.Eval;
-                sb.Append(ArrayWriteTarget(pair.Name));
+                sb.Append(arrTarget);
                 // `a+=(x)` goes through Add-BashArray: a sparse array appends after its highest subscript,
                 // which PowerShell's own `+=` cannot do on a dictionary.
-                sb.Append(pair.Op == AssignOp.PlusEqual ? " = Add-BashArray " + PsBuild.ArrayAppendBase(ArrayWriteTarget(pair.Name), ScalarValueOf(ResolveNameref(pair.Name), braced: true)) + " @("
+                sb.Append(pair.Op == AssignOp.PlusEqual ? " = Add-BashArray " + PsBuild.ArrayAppendBase(arrTarget, ScalarValueOf(ResolveNameref(pair.Name), braced: true)) + " @("
                     : wordsArePairs ? " = [PsBash.Cmdlets.BashAssoc]::FromWords(@("
-                    : kindAtRunTime ? " = [PsBash.Cmdlets.BashAssoc]::ListOrPairs(" + ArrayWriteTarget(pair.Name) + ", @("
+                    : kindAtRunTime ? " = [PsBash.Cmdlets.BashAssoc]::ListOrPairs(" + arrTarget + ", @("
                     : " = @(");
                 // A glob element (`arr=(*.txt)`) expands to ZERO or more elements, which the comma
                 // form cannot splice (`'a',@('b','c')` is two elements). Such a list is emitted as
@@ -5174,7 +5202,7 @@ public static partial class PsEmitter
                 // `a[$i]=v` / `a[i+1]+=v` / `m[key]=v`: the subscript is a WORD (expanded here) and, for an indexed
                 // array, then evaluated as arithmetic at run time; Set-BashElement pads/keys and returns the container.
                 // A leading `~` is not a tilde prefix in a subscript (`m[~]=v` keys `~`, not $HOME).
-                string target = ArrayWriteTarget(ResolveNameref(baseName));
+                string target = BindArrayTarget(sb, ArrayWriteTarget(ResolveNameref(baseName)));
                 if (IsValidVarName(baseName))
                 {
                     _arrayVars?.Add(baseName); // a bare `$a` now reads `${a[0]}`
@@ -10323,7 +10351,7 @@ public static partial class PsEmitter
             return "''";
 
         // A nameref whose target is known only at run time (`declare -n r; r=$v`, a `for` over one): the run time reads it.
-        if (IsRuntimeNameref(name)) return PsBuild.ReadThroughNameref(name);
+        if (IsRuntimeNameref(name)) return RuntimeNamerefRead(name, strict);
         name = ResolveNameref(name);
         // `declare -n ref='a[2]'`: the nameref names an array element.
         if (IsNamerefElementTarget(name))
@@ -10359,6 +10387,14 @@ public static partial class PsEmitter
         => name.Length > 0 && name[0] != '0' && name.All(char.IsAsciiDigit)
             ? $"$(if ($global:__BashNounset -and @(if ({PsBuild.PositionalIsShells}) {{ $global:BashPositional }} else {{ $args }}).Count -lt {name}) {{ {PsBuild.ParamErrorThrowStatements(PsBuild.SingleQuote(name + ": "), "'unbound variable'")} }} else {{ {special} }})"
             : special;
+
+    /// <summary>
+    /// <c>$r</c> / <c>${r}</c> / <c>${#r}</c> of a nameref the run time resolves: its target's value, and under nounset an
+    /// unset target, or none yet, is r's unbound variable (bash: <c>typeset -n ref; set -u; echo $ref</c> is
+    /// "ref: unbound variable", status 1). REGRESSION: it expanded to nothing and the script went on.
+    /// </summary>
+    private static string RuntimeNamerefRead(string name, bool strict)
+        => strict && _nounsetMode ? StrictRead(name, PsBuild.ReadThroughNameref(name)) : PsBuild.ReadThroughNameref(name);
 
     /// <summary>A read of <paramref name="name"/> that ends the script ("unbound variable") when nounset is on and it is unset.</summary>
     private static string StrictRead(string name, string plain)
@@ -12492,7 +12528,7 @@ public static partial class PsEmitter
     private static string EmitSimpleVarBraced(string name, bool strict = false)
     {
         // Emit ${name} or ${env:name} with braces to prevent PS drive-reference misparse.
-        if (IsRuntimeNameref(name)) return PsBuild.ReadThroughNameref(name);
+        if (IsRuntimeNameref(name)) return RuntimeNamerefRead(name, strict);
         name = ResolveNameref(name);
         if (IsJobCaptured(name) || (_lexicalLocals is not null && _lexicalLocals.Contains(name)))
             return $"${{{name}}}";

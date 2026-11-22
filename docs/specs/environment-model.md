@@ -228,7 +228,12 @@ back what the local hid.**
   Guard: `Core.Tests/Parser/NamerefRuntimeReadGuardTests` (no form of such a name reads `$env:r` or the store).
   `declare -p` lists r as a nameref, never as its target's array. A local one hides an outer reference of that name
   until the function returns. `declare +n r` leaves a declared, unset scalar (`declare -- r`). A plain `unset r` removes the reference
-  itself, because there is no target to unset.
+  itself, because there is no target to unset. Under nounset, `$r` / `${r}` / `${#r}` of such a nameref with no target,
+  or with an unset one, is r's "unbound variable" (`PsEmitter.RuntimeNamerefRead`); the default forms are not. An array
+  assignment `r=(...)` / `r+=(...)` while r has no target is not a first write naming it: bash warns "r: removing
+  nameref attribute" and the array is r's own (`PsBuild.ArrayAssignToNameref` → `BashVariableLookup.DropTargetlessNameref`).
+  A write through r to an element whose subscript is no expression (`a[1/0]`) is the subscript expansion error
+  (`BashArrayElement.WriteThroughReference`; `bash -c` ends).
 - **`for r in WORDS` over a nameref** (with a target or without) makes each word r's target in turn
   (`BashShellState.BindLoopNameref`); a word that names no variable ends the loop with status 1. The body and what
   follows read and write r through the run time, as above.
@@ -248,13 +253,21 @@ back what the local hid.**
   (`( )`, `$( )`, `<( )`, `cmd &`, a pipe stage): `PsEmitter.EnterSubshellTables` copies them and
   `LeaveSubshellTables` puts them back, so `( declare -i x ); x=1+1` stores `1+1`.
 - **A subshell's arrays** are PowerShell variables, so they end with its block only when they are made in its scope.
-  A subshell body's own `arr=(...)` is (`$arr` there). Every other write finds the subshell's scope at run time, the
-  nearest one holding `BashRuntime.SubshellDepthVariable` (`BashShellState.Save` sets it there): `mapfile`, `read -a`
-  and a write through a nameref (`BashVariableLookup.SetArray`/`ReplaceArray` → `SetInSubshellScope`), and a
-  function defined inside the subshell (`PsEmitter._subshellFunctionDepth` routes its writes through
-  `VarFrameStack.ArraySlot` → `ArrayWriteSlot` → `SlotInSubshellScope`, which makes the variable there holding what
-  that scope sees). So the subshell sees the write and its caller does not (`( mapfile -t arr <<< x )`,
-  `( f() { arr=(x y); }; f; echo "${arr[*]}" )`).
+  A subshell body's own `arr=(...)` is (`$arr` there). Every other write (`mapfile`, `read -a`, a write through a
+  nameref: `BashVariableLookup.SetArray`/`ReplaceArray`; a function defined inside the subshell, which
+  `PsEmitter._subshellFunctionDepth` routes through `VarFrameStack.ArraySlot` → `ArrayWriteSlot`) writes the
+  nearest variable it sees, in place, and the subshell's journal (`BashVariableLookup.ArrayWriteJournal`, opened by
+  `BashShellState.Save`) records that variable's value before its first write, or the global the write made.
+  `Restore` undoes them newest first. So the subshell sees the write and its caller does not
+  (`( mapfile -t arr <<< x )`, `( f() { arr=(x y); }; f; echo "${arr[*]}" )`). Every pipe stage, `$( )` and
+  `while read` in a pipeline is such a subshell, so the lookup is one `PSVariable.Get`, never a scope walk or a
+  script, and the emitter binds the slot once per write statement (`$__psbSlot`, `PsBuild.BindArraySlot`), not
+  once for the target and again for the append base. Guard: `Core.Tests/ArrayWriteHotPathGuardTests`.
+  REGRESSION (65cf7a7c): each such write ran a scope-walking script that threw at every intermediate scope.
+- **Attributes read at run time.** `declare -i/-l/-u` record their letter in the one run-time table
+  (`BashShellState.MarkAttribute`) only when the script reads attributes at run time (`declare -p`, `${v@a}`,
+  `${v@A}`; `PsEmitter._declarePrintMode`). Elsewhere the emitter's compile-time tables are enough, and the common
+  declaration emits no call. `-r` and `-x` are always recorded (`MarkReadonly`, `ShellExports`).
 
 Known gaps:
 

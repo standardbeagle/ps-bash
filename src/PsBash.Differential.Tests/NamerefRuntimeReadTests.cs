@@ -89,4 +89,40 @@ public class NamerefRuntimeReadTests
     [SkippableFact]
     public Task ErrorForm_WithNoWord_IsParameterNotSet() => AssertOracle.EqualAsync(
         "(echo ${zz?}); (echo ${zz:?}); zz=; (echo ${zz:?}); (echo ${zz?}ok)");
+
+    /// <summary>
+    /// Under nounset, <c>$r</c> / <c>${r}</c> / <c>${#r}</c> of a nameref with no target, or whose target is unset, is r's
+    /// unbound variable (oils nameref.spec.sh "name ref on Undef cell"); the default forms are not. REGRESSION: it
+    /// expanded to nothing and the script went on, status 0.
+    /// </summary>
+    [SkippableFact]
+    public Task Nounset_ANamerefWithNoTargetOrAnUnsetOne_IsUnbound() => AssertOracle.EqualAsync(
+        "( typeset -n ref; echo ref=$ref; echo nounset; set -o nounset; echo ref=$ref; echo after ); echo \"st=$?\"\n"
+        + "( typeset -n ref; set -u; echo \"[${ref-d}] [${ref:-e}]\"; echo \"[${#ref}]\"; echo after ); echo \"st=$?\"\n"
+        + "( typeset -n ref; set -u; echo \"${ref}\"; echo after ); echo \"st=$?\"\n"
+        + "( f() { local -n lr; set -u; echo \"lr=$lr\"; echo after; }; f ); echo \"st=$?\"\n"
+        + "( declare -n r2; v=tg; r2=$v; set -u; echo \"r2=$r2\"; echo after ); echo \"st=$?\"");
+
+    /// <summary>
+    /// An array assignment to a nameref with no target removes the nameref attribute, with bash's warning, and the
+    /// array is the name's own (oils nameref.spec.sh "-n attribute on array is hard error, not a warning"); one with a
+    /// target writes the target. REGRESSION: the first-write-names-the-target rule took it, so the array went nowhere.
+    /// </summary>
+    [SkippableFact]
+    public Task ArrayAssignment_ToANamerefWithNoTarget_MakesItAnArray() => AssertOracle.EqualAsync(
+        "( x=X; typeset -n ref; echo hi; ref=(x y); echo ref=$ref; declare -p ref ); echo \"st=$?\"\n"
+        + "( x=X; typeset -n ref; ref=(x y); echo \"${ref[1]} ${#ref[@]}\"; ref=x; echo \"ref=$ref x=$x\"; declare -p ref ); echo \"st=$?\"\n"
+        + "( typeset -n ref; ref+=(p q); echo \"ref=$ref\"; declare -p ref ); echo \"st=$?\"\n"
+        + "( typeset -n ref; ref=([k]=v); declare -p ref ); echo \"st=$?\"\n"
+        + "( f() { local -n lr; lr=(a b); echo \"lr=$lr ${#lr[@]}\"; declare -p lr; }; f ); echo \"st=$?\"\n"
+        + "( declare -n r; v=arr; r=$v; r=(p q); declare -p arr r ); echo \"st=$?\"");
+
+    /// <summary>
+    /// A write through a nameref to an element whose subscript is not an expression (<c>a[1/0]</c>) is bash's subscript
+    /// expansion error: the diagnostic, the rest of the line dropped, status 1. REGRESSION: the arithmetic error escaped
+    /// as a PowerShell exception.
+    /// </summary>
+    [SkippableFact]
+    public Task ElementTarget_WithABadSubscript_IsAnExpansionError() => AssertOracle.EqualAsync(
+        "a=(1); declare -n sr; v=\"a[1/0]\"; sr=$v; sr=x; echo \"after $?\"\necho \"next $?\"; declare -p a");
 }

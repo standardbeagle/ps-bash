@@ -383,7 +383,23 @@ public class PsBuildTests
 
     [Fact]
     public void ArrayAppendBase_FallsBackToTheScalarInTheEnvironment()
-        => Assert.Equal("($global:s ?? ${env:s})", PsBuild.ArrayAppendBase("$global:s", "s"));
+        => Assert.Equal("($global:s ?? ${env:s})", PsBuild.ArrayAppendBase("$global:s", "${env:s}"));
+
+    // Oracle: `a=(1); declare -n r; v='a[1/0]'; r=$v; r=x; echo no` reports "1/0: division by 0", drops the line and ends
+    // `bash -c` (a subscript expansion error); a value that is no name (`r=5`) is an assignment error, which `-c` survives.
+    [Fact]
+    public void AssignThroughNameref_ASubscriptErrorEndsADashCShell_AnAssignmentErrorDropsTheLine()
+    {
+        string ps = PsBuild.AssignThroughNameref("r", "$v", append: false);
+        Assert.Contains("if ([PsBash.Cmdlets.BashArrayElement]::TakeSubscriptError()) { " + PsBuild.UsageDiscardMark + " }; ", ps);
+        Assert.EndsWith(PsBuild.AssignmentDiscardMark + " }", ps);
+        Assert.True(PsBuild.CanDiscardLine(ps));
+    }
+
+    // The scalar is an expression the emitter picks (PsEmitter.ScalarValueOf): a run-time nameref's is its target's.
+    [Fact]
+    public void ArrayAppendBase_OfARunTimeNameref_FallsBackToTheTargetsScalar()
+        => Assert.Equal("($r ?? " + PsBuild.ReadThroughNameref("r") + ")", PsBuild.ArrayAppendBase("$r", PsBuild.ReadThroughNameref("r")));
 
     [Fact]
     public void AssocOrIndexed_RunsOnlyTheBranchForTheRunTimeKind()

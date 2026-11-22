@@ -220,4 +220,33 @@ public static class BashArrayElement
         FileSystemHelpers.WriteBashError(cmdlet, ShellDiagnostic.Prefix(cmdlet.SessionState) + ex.Describe(subscript));
         FileSystemHelpers.MarkExpansionFailed(cmdlet, inSubscript: true);
     }
+
+    /// <summary>
+    /// <c>r=value</c> / <c>r+=value</c> through a run-time nameref to the element <c>baseName[subscript]</c>
+    /// (<c>BashVariableLookup.AssignThroughNameref</c>, called by emitted code, not a builtin): null when written, else
+    /// bash's diagnostic for the emitted code to report as an assignment error (status 1, the rest of the line dropped):
+    /// "bad array subscript", or a subscript that is not an arithmetic expression (<c>1/0: division by 0</c>), as
+    /// <see cref="FailSubscript"/> words it, after which <see cref="TakeSubscriptError"/> is true: bash treats that one as
+    /// the expansion error FailSubscript raises (<c>bash -c</c> ends the shell). REGRESSION: it escaped as a PowerShell exception.
+    /// </summary>
+    public static string? WriteThroughReference(SessionState state, string baseName, string subscript, string value, bool append)
+    {
+        var vars = ReadOnly(state);
+        try
+        {
+            string old = append ? Read(state, baseName, subscript, vars) ?? "" : "";
+            return Write(state, baseName, subscript, false, old + value, vars) ? null : baseName + "[" + subscript + "]: bad array subscript";
+        }
+        catch (BashArith.BashArithException ex) { t_subscriptError = true; return ex.Describe(subscript); }
+    }
+
+    [ThreadStatic] private static bool t_subscriptError;
+
+    /// <summary>True (once) when the last <see cref="WriteThroughReference"/> failed on its subscript's arithmetic.</summary>
+    public static bool TakeSubscriptError()
+    {
+        bool was = t_subscriptError;
+        t_subscriptError = false;
+        return was;
+    }
 }

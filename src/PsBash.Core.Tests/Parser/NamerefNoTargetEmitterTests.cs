@@ -121,4 +121,40 @@ public class NamerefNoTargetEmitterTests
         Assert.Equal(1, ps.Split(NoTargetMark).Length - 1);
         Assert.Equal(2, ps.Split(AssignThrough).Length - 1);
     }
+
+    // Oracle (oils nameref.spec.sh "name ref on Undef cell"): `typeset -n r; set -u; echo $r` is "r: unbound variable",
+    // status 1; `${r-d}` is not. REGRESSION: the run-time read had no nounset check.
+    [Theory]
+    [InlineData("typeset -n r; set -u; echo $r")]
+    [InlineData("typeset -n r; set -u; echo \"${r}\"")]
+    [InlineData("typeset -n r; set -u; echo \"${#r}\"")]
+    [InlineData("declare -n r; r=$1; set -u; echo \"$r\"")]
+    public void Transpile_NounsetReadOfARunTimeNameref_IsUnboundWhenItsTargetIs(string bash)
+    {
+        var ps = T(bash);
+        Assert.Contains("if ($global:__BashNounset -and $null -eq $(" + ReadThrough + "))", ps);
+        Assert.Contains("Reported('r: ', 'unbound variable')", ps);
+    }
+
+    [Fact]
+    public void Transpile_DefaultFormOfARunTimeNameref_HasNoNounsetCheck()
+        => Assert.DoesNotContain("unbound variable", T("typeset -n r; set -u; echo \"${r-d}\""));
+
+    // Oracle (oils nameref.spec.sh "-n attribute on array is hard error, not a warning"): `typeset -n r; r=(x y)` warns,
+    // drops the nameref and assigns r's own array. REGRESSION: the array went to the (absent) target.
+    [Theory]
+    [InlineData("typeset -n r; r=(x y)", "$r = @(")]
+    [InlineData("typeset -n r; r+=(x y)", "$r = Add-BashArray (")]
+    [InlineData("declare -n r; r=$1; r=(x y)", "$r = @(")]
+    public void Transpile_ArrayAssignmentToARunTimeNameref_DropsATargetlessReferenceFirst(string bash, string write)
+    {
+        var ps = T(bash);
+        string drop = PsBuild.ArrayAssignToNameref("r");
+        Assert.Contains(drop + "; " + write, ps);
+        Assert.Contains("'warning: r: removing nameref attribute'", drop);
+    }
+
+    [Fact]
+    public void Transpile_ArrayAssignmentToANamerefWithATarget_DropsNothing()
+        => Assert.DoesNotContain("DropTargetlessNameref", T("declare -n r=x; r=(p q)"));
 }
