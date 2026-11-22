@@ -355,6 +355,9 @@ public static class BashShellState
         /// <summary>The arrays outside the body that it writes (<see cref="BashVariableLookup.ArrayWriteJournal"/>):
         /// each is put back when it ends.</summary>
         internal BashVariableLookup.ArrayWriteJournal? ArrayWrites { get; init; }
+
+        /// <summary>The descriptor table: a subshell gets a copy (`( exec >f ); echo x` prints x).</summary>
+        internal BashFdTable.Snapshot? Fds { get; init; }
     }
 
     /// <summary>The working directory a subshell must put back (see <see cref="SaveWorkingDirectory"/>).</summary>
@@ -454,7 +457,7 @@ public static class BashShellState
         return new Snapshot(env, globals, InvokeBashShoptCommand.SnapshotOptions(),
             IsTrue(session.PSVariable.GetValue("global:__BashXtrace")), SaveTables(), SaveAliasFunctions(session),
             VarFrameStack.Current.Save(), PsBash.Core.ShellExports.Save(), SaveWorkingDirectory(session))
-        { Umask = InvokeBashUmaskCommand.ShellMask, ArrayWrites = BashVariableLookup.OpenJournal(session) };
+        { Umask = InvokeBashUmaskCommand.ShellMask, ArrayWrites = BashVariableLookup.OpenJournal(session), Fds = BashFdTable.Save() };
     }
 
     /// <summary>
@@ -468,6 +471,8 @@ public static class BashShellState
         // shared): putting the snapshot back would undo what the parent wrote while the job ran. The job's scalars
         // and their export attribute are its own (ScalarOverlay, taken at the `&`), so those are put back.
         bool inJob = IsTrue(session.PSVariable.GetValue("global:" + BackgroundRunspaceMark));
+        // The descriptor table is this shell's (a job's runspace has its own copy, BashFdTable.AttachCopy).
+        if (saved.Fds is { } fds) BashFdTable.Restore(fds);
         if (inJob && PsBash.Core.ScalarOverlay.Current is null)
             return RestoreRunspaceGlobals(session, saved);
 

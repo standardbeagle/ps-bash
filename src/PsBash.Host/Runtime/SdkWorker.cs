@@ -380,7 +380,9 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         // or pipe, where bash writes LF (a Windows console renders LF as a newline itself). In-process callers and
         // the interactive PTY keep the platform newline.
         string eol = batchOutput && output is not null ? "\n" : Environment.NewLine;
-        Action<string> deliver = batcher is null ? writeThrough : batcher.Append;
+        Action<string> deliverRaw = batcher is null ? writeThrough : batcher.Append;
+        // The shell's own fd 1 moved by exec (`exec >log`): what reaches it goes there (BashFdTable, ShellStdio).
+        Action<string> deliver = text => { if (!PsBash.Core.Stdio.ShellStdio.TryDivert(1, text)) deliverRaw(text); };
         _host.HostUI.SetWriteLineForwarder(deliver);
 
         // REFACTOR-4: stderr sink. Every host stderr write — PowerShell error
@@ -393,7 +395,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         // by the launcher. An error RECORD's bytes come from PsBash.Core.StderrRecord (a line, or
         // no newline at all for `printf x >&2`): deliverErrorBytes. Host text that is a line
         // (exception messages, WriteErrorLine) goes through deliverError, which adds the LF.
-        Action<string> deliverErrorBytes = payload =>
+        Action<string> deliverErrorRaw = payload =>
         {
             // S1: stdout is batched, stderr is not. Without this flush the two
             // streams would REORDER — buffered stdout would surface after an error
@@ -415,6 +417,8 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
                 _ps.BeginStop(null, null);
             }
         };
+        // The shell's own fd 2 moved by exec (`exec 2>log`): what reaches it goes there.
+        Action<string> deliverErrorBytes = payload => { if (!PsBash.Core.Stdio.ShellStdio.TryDivert(2, payload)) deliverErrorRaw(payload); };
         Action<string> deliverError = line => deliverErrorBytes(line.EndsWith('\n') ? line : line + "\n");
         _host.HostUI.SetWriteErrorLineForwarder(errorOutput is not null ? deliverError : null);
 
@@ -707,12 +711,23 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         // by the connection's single output queue. Output a job queued between commands is delivered first.
         JobOutput.Attach((fd, text) =>
         {
+            // Raw: a job is not the foreground command, so the descriptors the foreground has registered for its own
+            // redirections (BashFdTable) are not the job's.
             lock (outputLock)
             {
-                if (fd == 1) deliver(text);
-                else deliverErrorBytes(text);
+                if (fd == 1) deliverRaw(text);
+                else deliverErrorRaw(text);
             }
         }, eol);
+        // The shell's ORIGINAL stdout / stderr for a descriptor that copies one (`exec 3>&1; x=$(echo a >&3)`).
+        PsBash.Core.Stdio.ShellStdio.Terminal = (fd, text) =>
+        {
+            lock (outputLock)
+            {
+                if (fd == 1) deliverRaw(text);
+                else deliverErrorRaw(text);
+            }
+        };
 
         // This command is the shell a signal sent to this host's pid (`$$`) reaches (ShellSignals, background-jobs.md
         // §13): a trapped one waits for its next statement boundary, an untrapped one ends it with 128+N, as the same
@@ -865,6 +880,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             // output sink.
             _host.HostUI.SetWriteLineForwarder(null);
             _host.HostUI.SetWriteErrorLineForwarder(null);
+            PsBash.Core.Stdio.ShellStdio.Terminal = null;
             if (errorOutput is not null) Console.SetError(priorConsoleError);
 
             if (stdin is not null)

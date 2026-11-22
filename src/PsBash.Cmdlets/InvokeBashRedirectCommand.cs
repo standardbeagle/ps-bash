@@ -132,6 +132,49 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
     // even when the command prints nothing.
     protected override void BeginProcessing()
     {
+        OpenTargets();
+        if (!_openFailed) RegisterTargets();
+    }
+
+    // The shell's descriptor table (BashFdTable): while the command runs, its fd 1 / fd 2 IS this stage's target, so an
+    // `exec 3>&1` inside copies it (`{ exec 3>&1; } >f; echo x >&3` writes x to f) and an `exec >g` inside moves what
+    // this stage would receive (ProcessRecord). Only a file or the null device: a stream device is not a new target.
+    private BashFdTable.Registration? _outReg, _errReg;
+
+    private void RegisterTargets()
+    {
+        if (_stdoutToFile && _outDevice is DeviceKind.None or DeviceKind.Null)
+        {
+            _outReg = BashFdTable.Register(1, BashFdTable.ForStage(_stream));
+        }
+        if (_stderrToFile && _errDevice is DeviceKind.None or DeviceKind.Null)
+        {
+            _errReg = BashFdTable.Register(2, BashFdTable.ForStage(_errorStream));
+        }
+    }
+
+    /// <summary>
+    /// A record for fd <paramref name="fd"/> after the command moved that descriptor (<c>{ exec &gt;g; echo x; } &gt;f</c>
+    /// writes x to g): written where the table says. True when it was; false when the descriptor is still this stage's.
+    /// </summary>
+    private bool TryDivert(int fd, string payload)
+    {
+        if ((fd == 1 ? _outReg : _errReg) is not { } reg) return false;
+        var current = reg.Current;
+        if (ReferenceEquals(current, reg.Handle)) return false;
+        int std = fd;
+        try
+        {
+            if (current is not null) std = BashFdTable.WriteHandle(current, payload);
+        }
+        catch (InvalidOperationException) { return true; }   // a closed descriptor: the write fails
+        if (std == 1) foreach (var line in BashRuntime.EmitBashLines(payload)) WriteObject(line);
+        else if (std == 2) FileSystemHelpers.WriteStderrBytes(this, payload);
+        return true;
+    }
+
+    private void OpenTargets()
+    {
         _outDevice = DevicePath.Classify(Path);
         _errDevice = DevicePath.Classify(ErrorPath);
         // A stream device is not a file: `> /dev/stdout` leaves the records where they were going, `> /dev/stderr`
@@ -331,6 +374,7 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
         if (InputObject is null || _openFailed) return;
         if (InputObject.BaseObject is ErrorRecord er)
         {
+            if (_errReg is not null && TryDivert(2, ErrorPayload(er))) return;
             if (_stderrToFile) { WriteTarget(_errorStream, _errDevice, ErrorPayload(er)); return; }
             // `2> /dev/stderr`: stays stderr (as stderr, not an ErrorRecord object a downstream stage would read as a
             // line). `2> /dev/stdout`: stdout, i.e. like `2>&1` at that point.
@@ -362,6 +406,7 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
         // `echo msg > /dev/stderr`: the exact bytes on the command's stderr.
         if (_outDevice == DeviceKind.Stderr) { FileSystemHelpers.WriteStderrBytes(this, BashRuntime.RecordFilePayload(InputObject)); return; }
         if (!_stdoutToFile) { WriteObject(InputObject); return; }
+        if (_outReg is not null && TryDivert(1, BashRuntime.RecordFilePayload(InputObject))) return;
         // Same per-record rule as tee: record boundary "\n" unless the record is marked
         // NoTrailingNewline (printf x / echo -n x), so `printf x > f` writes exactly "x".
         WriteTarget(_stream, _outDevice, BashRuntime.RecordFilePayload(InputObject));
@@ -420,6 +465,19 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
 
     private void Close()
     {
+        // The table gets back the fd 1 / 2 the command had before; the target closes once no descriptor names it.
+        if (_outReg is { } outReg)
+        {
+            _outReg = null;
+            BashFdTable.Unregister(outReg);
+            _stream = null;
+        }
+        if (_errReg is { } errReg)
+        {
+            _errReg = null;
+            BashFdTable.Unregister(errReg);
+            _errorStream = null;
+        }
         foreach (var s in new[] { _stream, _errorStream })
             try { s?.Dispose(); } catch { /* best-effort */ }
         _stream = null;

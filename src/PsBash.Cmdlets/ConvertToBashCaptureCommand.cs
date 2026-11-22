@@ -48,13 +48,65 @@ public sealed class ConvertToBashCaptureCommand : BashCmdlet
         (_joined ??= new StringBuilder()).Append(line).Append('\n');
     }
 
+    // The substitution IS fd 1 of the command inside it (BashFdTable): `x=$(exec 3>&1; echo a >&3)` captures a, and
+    // `x=$(exec >f; echo a)` writes a to f. What a table descriptor writes here arrives on another command's call, so it
+    // is queued and taken in order with the records (DrainWritten).
+    private BashFdTable.Registration? _reg;
+    private readonly object _writtenGate = new();
+    private StringBuilder? _written;
+
+    protected override void BeginProcessing()
+    {
+        _reg = BashFdTable.Register(1, BashFdTable.ForCapture(text =>
+        {
+            lock (_writtenGate) (_written ??= new StringBuilder()).Append(text);
+        }));
+    }
+
+    private void DrainWritten()
+    {
+        string? text = null;
+        lock (_writtenGate)
+        {
+            if (_written is { Length: > 0 }) { text = _written.ToString(); _written.Clear(); }
+        }
+        if (text is not null) Add(text);
+    }
+
+    private void Unregister()
+    {
+        if (_reg is not { } reg) return;
+        _reg = null;
+        BashFdTable.Unregister(reg);
+    }
+
+    protected override void StopProcessing() => Unregister();
+
+    protected override void DisposeResources() => Unregister();
+
     protected override void ProcessRecord()
     {
         if (InputObject is null) return;
+        DrainWritten();
 
         // The record's bytes (the one rule, BashRuntime.RecordBytes): a plain record is its text plus a newline even
         // when that text already ends in one (`$(jq -r . <<<'"a\n"'; echo .)` is "a\n\n.").
         var text = BashRuntime.RecordBytes(InputObject);
+        // The command moved its fd 1 away from this substitution (`exec >f`, `exec >&2`): the record goes there.
+        if (_reg is { } reg && reg.Current is var current && !ReferenceEquals(current, reg.Handle))
+        {
+            int std;
+            try { std = current is null ? 1 : BashFdTable.WriteHandle(current, text); }
+            catch (InvalidOperationException) { return; }   // a closed descriptor: the write fails
+            if (std == 2) { FileSystemHelpers.WriteStderrBytes(this, text); return; }
+            // The shell's original stdout; with no host attached there is nowhere else for it.
+            if (std == 0 || PsBash.Core.Stdio.ShellStdio.WriteTerminal(1, text)) return;
+        }
+        Add(text);
+    }
+
+    private void Add(string text)
+    {
         // bash drops every NUL byte of a substitution's output, with one warning: `$(printf '.\000.')` is `..`. Kept, a
         // NUL ended the value at the first one (an environment variable is a C string).
         if (text.Contains('\0'))
@@ -84,6 +136,8 @@ public sealed class ConvertToBashCaptureCommand : BashCmdlet
 
     protected override void EndProcessing()
     {
+        DrainWritten();
+        Unregister();
         if (_hasPending) Emit(_pending.ToString());
         if (!Join) return;
 

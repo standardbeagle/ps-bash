@@ -1470,6 +1470,30 @@ public static class PsBuild
     /// </summary>
     public const string MergeStderrIntoStdout = " 2>&1 | Invoke-BashRedirect -MergeErrors";
 
+    /// <summary>
+    /// The <c> | Invoke-BashFdRoute</c> stage: a command's final fd 1 / fd 2 when one names a table descriptor, a closed
+    /// descriptor, or the two are swapped (PsEmitter.TryAppendModelledRedirectTail resolves the list left to right).
+    /// Each destination is <c>out</c>, <c>err</c>, <c>null</c>, <c>close</c>, <c>pass</c> (a file stage follows) or a
+    /// descriptor number; <paramref name="name"/> is the command's, for a closed stdout's write error.
+    /// </summary>
+    public static string FdRouteStage(string outDest, string errDest, string? name)
+    {
+        var sb = new System.Text.StringBuilder(" | Invoke-BashFdRoute");
+        if (outDest != "out") sb.Append(" -Out ").Append(SingleQuote(outDest));
+        if (errDest != "err") sb.Append(" -Err ").Append(SingleQuote(errDest));
+        if (outDest == "close" && !string.IsNullOrEmpty(name)) sb.Append(" -Name ").Append(SingleQuote(name));
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// <c>cmd 3&gt;f</c>, <c>{ ...; } 3&gt;&amp;1</c>: numbered descriptors opened (<paramref name="open"/>) for one command
+    /// only. What those descriptors named before is saved first and put back after (<c>exec 3&gt;a; cmd 3&gt;b; echo &gt;&amp;3</c>
+    /// writes to a), the command's status kept.
+    /// </summary>
+    public static string ScopedDescriptors(IEnumerable<int> fds, string open, string command)
+        => "& { $__psbash_fdSave = Save-BashFd " + string.Join(",", fds) + "; " + open + "; try { " + command
+           + " } finally { $__psbash_fdRc = $global:LASTEXITCODE; Restore-BashFd $__psbash_fdSave; $global:LASTEXITCODE = $__psbash_fdRc } }";
+
     // ───────────────────────── Redirect target without output ──────────────────────────
 
     /// <summary>
