@@ -274,3 +274,34 @@ files that assign a bash variable, each with its assignment; a wrapper is not on
 `NoCmdlet_SetsTheProcessEnvironment_ExceptTheStore`; `Cmdlets.Tests/InvokeBashEnvCommandTests.Env_IgnoreEnvironment_*`
 (the process environment while `env -i`'s command runs, from the same and from another runspace);
 `Core.Tests/ScalarOverlayTests.ACommandsEnvironment_*`.
+
+## 12. A reserved name in lower or mixed case (`path`, `tmp`, `Temp`, `os`)
+
+**Invariant: a bash name maps to ONE store name, in one place, and every name that is printed is the bash name.**
+On Windows the environment (and the export table, `NameComparer`) is case-insensitive, so `path=abc` was `PATH=abc`
+(the next `git` was "command not found") and `tmp=x` sent temp files to `./x/`. `PsBash.Core.BashNameCase`
+(Transpiler assembly) gives a non-upper-case spelling of a RESERVED name (a fixed list: Windows system variables and
+the shell/tool variables that live in the environment) its own store name `__psbash_cv_<hexmask>_<UPPER>`, bit i of
+the mask set when letter i is upper-case (`path` -> `__psbash_cv_0_PATH`, `Path` -> `__psbash_cv_1_PATH`).
+`ToStore` is idempotent and `ToBash` reverses it. On only on Windows (`Enabled`; the `Override` seam for tests); a
+fixed list so the emitted text does not depend on the machine. Ordinary names (`x` / `X`) stay one variable
+(`intentional-differences.md`).
+
+Where the mapping happens:
+
+| Name source | Mapped by |
+|---|---|
+| Parsed as a variable (`$path`, `path=v`, `NAME=v cmd`, `for`/`select`, arithmetic names) | The AST record constructors (`WordPart.SimpleVarSub`, `BracedVarSub`, `Assignment`, `EnvPair`, `Command.ForIn`, `Command.Select`, `ArithmeticExpr.*`): the emitter only sees store names |
+| Builtin operand text in the emitter (`declare`/`typeset` names, `readonly NAME=v`, `export NAME=v`, a nameref target) | `PsEmitter.StoreNameWord` / `BashNameCase.ToStore` at those sites; `export "$n=v"` maps at run time |
+| A name handed to the runtime (`read`, `printf -v`, `getopts`, `unset`, `mapfile`, `${!ref}`, `[[ -v ]]`, arithmetic text, `env NAME=v`) | The by-name primitives themselves: `BashVariableStore`, `BashVariableLookup`, `ShellExports`, `ScalarOverlay.ForCommand`, `BashShellState` (readonly, attribute and nameref tables). Each takes a bash name or a store name; callers never map |
+
+Printing: listings (`declare -p`, `set`, `env`, `printenv`, `compgen -v`/`-e`, `${!prefix*}`, jq's `$ENV`) show
+`ToBash(name)`; diagnostics are demangled at the writers (`BashParamErrorException`, `FileSystemHelpers.WriteStderr`,
+`PsBuild.ShellDiagnosticLine` for a literal message, psm1 `Write-BashShellDiagnostic`) with `ToBashText`.
+
+A child: an EXPORTED mangled variable reaches a child under its store name (Windows cannot hand a child both `PATH`
+and `path`); a nested ps-bash reads it back as `path`, another program does not see `path`. Not exported, it never
+reaches a child (§1).
+
+Guards: `Core.Tests/BashNameCaseTests` (`EveryAstRecordWithAVariableName_IsCovered`: a new AST record with a variable
+name must map it; the primitive and message tests); `Differential.Tests/ReservedNameCaseTests` (bash oracle).

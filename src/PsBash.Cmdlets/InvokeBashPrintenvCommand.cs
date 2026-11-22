@@ -63,7 +63,10 @@ public sealed class InvokeBashPrintenvCommand : BashCmdlet
         string end = nul ? "\0" : "\n";
         if (names.Count == 0)
         {
-            var all = new List<KeyValuePair<string, string>>(BashVariableStore.EnumerateExported());
+            // Under the bash name (BashNameCase): a diverted `path` prints as path=...
+            var all = new List<KeyValuePair<string, string>>();
+            foreach (var (k, v) in BashVariableStore.EnumerateExported())
+                all.Add(new KeyValuePair<string, string>(PsBash.Core.BashNameCase.ToBash(k), v));
             all.Sort(static (x, y) => StringComparer.Ordinal.Compare(x.Key, y.Key));
             if (nul)
             {

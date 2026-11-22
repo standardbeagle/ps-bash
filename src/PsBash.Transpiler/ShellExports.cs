@@ -22,6 +22,8 @@ namespace PsBash.Core;
 /// running on the calling thread. It lives in this assembly because both the host (per-invocation reset, the
 /// interactive shell's direct spawn) and the cmdlets use it. See <c>docs/specs/environment-model.md</c>.
 /// </para>
+/// <para>Every by-name member takes a bash name or a store name (<see cref="BashNameCase.ToStore(string)"/>): the table
+/// holds store names, as the environment does (section 12).</para>
 /// </summary>
 public static class ShellExports
 {
@@ -149,7 +151,7 @@ public static class ShellExports
         lock (scope.Gate)
         {
             SyncLocked(scope);
-            return scope.Table.Exported.Contains(name);
+            return scope.Table.Exported.Contains(BashNameCase.ToStore(name));
         }
     }
 
@@ -161,7 +163,7 @@ public static class ShellExports
         {
             SyncLocked(scope);
             foreach (var name in names)
-                if (!string.IsNullOrEmpty(name)) scope.Table.Exported.Add(name);
+                if (!string.IsNullOrEmpty(name)) scope.Table.Exported.Add(BashNameCase.ToStore(name));
         }
     }
 
@@ -172,8 +174,9 @@ public static class ShellExports
         lock (scope.Gate)
         {
             SyncLocked(scope);
-            foreach (var name in names)
+            foreach (var bashName in names)
             {
+                var name = BashNameCase.ToStore(bashName);
                 scope.Table.Exported.Remove(name);
                 // Under `set -a` the name is unexported as of now; only a later assignment exports it again.
                 if (scope.Table.Baseline is not null && scope.Value(name) is { } value)
@@ -185,6 +188,7 @@ public static class ShellExports
     /// <summary><c>unset NAME</c>: the variable and its attributes are gone; a later <c>NAME=v</c> is a new, unexported one.</summary>
     public static void Forget(string name)
     {
+        name = BashNameCase.ToStore(name);
         var scope = new Scope(ScalarOverlay.Current);
         lock (scope.Gate)
         {
@@ -222,6 +226,7 @@ public static class ShellExports
     /// <summary>The value a child process would see for <paramref name="name"/>: null when unset or not exported.</summary>
     public static string? Get(string name)
     {
+        name = BashNameCase.ToStore(name);
         var scope = new Scope(ScalarOverlay.Current);
         lock (scope.Gate)
         {
@@ -385,8 +390,9 @@ public static class ShellExports
             SyncLocked(scope);
             for (int i = 0; i < names.Count; i++)
             {
-                was[i] = scope.Table.Exported.Contains(names[i]);
-                scope.Table.Exported.Add(names[i]);
+                var name = BashNameCase.ToStore(names[i]);
+                was[i] = scope.Table.Exported.Contains(name);
+                scope.Table.Exported.Add(name);
             }
         }
         return was;
@@ -402,8 +408,9 @@ public static class ShellExports
         {
             for (int i = 0; i < names.Count && i < was.Length; i++)
             {
-                if (was[i]) scope.Table.Exported.Add(names[i]);
-                else scope.Table.Exported.Remove(names[i]);
+                var name = BashNameCase.ToStore(names[i]);
+                if (was[i]) scope.Table.Exported.Add(name);
+                else scope.Table.Exported.Remove(name);
             }
         }
     }
@@ -411,6 +418,7 @@ public static class ShellExports
     /// <summary>Set one name's attribute (a function's local ends: the caller's variable has its own attribute back).</summary>
     public static void SetExported(string name, bool exported)
     {
+        name = BashNameCase.ToStore(name);
         var scope = new Scope(ScalarOverlay.Current);
         lock (scope.Gate)
         {

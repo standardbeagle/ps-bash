@@ -35,9 +35,15 @@ namespace PsBash.Cmdlets;
 public static class BashVariableStore
 {
     /// <summary>Read a bash variable. Null when unset (bash's "unset" — distinct
-    /// from set-to-empty, which the <c>${VAR-word}</c> operators rely on).</summary>
+    /// from set-to-empty, which the <c>${VAR-word}</c> operators rely on).
+    /// <para>Every by-name member takes a bash name or a store name: a reserved spelling (<c>path</c>) is its own
+    /// variable on Windows, not <c>PATH</c> (<see cref="BashNameCase.ToStore(string)"/>, idempotent;
+    /// <c>environment-model.md</c> section 12).</para></summary>
     public static string? Get(string name)
-        => ScalarOverlay.Current is { } job ? job.Get(name) : Environment.GetEnvironmentVariable(name);
+    {
+        name = BashNameCase.ToStore(name);
+        return ScalarOverlay.Current is { } job ? job.Get(name) : Environment.GetEnvironmentVariable(name);
+    }
 
     /// <summary>
     /// Write a bash variable. A null <paramref name="value"/> UNSETS it (the
@@ -45,6 +51,7 @@ public static class BashVariableStore
     /// </summary>
     public static void Set(string name, string? value)
     {
+        name = BashNameCase.ToStore(name);
         if (ScalarOverlay.Current is { } job) job.Set(name, value);
         else Environment.SetEnvironmentVariable(name, value);
     }
@@ -53,7 +60,9 @@ public static class BashVariableStore
     // runspace): the foreground and the other jobs go on writing the process environment while it runs
     // (background-jobs.md section 3, environment-model.md section 8). Every member here resolves the store per call.
 
-    /// <summary>Every bash variable currently set, for <c>env</c> / <c>printenv</c>.</summary>
+    /// <summary>Every bash variable currently set, for <c>env</c> / <c>printenv</c>, under its STORE name (callers key
+    /// case-insensitive tables by it, where <c>path</c> and <c>PATH</c> would collide). Whatever PRINTS the name
+    /// demangles it with <see cref="BashNameCase.ToBash"/>.</summary>
     public static IEnumerable<KeyValuePair<string, string>> Enumerate()
     {
         if (ScalarOverlay.Current is { } job)
@@ -95,7 +104,8 @@ public static class BashVariableStore
     /// </summary>
     public static string? GetExported(string name) => PsBash.Core.ShellExports.Get(name);
 
-    /// <summary>The exported variables that are set: a child's environment, for <c>env</c> / <c>printenv</c> / <c>compgen -e</c>.</summary>
+    /// <summary>The exported variables that are set: a child's environment, for <c>env</c> / <c>printenv</c> / <c>compgen -e</c>.
+    /// Store names, as <see cref="Enumerate"/>.</summary>
     public static IEnumerable<KeyValuePair<string, string>> EnumerateExported() => PsBash.Core.ShellExports.Enumerate();
 
     /// <summary>Whether <paramref name="name"/> has the export attribute.</summary>

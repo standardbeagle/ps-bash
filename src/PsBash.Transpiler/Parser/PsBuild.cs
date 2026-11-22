@@ -1205,9 +1205,24 @@ public static class PsBuild
         "$__psbash_optErr = [PsBash.Cmdlets.BashRuntime]::BuiltinOptionError(" + SingleQuote(builtin) + ", [string[]]" + argsExpr + ", "
         + SingleQuote(letters) + ", '', " + DiagnosticPrefix + "); "
         + "if ($null -ne $__psbash_optErr) { Write-Error -Message $__psbash_optErr -ErrorAction Continue; " + SetStatus(2) + " } else { " + body + " }";
-    /// <summary>A shell diagnostic <paramref name="message"/> (a PowerShell string expression) with bash's source prefix, on stderr.</summary>
+    /// <summary>A shell diagnostic <paramref name="message"/> (a PowerShell string expression) with bash's source prefix, on stderr.
+    /// A message that is one single-quoted literal names a variable by its bash name (<c>path: readonly variable</c>, not the
+    /// store name the AST carries: <see cref="BashNameCase.ToBashText"/>); an expression is code and is left alone.</summary>
     public static string ShellDiagnosticLine(string message) =>
-        "Write-Error -Message (" + DiagnosticPrefix + " + " + message + ") -ErrorAction Continue";
+        "Write-Error -Message (" + DiagnosticPrefix + " + " + (IsSingleQuotedLiteral(message) ? BashNameCase.ToBashText(message) : message) + ") -ErrorAction Continue";
+
+    /// <summary>True when <paramref name="text"/> is exactly one <see cref="SingleQuote"/> literal (<c>'a''b'</c>).</summary>
+    private static bool IsSingleQuotedLiteral(string text)
+    {
+        if (text.Length < 2 || text[0] != '\'' || text[^1] != '\'') return false;
+        for (int i = 1; i < text.Length - 1; i++)
+        {
+            if (text[i] != '\'') continue;
+            if (text[i + 1] != '\'' || i + 1 == text.Length - 1) return false;
+            i++;
+        }
+        return true;
+    }
 
     /// <summary>Source line of the statement being emitted; the ERR trap reads it as <c>$LINENO</c>.</summary>
     [ThreadStatic] public static int TrapLine;

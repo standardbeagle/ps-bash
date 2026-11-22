@@ -116,7 +116,11 @@ public abstract record Command : BashNode
         ImmutableArray<Redirect> Redirects = default,
         bool ExplicitIn = false,
         int Line = 0,
-        int EndLine = 0) : Command;
+        int EndLine = 0) : Command
+    {
+        /// <summary>The STORE name of the loop variable (<see cref="PsBash.Core.BashNameCase.ToStore(string)"/>).</summary>
+        public string Var { get; init; } = PsBash.Core.BashNameCase.ToStore(Var);
+    }
 
     /// <summary>
     /// A <c>select</c> menu loop: <c>select x in a b c; do body; done</c> —
@@ -130,7 +134,11 @@ public abstract record Command : BashNode
         ImmutableArray<CompoundWord> List,
         Command Body,
         ImmutableArray<Redirect> Redirects = default,
-        int EndLine = 0) : Command;
+        int EndLine = 0) : Command
+    {
+        /// <summary>The STORE name of the menu variable (<see cref="PsBash.Core.BashNameCase.ToStore(string)"/>).</summary>
+        public string Var { get; init; } = PsBash.Core.BashNameCase.ToStore(Var);
+    }
 
     /// <summary>
     /// A C-style arithmetic for loop: <c>for ((init; cond; step)); do body; done</c>.

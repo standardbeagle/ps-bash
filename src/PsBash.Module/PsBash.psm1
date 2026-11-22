@@ -168,7 +168,8 @@ function Get-BashIndirectValue {
         }
         return $null
     }
-    if ($NameOnly) { return ($n -replace '\[.*$', '') }
+    # The store name (BashNameCase): the caller assigns or inspects the variable by it.
+    if ($NameOnly) { return [PsBash.Core.BashNameCase]::ToStore(($n -replace '\[.*$', '')) }
     if ($n -match '^[0-9]+$') {
         if ([int]$n -eq 0) { return 'bash' }
         if ([int]$n -le $Pos.Count) { return [string]$Pos[[int]$n - 1] }
@@ -291,7 +292,8 @@ function Write-BashExpansionError([string]$Prefix, [string]$Message) {
 # A shell diagnostic on stderr with bash's source prefix (`t.sh: line 3: `, `bash: line 1: ` under -c, `bash: `
 # interactive): ShellDiagnostic.Prefix, the one rule. REGRESSION: the expansion errors here spelled a bare "bash: ".
 function Write-BashShellDiagnostic([string]$Message) {
-    Write-BashHostStderr ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + $Message)
+    # A variable is named by its bash name, not its store name (`path: unbound variable`; BashNameCase.ToBashText).
+    Write-BashHostStderr ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + [PsBash.Core.BashNameCase]::ToBashText($Message))
 }
 
 # `b[-5]=x`: bash's "bad array subscript", naming the element as written; status 1 and, like an expansion error, the

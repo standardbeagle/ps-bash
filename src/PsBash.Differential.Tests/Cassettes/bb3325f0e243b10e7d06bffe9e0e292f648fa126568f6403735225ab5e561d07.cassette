@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 68
+stdout-length: 20
+stderr-length: 0
+==== SCRIPT ====
+os=x; user=me; home=/nowhere; echo $os $user $home; cd && echo cd-ok
+==== STDOUT ====
+x me /nowhere
+cd-ok
+
+==== STDERR ====
+

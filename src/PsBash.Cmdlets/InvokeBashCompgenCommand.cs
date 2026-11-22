@@ -94,12 +94,14 @@ public sealed class InvokeBashCompgenCommand : BashCmdlet
             case "directory":
                 return PathCandidates(prefix, kind == "directory");
             case "variable":
-                return Script("Get-Variable | ForEach-Object Name").Concat(Script("Get-ChildItem Env: | ForEach-Object { if ($_.Name -ieq 'Path') { 'PATH' } else { $_.Name } }")).Distinct(StringComparer.Ordinal);
+                // A diverted reserved-name variable (stored __psbash_cv_0_PATH) completes as its bash name, `path` (BashNameCase).
+                return Script("Get-Variable | ForEach-Object Name").Concat(Script("Get-ChildItem Env: | ForEach-Object { if ($_.Name -ieq 'Path') { 'PATH' } else { $_.Name } }"))
+                    .Select(PsBash.Core.BashNameCase.ToBash).Distinct(StringComparer.Ordinal);
             case "function":
                 return DeclarePrinter.AllBashFunctions(this).Select(f => f.Name);
             case "export":
                 // -e: the exported variables (a variable that is merely set is -v only).
-                return BashVariableStore.EnumerateExported().Select(kv => string.Equals(kv.Key, "Path", StringComparison.OrdinalIgnoreCase) ? "PATH" : kv.Key)
+                return BashVariableStore.EnumerateExported().Select(kv => string.Equals(kv.Key, "Path", StringComparison.OrdinalIgnoreCase) ? "PATH" : PsBash.Core.BashNameCase.ToBash(kv.Key))
                     .OrderBy(n => n, StringComparer.Ordinal);
             case "setopt":
                 return SetOptions;

@@ -185,19 +185,22 @@ public sealed class InvokeBashUnsetCommand : BashCmdlet
 
         foreach (var name in names)
         {
-            if (!functionMode && BashShellState.IsReadonly(name))
+            // A variable by its store name (`unset path` removes the bash variable path, never PATH: BashNameCase); a
+            // function, and every message, by the name as written.
+            string store = functionMode ? name : PsBash.Core.BashNameCase.ToStore(name);
+            if (!functionMode && BashShellState.IsReadonly(store))
             {
                 FileSystemHelpers.WriteStderr(this, $"unset: {name}: cannot unset: readonly variable");
                 FileSystemHelpers.SetLastExitCode(this, 1);
                 continue;
             }
-            if (!functionMode && TryUnsetElement(name)) continue;
+            if (!functionMode && TryUnsetElement(store)) continue;
             // A temp binding (`v=t f`) or a caller's local (`unlocal() { unset -v "$1"; }`): the frame goes and the value
             // it hid comes back, as in bash. A local of the current function falls through: unset, still local.
-            if (!functionMode && VarFrameStack.Current.Unset(name, out var revealed))
+            if (!functionMode && VarFrameStack.Current.Unset(store, out var revealed))
             {
-                BashVariableStore.Set(name, revealed);
-                if (revealed is null) PsBash.Core.ShellExports.Forget(name);
+                BashVariableStore.Set(store, revealed);
+                if (revealed is null) PsBash.Core.ShellExports.Forget(store);
                 continue;
             }
             if (functionMode)
@@ -222,19 +225,19 @@ public sealed class InvokeBashUnsetCommand : BashCmdlet
                 // caller).
                 // Bash: with neither -f nor -v, a name that is no variable at all unsets the function of that name.
                 InvokeCommand.InvokeScript(
-                    "param($n, $explicitVar) $isVar = (Get-Variable -Name $n -Scope 1 -ErrorAction SilentlyContinue) -or (Test-Path ('Env:\\' + $n)); " +
+                    "param($n, $explicitVar, $fn) $isVar = (Get-Variable -Name $n -Scope 1 -ErrorAction SilentlyContinue) -or (Test-Path ('Env:\\' + $n)); " +
                     "Remove-Variable -Name $n -Scope 1 -ErrorAction SilentlyContinue; " +
                     "if (Test-Path ('Env:\\' + $n)) { Remove-Item -Path ('Env:\\' + $n) -Force -ErrorAction SilentlyContinue } " +
-                    "elseif (-not $isVar -and -not $explicitVar -and -not $n.Contains('[')) { Remove-Item -Path ('Function:\\' + $n) -Force -ErrorAction SilentlyContinue }",
+                    "elseif (-not $isVar -and -not $explicitVar -and -not $fn.Contains('[')) { Remove-Item -Path ('Function:\\' + $fn) -Force -ErrorAction SilentlyContinue }",
                     // `declare c; unset c`: a declared name is a variable even with no value yet (no function is unset).
-                    name, explicitVar || BashShellState.HasAttributes(name));
+                    store, explicitVar || BashShellState.HasAttributes(store), name);
                 // SHELL has a startup value even when the environment lacks it (PsBuild maps a read of it to
                 // BashRuntime.DefaultShell); once unset it reads as unset, as in bash.
                 if (name == "SHELL") SessionState.PSVariable.Set("global:__BashShellUnset", true);
                 // The attributes go with the variable: a later `NAME=v` is a new, unexported one, and `declare -p NAME`
                 // finds nothing (the declared-but-unset mark and -i/-l/-u went too).
-                PsBash.Core.ShellExports.Forget(name);
-                BashShellState.TakeAttributes(name);
+                PsBash.Core.ShellExports.Forget(store);
+                BashShellState.TakeAttributes(store);
             }
         }
     }

@@ -68,10 +68,18 @@ public sealed record Assignment(
     string Name,
     AssignOp Op,
     CompoundWord? Value,
-    ArrayWord? ArrayValue = null) : BashNode;
+    ArrayWord? ArrayValue = null) : BashNode
+{
+    /// <summary>The STORE name (<see cref="PsBash.Core.BashNameCase.ToStore(string)"/>), subscript kept.</summary>
+    public string Name { get; init; } = PsBash.Core.BashNameCase.ToStore(Name);
+}
 
 /// <summary>
 /// An environment pair for command prefix, e.g. <c>FOO=bar cmd</c>.
 /// Modeled after oils syntax.asdl EnvPair.
 /// </summary>
-public sealed record EnvPair(string Name, CompoundWord? Value) : BashNode;
+public sealed record EnvPair(string Name, CompoundWord? Value) : BashNode
+{
+    /// <summary>The STORE name (<see cref="PsBash.Core.BashNameCase.ToStore(string)"/>).</summary>
+    public string Name { get; init; } = PsBash.Core.BashNameCase.ToStore(Name);
+}

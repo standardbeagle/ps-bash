@@ -29,23 +29,27 @@ namespace PsBash.Cmdlets;
 /// </summary>
 public static class BashShellState
 {
+    // The readonly, attribute and nameref tables are keyed by STORE name: every member takes a bash name or a store name
+    // (`readonly path` is not PATH on Windows; PsBash.Core.BashNameCase, environment-model.md section 12).
+    private static string Key(string name) => PsBash.Core.BashNameCase.ToStore(name);
+
     private static readonly HashSet<string> ReadonlyNames = new(StringComparer.Ordinal);
 
     /// <summary>Records <c>readonly NAME</c>; only <c>unset</c> consults it (assignment is not blocked: see intentional-differences.md).</summary>
-    public static void MarkReadonly(string name) { lock (ReadonlyNames) ReadonlyNames.Add(name); }
+    public static void MarkReadonly(string name) { lock (ReadonlyNames) ReadonlyNames.Add(Key(name)); }
 
     /// <summary>A function's read-only local goes when the function returns (VarFrameStack.Exit): the name is writable again.</summary>
-    internal static void UnmarkReadonly(string name) { lock (ReadonlyNames) ReadonlyNames.Remove(name); }
+    internal static void UnmarkReadonly(string name) { lock (ReadonlyNames) ReadonlyNames.Remove(Key(name)); }
 
     /// <summary>Removes and returns NAME's nameref target (null when none): a local of that name is a plain variable.</summary>
-    internal static string? TakeNameref(string name) { lock (Namerefs) return Namerefs.Remove(name, out var t) ? t : null; }
+    internal static string? TakeNameref(string name) { lock (Namerefs) return Namerefs.Remove(Key(name), out var t) ? t : null; }
 
     /// <summary>Puts back the target <see cref="TakeNameref"/> returned (null: NAME is no nameref).</summary>
     internal static void RestoreNameref(string name, string? target)
     {
         lock (Namerefs)
-            if (target is null) Namerefs.Remove(name);
-            else Namerefs[name] = target;
+            if (target is null) Namerefs.Remove(Key(name));
+            else Namerefs[Key(name)] = target;
     }
 
     /// <summary>A new, independent invocation starts with nothing readonly (the daemon outlives the scripts it runs).</summary>
@@ -53,8 +57,12 @@ public static class BashShellState
 
     private static readonly Dictionary<string, string> Namerefs = new(StringComparer.Ordinal);
 
-    /// <summary>Records <c>declare -n NAME=TARGET</c> so <c>declare -p</c> can list it (the emitter resolves the reference itself).</summary>
-    public static void SetNameref(string name, string target) { lock (Namerefs) Namerefs[name] = target; }
+    /// <summary>Records <c>declare -n NAME=TARGET</c> so <c>declare -p</c> can list it (the emitter resolves the reference itself).
+    /// The target is kept as its bash name: it is printed (<c>declare -p</c>) and handed back as a value (<c>typeset +n</c>).</summary>
+    public static void SetNameref(string name, string target)
+    {
+        lock (Namerefs) Namerefs[Key(name)] = PsBash.Core.BashNameCase.ToBash(target);
+    }
 
     /// <summary>
     /// <c>declare +n NAME</c>: the name is a plain variable again, whose value is the reference's own: the target name
@@ -63,10 +71,10 @@ public static class BashShellState
     public static string? ClearNameref(string name, object? current)
     {
         lock (Namerefs)
-            return Namerefs.Remove(name, out var target) ? target : current?.ToString();
+            return Namerefs.Remove(Key(name), out var target) ? target : current?.ToString();
     }
 
-    internal static string? NamerefTarget(string name) { lock (Namerefs) return Namerefs.TryGetValue(name, out var t) ? t : null; }
+    internal static string? NamerefTarget(string name) { lock (Namerefs) return Namerefs.TryGetValue(Key(name), out var t) ? t : null; }
 
     /// <summary>
     /// The variable NAME stands for when the shell resolves it at run time: its nameref target, followed through a chain
@@ -80,7 +88,7 @@ public static class BashShellState
             if (Namerefs.Count == 0) return name;
             int bracket = name.IndexOf('[');
             string current = bracket < 0 ? name : name[..bracket];
-            for (int hop = 0; hop < 16 && Namerefs.TryGetValue(current, out var next) && next.Length > 0 && next != current; hop++)
+            for (int hop = 0; hop < 16 && Namerefs.TryGetValue(Key(current), out var next) && next.Length > 0 && next != current; hop++)
                 current = next;
             if (bracket < 0) return current;
             return current.Contains('[') ? name : current + name[bracket..];
@@ -98,6 +106,7 @@ public static class BashShellState
     public static void MarkAttribute(string name, string letter)
     {
         if (letter == "x") { PsBash.Core.ShellExports.Export(name); return; }
+        name = Key(name);
         lock (Attributes)
         {
             Attributes.TryGetValue(name, out var cur);
@@ -108,30 +117,30 @@ public static class BashShellState
     }
 
     /// <summary>True when NAME has declare attribute letters (it was declared, if only with no value).</summary>
-    internal static bool HasAttributes(string name) { lock (Attributes) return Attributes.ContainsKey(name); }
+    internal static bool HasAttributes(string name) { lock (Attributes) return Attributes.ContainsKey(Key(name)); }
 
     /// <summary>Removes and returns NAME's attribute letters (null when it has none): a local now hides them (VarFrameStack.TakeAttributes).</summary>
-    internal static string? TakeAttributes(string name) { lock (Attributes) return Attributes.Remove(name, out var s) ? s : null; }
+    internal static string? TakeAttributes(string name) { lock (Attributes) return Attributes.Remove(Key(name), out var s) ? s : null; }
 
     /// <summary>Puts back the letters <see cref="TakeAttributes"/> returned, when the local that hid them goes.</summary>
     internal static void RestoreAttributes(string name, string? saved)
     {
         lock (Attributes)
-            if (saved is null) Attributes.Remove(name);
-            else Attributes[name] = saved;
+            if (saved is null) Attributes.Remove(Key(name));
+            else Attributes[Key(name)] = saved;
     }
 
     /// <summary><c>declare x</c> (no value, no -a): declared as a scalar that is still unset.</summary>
-    internal static bool IsDeclaredScalar(string name) { lock (Attributes) return Attributes.TryGetValue(name, out var s) && s.Contains('-'); }
+    internal static bool IsDeclaredScalar(string name) { lock (Attributes) return Attributes.TryGetValue(Key(name), out var s) && s.Contains('-'); }
 
     /// <summary><c>declare x</c> / <c>declare -a x</c> with no value: declared but unset, so <c>declare -p</c> shows no <c>=()</c>.</summary>
-    internal static bool IsDeclaredUnset(string name) { lock (Attributes) return Attributes.TryGetValue(name, out var s) && (s.Contains('-') || s.Contains('~')); }
+    internal static bool IsDeclaredUnset(string name) { lock (Attributes) return Attributes.TryGetValue(Key(name), out var s) && (s.Contains('-') || s.Contains('~')); }
 
     /// <summary>The <c>declare -p</c> flag letters of NAME in bash order (<c>i</c>, <c>r</c>, <c>x</c>, <c>l</c>/<c>u</c>), "" for none.</summary>
     internal static string AttributeLetters(string name)
     {
         string set;
-        lock (Attributes) set = Attributes.TryGetValue(name, out var s) ? s : "";
+        lock (Attributes) set = Attributes.TryGetValue(Key(name), out var s) ? s : "";
         var sb = new System.Text.StringBuilder();
         if (set.Contains('i')) sb.Append('i');
         if (IsReadonly(name)) sb.Append('r');
@@ -141,14 +150,15 @@ public static class BashShellState
         return sb.ToString();
     }
 
-    internal static bool IsReadonly(string name) { lock (ReadonlyNames) return ReadonlyNames.Contains(name); }
+    internal static bool IsReadonly(string name) { lock (ReadonlyNames) return ReadonlyNames.Contains(Key(name)); }
 
-    /// <summary>The first of <paramref name="names"/> that is read-only, or null (the emitter's run-time assignment guard).</summary>
+    /// <summary>The first of <paramref name="names"/> that is read-only, by its bash name (for the message), or null (the
+    /// emitter's run-time assignment guard).</summary>
     public static string? FirstReadonly(params string[] names)
     {
         lock (ReadonlyNames)
             foreach (var n in names)
-                if (ReadonlyNames.Contains(n)) return n;
+                if (ReadonlyNames.Contains(Key(n))) return PsBash.Core.BashNameCase.ToBash(n);
         return null;
     }
 
@@ -442,7 +452,7 @@ public static class BashShellState
 public sealed class BashParamErrorException : Exception
 {
     public BashParamErrorException(string name, string? message)
-        : base(name + (string.IsNullOrEmpty(message) ? "parameter null or not set" : message)) { }
+        : base(PsBash.Core.BashNameCase.ToBashText(name + (string.IsNullOrEmpty(message) ? "parameter null or not set" : message))) { }
 
     /// <summary>
     /// The error, already written to the error stream by the emitted code (so the command's own

@@ -300,8 +300,9 @@ internal static class FileSystemHelpers
     /// </summary>
     public static void WriteStderr(PSCmdlet cmdlet, string message)
     {
-        // Every diagnostic names an operand as typed, not its resolved full path (OperandDisplay).
-        WriteStderrRecord(cmdlet, OperandDisplay.Rewrite(cmdlet, message), null);
+        // Every diagnostic names an operand as typed, not its resolved full path (OperandDisplay), and a variable by its
+        // bash name, not its store name (`path: readonly variable`, BashNameCase).
+        WriteStderrRecord(cmdlet, OperandDisplay.Rewrite(cmdlet, PsBash.Core.BashNameCase.ToBashText(message)), null);
     }
 
     /// <summary>

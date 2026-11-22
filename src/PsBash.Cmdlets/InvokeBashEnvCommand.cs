@@ -259,8 +259,9 @@ public sealed class InvokeBashEnvCommand : BashCmdlet
         var dict = new Dictionary<string, string>(StringComparer.Ordinal);
         if (!ignoreEnv)
         {
+            // Under the bash name: a diverted `path` (stored __psbash_cv_0_PATH, BashNameCase) prints as path=...
             foreach (var (k, v) in BashVariableStore.EnumerateExported())
-                dict[k] = v;
+                dict[PsBash.Core.BashNameCase.ToBash(k)] = v;
         }
         foreach (var u in unset) dict.Remove(u);
         foreach (var (n, v) in assignments) dict[n] = v;

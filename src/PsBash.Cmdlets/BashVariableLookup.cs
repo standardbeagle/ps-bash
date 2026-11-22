@@ -19,6 +19,9 @@ namespace PsBash.Cmdlets;
 /// place of its own <c>local q</c> (<c>$((q + 1))</c> was 1, not 10); <c>read q</c> in a function left a global
 /// <c>$q</c> that every later <c>(( q &gt; 0 ))</c> read.</para>
 ///
+/// <para><b>Names.</b> Every member takes a bash name or a store name and maps it (<see cref="BashNameCase.ToStore(string)"/>):
+/// <c>path</c> is its own variable on Windows, not <c>PATH</c> (<c>environment-model.md</c> section 12).</para>
+///
 /// <para>Guard: <c>Core.Tests/ShellVariableStorageGuardTests</c>: no other cmdlet or module function touches a
 /// PowerShell variable by a computed name, and the emitter binds no PowerShell variable for a bash scalar.</para>
 /// </summary>
@@ -31,6 +34,7 @@ public static class BashVariableLookup
     /// </summary>
     public static PSVariable ArrayWriteSlot(SessionState state, string name, bool callerLocal)
     {
+        name = BashNameCase.ToStore(name);
         if (callerLocal && state.PSVariable.Get(name) is { } nearest) return nearest;
         string global = "global:" + name;
         if (state.PSVariable.Get(global) is { } existing) return existing;
@@ -98,6 +102,7 @@ public static class BashVariableLookup
     /// </summary>
     public static void SetArray(SessionState state, string name, object holder)
     {
+        name = BashNameCase.ToStore(name);
         PSVariable? existing = null;
         try { existing = state.PSVariable.Get(name); }
         catch (Exception e) when (e is ArgumentException or SessionStateException) { /* not a PowerShell name */ }
@@ -129,6 +134,7 @@ public static class BashVariableLookup
     /// </summary>
     public static void ReplaceArray(SessionState state, string name, object holder)
     {
+        name = BashNameCase.ToStore(name);
         if (ArrayVariable(state, name) is { } owner) owner.Value = holder;
         else state.PSVariable.Set(name, holder);
     }
@@ -136,11 +142,13 @@ public static class BashVariableLookup
     /// <summary>Remove an array variable (the shell variable store is not touched).</summary>
     public static void RemoveArray(SessionState state, string name)
     {
+        name = BashNameCase.ToStore(name);
         if (ArrayVariable(state, name) is not null) state.PSVariable.Remove(name);
     }
 
     private static PSVariable? ArrayVariable(SessionState state, string name)
     {
+        name = BashNameCase.ToStore(name);
         if (name.Length == 0 || PowerShellOwnedVariables.Contains(name)) return null;
         PSVariable? variable;
         try { variable = state.PSVariable.Get(name); }

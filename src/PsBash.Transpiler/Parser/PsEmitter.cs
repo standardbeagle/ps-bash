@@ -277,8 +277,9 @@ public static partial class PsEmitter
 
     private static string ResolveNameref(string name)
     {
+        // A target taken from word text (`declare -n ref=path`) is a bash name: the variable is its store name (BashNameCase).
         for (int hops = 0; hops < 8 && _namerefs is not null && _namerefs.TryGetValue(name, out var target); hops++)
-            name = target;
+            name = BashNameCase.ToStore(target);
         return name;
     }
 
@@ -5409,7 +5410,8 @@ public static partial class PsEmitter
         {
             if (!IsRuntimeAssignment(w) && TrySplitInitializer(w, out var staticName, out var staticValue))
             {
-                sbOut.Append("$env:").Append(staticName).Append(" = ").Append(EmitAssignmentValue(staticValue)).Append("; ");
+                // A name from word text, not from an AST record: map it here (`export path=x` is not PATH, BashNameCase).
+                sbOut.Append("$env:").Append(BashNameCase.ToStore(staticName)).Append(" = ").Append(EmitAssignmentValue(staticValue)).Append("; ");
                 if (staticName == "PATH") sbOut.Append(PsBuild.NormalizePathVariable).Append("; ");
                 continue;
             }
@@ -5419,7 +5421,7 @@ public static partial class PsEmitter
             if (name == "readonly") _runtimeReadonly = true;
             // `export 'NAME+=VALUE'` (the run-time eval of `export NAME${x}+=v` quotes each field) appends.
             sbOut.Append($"$__psbD = {expr}; $__psbI = $__psbD.IndexOf('='); ")
-                 .Append("if ($__psbI -gt 0) { $__psbN = $__psbD.Substring(0, $__psbI); $__psbV = $__psbD.Substring($__psbI + 1); ")
+                 .Append("if ($__psbI -gt 0) { $__psbN = [PsBash.Core.BashNameCase]::ToStore($__psbD.Substring(0, $__psbI)); $__psbV = $__psbD.Substring($__psbI + 1); ")
                  .Append("if ($__psbN.EndsWith('+')) { $__psbN = $__psbN.Substring(0, $__psbN.Length - 1); $__psbV = [string][PsBash.Cmdlets.BashVariableStore]::Get($__psbN) + $__psbV }; ")
                  .Append("Set-Item -LiteralPath ('Env:' + $__psbN) -Value $__psbV" + markReadonly)
                  // `export "$k=$v"`: `declare -p` shows the x attribute, as for a literal `export X=1`.
@@ -6015,7 +6017,7 @@ public static partial class PsEmitter
                 mark.Append("; [PsBash.Cmdlets.BashShellState]::MarkAttribute(").Append(PsBuild.SingleQuote(n)).Append(", '").Append(a).Append("')");
             if (!hasR) continue;
             mark.Append("; [PsBash.Cmdlets.BashShellState]::MarkReadonly(").Append(PsBuild.SingleQuote(n)).Append(")");
-            _readonlyVars?.Add(n);
+            _readonlyVars?.Add(BashNameCase.ToStore(n));
         }
         if (plusX) mark.Append("; ").Append(PsBuild.MarkUnexported(names.Where(IsValidVarName)));
         result = core + mark;
@@ -6109,6 +6111,10 @@ public static partial class PsEmitter
             else if (val is not null && !val.StartsWith('-')) varName = val;
             else if (val is null && TrySplitInitializer(word, out var n, out var v)) { exprName = n; exprValue = v; }
         }
+        // The names come from word text, not from AST records: the store name the records carry (`declare path=x` is not
+        // PATH on Windows; BashNameCase). A message names it by its bash name (PsBuild.ShellDiagnosticLine).
+        if (varName is not null) varName = StoreNameWord(varName);
+        if (exprName is not null) exprName = BashNameCase.ToStore(exprName);
         // `readonly r=1; typeset +r r=2` / `declare r=2`: assigning a read-only name is refused, the value kept (the direct
         // `$env:r = ...` below overwrote it). Same report as a plain `r=2` (EmitAssignment), with the builtin's name.
         if (!isPrint && _readonlyVars is not null && (exprName ?? (varName is { } rv && rv.IndexOf('=') is > 0 and var req ? rv[..req] : null)) is { } assigned
@@ -6143,7 +6149,7 @@ public static partial class PsEmitter
         if (isPrint && varName is not null && IsValidVarName(varName) && _namerefs is not null && _namerefs.TryGetValue(varName, out var refTargetName)
             && cmd.Words.Skip(1).Count(w => GetLiteralValue(w) is { } x && !x.StartsWith('-')) == 1)
         {
-            result = "Invoke-BashEcho " + PsBuild.SingleQuote("declare -n " + varName + "=\"" + refTargetName + "\"") + "; " + PsBuild.SetStatus(0);
+            result = "Invoke-BashEcho " + PsBuild.SingleQuote("declare -n " + BashNameCase.ToBash(varName) + "=\"" + refTargetName + "\"") + "; " + PsBuild.SetStatus(0);
             return true;
         }
         if (isAssoc && !isPrint && _assocVars is not null)
@@ -6284,6 +6290,18 @@ public static partial class PsEmitter
     /// Split a <c>NAME=value</c> word whose value has expansions (<c>x=$(cmd)</c>, <c>x="$y"</c>):
     /// its first part is a literal starting with a valid name and <c>=</c>. False otherwise.
     /// </summary>
+    /// <summary>
+    /// A builtin's literal operand (<c>path</c>, <c>path=v</c>, <c>path+=v</c>, <c>path[1]=v</c>) with its NAME part as the
+    /// store name (<see cref="BashNameCase.ToStore(string)"/>): what the AST records give a name parsed as an assignment.
+    /// </summary>
+    private static string StoreNameWord(string word)
+    {
+        int eq = word.IndexOf('=');
+        int end = eq < 0 ? word.Length : eq > 0 && word[eq - 1] == '+' ? eq - 1 : eq;
+        string mapped = BashNameCase.ToStore(word[..end]);
+        return ReferenceEquals(mapped, word) || mapped == word[..end] ? word : mapped + word[end..];
+    }
+
     private static bool TrySplitInitializer(CompoundWord word, out string name, out CompoundWord value)
     {
         name = "";
@@ -6961,12 +6979,12 @@ public static partial class PsEmitter
                 if (eq <= 0)
                 {
                     roSb.Append("[PsBash.Cmdlets.BashShellState]::MarkReadonly(").Append(PsBuild.SingleQuote(val)).Append("); ");
-                    _readonlyVars?.Add(val);
+                    _readonlyVars?.Add(BashNameCase.ToStore(val));
                     continue;
                 }
                 // `readonly NAME+=text` appends to the current value.
                 bool append = val[eq - 1] == '+';
-                string roName = append ? val[..(eq - 1)] : val[..eq];
+                string roName = BashNameCase.ToStore(append ? val[..(eq - 1)] : val[..eq]); // word text: the store name (BashNameCase)
                 roSb.Append("[PsBash.Cmdlets.BashShellState]::MarkReadonly(").Append(PsBuild.SingleQuote(roName)).Append("); ");
                 _readonlyVars?.Add(roName);
                 roSb.Append("$env:").Append(roName).Append(" = ").Append(append ? "$env:" + roName + " + " : "")
@@ -6974,12 +6992,14 @@ public static partial class PsEmitter
             }
             else if (TrySplitAppendInitializer(word, out var appName, out var appValue))
             {
+                appName = BashNameCase.ToStore(appName);
                 roSb.Append("$env:").Append(appName).Append(" = $env:").Append(appName).Append(" + ")
                     .Append(EmitAssignmentValue(appValue)).Append("; ");
                 roSb.Append("[PsBash.Cmdlets.BashShellState]::MarkReadonly(").Append(PsBuild.SingleQuote(appName)).Append("); ");
             }
             else if (TrySplitInitializer(word, out var name, out var value))
             {
+                name = BashNameCase.ToStore(name);
                 roSb.Append("$env:").Append(name).Append(" = ").Append(EmitAssignmentValue(value)).Append("; ");
                 roSb.Append("[PsBash.Cmdlets.BashShellState]::MarkReadonly(").Append(PsBuild.SingleQuote(name)).Append("); ");
             }
@@ -11445,7 +11465,10 @@ public static partial class PsEmitter
 
         if (bvs.Suffix == "!names")
         {
-            string expr = $"@(@(Get-ChildItem env: | Where-Object {{ $_.Name -clike '{bvs.Name}*' }} | ForEach-Object {{ $_.Name }}) + @(Get-Variable -Name '{bvs.Name}*' -ErrorAction SilentlyContinue | Where-Object {{ $_.Name -clike '{bvs.Name}*' -and $_.Options -eq 'None' -and ($_.Value -is [array] -or $_.Value -is [System.Collections.IDictionary]) -and $_.Name -cnotin 'args','input','Error','Matches','PSBoundParameters' }} | ForEach-Object {{ $_.Name }}) | Sort-Object -Unique -CaseSensitive)";
+            // Listed and matched under the BASH name: a diverted `path` (stored __psbash_cv_0_PATH, BashNameCase) matches
+            // ${!pa*} and prints as path.
+            string prefix = BashNameCase.ToBash(bvs.Name);
+            string expr = $"@(@(Get-ChildItem env: | ForEach-Object {{ [PsBash.Core.BashNameCase]::ToBash($_.Name) }} | Where-Object {{ $_ -clike '{prefix}*' }}) + @(Get-Variable -Name '{prefix}*', '{BashNameCase.Prefix}*' -ErrorAction SilentlyContinue | Where-Object {{ $_.Options -eq 'None' -and ($_.Value -is [array] -or $_.Value -is [System.Collections.IDictionary]) -and $_.Name -cnotin 'args','input','Error','Matches','PSBoundParameters' }} | ForEach-Object {{ [PsBash.Core.BashNameCase]::ToBash($_.Name) }} | Where-Object {{ $_ -clike '{prefix}*' }}) | Sort-Object -Unique -CaseSensitive)";
             return inDoubleQuote ? $"$({expr})" : expr;
         }
 

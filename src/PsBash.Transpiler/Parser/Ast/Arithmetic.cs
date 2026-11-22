@@ -11,10 +11,16 @@ public sealed record ArithmeticSyntax(string Source, ArithmeticExpr Root)
 public abstract record ArithmeticExpr : BashNode
 {
     public sealed record Number(long Value) : ArithmeticExpr;
-    public sealed record Identifier(string Name) : ArithmeticExpr;
+    public sealed record Identifier(string Name) : ArithmeticExpr
+    {
+        /// <summary>The STORE name (<see cref="PsBash.Core.BashNameCase.ToStore(string)"/>).</summary>
+        public string Name { get; init; } = PsBash.Core.BashNameCase.ToStore(Name);
+    }
     /// <summary>A parameter expansion with normalized lookup identity and preserved source spelling.</summary>
     public sealed record Parameter(string LookupKey, string Spelling, string UnbracedSuffix = "") : ArithmeticExpr
     {
+        /// <summary>The STORE name looked up (<see cref="PsBash.Core.BashNameCase.ToStore(string)"/>); <see cref="Spelling"/> stays as written.</summary>
+        public string LookupKey { get; init; } = PsBash.Core.BashNameCase.ToStore(LookupKey);
         public string Name => Spelling;
         public Parameter(string spelling) : this(Normalize(spelling), spelling, "") { }
         private static string Normalize(string spelling) =>
@@ -33,8 +39,16 @@ public abstract record ArithmeticExpr : BashNode
     public sealed record Unary(ArithmeticUnaryOp Op, ArithmeticExpr Operand) : ArithmeticExpr;
     public sealed record Binary(ArithmeticBinaryOp Op, ArithmeticExpr Left, ArithmeticExpr Right) : ArithmeticExpr;
     public sealed record Conditional(ArithmeticExpr Condition, ArithmeticExpr WhenTrue, ArithmeticExpr WhenFalse) : ArithmeticExpr;
-    public sealed record Assignment(string Name, ArithmeticAssignmentOp Op, ArithmeticExpr Value) : ArithmeticExpr;
-    public sealed record Increment(string Name, int Delta, bool Prefix) : ArithmeticExpr;
+    public sealed record Assignment(string Name, ArithmeticAssignmentOp Op, ArithmeticExpr Value) : ArithmeticExpr
+    {
+        /// <summary>The STORE name (<see cref="PsBash.Core.BashNameCase.ToStore(string)"/>), subscript kept.</summary>
+        public string Name { get; init; } = PsBash.Core.BashNameCase.ToStore(Name);
+    }
+    public sealed record Increment(string Name, int Delta, bool Prefix) : ArithmeticExpr
+    {
+        /// <summary>The STORE name (<see cref="PsBash.Core.BashNameCase.ToStore(string)"/>), subscript kept.</summary>
+        public string Name { get; init; } = PsBash.Core.BashNameCase.ToStore(Name);
+    }
     /// <summary>An expression the static parser rejects (`${z}11`, `$(cmd)${v:-3}`, `1 + 2.3`): bash expands its text first and
     /// evaluates it at run time, so the emitter substitutes the expansions and the evaluator reports any error then.</summary>
     public sealed record Deferred(string Text) : ArithmeticExpr;

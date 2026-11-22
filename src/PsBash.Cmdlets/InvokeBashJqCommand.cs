@@ -114,7 +114,7 @@ public sealed class InvokeBashJqCommand : BashCmdlet
         foreach (DictionaryEntry e in o.Named) globals[(string)e.Key] = e.Value;
         var env = new OrderedDictionary();
         // jq is a program: $ENV is its environment, the exported variables only.
-        foreach (var (name, value) in BashVariableStore.EnumerateExported()) env[name] = value;
+        foreach (var (name, value) in BashVariableStore.EnumerateExported()) env[PsBash.Core.BashNameCase.ToBash(name)] = value; // $ENV.path: the bash name
         // Windows names the variable "Path"; scripts written for jq on Linux ask for $ENV.PATH.
         if (OperatingSystem.IsWindows() && env.Contains("Path") && !env.Contains("PATH")) env["PATH"] = env["Path"];
         globals["ENV"] = env;

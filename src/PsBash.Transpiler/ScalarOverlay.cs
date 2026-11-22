@@ -93,8 +93,9 @@ public sealed class ScalarOverlay
         var values = new Dictionary<string, string>(ShellExports.NameComparer);
         if (!ignoreEnvironment)
             foreach (var (name, value) in ShellExports.Enumerate()) values[name] = value;
-        foreach (var name in unset) values.Remove(name);
-        foreach (var (name, value) in assignments) values[name] = value;
+        // Bash names (`env -u path`, `env path=x cmd`): the store's keys are store names (BashNameCase, section 12).
+        foreach (var name in unset) values.Remove(BashNameCase.ToStore(name));
+        foreach (var (name, value) in assignments) values[BashNameCase.ToStore(name)] = value;
         var exports = new ShellExports.Table { Exported = new HashSet<string>(values.Keys, ShellExports.NameComparer) };
         return new ScalarOverlay(values, exports);
     }
