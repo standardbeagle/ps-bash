@@ -18,7 +18,7 @@ namespace PsBash.Cmdlets;
 /// place through <see cref="InnerCommand"/>, fed nohup's pipe.</item>
 /// </list>
 /// <para>The emitter hands over the caller's redirects as leading private flags (<c>--psbash-out FILE</c>,
-/// <c>--psbash-append</c>, <c>--psbash-err FILE|&amp;1</c>) because a PowerShell redirect only reaches this cmdlet's own
+/// <c>--psbash-append</c>, <c>--psbash-err FILE|&amp;1</c>, <c>--psbash-err-append</c> for <c>2&gt;&gt;</c>) because a PowerShell redirect only reaches this cmdlet's own
 /// output, never the detached child's. Exit status follows GNU nohup: 125 own failure, 127 command not found, 126 not
 /// runnable, else CMD's.</para>
 /// </summary>
@@ -52,13 +52,14 @@ public sealed class InvokeBashNohupCommand : BashCmdlet
         FileSystemHelpers.SetLastExitCode(this, 0);
 
         string? outFile = null, errFile = null;
-        bool append = false, errToOut = false, background = false;
+        bool append = false, errToOut = false, errAppend = false, background = false;
         int i = 0;
         for (; i < args.Length; i++)
         {
             if (args[i] == "--psbash-bg") background = true;
             else if (args[i] == "--psbash-out" && i + 1 < args.Length) outFile = args[++i];
             else if (args[i] == "--psbash-append") append = true;
+            else if (args[i] == "--psbash-err-append") errAppend = true;
             else if (args[i] == "--psbash-err" && i + 1 < args.Length) { var v = args[++i]; if (v == "&1") errToOut = true; else errFile = v; }
             else break;
         }
@@ -101,7 +102,7 @@ public sealed class InvokeBashNohupCommand : BashCmdlet
             {
                 bool missing = launch.Runnable;
                 Fail($"nohup: failed to run command '{rest[0]}': " + (missing ? "No such file or directory" : "Permission denied"),
-                    missing ? 127 : 126, defaultLog ? null : outPath, append, errToOut, errPath);
+                    missing ? 127 : 126, defaultLog ? null : outPath, append, errToOut, errPath, errAppend);
                 return;
             }
             exe = program;
@@ -121,7 +122,7 @@ public sealed class InvokeBashNohupCommand : BashCmdlet
         else
         {
             Fail($"nohup: failed to run command '{rest[0]}': No such file or directory", 127,
-                defaultLog ? null : outPath, append, errToOut, errPath);
+                defaultLog ? null : outPath, append, errToOut, errPath, errAppend);
             return;
         }
 
@@ -129,7 +130,7 @@ public sealed class InvokeBashNohupCommand : BashCmdlet
             FileSystemHelpers.WriteStderr(this, "nohup: ignoring input and appending output to 'nohup.out'");
         try
         {
-            using var child = DetachedProcess.SpawnChild(exe, exeArgs, cwd, outPath, append || defaultLog, errPath);
+            using var child = DetachedProcess.SpawnChild(exe, exeArgs, cwd, outPath, append || defaultLog, errPath, errAppend);
             if (background)
             {
                 InvokeCommand.InvokeScript("param($p) $global:BashBgLastPid = $p", child.Pid);
@@ -143,7 +144,7 @@ public sealed class InvokeBashNohupCommand : BashCmdlet
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             Fail($"nohup: failed to run command '{rest[0]}': {ex.Message}", 126,
-                defaultLog ? null : outPath, append: true, errToOut, errPath);
+                defaultLog ? null : outPath, append: true, errToOut, errPath, errAppend);
         }
     }
 
@@ -152,7 +153,7 @@ public sealed class InvokeBashNohupCommand : BashCmdlet
     /// exist and the message lands in the stderr target. The emitter moved those redirects into flags for the child
     /// (<c>--psbash-out</c> / <c>--psbash-err</c>), so they are opened here; without one the message goes to stderr.
     /// </summary>
-    private void Fail(string message, int code, string? outPath, bool append, bool errToOut, string? errPath)
+    private void Fail(string message, int code, string? outPath, bool append, bool errToOut, string? errPath, bool errAppend)
     {
         FileSystemHelpers.SetLastExitCode(this, code);
         try
@@ -163,7 +164,7 @@ public sealed class InvokeBashNohupCommand : BashCmdlet
             if (errToOut && outPath is not null) return;
             if (errPath is not null)
             {
-                using var e = RedirectFileWriter.OpenFile(errPath, append: false, this);
+                using var e = RedirectFileWriter.OpenFile(errPath, errAppend, this);
                 e.Write(RawBytes.GetBytes(message + "\n"));
                 return;
             }

@@ -1,0 +1,30 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 746
+stdout-length: 238
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; nohup sh -c 'echo out; echo "no such file" >&2; exit 2' > out.txt 2>&1; echo "rc=$?"; cat out.txt; echo old-old-old > e.txt; nohup sh -c 'echo E1 >&2' > o4.txt 2> e.txt; cat e.txt; nohup sh -c 'echo E2 >&2' > o4.txt 2>> e.txt; cat e.txt; nohup sh -c 'exit 3' > o2.txt; echo "rc=$?"; nohup sh -c 'echo hi; echo err >&2' 2>/dev/null | cat; echo "rc=$?"; nohup true | cat; echo "rc=$?"; nohup nosuchcmd > o3.txt 2>&1; echo "rc=$?"; sed 's/^.*nohup: /nohup: /' o3.txt; x=$(nohup echo captured 2>/dev/null); echo "x=$x rc=$?"; printf 'a\nb\n' | nohup cat; nohup sh -c 'exit 5' 2>/dev/null; echo "rc=$?"; nohup nosuchcmd 2>&1 | sed 's/^.*nohup: /nohup: /'; echo "nohup.out exists: $(test -e nohup.out && echo yes || echo no)"
+==== STDOUT ====
+rc=2
+out
+no such file
+E1
+E1
+E2
+rc=3
+hi
+rc=0
+rc=0
+rc=127
+nohup: failed to run command 'nosuchcmd': No such file or directory
+x=captured rc=0
+a
+b
+rc=5
+nohup: failed to run command 'nosuchcmd': No such file or directory
+nohup.out exists: no
+
+==== STDERR ====
+

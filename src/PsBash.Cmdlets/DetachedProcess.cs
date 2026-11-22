@@ -12,6 +12,10 @@ namespace PsBash.Cmdlets;
 /// breakaway). It inherits EXACTLY three handles via PROC_THREAD_ATTRIBUTE_HANDLE_LIST - NUL as stdin and the log
 /// file as stdout/stderr - because .NET's own Process.Start would copy every inheritable handle of the caller,
 /// including the pipe a waiting agent is reading. Unix: <c>sh</c> ignoring SIGHUP, then <c>exec</c>.</para>
+/// <para>A redirect file is opened for WRITING (GENERIC_WRITE) and an append moves to its end, as cmd.exe's <c>&gt;&gt;</c>
+/// does, never with FILE_APPEND_DATA alone: the MSYS2/Cygwin runtime (Git for Windows' ls.exe, sh.exe) derives an
+/// inherited handle's open mode from its granted access, reads append-only as not writable, and wrote nothing
+/// (<c>nohup ls /x &gt; f 2&gt;&amp;1</c> left f empty on the GitHub Windows runner, v0.15.1 gate).</para>
 /// </summary>
 public static class DetachedProcess
 {
@@ -26,27 +30,28 @@ public static class DetachedProcess
     /// <param name="outPath">File that receives stdout.</param>
     /// <param name="append">Append to <paramref name="outPath"/> instead of truncating it.</param>
     /// <param name="errPath">File that receives stderr; null shares <paramref name="outPath"/>.</param>
-    public static int Spawn(string exe, IReadOnlyList<string> args, string workingDirectory, string outPath, bool append, string? errPath)
+    /// <param name="errAppend">Append to <paramref name="errPath"/> (<c>2&gt;&gt;</c>) instead of truncating it (<c>2&gt;</c>).</param>
+    public static int Spawn(string exe, IReadOnlyList<string> args, string workingDirectory, string outPath, bool append, string? errPath, bool errAppend = false)
     {
-        using var child = SpawnChild(exe, args, workingDirectory, outPath, append, errPath);
+        using var child = SpawnChild(exe, args, workingDirectory, outPath, append, errPath, errAppend);
         return child.Pid;
     }
 
     /// <summary>As <see cref="Spawn"/>, keeping hold of the process so a foreground <c>nohup CMD</c> can wait for its
     /// status (<see cref="DetachedChild.Wait"/>). Disposing the result lets go of it; the process keeps running.</summary>
-    public static DetachedChild SpawnChild(string exe, IReadOnlyList<string> args, string workingDirectory, string outPath, bool append, string? errPath)
+    public static DetachedChild SpawnChild(string exe, IReadOnlyList<string> args, string workingDirectory, string outPath, bool append, string? errPath, bool errAppend = false)
         => OperatingSystem.IsWindows()
-            ? StartWindows(exe, args, workingDirectory, outPath, append, errPath)
-            : StartUnix(exe, args, workingDirectory, outPath, append, errPath);
+            ? StartWindows(exe, args, workingDirectory, outPath, append, errPath, errAppend)
+            : StartUnix(exe, args, workingDirectory, outPath, append, errPath, errAppend);
 
-    private static DetachedChild StartUnix(string exe, IReadOnlyList<string> args, string cwd, string outPath, bool append, string? errPath)
+    private static DetachedChild StartUnix(string exe, IReadOnlyList<string> args, string cwd, string outPath, bool append, string? errPath, bool errAppend)
     {
         var psi = new ProcessStartInfo(PsBash.Core.Platform.SystemTools.PosixShell) { WorkingDirectory = cwd, UseShellExecute = false };
         var op = append ? ">>" : ">";
         psi.ArgumentList.Add("-c");
         psi.ArgumentList.Add(string.IsNullOrEmpty(errPath)
             ? $"trap '' HUP; o=\"$OUT\"; unset OUT; exec \"$@\" </dev/null {op}\"$o\" 2>&1"
-            : $"trap '' HUP; o=\"$OUT\"; e=\"$ERR\"; unset OUT ERR; exec \"$@\" </dev/null {op}\"$o\" 2>>\"$e\"");
+            : $"trap '' HUP; o=\"$OUT\"; e=\"$ERR\"; unset OUT ERR; exec \"$@\" </dev/null {op}\"$o\" 2{(errAppend ? ">>" : ">")}\"$e\"");
         psi.ArgumentList.Add("nohup");
         psi.ArgumentList.Add(exe);
         foreach (var a in args) psi.ArgumentList.Add(a);
@@ -59,8 +64,8 @@ public static class DetachedProcess
 
     // ---- Windows ----
     private static readonly IntPtr InvalidHandle = new(-1);
-    private const uint GenericRead = 0x80000000, GenericWrite = 0x40000000, FileAppendData = 0x4;
-    private const uint ShareRW = 0x3, OpenExisting = 3, OpenAlways = 4, CreateAlways = 2;
+    private const uint GenericRead = 0x80000000, GenericWrite = 0x40000000;
+    private const uint ShareRW = 0x3, OpenExisting = 3, OpenAlways = 4, CreateAlways = 2, FileEnd = 2;
     private const int StartfUseStdHandles = 0x100;
     private const uint DetachedProcessFlag = 0x8, NewProcessGroup = 0x200, BreakawayFromJob = 0x01000000, ExtendedStartupInfoPresent = 0x80000, UnicodeEnvironment = 0x400;
     private static readonly IntPtr ProcThreadAttributeHandleList = new(0x00020002);
@@ -85,6 +90,9 @@ public static class DetachedProcess
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern IntPtr CreateFileW(string name, uint access, uint share, ref SecurityAttributes sa, uint disposition, uint flags, IntPtr template);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetFilePointerEx(IntPtr file, long distance, IntPtr newPosition, uint moveMethod);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool InitializeProcThreadAttributeList(IntPtr list, int count, int flags, ref IntPtr size);
@@ -148,7 +156,7 @@ public static class DetachedProcess
             if (_process != IntPtr.Zero) { CloseHandle(_process); _process = IntPtr.Zero; }
         }
     }
-    private static DetachedChild StartWindows(string exe, IReadOnlyList<string> args, string cwd, string outPath, bool append, string? errPath)
+    private static DetachedChild StartWindows(string exe, IReadOnlyList<string> args, string cwd, string outPath, bool append, string? errPath, bool errAppend)
     {
         var cmd = new StringBuilder();
         AppendQuoted(cmd, exe);
@@ -166,13 +174,8 @@ public static class DetachedProcess
             var sa = new SecurityAttributes { nLength = Marshal.SizeOf<SecurityAttributes>(), bInheritHandle = 1 };
             nul = CreateFileW("NUL", GenericRead | GenericWrite, ShareRW, ref sa, OpenExisting, 0, IntPtr.Zero);
             if (nul == InvalidHandle) throw Failure("open NUL");
-            outH = CreateFileW(outPath, FileAppendData, ShareRW, ref sa, append ? OpenAlways : CreateAlways, 0, IntPtr.Zero);
-            if (outH == InvalidHandle) throw Failure($"open '{outPath}'");
-            if (!string.IsNullOrEmpty(errPath))
-            {
-                errH = CreateFileW(errPath, FileAppendData, ShareRW, ref sa, OpenAlways, 0, IntPtr.Zero);
-                if (errH == InvalidHandle) throw Failure($"open '{errPath}'");
-            }
+            outH = OpenRedirectTarget(outPath, append, ref sa);
+            if (!string.IsNullOrEmpty(errPath)) errH = OpenRedirectTarget(errPath, errAppend, ref sa);
             var stderrH = errH == InvalidHandle ? outH : errH;
 
             IntPtr size = IntPtr.Zero;
@@ -212,6 +215,16 @@ public static class DetachedProcess
             if (outH != InvalidHandle) CloseHandle(outH);
             if (errH != InvalidHandle) CloseHandle(errH);
         }
+    }
+
+    // A child's redirect file: writable (not FILE_APPEND_DATA alone, which MSYS2 programs cannot write to), truncated
+    // (`>`) or positioned at its end (`>>`); the child inherits the handle and its position.
+    private static IntPtr OpenRedirectTarget(string path, bool append, ref SecurityAttributes sa)
+    {
+        var h = CreateFileW(path, GenericWrite, ShareRW, ref sa, append ? OpenAlways : CreateAlways, 0, IntPtr.Zero);
+        if (h == InvalidHandle) throw Failure($"open '{path}'");
+        if (append && !SetFilePointerEx(h, 0, IntPtr.Zero, FileEnd)) { var e = Failure($"seek '{path}'"); CloseHandle(h); throw e; }
+        return h;
     }
 
     private static InvalidOperationException Failure(string what) => new($"{what} failed: Win32 error {Marshal.GetLastWin32Error()}");

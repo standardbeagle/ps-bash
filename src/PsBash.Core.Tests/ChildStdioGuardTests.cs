@@ -47,6 +47,34 @@ public class ChildStdioGuardTests
         ["InvokeBashLessCommand.cs"] = "interactive pager on the console",
     };
 
+    /// <summary>
+    /// A file handle a child inherits is opened for WRITING, never with FILE_APPEND_DATA alone: the MSYS2/Cygwin runtime
+    /// (Git for Windows' ls.exe, sh.exe) derives the inherited fd's mode from the granted access, reads append-only as not
+    /// writable, and writes nothing (<c>nohup ls /x &gt; f 2&gt;&amp;1</c> left f empty on the Windows runner, v0.15.1 gate).
+    /// An append opens GENERIC_WRITE and moves to the end (<c>DetachedProcess.OpenRedirectTarget</c>).
+    /// </summary>
+    [Fact]
+    public void ChildHandles_AreNeverOpenedAppendDataOnly()
+    {
+        var offenders = new List<string>();
+        foreach (var file in Directory.EnumerateFiles(Path.Combine(RepoRoot(), "src"), "*.cs", SearchOption.AllDirectories))
+        {
+            var rel = Path.GetRelativePath(RepoRoot(), file).Replace('\\', '/');
+            if (rel.Contains("/bin/", StringComparison.Ordinal) || rel.Contains("/obj/", StringComparison.Ordinal)
+                || rel.Split('/')[1].EndsWith(".Tests", StringComparison.Ordinal)) continue;
+            var lines = File.ReadAllLines(file);
+            for (int i = 0; i < lines.Length; i++)
+            {
+                if (IsComment(lines[i]) || lines[i].Contains("///", StringComparison.Ordinal)) continue;
+                if (Regex.IsMatch(lines[i], @"\bFILE_APPEND_DATA\b|\bFileAppendData\b|FileSystemRights\.AppendData\b"))
+                    offenders.Add($"{rel}:{i + 1}: {lines[i].Trim()}");
+            }
+        }
+        Assert.True(offenders.Count == 0,
+            "Open a child's redirect file GENERIC_WRITE (seek to the end to append), not FILE_APPEND_DATA: MSYS2 programs "
+            + "cannot write an append-only handle. Offenders:\n  " + string.Join("\n  ", offenders));
+    }
+
     [Fact]
     public void ProcessStart_OnlyInTheStdioPrimitive_OrADocumentedExemption()
     {

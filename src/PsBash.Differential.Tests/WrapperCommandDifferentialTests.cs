@@ -49,10 +49,13 @@ public class WrapperCommandDifferentialTests
     // Class: nohup always detached and returned 0 at once, so a foreground `nohup CMD` lost CMD's status and output
     // (`x=$(nohup echo hi)` was empty and a nohup.out appeared). Primitive: only `nohup CMD &` detaches (the emitter's
     // --psbash-bg); a foreground one waits for CMD, and with stdout neither a terminal nor redirected runs it in place
-    // (InnerCommand), creating no nohup.out.
+    // (InnerCommand), creating no nohup.out. The detached child writes its redirect files itself: sh (Git's MSYS2 sh.exe
+    // on the Windows runner, which wrote nothing into an append-only handle) gets `>`/`2>` truncating and `2>>` appending.
+    // No `ls`: nohup runs the host's program, and BSD ls (macOS) words and codes the error its own way.
     [SkippableFact]
     public Task ForegroundNohup_WaitsAndTakesTheCommandsStatus()
-        => Eq("cd \"$(mktemp -d)\" || exit; nohup ls /nosuch > out.txt 2>&1; echo \"rc=$?\"; sed 's/^.*ls: /ls: /' out.txt; "
+        => Eq("cd \"$(mktemp -d)\" || exit; nohup sh -c 'echo out; echo \"no such file\" >&2; exit 2' > out.txt 2>&1; echo \"rc=$?\"; cat out.txt; "
+            + "echo old-old-old > e.txt; nohup sh -c 'echo E1 >&2' > o4.txt 2> e.txt; cat e.txt; nohup sh -c 'echo E2 >&2' > o4.txt 2>> e.txt; cat e.txt; "
             + "nohup sh -c 'exit 3' > o2.txt; echo \"rc=$?\"; nohup sh -c 'echo hi; echo err >&2' 2>/dev/null | cat; echo \"rc=$?\"; "
             + "nohup true | cat; echo \"rc=$?\"; nohup nosuchcmd > o3.txt 2>&1; echo \"rc=$?\"; sed 's/^.*nohup: /nohup: /' o3.txt; "
             + "x=$(nohup echo captured 2>/dev/null); echo \"x=$x rc=$?\"; printf 'a\\nb\\n' | nohup cat; "

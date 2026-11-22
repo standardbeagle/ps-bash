@@ -3284,7 +3284,8 @@ public static partial class PsEmitter
     /// <summary>
     /// A redirect on <c>nohup CMD</c> is meant for CMD, but CMD runs detached in another process, where a host-side
     /// redirect never reaches it. The stdout/stderr file redirects move into leading private flags of
-    /// <c>Invoke-BashNohup</c> (<c>--psbash-out FILE [--psbash-append] [--psbash-err FILE|&amp;1]</c>), which opens them for the child.
+    /// <c>Invoke-BashNohup</c> (<c>--psbash-out FILE [--psbash-append] [--psbash-err FILE|&amp;1 [--psbash-err-append]]</c>), which opens
+    /// them for the child: <c>2&gt;</c> truncates its file and <c>2&gt;&gt;</c> appends, as the shell would have opened them.
     /// <c>nohup CMD &amp;</c> leads with <c>--psbash-bg</c>: only then does nohup return before CMD ends (a foreground
     /// <c>nohup CMD</c> waits and takes CMD's status, which is also what an unmarked <c>Invoke-BashNohup</c> does).
     /// </summary>
@@ -3293,13 +3294,13 @@ public static partial class PsEmitter
         var keep = ImmutableArray.CreateBuilder<Redirect>();
         var lead = new List<CompoundWord>();
         if (background) lead.Add(LiteralWord("--psbash-bg"));
-        CompoundWord? outTarget = null; bool append = false; CompoundWord? errTarget = null; bool errToOut = false;
+        CompoundWord? outTarget = null; bool append = false; CompoundWord? errTarget = null; bool errAppend = false; bool errToOut = false;
         foreach (var r in s.Redirects)
         {
             if (r.Op is ">" or ">>" or ">|" && r.Fd == 1) { outTarget = r.Target; append = r.Op == ">>"; }
             else if (r.Op is "&>" or "&>>") { outTarget = r.Target; append = r.Op == "&>>"; errToOut = true; }
             else if (r.Op == ">&" && r.Fd == 2 && GetLiteralValue(r.Target) == "1") errToOut = true;
-            else if (r.Op is ">" or ">>" && r.Fd == 2) errTarget = r.Target;
+            else if (r.Op is ">" or ">>" or ">|" && r.Fd == 2) { errTarget = r.Target; errAppend = r.Op == ">>"; }
             else keep.Add(r);
         }
         if (outTarget is not null)
@@ -3307,7 +3308,11 @@ public static partial class PsEmitter
             lead.Add(LiteralWord("--psbash-out")); lead.Add(outTarget);
             if (append) lead.Add(LiteralWord("--psbash-append"));
             if (errToOut) { lead.Add(LiteralWord("--psbash-err")); lead.Add(LiteralWord("&1")); }
-            else if (errTarget is not null) { lead.Add(LiteralWord("--psbash-err")); lead.Add(errTarget); }
+            else if (errTarget is not null)
+            {
+                lead.Add(LiteralWord("--psbash-err")); lead.Add(errTarget);
+                if (errAppend) lead.Add(LiteralWord("--psbash-err-append"));
+            }
         }
         else keep.AddRange(s.Redirects.Where(r => r.Fd == 1 || r.Fd == 2 || r.Op is "&>" or "&>>")); // stderr-only redirects keep the old behaviour
         if (outTarget is null && !background) return s;

@@ -36,4 +36,19 @@ public class NohupEmitterTests
     [InlineData("x=$(nohup echo hi)")]
     public void Transpile_ForegroundNohup_IsNotMarkedBackground(string bash) =>
         Assert.DoesNotContain("--psbash-bg", Emit(bash));
+
+    // Class: the stderr file of a detached nohup child was opened one way for `2>` and `2>>` (never truncated on
+    // either OS). The emitter says which: `2>>` adds --psbash-err-append, `2>`/`2>|` do not.
+    [Theory]
+    [InlineData("nohup ls /x > o.txt 2>> e.txt", true)]
+    [InlineData("nohup ls /x > o.txt 2>> e.txt &", true)]
+    [InlineData("nohup ls /x > o.txt 2> e.txt", false)]
+    [InlineData("nohup ls /x >> o.txt 2> e.txt", false)]
+    [InlineData("nohup ls /x > o.txt 2>| e.txt", false)]
+    public void Transpile_NohupStderrFile_SaysWhetherItAppends(string bash, bool appends)
+    {
+        var ps = Emit(bash);
+        Assert.Contains("'--psbash-err'", ps);
+        Assert.Equal(appends, ps.Contains("'--psbash-err-append'", System.StringComparison.Ordinal));
+    }
 }

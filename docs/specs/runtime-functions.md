@@ -461,6 +461,13 @@ still runs detached and nohup waits for it; with stdout a pipe or a capture (`no
 `$(nohup CMD)`) CMD runs in place through the runner and no `nohup.out` is made, as GNU nohup leaves
 a non-terminal stdout alone.
 
+INVARIANT: the detached child's redirect files are opened as the shell would open them (`DetachedProcess`):
+`>`/`2>` truncate, `>>`/`2>>` append (the emitter's `--psbash-append` / `--psbash-err-append`), and on
+Windows a file is opened GENERIC_WRITE (an append seeks to its end), never FILE_APPEND_DATA alone: the
+MSYS2 runtime (Git for Windows' `ls.exe`, `sh.exe`) reads an append-only handle as not writable and writes
+nothing (`nohup ls /x > f 2>&1` left `f` empty on the GitHub Windows runner, v0.15.1 gate). Guards:
+`ChildStdioGuardTests.ChildHandles_AreNeverOpenedAppendDataOnly`, `DetachedProcessRedirectTests`.
+
 `time` (GNU time when not first in a pipeline: `echo x | time cat`) keeps its own runner, inventoried in the
 guard: it runs functions and builtins too (`Resolve-BashCommand`; InnerCommand bypasses functions) and buffers
 the run into its timing record (an error record = status 1). It is held to the same stdin rule: it declares a
