@@ -100,22 +100,40 @@ public static class PsBuild
     private const string DashMarks = "\u2013\u2014\u2015";
 
     /// <summary>
+    /// True for a character PowerShell's tokenizer ends an unquoted word at (CharExtensions.IsWhitespace plus the
+    /// newlines): ASCII space, tab, VT, FF, CR, LF, U+0085 (NEL), U+00A0 (NBSP) and every Unicode separator
+    /// (<see cref="char.IsSeparator(char)"/>: U+1680, U+2000-U+200A, U+2028, U+2029, U+202F, U+205F, U+3000). bash splits
+    /// a word only at space, tab and newline, so the rest are ordinary word characters to it: <c>a&#xA0;#c</c> is ONE bash
+    /// word, which PowerShell read as <c>a</c> and a comment (the next line ran as code), and <c>a&#xA0;@x</c> splatted
+    /// <c>$x</c>. Guard BashDataNeverCodeGuardTests (exhaustive over the BMP against the real tokenizer).
+    /// </summary>
+    public static bool IsPsWordBreak(char c)
+        => c is ' ' or '\t' or '\n' or '\r' or '\v' or '\f' or '\u0085' or '\u00A0' || (c > '\u00FF' && char.IsSeparator(c));
+
+    /// <summary>
     /// True when bash LITERAL text spliced into an unquoted PowerShell word holds a character PowerShell reads as
     /// syntax there although bash does not: <c>{</c>/<c>}</c> (a scriptblock), a quote mark (<c>'</c>, <c>"</c>,
-    /// U+2018-U+201E open a string), or, at the start of the word, a dash mark (U+2013-U+2015 make a parameter).
+    /// U+2018-U+201E open a string), <c>$</c> (bash's <c>$^</c>, <c>$:</c>, <c>$é</c>, a trailing <c>$</c> are literal
+    /// text; PowerShell read <c>$^</c> as its automatic variable and <c>$:</c> failed the whole script), a character
+    /// PowerShell ends a word at (<see cref="IsPsWordBreak"/>), or, at the start of the word, a dash mark (U+2013-U+2015
+    /// make a parameter) or <c>--%</c> (PowerShell's stop-parsing token, which turned the rest of the line into text).
     /// </summary>
     public static bool BarewordNeedsEscape(string text, bool atWordStart)
     {
         if (text.Length == 0) return false;
-        if (atWordStart && DashMarks.Contains(text[0])) return true;
+        if (atWordStart && (DashMarks.Contains(text[0]) || text.StartsWith("--%", StringComparison.Ordinal))) return true;
         foreach (char c in text)
-            if (c is '{' or '}' || IsSingleQuoteMark(c) || IsDoubleQuoteMark(c)) return true;
+            if (BarewordCharNeedsEscape(c)) return true;
         return false;
     }
 
+    private static bool BarewordCharNeedsEscape(char c)
+        => c is '{' or '}' or '$' || IsSingleQuoteMark(c) || IsDoubleQuoteMark(c) || IsPsWordBreak(c);
+
     /// <summary>
-    /// <paramref name="text"/> (bash literal text) with a backtick before each character
-    /// <see cref="BarewordNeedsEscape"/> names, for splicing into an unquoted PowerShell word.
+    /// <paramref name="text"/> (bash literal text) with each character <see cref="BarewordNeedsEscape"/> names escaped
+    /// (<see cref="EscapeBarewordChar"/>), for splicing into an unquoted PowerShell word. The escapes mean the same
+    /// inside a PowerShell double-quoted string, so the result is also valid there.
     /// </summary>
     public static string EscapeBareword(string text, bool atWordStart)
     {
@@ -124,11 +142,56 @@ public static class PsBuild
         for (int i = 0; i < text.Length; i++)
         {
             char c = text[i];
-            if (c is '{' or '}' || IsSingleQuoteMark(c) || IsDoubleQuoteMark(c) || (i == 0 && atWordStart && DashMarks.Contains(c)))
-                sb.Append('`');
-            sb.Append(c);
+            if (BarewordCharNeedsEscape(c)) sb.Append(EscapeBarewordChar(c));
+            else if (i == 0 && atWordStart && (DashMarks.Contains(c) || text.StartsWith("--%", StringComparison.Ordinal))) sb.Append('`').Append(c);
+            else sb.Append(c);
         }
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// One bash-literal character as unquoted PowerShell word text that denotes exactly it (also valid inside a
+    /// PowerShell double-quoted string). An ASCII letter or digit stays bare (a backtick before one is a PowerShell escape:
+    /// <c>`n</c>, <c>`a</c>, <c>`0</c>). CR, LF, VT, FF and tab are their escape sequences: a backtick before a raw CR or LF
+    /// is PowerShell's line CONTINUATION, so bash's escaped CR (<c>a\&lt;CR&gt;</c>) glued the next line's emitted code
+    /// into the word. A non-ASCII word break (<see cref="IsPsWordBreak"/>) is <c>`u{XXXX}</c>. Anything else gets a backtick.
+    /// </summary>
+    public static string EscapeBarewordChar(char c) => c switch
+    {
+        '\r' => "`r",
+        '\n' => "`n",
+        '\t' => "`t",
+        '\v' => "`v",
+        '\f' => "`f",
+        _ when char.IsAsciiLetterOrDigit(c) => c.ToString(),
+        _ when c > '\u007F' && IsPsWordBreak(c) => "`u{" + ((int)c).ToString("X4", System.Globalization.CultureInfo.InvariantCulture) + "}",
+        _ => "`" + c,
+    };
+
+    /// <summary>A bash ESCAPED literal (<c>\x</c>: every character literal) as unquoted PowerShell word text, each character
+    /// through <see cref="EscapeBarewordChar"/>.</summary>
+    public static string EscapeBarewordLiteral(string text)
+    {
+        if (text.Length == 1) return EscapeBarewordChar(text[0]);
+        var sb = new System.Text.StringBuilder(text.Length * 2);
+        foreach (char c in text) sb.Append(EscapeBarewordChar(c));
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// True when bash text that the emitter would render as a string literal NESTED inside the <c>$( )</c> of a
+    /// PowerShell double-quoted string holds a character that scan misreads: PowerShell finds the end of an in-string
+    /// <c>$( )</c> by counting parens without honouring the quotes inside it, so a <c>(</c> or <c>)</c> in the nested
+    /// literal moved the end (<c>"$($env:u ? $env:u : 'x)')"</c> failed the whole script), a quote mark left a string
+    /// open, a backtick escaped the closing mark, and a double-quote mark is rewritten even inside a nested literal.
+    /// Such a value is emitted outside the string (the emitter's join form), never inside it.
+    /// </summary>
+    public static bool HostileInStringSubexpression(string? text)
+    {
+        if (text is null) return false;
+        foreach (char c in text)
+            if (c is '(' or ')' or '`' || IsSingleQuoteMark(c) || IsDoubleQuoteMark(c)) return true;
+        return false;
     }
     /// <summary>
     /// <paramref name="emitted"/> (a whole unquoted PowerShell COMMAND ARGUMENT) single-quoted when PowerShell would read

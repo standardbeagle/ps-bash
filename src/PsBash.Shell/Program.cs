@@ -534,7 +534,8 @@ else
         // valid bash always transpiles, so only un-transpilable input reaches
         // here. Opt out with PSBASH_NO_PS_FALLBACK=1 to always surface the bash
         // parse error.
-        if (ex.Rule != "shell-option" && !EnvFlags.IsTruthy("PSBASH_NO_PS_FALLBACK") && LooksLikePowerShell(bashCommand))
+        // The one policy (PowerShellFallback; flock -c uses it too).
+        if (PowerShellFallback.Allows(bashCommand, ex))
         {
             pwshCommand = bashCommand;
             if (debug)
@@ -663,46 +664,6 @@ static async Task<string> ReadTextBoundedAsync(TextReader reader, long maxChars,
     }
 
     return sb.ToString();
-}
-
-// Heuristic: does this input look like PowerShell rather than bash? Only consulted
-// AFTER the bash transpiler has already failed to parse it, so it need not exclude
-// valid bash — it only has to distinguish "PowerShell the user meant" from "a bash
-// typo". The signals below are constructs that are unambiguously PowerShell and
-// NOT valid bash (so e.g. `[ $a -eq $b ]`, which bash and PowerShell share, is
-// deliberately NOT a signal). Pure string/regex so it stays AOT-safe.
-static bool LooksLikePowerShell(string input)
-{
-    if (string.IsNullOrWhiteSpace(input)) return false;
-
-    // A Pascal-case hyphenated cmdlet token: Get-Content, Test-Path, New-Item, …
-    // Bash command names are lower-case, so a Capitalized-Capitalized token is a
-    // strong PowerShell signal.
-    if (System.Text.RegularExpressions.Regex.IsMatch(input, @"\b[A-Z][a-z]+-[A-Z][A-Za-z]+\b"))
-        return true;
-
-    // A .NET static member access: [System.IO.Path]::GetFullPath(...), [Console]::…
-    if (System.Text.RegularExpressions.Regex.IsMatch(input, @"\[[\w.]+\]::"))
-        return true;
-
-    // PowerShell control flow with a brace block: `if (...) { }`, `while (...) {`,
-    // `foreach (...) {`, `switch (...) {`. Bash uses `if …; then … fi` / `do … done`
-    // and would never put a `{` block directly after `(...)`.
-    if (System.Text.RegularExpressions.Regex.IsMatch(
-            input, @"\b(if|elseif|while|foreach|switch)\b\s*\([^)]*\)\s*\{",
-            System.Text.RegularExpressions.RegexOptions.Singleline))
-        return true;
-
-    // A param block (script/function signature) at the start.
-    if (System.Text.RegularExpressions.Regex.IsMatch(
-            input, @"^\s*param\s*\(", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
-        return true;
-
-    // Pipeline automatic variable property access ($_.Prop) or $PSItem.
-    if (System.Text.RegularExpressions.Regex.IsMatch(input, @"\$_\.\w|\$PSItem\b"))
-        return true;
-
-    return false;
 }
 
 // Captures the launcher's FULL environment block to forward with each request.

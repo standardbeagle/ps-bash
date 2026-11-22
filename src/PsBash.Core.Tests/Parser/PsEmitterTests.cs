@@ -2650,7 +2650,9 @@ public class PsEmitterTests
         // is invalid PowerShell syntax at `$__psbash_cd_target = ~user`.
         var result = PsEmitter.Transpile("cd ~missinguser");
 
-        Assert.StartsWith("$__psbash_cd_target = '~missinguser'", result);
+        // The escaped bareword is evaluated as an argument: its backtick escapes (`~a`u{2028}b`) are then escapes,
+        // where re-quoting the emitted text as a string kept the backticks.
+        Assert.StartsWith("$__psbash_cd_target = $(& { [string]$args[0] } ~missinguser)", result);
         // No unquoted bareword `= ~...` should survive.
         Assert.DoesNotMatch(@"=\s*~[^'""\s]", result);
     }

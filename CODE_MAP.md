@@ -26,6 +26,7 @@ Tests: `*.Tests`, `Differential.Tests` (bash oracle), `Canary.Tests`, `Escalatio
 
 - **bash cmd → cmdlet**: `PsEmitter.TryEmitMappedCommand` (passthrough only).
 - **Emitted PS text** (quoting incl. Unicode quote/dash marks, exit-code, `[void]`, splat): `Parser/PsBuild.cs` — never hand-concat in PsEmitter (guard `PsQuoteMarkGuardTests`). Bare-or-quoted for number-shaped words (`1e5`, `08`): `Parser/PsNumberLiteral.cs` only. Bash quote removal on raw text: `Transpiler/BashQuoting.cs`.
+- **Bash data never becomes PS code** (psm1 builds no code from values; unparseable text runs as PS only via `Transpiler/PowerShellFallback.cs`): guard `BashDataNeverCodeGuardTests`. Spec `emitter-strategy.md` §Bash data never becomes PowerShell code.
 - **Command flags**: `Cmdlets/*Command.cs`; shared argv parser `Cmdlets/Args/{ArgParser,OptSpec,ParsedArgs}.cs` + emitter opt-in `PsEmitter.OrderedArgCommands`.
 - **Destructive FS / spawn**: `FileSystemHelpers.Delete*Force`/`ClearReadOnly`; `BashRuntime.RunChildProcess`.
 - **Glob**: `PsEmitter.IsGlobWord` → `ConvertToBashGlobCommand.cs` → `BashGlob.cs`; shopt in `InvokeBashShoptCommand`.
