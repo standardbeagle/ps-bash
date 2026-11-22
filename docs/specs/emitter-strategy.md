@@ -226,9 +226,27 @@ call, `PsBuild.RunBashTextCall`, made by `PsEmitter.RunTimeBashTextCall`.** It b
 calling function's locals, and the return check (a `return` in the text leaves the function). The runner
 `PsBuild.RunBashTextAtRunTime` is private; its only other caller, `BuiltinAsSourceScript`, runs a static builtin command
 whose own emitted form makes the call. `fc` is `PsBuild.FcTakeRerun` (the cmdlet leaves its choice in
-`$global:__BashFcRerun`) followed by that call. With a redirect (`eval "$c" 2>/dev/null`, `fc -s >f`) the text sits in the tail's `. { }` group, where a PowerShell `return` leaves only the group: in a function or eval text that group is `PsBuild.WithRedirectTailPassingReturn`, which carries the return to the caller (not `source`, whose `return` ends only the file). REGRESSION: fc's own copy of eval's call site missed all four
+`$global:__BashFcRerun`) followed by that call. With a redirect (`eval "$c" 2>/dev/null`, `fc -s >f`) the text sits in the redirect's block, which passes a return on (§2.7). REGRESSION: fc's own copy of eval's call site missed all four
 (`history -s 'return 7'; f() { fc -s; echo notreached; }` printed notreached), and a redirected `eval 'return 7' 2>/dev/null` in a function never returned. Guard:
 `Core.Tests/RunBashTextCallGuardTests`; behavior `Differential.Tests/FcRerunDifferentialTests`.
+
+### 2.7 A redirect's script block passes a return on
+
+**Invariant: a body put in a PowerShell script block for its redirects (`{ ...; } 2>x`, `while ... done <f`, `if ... fi >x`,
+`case ... esac 2>x`, `{ ...; } 3>x` / `{fd}>x`, `eval '...' <<< x`, `return 6 </dev/null`, `eval "$c" <f`) or as errexit's
+final and-or operand (`[[ 1 ]] && { return 6; }` under `set -e` / an ERR trap) is built by ONE primitive, `PsEmitter.RedirectGroup`.** A
+PowerShell `return` leaves only the block it is in, so when the body emitted a return that leaves a function, eval text or
+a subshell (`PsEmitter.LeavingReturn` counts each; `EmitCommand` marks where a command began), the block is
+`PsBuild.GroupPassingReturn`: `$global:__PsBashGroupReturn` is cleared before it, raised when the body starts and
+cleared at its end (`PsBuild.GroupBody`), and still raised after it only when a return skipped the end, which then
+returns again (a redirect that fails before the body runs leaves it clear: `{ return 6; } >/nonexistent/x` goes on). A body
+with no return keeps the plain block. A function or subshell definition keeps its own returns (they leave it, not the
+block around it). Not passed on, as in bash 5.2: break/continue (PowerShell's labelled break leaves blocks by itself), a
+function call with a redirect, and `source f 2>x` (its return ends the file). REGRESSION: `f() { { return 6; } 2>/dev/null;
+echo no; }` printed no and returned 0 (bash: 6), and the same for every compound command, `( { exit 3; } 2>x; echo no )`
+and `set -e` in a subshell; under `set -e` or an ERR trap `[[ 1 ]] && { return 6; }` printed no, and `return 6 <f` /
+`eval 'return 7' <f` failed the parse of the whole script. Guard: `Core.Tests/RedirectGroupGuardTests` (source inventory + emitted shapes); behavior
+`Differential.Tests/RedirectGroupReturnDifferentialTests`.
 
 ---
 

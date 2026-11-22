@@ -2004,7 +2004,7 @@ public static class PsBuild
     /// </summary>
     public static string InputRedirectGuard(string target, string ok, string? onFail = null, string? failTail = null) =>
         "& { $__psbash_ir = [string](Write-Output " + target + "); Invoke-BashTest -e $__psbash_ir; if ($global:LASTEXITCODE -eq 0) { " + ok
-        + " } else { " + InputRedirectFailure(failTail, onFail) + " } }";
+        + " } else { " + InputRedirectFailure(failTail) + " } }";
 
     /// <summary>
     /// The failure branch of every input-redirect guard (<see cref="InputRedirectGuard"/>, <see cref="InputRedirectGuardInline"/>,
@@ -2127,15 +2127,27 @@ public static class PsBuild
     }
 
     /// <summary>
-    /// <see cref="WithRedirectTail"/> for eval text (<c>eval</c>, <c>fc -s</c>) where a <c>return</c> leaves the caller:
-    /// a PowerShell <c>return</c> leaves only the <c>. { }</c> group, so the group clears a flag when it runs to its end
-    /// and the caller returns when it did not (bash: <c>f() { eval 'return 7' 2&gt;/dev/null; echo no; }</c> returns 7).
-    /// A <c>break</c> leaves past the check, as it should. Not for <c>source</c>, whose <c>return</c> ends only the file.
+    /// Set while a body that a redirect put in a script block (<c>{ return 6; } 2&gt;x</c> is <c>. { ... } 2&gt;$null</c>)
+    /// may have left by a PowerShell <c>return</c>, which leaves only that block: <see cref="GroupPassingReturn"/>.
     /// </summary>
-    public static string WithRedirectTailPassingReturn(string statements, Action<System.Text.StringBuilder> appendTail) =>
-        "$__psbash_grp_ret = $true; "
-        + WithRedirectTail(statements.TrimEnd(' ', ';') + "; $__psbash_grp_ret = $false", appendTail)
-        + "; if ($__psbash_grp_ret) { return }";
+    public const string GroupReturnVar = "$global:__PsBashGroupReturn";
+
+    /// <summary>
+    /// The body of such a block: <see cref="GroupReturnVar"/> is raised when it starts and cleared at its end, so it is
+    /// still raised after the block only when a return left the body midway. A redirect that fails before the body runs
+    /// (<c>{ return 6; } &gt;/nonexistent/x</c>, <c>return 6 &lt;missing</c>) leaves it clear: bash goes on (status 1).
+    /// </summary>
+    public static string GroupBody(string body) => GroupReturnVar + " = $true; " + body.TrimEnd(' ', ';') + "; " + GroupReturnVar + " = $false";
+
+    /// <summary>
+    /// The block (<paramref name="construct"/>, whose body went through <see cref="GroupBody"/>) with what makes a
+    /// <c>return</c> in it leave the caller: the flag is cleared before it, and still raised after it only when the body
+    /// left by a <c>return</c>, so the caller returns too (bash: <c>f() { { return 6; } 2&gt;/dev/null; echo no; }</c> returns 6).
+    /// The flag is raised again after the check, for an enclosing block whose body goes on (a function called in it may
+    /// have run blocks of its own). A <c>break</c> leaves past the check, as it should.
+    /// </summary>
+    public static string GroupPassingReturn(string construct) =>
+        GroupReturnVar + " = $false; " + construct + "; if (" + GroupReturnVar + ") { return }; " + GroupReturnVar + " = $true";
 
     /// <summary>
     /// A native program run with the surrounding shared stdin (<c>$global:__BashStdIn</c>) as its REAL

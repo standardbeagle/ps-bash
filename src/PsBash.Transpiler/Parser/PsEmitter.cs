@@ -526,7 +526,7 @@ public static partial class PsEmitter
         _errexitMode && _errexitExemptDepth == 0 ? PsBuild.ErrexitCheck(ErrexitExitStatement()) : null;
 
     private static string ErrexitExitStatement() =>
-        _subshellDepth > 0 ? "return" : ShellExit("$global:LASTEXITCODE");
+        _subshellDepth > 0 ? LeavingReturn("return") : ShellExit("$global:LASTEXITCODE");
 
     /// <summary>
     /// Code that may run inside a subshell the emitter cannot see: a function body is emitted once and called from
@@ -547,7 +547,7 @@ public static partial class PsEmitter
     /// the whole script.
     /// </summary>
     private static string EndShell(string status) =>
-        "$global:LASTEXITCODE = " + status + "; " + (_subshellDepth > 0 ? "return" : ShellExit("$global:LASTEXITCODE"));
+        "$global:LASTEXITCODE = " + status + "; " + (_subshellDepth > 0 ? LeavingReturn("return") : ShellExit("$global:LASTEXITCODE"));
 
     /// <summary>`readonly r=1; r=2`: the assignment is refused with status 1, which errexit acts on.</summary>
     private static bool WritesReadonly(Command.ShAssignment assign)
@@ -591,7 +591,7 @@ public static partial class PsEmitter
         // only raise the eval-return flag; the function (or eval text) it ran in returns here, as after an eval.
         if (cmd is Command.Simple && _subshellDepth == 0 && (_functionDepth > 0 || _context == TranspileContext.Eval)
             && text.Contains("Resolve-BashCommand", StringComparison.Ordinal))
-            text += "; " + PsBuild.EvalReturnCheck(inFunction: _functionDepth > 0);
+            text += "; " + LeavingReturn(PsBuild.EvalReturnCheck(inFunction: _functionDepth > 0));
         // A script that can set a trap runs a signal sent to the shell (ShellSignals) between statements, as bash runs a
         // trap between commands. A subshell is no target: bash's subshell is another process with its traps reset.
         if (_canSetTrap && _subshellDepth == 0)
@@ -1478,7 +1478,19 @@ public static partial class PsEmitter
         finally { _stderrMergeDepth--; }
     }
 
-    private static string EmitCommand(Command cmd) => TryEmitCompoundOutputProcessSubs(StackGuarded(cmd), out var outputProcSubs) ? outputProcSubs : cmd switch
+    /// <summary>
+    /// One command: its frame records <see cref="_leavingReturns"/> as it begins, so <see cref="RedirectGroup"/> can tell
+    /// whether the command's own text (its body) has a <c>return</c> in it.
+    /// </summary>
+    private static string EmitCommand(Command cmd)
+    {
+        int priorMark = _groupReturnMark;
+        _groupReturnMark = _leavingReturns;
+        try { return EmitCommandCore(cmd); }
+        finally { _groupReturnMark = priorMark; }
+    }
+
+    private static string EmitCommandCore(Command cmd) => TryEmitCompoundOutputProcessSubs(StackGuarded(cmd), out var outputProcSubs) ? outputProcSubs : cmd switch
     {
         Command.If ifCmd => EmitCompoundBody(ifCmd.Redirects, () => EmitIf(ifCmd)),
         Command.BoolExpr boolExpr => EmitBoolExpr(boolExpr),
@@ -1952,7 +1964,7 @@ public static partial class PsEmitter
     private static void PopLoopLabel() => _loopLabels!.RemoveAt(_loopLabels.Count - 1);
 
     /// <summary>A non-numeric loop-control count ends the script with status 128, as in bash.</summary>
-    private static string NumericArgExit => _subshellDepth > 0 ? "$global:LASTEXITCODE = 128; return" : ShellExit("128");
+    private static string NumericArgExit => _subshellDepth > 0 ? LeavingReturn("$global:LASTEXITCODE = 128; return") : ShellExit("128");
 
     /// <summary><c>break [N]</c> / <c>continue [N]</c> → the labelled PowerShell keyword.</summary>
     private static string EmitLoopControl(string keyword, Command.Simple cmd)
@@ -2908,10 +2920,12 @@ public static partial class PsEmitter
     private static string EmitEvalWithStdin(Func<string> emitEval, bool dotSource)
     {
         var body = WithStdinScope(true, emitEval);
-        return dotSource
-            ? ". { " + PsBuild.StdinScope(body, "__psbash_evin_prev" + (++_evalStdinSeq)) + " }"
-            : "& { " + PsBuild.StdinScope(body) + " }";
+        return dotSource ? DotStdinBlock(body) : "& { " + PsBuild.StdinScope(body) + " }";
     }
+
+    /// <summary>A body run in this shell with the block's pipe as its stdin scope (eval / source text fed a file).</summary>
+    private static string DotStdinBlock(string body) =>
+        ". { " + PsBuild.StdinScope(body, "__psbash_evin_prev" + (++_evalStdinSeq)) + " }";
 
     private static string ArrayWriteTarget(string name) =>
         ResolveNameref(name) is var resolved && resolved != name ? ArrayWriteTarget(resolved) :
@@ -2983,6 +2997,7 @@ public static partial class PsEmitter
             // A function is typically a FILTER (`echo x | f`): its stdin is whatever it is called with, not the
             // launcher's. Under the launcher-stdin scope its body therefore reads `$input`/the pipe as before.
             _functionDepth++;
+            int fnLeavingReturns = _leavingReturns;   // the body's returns leave the function, not a group around it
             // The body starts without the caller's ERR trap unless errtrace is on: the runtime puts it aside on entry
             // (PsBuild.FunctionPrologue -> ErrTrapInheritance), so a trap the body sets itself fires there.
             bool savedErrTrap = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = false;
@@ -3013,7 +3028,7 @@ public static partial class PsEmitter
                     ? EmitNamerefVariants(func.Name, dynamicNameref, ComputeBody)
                     : ComputeBody();
             }
-            finally { _functionDepth--; PsBuild.ErrTrapNeedsErrtrace = savedErrTrap; }
+            finally { _functionDepth--; PsBuild.ErrTrapNeedsErrtrace = savedErrTrap; _leavingReturns = fnLeavingReturns; }
             // `trap '...' RETURN` inside the function runs when the function returns (then is spent, so a
             // later call does not re-fire it). Only a body that calls `trap` pays for the wrapper.
             if (body.Contains("Invoke-BashTrap", StringComparison.Ordinal))
@@ -3207,6 +3222,7 @@ public static partial class PsEmitter
         // depth raised so `exit N` becomes a SCOPED `$LASTEXITCODE = N; return`,
         // and give that `return` a script block to return from.
         _subshellDepth++; var subRoOuter = EnterSubshellTables(); bool subRoViolation = _readonlyViolation; // `( r=2 ); echo` goes on
+        int subLeavingReturns = _leavingReturns;   // the body's exits leave the subshell's own block, not a group around it
         var outerLabels = _loopLabels; var outerBarrier = _loopBarrier;
         _loopLabels = null; _loopBarrier = subshell.KeepsLoopLevel ? outerBarrier : LoopBarrierKind.Warn;
         // The ERR trap is put aside at run time (BashShellState.Save -> ErrTrapInheritance): `( trap 'echo err' ERR; false )`
@@ -3214,7 +3230,7 @@ public static partial class PsEmitter
         string body; bool savedErrTrapSh = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = false;
         // `( … ) < file` gives the body its own stdin (a scope); otherwise it inherits the enclosing one.
         try { body = EmitCompoundBody(subshell.Redirects, () => EmitBody(subshell.Body)); }
-        finally { _subshellDepth--; LeaveSubshellTables(subRoOuter); _readonlyViolation = subRoViolation; PsBuild.ErrTrapNeedsErrtrace = savedErrTrapSh; _loopLabels = outerLabels; _loopBarrier = outerBarrier; }
+        finally { _subshellDepth--; LeaveSubshellTables(subRoOuter); _readonlyViolation = subRoViolation; PsBuild.ErrTrapNeedsErrtrace = savedErrTrapSh; _loopLabels = outerLabels; _loopBarrier = outerBarrier; _leavingReturns = subLeavingReturns; }
 
         // One subshell scope (PsBuild.ShellStateScope): a child PS scope plus save/restore of the
         // shell state a scope does not isolate, so nothing the body changes — `set -e`, variables,
@@ -5314,8 +5330,14 @@ public static partial class PsEmitter
             // `export NIX_LDFLAGS${role_post}+=" -L$1/lib64"`: a name glued to an expansion is not an assignment word, so
             // bash expands it like an ordinary operand (split, globbed) and the builtin reads NAME+=VALUE from the result.
             // Each field reaches the eval quoted (${w@Q}), as above. It fell to command lookup: "export: command not found".
-            // Not `local`: a quoted NAME=VALUE operand of local is assigned without a local frame (it outlives the function).
-            if (name == "export" && w.Parts.Any(IsExpansion) && w.Parts.Any(p => p is WordPart.Literal { Value: var l } && l.Contains('=')))
+            // `local "m=$1"` / `local m"$s"=1` too: the eval's `local 'm=a b*'` is the declaration with its local frame
+            // (TryEmitQuotedStaticDeclaration). It was assigned straight to the variable and outlived the function.
+            // (`export "X=$v"` keeps the direct assignment below, which sets the attribute; a local needs its frame.)
+            bool local = name == "local";
+            if (name is "export" or "local"
+                && w.Parts.Any(p => IsExpansion(p) || local && p is WordPart.DoubleQuoted { Parts: var inner } && inner.Any(IsExpansion))
+                && w.Parts.Any(p => p is WordPart.Literal { Value: var l } && l.Contains('=')
+                    || local && p is WordPart.DoubleQuoted { Parts: var dqParts } && dqParts.Any(q => q is WordPart.Literal { Value: var dl } && dl.Contains('='))))
             {
                 anyDynamic = true;
                 evalWords.Add(QuotedFieldsForEval(w, "%s "));
@@ -5329,7 +5351,69 @@ public static partial class PsEmitter
         // `readonly $names 2>/dev/null`: the redirect belongs to the declaration the eval runs.
         var redirects = cmd.Redirects;
         if (!redirects.IsDefaultOrEmpty)
-            result = PsBuild.WithRedirectTail(result, tail => AppendRedirectTail(tail, redirects));
+            result = RedirectGroup(result, body => PsBuild.WithRedirectTail(body, tail => AppendRedirectTail(tail, redirects)));
+        return true;
+    }
+
+    /// <summary>
+    /// Whether an operand of a wrapped declaration builtin (an ordinary word) expands unlike the declaration's own: an
+    /// unquoted expansion is split and globbed, and one before the first <c>=</c> makes the name a run-time one. The
+    /// emitter's side of <c>BashParser.OperandExpandsAsAWord</c>.
+    /// </summary>
+    private static bool ExpandsAsAWord(CompoundWord w)
+    {
+        bool sawEquals = false;
+        foreach (var p in w.Parts)
+        {
+            switch (p)
+            {
+                case WordPart.Literal { Value: var l }:
+                    sawEquals |= l.Contains('=');
+                    break;
+                case WordPart.EscapedLiteral or WordPart.SingleQuoted:
+                    break;
+                case WordPart.DoubleQuoted { Parts: var dq }:
+                    if (!sawEquals && dq.Any(q => q is not (WordPart.Literal or WordPart.EscapedLiteral))) return true;
+                    break;
+                default:
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// <c>local 'm=a b*'</c>: a quoted NAME=VALUE operand with nothing left to expand is the declaration
+    /// <c>local m='a b*'</c> (the builtin reads the assignment from the expanded word, as bash does), so it gets the
+    /// function's local frame like a written one. Every run-time <c>local</c> arrives in this form: the eval of
+    /// <c>local "$x"</c>, <c>local "m=$1"</c>, <c>builtin local m=$1</c>, <c>\local m=$x</c> hands each field over
+    /// single-quoted (<see cref="QuotedFieldsForEval"/>). REGRESSION: it was assigned straight to the variable and
+    /// outlived the function (<c>f() { \local m="$1"; }; f "a b*"; echo "${m-unset}"</c> printed a b*; bash: unset).
+    /// Only a valid NAME (and plain flags); anything else keeps its path and its diagnostics.
+    /// </summary>
+    private static bool TryEmitQuotedStaticDeclaration(string name, Command.Simple cmd, out string result)
+    {
+        result = "";
+        if (name != "local" || !cmd.EnvPairs.IsDefaultOrEmpty || !cmd.HereDocs.IsDefaultOrEmpty) return false;
+        var text = new StringBuilder(name);
+        bool anyQuotedPair = false;
+        foreach (var w in cmd.Words.Skip(1))
+        {
+            if (TryGetStaticArgValue(w) is not { } s) return false;
+            bool bare = w.Parts.All(p => p is WordPart.Literal);
+            if (bare && s.Length > 1 && s[0] is '-' or '+' && s.Skip(1).All(char.IsAsciiLetter))
+            {
+                text.Append(' ').Append(s);
+                continue;
+            }
+            int eq = s.IndexOf('=');
+            string varName = eq < 0 ? s : eq > 0 && s[eq - 1] == '+' ? s[..(eq - 1)] : s[..eq];
+            if (!IsValidVarName(varName)) return false;
+            text.Append(' ').Append(eq < 0 ? s : s[..(eq + 1)] + PsBuild.BashSingleQuote(s[(eq + 1)..]));
+            anyQuotedPair |= eq >= 0 && !bare;
+        }
+        if (!anyQuotedPair || BashParser.Parse(text.ToString()) is not Command.ShAssignment declaration) return false;
+        result = EmitCommand(cmd.Redirects.IsDefaultOrEmpty ? declaration : declaration with { Redirects = cmd.Redirects });
         return true;
     }
 
@@ -5467,13 +5551,18 @@ public static partial class PsEmitter
         if (wrap > 0 && TryGetStaticArgValue(cmd.Words[wrap]) is { } wrapped && wrapped is "declare" or "typeset" or "local" or "export" or "readonly")
         {
             var inner = cmd with { Words = [NoAliasWord(wrapped), .. cmd.Words.Skip(wrap + 1)] };
-            if (!TryEmitRuntimeNamedDeclaration(wrapped, inner, out result, operandsAreOrdinaryWords: true))
-                result = EmitSimple(inner);
+            // An operand expanded only inside double quotes after NAME= (`builtin typeset t="$x"`) is neither split nor
+            // globbed: the same as the declaration's, which needs no run-time transpile (BashParser.OperandExpandsAsAWord).
+            if (inner.Words.Skip(1).Any(ExpandsAsAWord)
+                && TryEmitRuntimeNamedDeclaration(wrapped, inner, out result, operandsAreOrdinaryWords: true))
+                return true;
+            result = EmitSimple(inner);
             return true;
         }
         var name = cmd.Words.Length < 2 ? null : GetLiteralValue(cmd.Words[0]);
         if (name is not ("declare" or "typeset" or "local" or "export" or "readonly"))
             return false;
+        if (TryEmitQuotedStaticDeclaration(name, cmd, out result)) return true;
         static bool IsDynamicAssignment(CompoundWord w)
         {
             if (w.Parts.IsDefaultOrEmpty) return false;
@@ -5709,11 +5798,12 @@ public static partial class PsEmitter
                 opens.Add($"Invoke-BashExecFd -Variable {PsBuild.SingleQuote(fdVar)} -Operator {PsBuild.SingleQuote(r.OpenOperator)} -Target {target}");
             }
             var rest = cmd with { Redirects = [.. cmd.Redirects.Where(r => r.FdVar is null)] };
-            return ". { " + string.Join("; ", opens) + "; " + EmitSimple(rest) + " }";
+            return RedirectGroup(EmitSimple(rest), body => ". { " + string.Join("; ", opens) + "; " + body + " }");
         }
         // `w9 9>&1`, `echo hi 9>f.txt`, `read -u 7 l 7<f`: a numbered descriptor opened for this command only.
         if (ScopedHighFdRedirects(cmd) is { Count: > 0 } highFds)
-            return WithScopedHighFds(EmitSimple(cmd with { Redirects = [.. cmd.Redirects.Where(r => !highFds.Contains(r))] }), highFds);
+            return RedirectGroup(EmitSimple(cmd with { Redirects = [.. cmd.Redirects.Where(r => !highFds.Contains(r))] }),
+                body => WithScopedHighFds(body, highFds));
         if (TryEmitOutputProcessSubs(cmd, out var outputProcSubResult))
             return outputProcSubResult;
         if (TryEmitEnvPairsWrap(cmd, out var envWrapResult))
@@ -5848,7 +5938,7 @@ public static partial class PsEmitter
             string inner = EmitSimple(new Command.Simple(cmd.Words, cmd.EnvPairs, cmd.Redirects, others));
             var closes = string.Join("; ", fdDocs.Select(h => $"Invoke-BashExecFd {h.Fd} '<&' '-'"));
             // Closing resets the status, so keep the command's own.
-            result = $". {{ {opens}; {inner}; $__psbashFdRc = $global:LASTEXITCODE; {closes}; $global:LASTEXITCODE = $__psbashFdRc }}";
+            result = RedirectGroup(inner, body => $". {{ {opens}; {body}; $__psbashFdRc = $global:LASTEXITCODE; {closes}; $global:LASTEXITCODE = $__psbashFdRc }}");
             return true;
         }
 
@@ -5875,7 +5965,8 @@ public static partial class PsEmitter
         // into a bare `. $(...)`, so the file's commands read nothing and /dev/stdin was empty.
         if (cmd.EnvPairs.IsEmpty && GetLiteralValue(cmd.Words[0]) is "eval" or "source" or ".")
         {
-            result = $"{EmitHereDocLiteral(cmd.HereDocs[^1])} | Emit-BashLine | {EmitEvalWithStdin(() => EmitSimple(innerCmd), dotSource: true)}";
+            string hereText = EmitHereDocLiteral(cmd.HereDocs[^1]);
+            result = RedirectGroup(WithStdinScope(true, () => EmitSimple(innerCmd)), body => $"{hereText} | Emit-BashLine | {DotStdinBlock(body)}");
             return true;
         }
         // The command is the pipe stage after the body (`body | Emit-BashLine | cmd`): any script block its emission wraps it in
@@ -5998,7 +6089,8 @@ public static partial class PsEmitter
             _emptyStdinDepth++;
             // Its readers read the EMPTY scope, never the surrounding one (SealedFromStdinProbe): `ssh h cmd < /dev/null`
             // in a read loop's body leaves the loop its lines, and the loop may still stream.
-            try { result = SealedFromStdinProbe(() => PsBuild.EmptyStdinScope(WithStdinScope(true, () => EmitSimpleFed(innerCmd)), _emptyStdinDepth)); }
+            // A return in it (`return 6 </dev/null`, `eval 'return 7' </dev/null`) leaves the function past the block.
+            try { result = SealedFromStdinProbe(() => RedirectGroup(WithStdinScope(true, () => EmitSimpleFed(innerCmd)), b => PsBuild.EmptyStdinScope(b, _emptyStdinDepth))); }
             finally { _emptyStdinDepth--; }
             return true;
         }
@@ -6026,7 +6118,7 @@ public static partial class PsEmitter
             if (!remaining.IsDefaultOrEmpty) AppendRedirectTail(read, remaining);
             result = read.ToString();
             // `x=$(< missing)`: reported (status 1), as for a command; Get-Content's own error was a PowerShell one, status 0.
-            if (guarded) result = PsBuild.SimpleInputRedirectGuard(target, result, failTail);
+            if (guarded) result = InputRedirectGuarded(target, result, static r => r, failTail);
             return true;
         }
 
@@ -6038,15 +6130,32 @@ public static partial class PsEmitter
         bool mappedConsumer = TryEmitMappedCommand(innerCmd, out _);
         // `. ./f < in`: the sourced commands read the file, in this shell - a stdin scope, as for a here-document
         // (EmitEvalWithStdin). REGRESSION: piped into a bare `. $(...)`, `read` in f read nothing.
-        bool sourcesText = innerCmd.EnvPairs.IsDefaultOrEmpty && GetLiteralValue(innerCmd.Words[0]) is "source" or ".";
-        result = sourcesText
-            ? $"Invoke-BashCat {target} -RawStdinBytes | {EmitEvalWithStdin(() => EmitSimple(innerCmd), dotSource: true)}"
-            : mappedConsumer
+        // `eval 'return 7' < f`, `return 6 < f`: a statement list too (no pipe stage: the whole script failed to parse); run
+        // as source's text is, and a return in it leaves the function (RedirectGroup).
+        if (innerCmd.EnvPairs.IsDefaultOrEmpty && GetLiteralValue(innerCmd.Words[0]) is "source" or "." or "eval" or "return" or "exit")
+        {
+            var fed = WithStdinScope(true, () => EmitSimple(innerCmd));
+            string Feed(string body) => $"Invoke-BashCat {target} -RawStdinBytes | {DotStdinBlock(body)}";
+            result = guarded ? InputRedirectGuarded(target, fed, Feed, failTail) : RedirectGroup(fed, Feed);
+            return true;
+        }
+        result = mappedConsumer
             ? $"Invoke-BashCat {target} -RawStdinBytes | {inner}"
             : $"Invoke-BashCat {target} -RawStdinBytes | {NativeStdinFeedStage(innerCmd)}{inner}";
         if (guarded)
-            result = PsBuild.SimpleInputRedirectGuard(target, result, failTail);
+            result = InputRedirectGuarded(target, result, static r => r, failTail);
         return true;
+    }
+
+    /// <summary>
+    /// A simple command fed <c>&lt; file</c> (<paramref name="feed"/> builds the feed around its emitted
+    /// <paramref name="body"/>) behind the guard that reports a file it cannot open, through <see cref="RedirectGroup"/>:
+    /// a return in the body leaves the function (when the file cannot be opened the body never runs, nor returns).
+    /// </summary>
+    private static string InputRedirectGuarded(string target, string body, Func<string, string> feed, string? failTail)
+    {
+        return RedirectGroup(body, b =>
+            PsBuild.SimpleInputRedirectGuard(target, feed(b), failTail));
     }
 
     // declare/typeset -A map -> $map = @{} (associative array / hashtable declaration)
@@ -6870,6 +6979,7 @@ public static partial class PsEmitter
         {
             string evalSignal = _context == TranspileContext.Eval && _functionDepth == 0 && _subshellDepth == 0
                 ? PsBuild.EvalReturnSignal : "";
+            _leavingReturns++;   // every form below ends with a PowerShell return (RedirectGroup)
             // `return 1 2`: bash checks the status operand, then reports "too many arguments" and drops the rest of the
             // line (PsBuild.UsageDiscard). REGRESSION: no message, and the line went on.
             if (cmd.Words.Length > 2 && !IsNonNumericLiteral(cmd.Words[1]))
@@ -6958,9 +7068,9 @@ public static partial class PsEmitter
 
         else if (cmd0 == "exit" && _subshellDepth > 0)
         {
-            specialResult = cmd.Words.Length >= 2
+            specialResult = LeavingReturn(cmd.Words.Length >= 2
                 ? $"$global:LASTEXITCODE = {EmitExitCodeValue(cmd.Words[1])}; return"
-                : "return";
+                : "return");
         }
 
         // A bare `exit` leaves with the status of the last command; inside an EXIT trap handler that is the status
@@ -7050,10 +7160,7 @@ public static partial class PsEmitter
             // Dot-source keeps their side effects (variables, functions, cwd) in the caller's scope.
             result = (reportOnly || cmd0 is "cd" or "read" or "eval" or "fc" or "readonly" or "set" or "source" or "." or "local")
                 && !cmd.Redirects.IsDefaultOrEmpty
-                    ? cmd0 is "eval" or "fc" && _subshellDepth == 0 && (_functionDepth > 0 || _context == TranspileContext.Eval)
-                        // A `return` in the text leaves the caller, not just the redirect's group.
-                        ? PsBuild.WithRedirectTailPassingReturn(specialResult, tail => AppendRedirectTail(tail, cmd.Redirects))
-                        : WithRedirectTailOn(specialResult, cmd.Redirects)
+                    ? WithRedirectTailOn(specialResult, cmd.Redirects)
                     : specialResult;
             return true;
         }
@@ -7535,7 +7642,7 @@ public static partial class PsEmitter
     private static string WithRedirectTailOn(string emitted, ImmutableArray<Redirect> redirects)
     {
         if (!IsSingleRuntimeCommand(emitted))
-            return PsBuild.WithRedirectTail(emitted, tail => AppendRedirectTail(tail, redirects));
+            return RedirectGroup(emitted, body => PsBuild.WithRedirectTail(body, tail => AppendRedirectTail(tail, redirects)));
         var sb = new StringBuilder(emitted);
         AppendRedirectTail(sb, redirects);
         return sb.ToString();
@@ -12677,7 +12784,11 @@ public static partial class PsEmitter
                 int textStart = i > 0 ? operandStart + andOr.Ops[i - 1].Length + 2 : operandStart;
                 var operand = sb.ToString(textStart, sb.Length - textStart);
                 sb.Length = textStart;
-                sb.Append(PsBuild.ErrexitFinalOperand(operand));
+                // Its block holds the operand: a return in it leaves the function too (RedirectGroup; the passing form is
+                // a statement list, so one `$( )` makes it a chain operand). REGRESSION: under set -e or an ERR trap
+                // `f() { [[ 1 ]] && { return 6; }; echo no; }` printed no.
+                string finalOperand = RedirectGroup(operand, PsBuild.ErrexitFinalOperand);
+                sb.Append(finalOperand.StartsWith(PsBuild.GroupReturnVar, StringComparison.Ordinal) ? PsBuild.Subexpr(finalOperand) : finalOperand);
             }
 
             // failglob / bad substitution abandons the whole list: `echo *.ZZ || echo alt` must not fall back.
@@ -13637,7 +13748,11 @@ public static partial class PsEmitter
     /// </para>
     /// </summary>
     private static string ApplyCompoundRedirects(
-        string body, ImmutableArray<Redirect> redirects, bool stdinScope = true)
+        string body, ImmutableArray<Redirect> redirects, bool stdinScope = true) =>
+        redirects.IsDefaultOrEmpty ? body : RedirectGroup(body, b => ApplyCompoundRedirectsCore(b, redirects, stdinScope));
+
+    /// <summary>The construct of <see cref="ApplyCompoundRedirects"/> around <paramref name="body"/>.</summary>
+    private static string ApplyCompoundRedirectsCore(string body, ImmutableArray<Redirect> redirects, bool stdinScope)
     {
         if (redirects.IsDefaultOrEmpty)
             return body;
@@ -14416,7 +14531,7 @@ public static partial class PsEmitter
                 finally { _definedFunctions = priorFns; }
                 // A statement list (`cd`) becomes one group for the tail; a single command (`read`) stays bare: a `. { }`
                 // group would not hand it the pipe it reads.
-                if (tailRedirects > 0 && !IsSingleRuntimeCommand(result)) result = PsBuild.WithRedirectTail(result, static _ => { });
+                if (tailRedirects > 0 && !IsSingleRuntimeCommand(result)) result = RedirectGroup(result, static body => PsBuild.WithRedirectTail(body, static _ => { }));
                 return true;
             }
             case "unset":
@@ -14830,12 +14945,47 @@ public static partial class PsEmitter
     /// in; at the top of a script, or in a subshell, there is nothing to return from. <c>eval</c> and <c>fc -s</c> run
     /// their text through it (guard <c>RunBashTextCallGuardTests</c>).
     /// </summary>
-    private static string RunTimeBashTextCall(string label) =>
-        PsBuild.RunBashTextCall(label, LoopModeForCallSite(),
-            EvalLocalNamesArg() is { Length: > 0 } locals ? locals : ", $null",
-            _subshellDepth > 0 ? ""
-                : _functionDepth > 0 ? PsBuild.EvalReturnCheck(inFunction: true)
-                : _context == TranspileContext.Eval ? PsBuild.EvalReturnCheck(inFunction: false) : "");
+    private static string RunTimeBashTextCall(string label)
+    {
+        string returnCheck = _subshellDepth > 0 ? ""
+            : _functionDepth > 0 ? LeavingReturn(PsBuild.EvalReturnCheck(inFunction: true))
+            : _context == TranspileContext.Eval ? LeavingReturn(PsBuild.EvalReturnCheck(inFunction: false)) : "";
+        return PsBuild.RunBashTextCall(label, LoopModeForCallSite(),
+            EvalLocalNamesArg() is { Length: > 0 } locals ? locals : ", $null", returnCheck);
+    }
+
+    /// <summary>
+    /// How many PowerShell <c>return</c>s that leave a function, eval or source text, or a subshell have been emitted
+    /// (each goes through <see cref="LeavingReturn"/>, or counts itself). Only ever grows.
+    /// </summary>
+    [ThreadStatic] private static int _leavingReturns;
+
+    /// <summary><see cref="_leavingReturns"/> when the command being emitted began (<see cref="EmitCommand"/>).</summary>
+    [ThreadStatic] private static int _groupReturnMark;
+
+    /// <summary><paramref name="text"/>, which ends with a PowerShell <c>return</c> that leaves a function, eval text or a
+    /// subshell: counted for <see cref="RedirectGroup"/>.</summary>
+    private static string LeavingReturn(string text)
+    {
+        _leavingReturns++;
+        return text;
+    }
+
+    /// <summary>
+    /// THE way to put an emitted body in a script block for its redirects (<c>{ ...; } 2&gt;x</c>, <c>while ... done
+    /// &lt;f</c>, <c>if ... fi &gt;x</c>, <c>eval '...' 3&gt;x</c>, ...): <paramref name="build"/> makes the whole construct
+    /// around the body it is handed. A PowerShell <c>return</c> leaves only that block, so when the body has one (this
+    /// command emitted a <see cref="LeavingReturn"/>) the construct is <see cref="PsBuild.GroupPassingReturn"/>: the
+    /// return leaves the caller as well (bash: <c>f() { { return 6; } 2&gt;/dev/null; echo no; }</c> returns 6). A body
+    /// with no return keeps the plain block. Not for <c>source</c>, whose <c>return</c> ends only the file (it emits
+    /// none). Guard: <c>RedirectGroupGuardTests</c>.
+    /// </summary>
+    private static string RedirectGroup(string body, Func<string, string> build)
+    {
+        if (_leavingReturns == _groupReturnMark) return build(body);
+        _leavingReturns++;   // the check after the block is one more, for an enclosing block
+        return PsBuild.GroupPassingReturn(build(PsBuild.GroupBody(body)));
+    }
 
     /// <summary>
     /// <c>fc</c>: Invoke-BashFc lists, refuses an editor, or picks a re-run (<c>fc -s</c>, <c>fc -e -</c>) that it leaves
