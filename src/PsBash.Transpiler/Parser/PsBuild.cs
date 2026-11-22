@@ -1494,6 +1494,19 @@ public static class PsBuild
         "Invoke-BashPipeStage -Slot " + PipeStatusSlots + " -Index " + index.ToString(System.Globalization.CultureInfo.InvariantCulture)
         + " -Script { " + (index == 0 ? "& { " + stageBlock + " }" : stageBlock) + " }";
 
+    /// <summary>The global <c>Invoke-BashFc</c> leaves a re-run command in (<c>fc -s</c>, <c>fc -e -</c>), for <see cref="FcCall"/>.</summary>
+    public const string FcRerunVariable = "__BashFcRerun";
+
+    /// <summary>
+    /// <c>fc</c>: <paramref name="fcCommand"/> (the <c>Invoke-BashFc</c> call) and then the command it chose to re-run, as
+    /// <see cref="RunBashTextAtRunTime"/> runs eval text: in the caller's scope (dot-sourced, one pipeline element, so
+    /// <c>fc -s | tr</c> pipes the re-run's output), a syntax error status 2. A cmdlet must not run script itself.
+    /// </summary>
+    public static string FcCall(string fcCommand) =>
+        ". { $global:" + FcRerunVariable + " = $null; " + fcCommand + "; if ($null -ne $global:" + FcRerunVariable + ") { "
+        + "$__psbash_eval_src = $global:" + FcRerunVariable + "; $global:" + FcRerunVariable + " = $null; "
+        + RunBashTextAtRunTime(", $null", "fc") + " } }";
+
     /// <summary>
     /// The call head of a builtin the emitter implements, run at run time as its own static form with the words it gets
     /// (<see cref="BuiltinAsSourceScript"/>): <c>set -o "$opt"</c>, whose option is known only then.

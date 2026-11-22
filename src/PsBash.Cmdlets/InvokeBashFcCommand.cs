@@ -4,16 +4,20 @@ using System.Management.Automation;
 namespace PsBash.Cmdlets;
 
 /// <summary>
-/// The <c>fc</c> builtin's listing form over the session history that <c>history</c> keeps
-/// (<see cref="InvokeBashHistoryCommand.Entries"/>):
+/// The <c>fc</c> builtin over the session history that <c>history</c> keeps (<see cref="InvokeBashHistoryCommand.Entries"/>):
 /// <code>
 /// fc -l [-nr] [first [last]]   list "N\t cmd" (-n: "\t cmd"), -r reversed; default: the last 16
+/// fc -s [pat=rep ...] [cmd]    re-run an entry (default: the last) with every pat replaced by rep; also fc -e - ...
 /// </code>
-/// <c>first</c>/<c>last</c> are a history number, a negative offset from the current command, or the prefix of a
-/// command (the most recent match). When the shell records its own lines (<c>set -o history</c>, which an
-/// interactive shell sets) the last entry is this <c>fc</c> command and is skipped, as bash skips it.
-/// Editing and re-executing (<c>fc [-e ename]</c>, <c>fc -s</c>) are not supported: after the history lookup they
-/// fail with status 1. Without this, PowerShell's <c>fc</c> alias (<c>Format-Custom</c>) ran.
+/// <c>first</c>/<c>last</c>/<c>cmd</c> are a history number, a negative offset from the current command, or the prefix
+/// of a command (the most recent match), resolved by bash's <c>fc_gethnum</c> rules (<see cref="Resolve"/>). When the
+/// shell records its own lines (<c>set -o history</c>, which an interactive shell sets) the last entry is this
+/// <c>fc</c> command and is skipped, as bash skips it.
+/// <para>Re-running: the command is echoed to stderr, replaces the LAST history entry (bash's <c>fc_replhist</c>, also
+/// with history recording off), and is left in <c>$global:__BashFcRerun</c> (<c>PsBuild.FcRerunVariable</c>) for the
+/// emitted call (<c>PsBuild.FcCall</c>) to run through the one run-time runner of bash text, in the caller's scope. The
+/// cmdlet never runs script itself. Opening an editor (<c>fc</c>, <c>fc -e ename</c>) is refused with status 1.</para>
+/// Without this, PowerShell's <c>fc</c> alias (<c>Format-Custom</c>) ran.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashFc")]
 public sealed class InvokeBashFcCommand : BashCmdlet
@@ -25,16 +29,19 @@ public sealed class InvokeBashFcCommand : BashCmdlet
     public string[]? Arguments { get; set; }
 
     internal const string Usage = "fc: usage: fc [-e ename] [-lnr] [first] [last] or fc -s [pat=rep] [command]";
+    internal const string EditorRefused = "fc: opening an editor is not supported";
 
-    /// <summary>Pure: runs <paramref name="args"/> against <paramref name="history"/>. <paramref name="lastIsCurrent"/>:
-    /// the last entry is this command itself (bash with history recording on).</summary>
-    internal static InvokeBashHistoryCommand.Result Run(IReadOnlyList<string> args, IReadOnlyList<string> history, bool lastIsCurrent)
+    /// <summary>Pure: runs <paramref name="args"/> against <paramref name="history"/> (a re-run replaces its last entry).
+    /// <paramref name="lastIsCurrent"/>: the last entry is this command itself (bash with history recording on).
+    /// A re-run returns the command in <see cref="InvokeBashHistoryCommand.Result.Rerun"/>.</summary>
+    internal static InvokeBashHistoryCommand.Result Run(IReadOnlyList<string> args, List<string> history, bool lastIsCurrent)
     {
         var o = new List<string>(); var err = new List<string>();
         InvokeBashHistoryCommand.Result Done(int s) => new(o, err, s);
         InvokeBashHistoryCommand.Result Fail(int s, string msg) { err.Add("fc: " + msg); return Done(s); }
 
         bool list = false, numbers = true, reverse = false, reexec = false;
+        string? ename = null;
         int i = 0;
         for (; i < args.Count; i++)
         {
@@ -53,8 +60,9 @@ public sealed class InvokeBashFcCommand : BashCmdlet
                         if (k + 1 == a.Length)
                         {
                             if (i + 1 >= args.Count) { err.Add("fc: -e: option requires an argument"); err.Add(Usage); return Done(2); }
-                            i++;
+                            ename = args[++i];
                         }
+                        else ename = a[(k + 1)..];
                         k = a.Length;
                         break;
                     default:
@@ -65,55 +73,97 @@ public sealed class InvokeBashFcCommand : BashCmdlet
             }
         }
         var operands = args.Skip(i).ToList();
+        // `fc -e - ...` is `fc -s ...`; either wins over -l (bash checks it first).
+        reexec |= ename == "-";
 
         int count = history.Count;
         int last = lastIsCurrent && count > 0 ? count - 1 : count;   // the last entry fc considers (1-based number)
 
-        if (reexec || !list)
+        if (reexec)
+        {
+            // Leading pat=rep words, then the command to re-run (default: the last entry).
+            int s = 0;
+            while (s < operands.Count && operands[s].Contains('=')) s++;
+            if (last == 0) return Fail(1, "no command found");
+            int? n = s < operands.Count ? Resolve(operands[s], history, last, first: false, listing: false) : last;
+            if (n is not int num) return Fail(1, "no command found");
+            var command = history[num - 1];
+            for (int k = 0; k < s; k++)
+            {
+                int eq = operands[k].IndexOf('=');
+                command = Substitute(command, operands[k][..eq], operands[k][(eq + 1)..]);
+            }
+            err.Add(command);
+            if (command.Length > 0)
+            {
+                if (history.Count > 0) history.RemoveAt(history.Count - 1);
+                history.Add(command);
+            }
+            return Done(0) with { Rerun = command };
+        }
+
+        if (!list)
         {
             if (last == 0) return Fail(1, "no command found");
-            var spec = reexec ? operands.FirstOrDefault(op => !op.Contains('=')) : operands.FirstOrDefault();
-            if (spec is not null && Resolve(spec, history, last) is null) return Fail(1, "no command found");
-            return Fail(1, "editing and re-executing history is not supported");
+            var spec = operands.FirstOrDefault();
+            if (spec is not null && Resolve(spec, history, last, first: true, listing: false) is null) return Fail(1, "no command found");
+            err.Add(EditorRefused);
+            return Done(1);
         }
 
         if (last == 0) return Done(0);
-        int first, end;
+        int from, end;
         if (operands.Count == 0)
         {
             end = last;
-            first = Math.Max(1, last - 15);
+            from = Math.Max(1, last - 15);
         }
         else
         {
-            if (Resolve(operands[0], history, last) is not int f) return Fail(1, "no command found");
-            int? l = operands.Count > 1 ? Resolve(operands[1], history, last) : last;
+            if (Resolve(operands[0], history, last, first: true, listing: true) is not int f) return Fail(1, "no command found");
+            int? l = operands.Count > 1 ? Resolve(operands[1], history, last, first: false, listing: true) : last;
             if (l is null) return Fail(1, "no command found");
-            first = f > last ? 1 : f;   // bash: a first number past the end lists from the start
-            end = Math.Min(l.Value, last);
+            from = f;
+            end = l.Value;
         }
-        if (first > end) { (first, end) = (end, first); reverse = true; }   // -r never un-reverses
-        for (int k = 0; k <= end - first; k++)
+        if (from > end) { (from, end) = (end, from); reverse = true; }   // -r never un-reverses
+        for (int k = 0; k <= end - from; k++)
         {
-            int n = reverse ? end - k : first + k;
+            int n = reverse ? end - k : from + k;
             o.Add(numbers ? $"{n}\t {history[n - 1]}" : $"\t {history[n - 1]}");
         }
         return Done(0);
     }
 
-    /// <summary>A history number for a <c>first</c>/<c>last</c> operand: N, -N from the current command, 0 for the
-    /// last, else the most recent entry starting with the text. Null when no entry matches.</summary>
-    private static int? Resolve(string spec, IReadOnlyList<string> history, int last)
+    /// <summary>
+    /// bash's <c>fc_gethnum</c>: the history number (1-based, at most <paramref name="last"/>) an operand names. -N counts
+    /// back from the current command (never before 1); 0 is the last entry and -0 too when listing (else nothing); a
+    /// number at or past the last entry is the first entry when it is a range's <paramref name="first"/> end, else the
+    /// last (so <c>fc -l 5</c> over five entries lists all five); any other text is the most recent entry starting with
+    /// it. Null when nothing matches.
+    /// </summary>
+    private static int? Resolve(string spec, IReadOnlyList<string> history, int last, bool first, bool listing)
     {
         if (int.TryParse(spec, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var n))
         {
             if (n < 0) return Math.Max(1, last + 1 + n);
-            if (n == 0) return last;
+            if (n == 0) return spec.StartsWith('-') && !listing ? null : last;
+            if (n >= last) return first ? 1 : last;
             return n;
         }
         for (int j = last - 1; j >= 0; j--)
             if (history[j].StartsWith(spec, StringComparison.Ordinal)) return j + 1;
         return null;
+    }
+
+    /// <summary>bash's <c>fc_dosubs</c>: every <paramref name="pat"/> in <paramref name="command"/> becomes
+    /// <paramref name="rep"/>; an empty pattern matches each character.</summary>
+    private static string Substitute(string command, string pat, string rep)
+    {
+        if (pat.Length > 0) return command.Replace(pat, rep, StringComparison.Ordinal);
+        var sb = new System.Text.StringBuilder(command.Length * Math.Max(1, rep.Length));
+        for (int k = 0; k < command.Length; k++) sb.Append(rep);
+        return sb.ToString();
     }
 
     protected override void EndProcessing()
@@ -126,7 +176,12 @@ public sealed class InvokeBashFcCommand : BashCmdlet
 
         var r = Run(args, InvokeBashHistoryCommand.Entries(SessionState), InvokeBashShoptCommand.IsEnabled("set:history"));
         foreach (var line in r.Out) WriteObject(line);
-        foreach (var line in r.Err) FileSystemHelpers.WriteStderr(this, line);
+        // A re-run's stderr is the echoed command, as typed; every other line is a shell diagnostic and carries the
+        // source prefix (`s.sh: line 5: fc: no command found`), as `history`'s do. A usage line has none (bash).
+        foreach (var line in r.Err)
+            FileSystemHelpers.WriteStderr(this, r.Rerun is not null || line.StartsWith("fc: usage:", StringComparison.Ordinal)
+                ? line : ShellDiagnostic.Prefix(SessionState) + line);
+        if (r.Rerun is not null) SessionState.PSVariable.Set("global:" + PsBash.Core.Parser.PsBuild.FcRerunVariable, r.Rerun);
         FileSystemHelpers.SetLastExitCode(this, r.Status);
     }
 }

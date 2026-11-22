@@ -197,6 +197,19 @@ fallback before the definition runs and after `unset -f`). Rule: `PsEmitter.IsAl
 defines as a function. Guards: `Core.Tests/FunctionShadowsModuleAliasGuardTests` (the list equals the psm1's; every
 alias loses to a function); behavior `Differential.Tests/CommandLookupDifferentialTests.Function_WinsOverAnAliasedCommand`.
 
+### 2.5 A quoted builtin name is the builtin
+
+**Invariant: quoting a command name (`'local'`, `"eval"`, `\export`, `b\reak`) only escapes alias expansion; the
+builtin of that name still runs.** The quote-removed static spelling is the name, read in one place per layer:
+`BashParser.CommandWordName` for the declaration productions (`export`/`local`/`declare`/`typeset`/`readonly`, also behind
+`command`/`builtin`), `BashParser.EscapedControlBuiltin` for `break`/`continue`/`return`/`exit` (the AST the loop and
+function analyses read), and `PsEmitter.UnquoteBuiltinName` (right after `ExpandAliases` in `EmitSimple`) for every
+other name in `BashBuiltins.Names`. A name the script also aliases stays quoted, since `EmitSimple` re-enters
+`ExpandAliases` for parts of one command. A program or function name keeps its quotes (it runs either way).
+REGRESSION: every emitter-implemented builtin spelled quoted was `command not found` (127). Guards:
+`Core.Tests/Parser/QuotedBuiltinNameTests`, `ControlBuiltinWrapperTests`; behavior
+`Differential.Tests/QuotedBuiltinNameDifferentialTests`.
+
 ---
 
 ## 3. `EmitPassthrough`

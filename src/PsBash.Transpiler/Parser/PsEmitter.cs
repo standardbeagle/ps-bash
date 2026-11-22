@@ -913,7 +913,7 @@ public static partial class PsEmitter
     private static readonly IReadOnlySet<string> s_selfReportingBuiltins = new HashSet<string>(StringComparer.Ordinal)
     {
         "let", ".", "source", "cd", "type", "declare", "typeset", "local", "alias", "unalias", "wait", "command", "builtin", "help",
-        "[", "test", "history",
+        "[", "test", "history", "fc",
     };
 
     /// <summary>
@@ -5571,6 +5571,7 @@ public static partial class PsEmitter
     private static string EmitSimple(Command.Simple cmd)
     {
         cmd = ExpandAliases(cmd);
+        cmd = UnquoteBuiltinName(cmd);
         // `set -o posix` (bash): a prefix assignment before a special builtin stays set after it (`foo=bar :`), and the
         // builtin wins over a function of its name. The option is known only at run time, so a script that names it
         // gets both forms.
@@ -14204,7 +14205,8 @@ public static partial class PsEmitter
                 result = EmitPassthrough("Invoke-BashHistory", args);
                 return true;
             case "fc":
-                result = EmitPassthrough("Invoke-BashFc", args);
+                // fc -s / fc -e - re-run a history entry: the cmdlet picks it, PsBuild.FcCall runs it here.
+                result = PsBuild.FcCall(EmitPassthrough("Invoke-BashFc", args));
                 return true;
             case "hash":
                 result = EmitPassthrough("Invoke-BashHash", args);
@@ -14315,6 +14317,25 @@ public static partial class PsEmitter
             default:
                 return false;
         }
+    }
+
+    /// <summary>
+    /// A quoted or backslash-escaped command name (<c>'local'</c>, <c>"eval"</c>, <c>\export</c>) only escapes alias
+    /// expansion in bash: the builtin of that name still runs. Called after <see cref="ExpandAliases"/> (which looks at
+    /// bare words only), it makes the name of a bash builtin (<see cref="BashBuiltins.Names"/>) a plain word for
+    /// everything after. REGRESSION: every builtin the emitter implements (<c>local</c>, <c>export</c>, <c>set</c>,
+    /// <c>eval</c>, <c>read</c>, <c>declare</c>, <c>return</c>, <c>break</c>) was looked up as a program,
+    /// <c>command not found</c> (127). Other names keep their quotes (a function or program runs either way). A name an
+    /// alias also has stays quoted: EmitSimple re-enters itself (and so ExpandAliases) for parts of one command, and the
+    /// bare word would expand there (<c>alias echo=...; 'echo' x</c>). The declaration builtins (<c>'local' v=3</c>) are
+    /// read by the parser (<c>BashParser.CommandWordName</c>).
+    /// </summary>
+    private static Command.Simple UnquoteBuiltinName(Command.Simple cmd)
+    {
+        if (cmd.Words.IsDefaultOrEmpty || GetLiteralValue(cmd.Words[0]) is not null) return cmd;
+        if (TryGetStaticArgValue(cmd.Words[0]) is not { } name || !BashBuiltins.Names.Contains(name)) return cmd;
+        if (_aliasDefs is not null && AliasLookup(name, cmd.Line) is not null) return cmd;
+        return cmd with { Words = cmd.Words.SetItem(0, new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal(name)))) };
     }
 
     public static string? GetLiteralValue(CompoundWord word)

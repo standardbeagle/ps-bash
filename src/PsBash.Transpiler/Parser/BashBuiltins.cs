@@ -34,7 +34,7 @@ public static class BashBuiltins
     /// </summary>
     public static readonly IReadOnlySet<string> RunAsSource = new HashSet<string>(StringComparer.Ordinal)
     {
-        ".", "alias", "cd", "declare", "eval", "exec", "exit", "export", "let", "local", "readarray", "readonly", "set",
+        ".", "alias", "cd", "declare", "eval", "exec", "exit", "export", "fc", "let", "local", "readarray", "readonly", "set",
         "source", "trap", "typeset", "unalias",
     };
 

@@ -9,9 +9,10 @@ namespace PsBash.Cmdlets;
 /// <code>
 /// history [n]                 list (the last n entries), "%5d  %s"
 /// history -c | -d offset      clear | delete one entry (negative offset counts from the end)
+/// history -d start-end        delete a range (each end a number or a negative offset)
 /// history -s arg...           append the args as one entry
-/// history -p arg...           print each arg (no history expansion in a script)
-/// history -a|-n|-r|-w [file]  append / (nothing new) / read / write the list to file or $HISTFILE
+/// history -p arg...           print each arg after history expansion (PsBash.Core.HistoryExpander)
+/// history -a|-n|-r|-w [file]  append / (nothing new) / read / write the list to file or $HISTFILE (one of them)
 /// </code>
 /// Without this, PowerShell's <c>history</c> alias (<c>Get-History</c>) ran and leaked its binder errors.
 /// </summary>
@@ -34,8 +35,9 @@ public sealed class InvokeBashHistoryCommand : BashCmdlet
     internal const string Usage =
         "history: usage: history [-c] [-d offset] [n] or history -anrw [filename] or history -ps arg [arg...]";
 
-    /// <summary>One run's result: lines for stdout, lines for stderr, the exit status.</summary>
-    internal sealed record Result(List<string> Out, List<string> Err, int Status);
+    /// <summary>One run's result: lines for stdout, lines for stderr, the exit status, and (<c>fc -s</c>) the command
+    /// to run next.</summary>
+    internal sealed record Result(List<string> Out, List<string> Err, int Status, string? Rerun = null);
 
     /// <summary>Index of the first entry not yet in the history file: <c>history -a</c> appends from it, and
     /// <c>-a</c> / <c>-w</c> / <c>-r</c> move it to the end. <c>-c</c> resets it, so lines entered after a clear
@@ -45,11 +47,12 @@ public sealed class InvokeBashHistoryCommand : BashCmdlet
     /// <summary>Pure: applies <paramref name="args"/> to <paramref name="list"/> (mutated in place). File options go
     /// through <paramref name="readFile"/> / <paramref name="writeFile"/> (append flag) so tests need no disk; an
     /// IO exception from <paramref name="writeFile"/> is status 1. With no operand and no <paramref name="histFile"/>
-    /// the file is <paramref name="defaultFile"/> (bash: <c>~/.history</c>).</summary>
+    /// the file is <paramref name="defaultFile"/> (bash: <c>~/.history</c>). <paramref name="lastIsCurrent"/>: the last
+    /// entry is this command itself (history recording on).</summary>
     internal static Result Run(
         IReadOnlyList<string> args, List<string> list, string? histFile,
         Func<string, string[]?> readFile, Action<string, IEnumerable<string>, bool> writeFile,
-        HistoryMark? mark = null, string? defaultFile = null)
+        HistoryMark? mark = null, string? defaultFile = null, bool lastIsCurrent = false)
     {
         mark ??= new HistoryMark();
         if (mark.Saved > list.Count) mark.Saved = list.Count;
@@ -69,6 +72,7 @@ public sealed class InvokeBashHistoryCommand : BashCmdlet
         }
 
         char? fileOp = null; bool clear = false, print = false, store = false; string? delete = null;
+        var fileOps = new HashSet<char>();
         int i = 0;
         for (; i < args.Count; i++)
         {
@@ -83,7 +87,7 @@ public sealed class InvokeBashHistoryCommand : BashCmdlet
                     case 'c': clear = true; break;
                     case 'p': print = true; break;
                     case 's': store = true; break;
-                    case 'a' or 'n' or 'r' or 'w': fileOp = ch; break;
+                    case 'a' or 'n' or 'r' or 'w': fileOp = ch; fileOps.Add(ch); break;
                     case 'd':
                         var rest = a[(k + 1)..];
                         if (rest.Length == 0)
@@ -103,18 +107,24 @@ public sealed class InvokeBashHistoryCommand : BashCmdlet
         }
         var operands = args.Skip(i).ToList();
 
-        if (clear) { list.Clear(); mark.Saved = 0; if (delete is null && fileOp is null && !print && !store) return Done(0); }
-        if (delete is not null)
-        {
-            if (!long.TryParse(delete, out var off)) return Fail(1, $"{delete}: history position out of range");
-            long idx = off < 0 ? list.Count + off : off - 1;
-            if (idx < 0 || idx >= list.Count) return Fail(1, $"{delete}: history position out of range");
-            list.RemoveAt((int)idx);
-            if (idx < mark.Saved) mark.Saved--;
-            return Done(0);
-        }
-        if (print) { o.AddRange(operands); return Done(0); }
+        // bash's order: the -anrw check, -c (alone when no operand follows), -s, -p, -d, the file options, the listing.
+        if (fileOps.Count > 1) return Fail(1, "cannot use more than one of -anrw");
+        if (clear) { list.Clear(); mark.Saved = 0; if (operands.Count == 0) return Done(0); }
         if (store) { if (operands.Count > 0) list.Add(string.Join(' ', operands)); return Done(0); }
+        if (print)
+        {
+            // The `history -p` line itself (recorded with set -o history) is gone before the expansion, as in bash.
+            if (lastIsCurrent && list.Count > 0) { list.RemoveAt(list.Count - 1); if (mark.Saved > list.Count) mark.Saved = list.Count; }
+            int status = 0;
+            foreach (var word in operands)
+            {
+                if (PsBash.Core.HistoryExpander.Expand(word, list, out _) is { } expanded) o.Add(expanded);
+                else { e.Add($"history: {word}: history expansion failed"); status = 1; }
+            }
+            return Done(status);
+        }
+        if (delete is not null)
+            return Delete(delete, list, mark, out var bad) ? Done(0) : bad is null ? Done(1) : Fail(1, $"{bad}: history position out of range");
         if (fileOp is char op)
         {
             var file = operands.Count > 0 ? operands[0] : string.IsNullOrEmpty(histFile) ? defaultFile : histFile;
@@ -148,6 +158,45 @@ public sealed class InvokeBashHistoryCommand : BashCmdlet
         for (int j = list.Count - count; j < list.Count; j++) o.Add($"{j + 1,5}  {list[j]}");
         return Done(0);
     }
+
+    /// <summary>
+    /// <c>history -d OFFSET</c> / <c>-d START-END</c> as bash 5.2 does it. Each number is bash's <c>legal_number</c>
+    /// (blanks around it allowed); a negative one counts back from the end of the list (<c>-1</c> the last entry), a
+    /// positive one is an entry number, and 0 stays the first entry inside a range (<c>0-1</c> deletes entry 1). The
+    /// range separator is the first <c>-</c> after the first character. False with <paramref name="bad"/> naming the
+    /// offending text (the whole argument when a number does not parse), or null when START is past END (bash fails
+    /// quietly).
+    /// </summary>
+    private static bool Delete(string arg, List<string> list, HistoryMark mark, out string? bad)
+    {
+        bad = arg;
+        int dash = arg.Length > 1 ? arg.IndexOf('-', 1) : -1;
+        if (dash > 0)
+        {
+            string startText = arg[..dash], endText = arg[(dash + 1)..];
+            if (!TryLegalNumber(startText, out var start) || !TryLegalNumber(endText, out var end)) return false;
+            if (startText[0] == '-' && start < 0) start += list.Count; else if (start > 0) start--;
+            if (start < 0 || start >= list.Count) { bad = startText; return false; }
+            if (endText.Length > 0 && endText[0] == '-' && end < 0) end += list.Count; else if (end > 0) end--;
+            if (end < 0 || end >= list.Count) { bad = endText; return false; }
+            if (start > end) { bad = null; return false; }
+            int n = (int)(end - start + 1);
+            list.RemoveRange((int)start, n);
+            mark.Saved = mark.Saved <= start ? mark.Saved : Math.Max((int)start, mark.Saved - n);
+            return true;
+        }
+        if (!TryLegalNumber(arg, out var off)) return false;
+        long idx = arg[0] == '-' && off < 0 ? list.Count + off : off - 1;
+        if (idx < 0 || idx >= list.Count) return false;
+        list.RemoveAt((int)idx);
+        if (idx < mark.Saved) mark.Saved--;
+        return true;
+    }
+
+    /// <summary>bash's <c>legal_number</c>: an optionally signed decimal integer with blanks around it allowed.</summary>
+    private static bool TryLegalNumber(string text, out long value)
+        => long.TryParse(text.Trim(' ', '\t', '\n'), System.Globalization.NumberStyles.AllowLeadingSign,
+            System.Globalization.CultureInfo.InvariantCulture, out value);
 
     /// <summary>The session's history list (global, so <c>history -s</c> in a function outlives it); shared with <c>fc</c>.</summary>
     internal static List<string> Entries(SessionState state)
@@ -195,7 +244,7 @@ public sealed class InvokeBashHistoryCommand : BashCmdlet
                 FileSystemHelpers.ThrowIfNotWritableName(path);   // `history -w hx/` creates no file `hx`
                 using var sw = new StreamWriter(path, append, PsBash.Core.RawBytes.Encoding);
                 foreach (var l in lines) sw.Write(l + "\n");
-            }, mark, defaultFile);
+            }, mark, defaultFile, InvokeBashShoptCommand.IsEnabled("set:history"));
 
         foreach (var line in r.Out) WriteObject(line);
         // A shell diagnostic carries the source prefix (`s.sh: line 3: history: x: numeric argument required`); the
