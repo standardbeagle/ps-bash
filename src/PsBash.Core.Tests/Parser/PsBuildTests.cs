@@ -632,12 +632,26 @@ public class PsBuildTests
     [Theory]
     [InlineData("fc -s a=b")]
     [InlineData("fc -l 1 2")]
-    [InlineData("fc -s > out")]
     public void Transpile_Fc_TakesTheRerunThenTheSharedCall(string bash)
     {
         var ps = PsEmitter.Transpile(bash)!;
         Assert.Contains("$global:__BashFcRerun = $null; Invoke-BashFc ", ps);
         Assert.Contains("$__psbash_eval_src = $global:__BashFcRerun; $global:__BashFcRerun = $null; if (-not [string]::IsNullOrWhiteSpace($__psbash_eval_src)) { ", ps);
         Assert.DoesNotContain(". { $global:__BashFcRerun", ps);
+    }
+
+    /// <summary>
+    /// <c>fc -s &gt; out</c>: the redirect is the whole command's, so the re-run's output goes to out too (bash 5.2: out holds
+    /// the re-run's <c>hello</c>; the echoed command line goes to stderr). The take of the re-run and the run-time call are
+    /// both inside the one block the redirect applies to (PsEmitter.RedirectGroup), the redirect after the call.
+    /// </summary>
+    [Fact]
+    public void Transpile_FcWithARedirect_TakesAndRunsTheRerunInsideTheRedirectedBlock()
+    {
+        var ps = PsEmitter.Transpile("fc -s > out")!;
+        Assert.StartsWith(". { $global:__BashFcRerun = $null; Invoke-BashFc -s; $__psbash_eval_src = $global:__BashFcRerun; ", ps);
+        int run = ps.IndexOf("Invoke-Expression $__psbash_eval_pwsh", StringComparison.Ordinal);
+        int redirect = ps.IndexOf("} | Invoke-BashRedirect -Path out", StringComparison.Ordinal);
+        Assert.True(run > 0 && redirect > run, ps);
     }
 }

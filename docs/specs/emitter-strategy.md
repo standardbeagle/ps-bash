@@ -258,6 +258,27 @@ return passes through; the one that is a block (`ErrexitFinalOperand`) goes thro
 `RedirectGroupGuardTests.ErrexitWrappersPassAReturnOrAreBlockMakers` (a PsBuild errexit wrapper that makes a block must
 be a listed block maker) and the condition shapes in `Transpile_ReturnInAnErrexitCondition_StaysAStatement`.
 
+**errexit's final and-or operand streams.** Each and-or operand marks its own start (as `EmitCommand` does for a
+command), so only a return in THAT operand makes it pass one on. The operand stays the dot-sourced block
+(`ErrexitFinalOperand`) with `GroupBody` inside, and the `GroupPassingReturn` check wraps the whole errexit list
+(`EmitAndOrStatement`): the final operand is the last thing the list runs, so the check after it is the operand's. It is
+never put in `$( )`, which would hold back every line of `set -e; cond && npm start` until it ended. REGRESSION: the operand
+compared against the enclosing body's mark, so any earlier `x || return 1` made every later operand "pass", in `$( )`.
+Guard: `RedirectGroupGuardTests.Transpile_ErrexitFinalOperand*`; behavior
+`RedirectGroupReturnDifferentialTests.ErrexitFinalOperand_AfterAnEarlierReturn_RunsAndStillPassesAReturn`.
+
+**The emitter's thread state is per unit and per scope.** The emitter's `[ThreadStatic]` fields go back to their first
+values at the start of every top-level `Transpile` (`PsEmitter.ResetUnitState`; a nested one, for static eval text, keeps
+them), except the caller's inputs to it (`InheritedPipefail`, `EvalLocalNames`, ...). Every nested emission scope (`$( )`,
+`<( )`/`>( )`, a pipe stage, a `&` job, a subshell, a function body) saves and restores the scoped fields through ONE
+struct, `PsEmitter.EmitterScope` (`Enter()` ... `Restore()` in a finally), never ad-hoc locals. Name sequences that must
+stay distinct across units nesting at run time (`__psbash_evin_prev`, `__psbash_pso`) carry a salt from the unit's text,
+so a reset counter cannot repeat a name an outer unit uses. REGRESSION: `_leavingReturns` was never reset and not
+restored after `$( )`, a pipe stage or a job, so the same script emitted different PowerShell depending on what was
+transpiled before it on the thread. Guards: `Core.Tests/EmitterStateGuardTests` (every `[ThreadStatic]` field of PsEmitter
+and PsBuild is reset by `ResetUnitState` or exempt with a reason), `Spec.Tests/TranspileDeterminismTests` (every spec case
+and eval fixture transpiles to the same text after any other unit).
+
 ---
 
 ## 3. `EmitPassthrough`
