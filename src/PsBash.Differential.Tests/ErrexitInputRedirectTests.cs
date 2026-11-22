@@ -53,6 +53,13 @@ public class ErrexitInputRedirectTests
         + "( set -e; : > /nonexistent/d/o || echo handled8; echo cont8 ) 2>/dev/null; echo \"s8=$?\"\n"
         + "( set -e; { { :; } 2> /nonexistent/d/e; } 2>/dev/null; echo no9 ); echo \"s9=$?\"\n");
 
+    // `true < f`, `: < f`: the builtin emits an expression, a pipe stage after the file only once wrapped. REGRESSION: the
+    // whole script failed to parse ("Expressions are only allowed as the first element of a pipeline").
+    [SkippableFact]
+    public Task StatusOnlyBuiltins_WithAnInputFile_RunAndReportAMissingOne() => AssertOracle.EqualAsync(
+        "echo hi > in\ntrue < in; echo \"t=$?\"\n: < in; echo \"c=$?\"\nfalse < in; echo \"f=$?\"\n"
+        + "true < /nonexistent/zz; echo \"m=$?\"\nr() { return 3; }\nr < in; echo \"r=$?\"\n");
+
     // The ERR trap runs once for the failed open, nested or not, with $LINENO at the command before a compound and at a
     // simple command's own line (bash 5.2).
     [SkippableFact]
