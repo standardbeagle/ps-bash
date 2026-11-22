@@ -198,4 +198,45 @@ public class RedirectGroupGuardTests
     [InlineData("f() { read -r l </dev/null; cat <rc; }")]             // `< /dev/null`, `< file` with no return
     public void Transpile_RedirectBlockWithNoReturnToPass_KeepsThePlainBlock(string script)
         => Assert.DoesNotContain(PsBuild.GroupReturnVar, PsEmitter.Transpile(script)!);
+
+    /// <summary>errexit's final and-or operand as emitted: <c>&amp;&amp; . { suppress--; try { OPERAND</c>.</summary>
+    private static readonly string FinalOperandBlock = "&& . { " + PsBuild.ErrexitSuppressVar + "--; try { ";
+
+    /// <summary>
+    /// errexit's final and-or operand with a return in it: the check after the whole list passes the return on, and the
+    /// operand stays the dot-sourced block, a chain operand whose output streams. REGRESSION: the passing form was put in
+    /// <c>$( )</c>, which held back every line of <c>set -e; cond &amp;&amp; npm start</c> / <c>tail -f</c> until it ended.
+    /// </summary>
+    [Theory]
+    [InlineData("set -e\nf() { [[ 1 ]] && { return 6; }; echo no; }")]
+    [InlineData("trap : ERR\nf() { true && { return 6; } 2>x; echo no; }")]
+    [InlineData("set -e\nf() { false || return 1; [[ 1 ]] && { echo a; return 6; }; echo no; }")]
+    public void Transpile_ErrexitFinalOperandWithAReturn_StreamsAndPassesItOn(string script)
+    {
+        var ps = PsEmitter.Transpile(script)!;
+        Assert.Contains(PassesReturn, ps);
+        Assert.Contains(FinalOperandBlock + PsBuild.GroupReturnVar + " = $true", ps);
+        Assert.DoesNotContain("$(" + PsBuild.GroupReturnVar, ps);
+    }
+
+    /// <summary>
+    /// errexit's final and-or operand with no return of its own is the plain block, whatever came before it. REGRESSION: the
+    /// operand compared the return count against the enclosing statement's mark, so one earlier <c>x || return 1</c> (or a
+    /// <c>$( exit )</c>, a pipe stage's exit, a function's return) made every later final operand "pass", in <c>$( )</c>.
+    /// </summary>
+    [Theory]
+    [InlineData("set -e\nf() { false || return 1; true && { sleep 1; echo a; sleep 1; echo b; }; }")]
+    [InlineData("set -e\nf() { { return 6; } 2>x; true && { echo a; }; }")]
+    [InlineData("set -e\nf() { return 1; }\ntrue && { echo a; }")]
+    [InlineData("set -e\nv=$(foo || exit 1)\ntrue && { echo a; }")]
+    [InlineData("set -e\necho q | while :; do exit 1; done\ntrue && { echo a; }")]
+    [InlineData("set -e\n( exit 2 ) || :\ntrue && { echo a; }")]
+    [InlineData("set -e\n{ exit 3; } &\ntrue && { echo a; }")]
+    public void Transpile_ErrexitFinalOperandAfterAnEarlierReturn_KeepsThePlainBlock(string script)
+    {
+        var ps = PsEmitter.Transpile(script)!;
+        Assert.Contains(FinalOperandBlock, ps);
+        Assert.DoesNotContain(FinalOperandBlock + PsBuild.GroupReturnVar, ps);
+        Assert.DoesNotContain("$(" + PsBuild.GroupReturnVar, ps);
+    }
 }

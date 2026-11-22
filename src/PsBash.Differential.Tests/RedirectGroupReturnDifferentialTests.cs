@@ -113,6 +113,23 @@ public class RedirectGroupReturnDifferentialTests
         + "trap ':' ERR\n"
         + "for k in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do c$k; echo \"err-c$k=$?\"; done\n");
 
+    // errexit's final and-or operand after an earlier `|| return 1`, `$( exit )`, a pipe stage's exit or a function's return in
+    // the same unit: it runs as a plain statement (its output streams; the emitted form is guarded by
+    // RedirectGroupGuardTests.Transpile_ErrexitFinalOperandAfterAnEarlierReturn_KeepsThePlainBlock), and a return in it
+    // still leaves the function. Each case in a subshell that turns set -e on.
+    [SkippableFact]
+    public Task ErrexitFinalOperand_AfterAnEarlierReturn_RunsAndStillPassesAReturn() => Same(
+        "a1(){ true || return 1; true && { echo a1; echo a2; }; echo a3; }\n"
+        + "a2(){ true || return 1; [[ 1 ]] && { echo in2; return 6; }; echo no; }\n"
+        + "a3(){ v=$(true || exit 4); echo \"v=$?\"; [[ 1 ]] && { echo in3; return 6; }; echo no; }\n"
+        + "a4(){ echo q | while read -r l; do [ -z \"$l\" ] && exit 1; break; done; true && { echo s4; }; [[ 1 ]] && { return 5; }; echo no; }\n"
+        + "a5(){ { return 2; } 2>/dev/null; echo no; }\n"
+        + "a6(){ a5 || :; true && { echo after-a5; }; false || { echo or-arm; return 7; }; echo no; }\n"
+        + "se(){ ( set -e; \"$@\"; echo \"after-$1\" ); echo \"se-$1=$?\"; }\n"
+        + "for k in 1 2 3 4 5 6; do se a$k; done\n"
+        + "trap ':' ERR\n"
+        + "for k in 1 2 3 4 6; do a$k; echo \"err-a$k=$?\"; done\n");
+
     // Controls: what bash does NOT pass on.
     [SkippableFact]
     public Task Controls_BreakContinueCallsAndSource() => Same(
