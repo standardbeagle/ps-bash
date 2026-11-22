@@ -1378,6 +1378,23 @@ public static class PsBuild
     public static string TouchRedirectTarget(string target, bool append, bool force = false) =>
         "@() | Invoke-BashRedirect -Path " + target + (append ? " -Append" : "") + (force ? " -Force" : "");
 
+    // ───────────────────────── Descriptor table steps ──────────────────────────
+
+    /// <summary>
+    /// <c>Invoke-BashExecFd N 'OP' TARGET</c>: open, duplicate or close numbered descriptor <paramref name="fd"/> in the
+    /// shell's descriptor table (operator <c>&lt;&lt;&lt;</c>: TARGET is the text to read). <paramref name="targetArg"/> is an
+    /// emitted argument (a quoted word, or a parenthesized expression).
+    /// </summary>
+    public static string ExecFd(int fd, string op, string targetArg) =>
+        "Invoke-BashExecFd " + fd.ToString(System.Globalization.CultureInfo.InvariantCulture) + " " + SingleQuote(op) + " " + targetArg;
+
+    /// <summary><c>{name}OP TARGET</c>: the runtime allocates a descriptor (10 up), opens it and stores its number in name.</summary>
+    public static string ExecFdNamed(string variable, string op, string targetArg) =>
+        "Invoke-BashExecFd -Variable " + SingleQuote(variable) + " -Operator " + SingleQuote(op) + " -Target " + targetArg;
+
+    /// <summary><c>N&gt;&amp;-</c>: close descriptor <paramref name="fd"/>.</summary>
+    public static string ExecFdClose(int fd) => ExecFd(fd, ">&", "'-'");
+
     /// <summary>
     /// The <c> | Invoke-BashRedirect …</c> stage that applies a command's final stdout/stderr
     /// destinations (see <c>PsEmitter.AppendRedirectTail</c>). Targets are emitted ARGUMENT-mode
@@ -1390,7 +1407,7 @@ public static class PsBuild
     public static string RedirectStage(
         string? stdoutPath, bool append, string? errorPath, bool errorAppend, bool passErrors,
         IReadOnlyList<string> truncate, IReadOnlyList<string> touch,
-        bool force = false, bool errorForce = false, string? openPlan = null)
+        bool force = false, bool errorForce = false, string? openPlan = null, bool readWrite = false)
     {
         var sb = new System.Text.StringBuilder(" | Invoke-BashRedirect");
         if (stdoutPath is not null)
@@ -1398,6 +1415,7 @@ public static class PsBuild
             sb.Append(" -Path ").Append(stdoutPath);
             if (append) sb.Append(" -Append");
             if (force) sb.Append(" -Force");
+            if (readWrite) sb.Append(" -ReadWrite");
         }
         if (errorPath is not null)
         {

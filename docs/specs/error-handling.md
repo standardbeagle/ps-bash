@@ -411,8 +411,15 @@ POINTS AT THAT MOMENT, and the redirects after it are never opened (bash 5.2, WS
 - *Input redirects* (`PsBuild.SimpleInputRedirectGuard`, `InputRedirectGuard`, `InputRedirectGuardInline`): the
   report is `PsBuild.InputRedirectFailure`, run through the stdout/stderr redirects written BEFORE the `<`
   (`PsEmitter.InputFailTail`). A lone `$(< file)` is guarded too (it was a PowerShell `Get-Content` error, status 0).
-- Under `set -e` the stage writes the report itself and throws a terminating error marked `psbash.reported`, so the
-  host does not print it a second time (`ps-bash: …`).
+- INVARIANT: a redirect that cannot be opened is a STATUS, never an errexit decision. The stage (`Invoke-BashRedirect`,
+  `FailOpen`) writes the report, sets status 1 (`$LASTEXITCODE`, `$global:__BashRedirectFailed`) and stops its upstream;
+  it never throws for `set -e`. Errexit belongs to the one emitted check after the statement (`PsBuild.ErrexitCheck`,
+  placed by `PsEmitter.IsErrexitCheckedSimple`, which also checks a special builtin or a bare redirect that opens a file,
+  `: > /nodir/f`, `> /nodir/f`), so `||`, `if`, `while` and `!` (`__BashErrexitSuppress`) keep it from ending the shell,
+  a subshell's `set -e` ends only the subshell, and the report goes where the subshell's `2>` points. The stage used to
+  throw under `set -e`: `echo hi > /nodir/x || echo caught` ended the script, `( set -e; { echo x; } > /nodir/f )
+  2>/dev/null; echo $?` ended the whole script and printed its message past the `2>/dev/null`. Differential:
+  `RedirectOperatorDifferentialTests.RedirectThatCannotOpen_*`.
 
 Not yet through the primitive: the other shell diagnostics still hard-code `bash: ` or `ps-bash: ` (no NAME, no line).
 

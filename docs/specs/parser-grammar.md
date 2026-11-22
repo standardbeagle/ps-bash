@@ -165,11 +165,32 @@ simple_command -> assignment_prefix* word_or_redirect*
 assignment_prefix -> ASSIGNMENT_WORD ('(' word* ')')?
 word_or_redirect  -> WORD | redirect | here_string | heredoc_operator
 
-redirect     -> IO_NUMBER? redirect_op WORD
-redirect_op  -> '<' | '>' | '>>' | '<&' | '>&' | '&>' | '&>>' | '<<' | '<<-'
-here_string  -> '<<<' WORD
-heredoc_op   -> ('<<' | '<<-') DELIMITER
+redirect     -> fd_prefix? ( file_op WORD | '<<<' WORD | ('<<' | '<<-') DELIMITER )
+fd_prefix    -> IO_NUMBER | NAMED_FD            # `3`, `{name}` - not before '&>' / '&>>'
+file_op      -> '<' | '>' | '>|' | '>>' | '<>' | '<&' | '>&' | '&>' | '&>>'
 ```
+
+#### Redirections (one table)
+
+`RedirectOperators` (Transpiler `Parser/RedirectOperators.cs`) is THE list of redirection operators. The lexer asks it
+which digit word before an operator is its descriptor (`IsRedirectKind` -> `TakesFdPrefix`), and the parser asks it which
+tokens start a redirection everywhere one may appear: among a simple command's words, after a compound command's
+closing keyword (`done`, `}`, `fi`, `)`, ... via `ParseTrailingRedirects`) and among a declaration builtin's operands.
+INVARIANTS:
+- every operator takes an optional `N` or `{name}` prefix on every kind of command (`&>` / `&>>` take none: they name
+  stdout and stderr both, and bash reads `2&>f` as the word `2` then `&>f`);
+- there is ONE production, `ParseRedirect`, for every command kind; a here-document (Op `<<`, for `<<` and `<<-`) or
+  here-string (Op `<<<`) carries its text in `Redirect.Here`. On a simple command a here-text on fd 0 with no `{name}` is
+  the command's stdin (`Command.Simple.HereDocs`, the last one wins); on any other descriptor it is a `Redirect` that
+  opens that descriptor (`read -u 3 l 3<<< x`, `exec {hd}<<EOF`), emitted by `PsEmitter.FdOpenStep` as text
+  (`Invoke-BashExecFd N '<<<' (text)`);
+- `<>` is a `Less` token whose `Redirect.ReadWrite` is set (`OpenOperator` = `<>`); `N>&M-` / `N<&M-` (a move) is the
+  dup operator with the target word `M-` (`PsEmitter.MovedFd`).
+
+The lists used to be separate and disagreed: `3<<<` was not an IO number (`read -u 3 b 3<<< x` passed `3` as a name),
+`{v}<<<` on a simple command ran `{v}`, a compound command's `3<<< x` / `3<<EOF` did not parse.
+Guard: Host.Tests `RedirectOperatorTableGuardTests` (every operator x no prefix / `N` / `{name}` x simple / group / loop /
+`exec`: a redirection on the AST and valid PowerShell, generated from the table).
 
 Special handling:
 - `export` / `local` followed by `ASSIGNMENT_WORD` produces `ShAssignment` (with `IsLocal` flag for `local`).
@@ -432,10 +453,20 @@ Heredoc delimiter quoting controls expansion:
 - Unquoted `<<EOF` -> `Expand=true` (variables expanded)
 - Quoted `<<'EOF'` or `<<"EOF"` -> `Expand=false` (literal body)
 
-The body is sliced from the raw source by the parser (`CollectHereDocBodies`), which
-also applies `<<-` tab stripping there — `HereDoc.Body` is final; the emitter does not
+The body is sliced from the raw source by the parser (`BashParser.HereDocument`, from the span the lexer stamped on the
+delimiter token), which also applies `<<-` tab stripping there — `HereDoc.Body` is final; the emitter does not
 strip again. A body delimited by end of input (no delimiter line, no trailing newline)
 still gets the final `\n` bash gives every body line.
+
+**Line continuation (unquoted delimiter).** bash reads an unquoted here-document's lines with backslash-newline removed:
+before the `<<-` tab strip (which then strips only the joined line's start), before the delimiter match and before
+expansion. So `a $x\` + `b` is `a $xb` (`$xb` unset: `a `), `<<-` `TAB t1\` + `TAB t2` is `t1 TAB t2`, and `a\` then
+`EOF` is the body line `aEOF`, not the end. A backslash takes the next character with it: `\\` before a newline is a
+literal backslash and the newline stays. Of the other escapes only `\$`, `` \` `` and `\\` are special (left for
+expansion); `\a`, `\"`, `\'`, `\{` keep their backslash. A quoted delimiter (`'EOF'`, `"EOF"`, `\EOF`) keeps every
+backslash-newline. ONE rule: `BashLexer.JoinHereDocContinuations`, used by the lexer's delimiter match
+(`SkipHeredocBody`, also inside `$( )`) and by the parser's body. Tests: Core.Tests `HereDocContinuationTests`,
+Differential `RedirectOperatorDifferentialTests.HereDocument_BackslashNewline_IsALineContinuation`.
 
 ### 6.3 Brace Expansion vs Literal Braces
 

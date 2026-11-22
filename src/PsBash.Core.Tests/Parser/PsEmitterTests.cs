@@ -477,9 +477,9 @@ public class PsEmitterTests
     {
         // `cmd 3<<EOF` feeds descriptor 3 (read -u 3), not stdin; the command's status survives the close.
         var ps = PsEmitter.Transpile("read -u 3 x 3<<EOF\nhi\nEOF")!;
-        Assert.Contains("Invoke-BashExecFd 3 '<'", ps);
-        Assert.Contains("Invoke-BashExecFd 3 '<&' '-'", ps);
-        Assert.Contains("$global:LASTEXITCODE = $__psbashFdRc", ps);
+        Assert.Contains("Invoke-BashExecFd 3 '<<<' (", ps);
+        Assert.Contains("Invoke-BashExecFd 3 '>&' '-'", ps);
+        Assert.Contains("$global:LASTEXITCODE = $__psbash_fdRc", ps);   // the one scoped-descriptor form (WithScopedHighFds)
         Assert.DoesNotContain("| Emit-BashLine | Invoke-BashRead", ps);
     }
 

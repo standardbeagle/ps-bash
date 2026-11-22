@@ -517,9 +517,15 @@ if ($__bfed -and $__bc -is [string] -and $__bc -ceq $__bn -and $__bn -ne '' -and
     # called by name. Piped, it was handed EVERYTHING left (`c=f; { $c; $c; } < in` gave the second call nothing).
     & $__bc @__bargs
 } elseif ($__bfed) {
-    $__bread = $(if ($__bsr = 'PsBash.Core.Parser.StdinReaders' -as [type]) { $__bsr::ShouldFeed($__bn, [string[]]$__bargs) } else { $true })
-    if ($__bread) {
+    # StdinReaders.Plan, the one decision a literal name gets too (PsEmitter.EmitSimpleFed): a program (or a name not
+    # found) has the stdin as its process stdin, never a feed piped in, which waited for a first record - `$PY -c ...`
+    # hung under an open, silent launcher stdin.
+    $__bplan = $(if ($__bsr = 'PsBash.Core.Parser.StdinReaders' -as [type]) { [string]$__bsr::Plan($__bn, [string[]]$__bargs) } else { 'ProcessStdin' })
+    if ($__bplan -eq 'Pipe') {
         & { $__psbash_q = $global:__BashStdIn; $__psbash_r = $null; while ($__psbash_q -and $__psbash_q.TryDequeue([ref]$__psbash_r)) { $__psbash_r } } | & $__bc @__bargs
+    } elseif ($__bplan -eq 'ProcessStdin' -and $__bn -ne '') {
+        $__psbash_native_stdin = Enter-BashNativeStdin $__bn
+        try { & $__bc @__bargs } finally { Exit-BashNativeStdin $__psbash_native_stdin }
     } else { & $__bc @__bargs }
 } elseif ($MyInvocation.ExpectingInput) {
     # Piped (`echo x | $c`): the same StdinReaders rule. A command that does not read stdin drains it and runs; piped a
