@@ -1743,16 +1743,20 @@ public static partial class PsEmitter
     }
 
     /// <summary>
-    /// An <c>if</c>/<c>elif</c>/<c>while</c>/<c>until</c> condition: errexit-exempt in bash, so nothing
-    /// emitted inside it is checked, and under errexit a condition that runs a command runs it
-    /// suppressed — a function called there must keep going past its own failures.
+    /// An <c>if</c>/<c>elif</c>/<c>while</c>/<c>until</c> condition in expression position: a test that runs no command
+    /// (<c>[ ]</c>, <c>[[ ]]</c>, <c>(( ))</c>, <c>true</c>), errexit-exempt as every condition is in bash. A condition that
+    /// runs a command is hoisted to statement position instead (<see cref="IsHoistedCondition"/>,
+    /// <see cref="EmitHoistedCondition"/>), so a <c>return</c> in it (<c>if return 6; then</c>, <c>while ! return 6</c>,
+    /// <c>if [[ 1 ]] &amp;&amp; return 6</c>) is a statement of the function and leaves it, under set -e and an ERR
+    /// trap too — in the expression's script block (<see cref="PsBuild.ExitCodeTest"/>) it would leave only the block.
+    /// One is refused here, so no new caller can put a command in that block (guard <c>RedirectGroupGuardTests</c>).
     /// </summary>
-    private static string EmitGuardedCondition(Command cond, Func<Command, string> emit)
+    private static string EmitExpressionCondition(Command cond)
     {
-        var text = WithErrexitExempt(() => emit(cond));
-        return _errexitMode && ConditionRunsCommand(cond) ? PsBuild.ErrexitSuppressedExpr(text) : text;
+        if (IsHoistedCondition(cond))
+            throw new InvalidOperationException("a condition that runs a command is hoisted (EmitHoistedCondition), never an expression");
+        return WithErrexitExempt(() => EmitCondition(cond));
     }
-
     private static bool ConditionRunsCommand(Command cond) => cond switch
     {
         Command.BoolExpr or Command.ArithCommand => false,
@@ -1788,7 +1792,7 @@ public static partial class PsEmitter
             if (hoist)
                 sb.Append(EmitHoistedCondition(arm.Cond)).Append("if (").Append(PsBuild.LastStatusTest()).Append(')');
             else
-                sb.Append(i == start ? "if (" : " elseif (").Append(EmitGuardedCondition(arm.Cond, EmitCondition)).Append(')');
+                sb.Append(i == start ? "if (" : " elseif (").Append(EmitExpressionCondition(arm.Cond)).Append(')');
             sb.Append(" { ").Append(EmitBody(arm.Body)).Append(" }");
         }
 
@@ -1818,7 +1822,7 @@ public static partial class PsEmitter
     private static bool IsHoistedCondition(Command cond) => ConditionRunsCommand(cond) || DebugActive;
 
     /// <summary>The hoisted condition statement(s), errexit-exempt (and suppressed under
-    /// errexit) like <see cref="EmitGuardedCondition"/>, followed by "; ".</summary>
+    /// errexit: <see cref="PsBuild.ErrexitSuppressed"/>, a try/finally, so a return in it leaves the function), followed by "; ".</summary>
     private static string EmitHoistedCondition(Command cond)
     {
         // A condition names its command like a statement does: `if nosuch; then` on line 3 reports line 3, and a loop's
@@ -2508,7 +2512,7 @@ public static partial class PsEmitter
             }
             else
             {
-                string cond = EmitGuardedCondition(whileCmd.Cond, EmitCondition);
+                string cond = EmitExpressionCondition(whileCmd.Cond);
                 sb.Append(whileCmd.IsUntil ? "if (" + cond + ") { " : "if (-not (" + cond + ")) { ");
             }
             sb.Append(PsBuild.SetStatusTo(st)).Append("; break }; ");
@@ -4852,8 +4856,7 @@ public static partial class PsEmitter
                     // `local +n r` turned r into a plain variable holding the target name.
                     // REGRESSION: `f() { local -n r=x; local +n r; }; f` left a global r=x.
                     if (_dynLocals?.Contains(pair.Name) == true)
-                        sb.Append($"if ($null -eq $__lsd_{pair.Name}) {{ $__lsd_{pair.Name} = @{{ v = $env:{pair.Name} }} }}; [void]")
-                          .Append(PsBuild.DeclareLocal(pair.Name)).Append("; ");
+                        sb.Append(PsBuild.RunTimeLocal(pair.Name, keepsValue: true, inWrittenFunction: true)).Append("; ");
                     sb.Append("[PsBash.Cmdlets.VarFrameStack]::LocalAttributes(").Append(PsBuild.SingleQuote(pair.Name)).Append("); ")
                       .Append(NamerefMark(pair.Name, localTarget)).Append("; ").Append(PsBuild.SetStatus(0));
                 }
@@ -4927,16 +4930,15 @@ public static partial class PsEmitter
                 // Park the caller's value once per call (restored by EmitFunction's finally), then assign.
                 // `local x` alone leaves x unset, as in bash.
                 // `local s+=x`: the first declaration in this call starts from empty (not the caller's s); later ones append.
+                bool writtenLocal = _dynLocals?.Contains(pair.Name) == true;
                 if (pair.Op == AssignOp.PlusEqual && pair.Value is not null)
-                    sb.Append($"$__psbashLocBase = if ($null -eq $__lsd_{pair.Name}) {{ '' }} else {{ $env:{pair.Name} }}; ");
-                sb.Append($"if ($null -eq $__lsd_{pair.Name}) {{ $__lsd_{pair.Name} = @{{ v = $env:{pair.Name} }} }}; ");
+                    sb.Append("$__psbashLocBase = if (" + PsBuild.NotParked(pair.Name, writtenLocal) + ") { '' } else { $env:" + pair.Name + " }; ");
                 // bash's frame rules (VarFrameStack): `local v` over a temp binding (`v=t f`) keeps its value, a second
                 // `local v` in the same call keeps the local's, anything else leaves v unset; `unset` consults the frames.
-                string declareLocal = PsBuild.DeclareLocal(pair.Name);
-                if (pair.Value is null) sb.Append($"$env:{pair.Name} = ").Append(declareLocal);
-                else
+                sb.Append(PsBuild.RunTimeLocal(pair.Name, keepsValue: pair.Value is not null, inWrittenFunction: writtenLocal));
+                if (pair.Value is not null)
                 {
-                    sb.Append("[void]").Append(declareLocal).Append($"; $env:{pair.Name} = ");
+                    sb.Append($"; $env:{pair.Name} = ");
                     string localAssigned = EmitAssignmentValue(pair.Value);
                     // `local s+=x` appends to the value already there (the caller's, or this function's earlier one).
                     sb.Append(pair.Op == AssignOp.Equal && _intVars?.Contains(pair.Name) == true
@@ -5294,11 +5296,16 @@ public static partial class PsEmitter
     /// single-quoted (<see cref="QuotedFieldsForEval"/>). REGRESSION: it was assigned straight to the variable and
     /// outlived the function (<c>f() { \local m="$1"; }; f "a b*"; echo "${m-unset}"</c> printed a b*; bash: unset).
     /// Only a valid NAME (and plain flags); anything else keeps its path and its diagnostics.
+    /// <para>The same for <c>declare</c>/<c>typeset</c> in text built at run time (<c>declare "$2"</c>, <c>$dc v=1</c>,
+    /// <c>command declare v=$1</c> hand <c>declare 'v=1'</c> over): the written declaration
+    /// <c>declare v='1'</c> is the running function's local (<see cref="RunTimeDeclareScope"/>). REGRESSION: it was
+    /// assigned straight to the variable, so <c>f(){ dc=declare; $dc wv=1; }; f</c> left wv set (bash: unset).</para>
     /// </summary>
     private static bool TryEmitQuotedStaticDeclaration(string name, Command.Simple cmd, out string result)
     {
         result = "";
-        if (name != "local" || !cmd.EnvPairs.IsDefaultOrEmpty || !cmd.HereDocs.IsDefaultOrEmpty) return false;
+        bool declares = name is "declare" or "typeset" && _context == TranspileContext.Eval;
+        if (!(name == "local" || declares) || !cmd.EnvPairs.IsDefaultOrEmpty || !cmd.HereDocs.IsDefaultOrEmpty) return false;
         var text = new StringBuilder(name);
         bool anyQuotedPair = false;
         foreach (var w in cmd.Words.Skip(1))
@@ -5314,10 +5321,16 @@ public static partial class PsEmitter
             string varName = eq < 0 ? s : eq > 0 && s[eq - 1] == '+' ? s[..(eq - 1)] : s[..eq];
             if (!IsValidVarName(varName)) return false;
             text.Append(' ').Append(eq < 0 ? s : s[..(eq + 1)] + PsBuild.BashSingleQuote(s[(eq + 1)..]));
-            anyQuotedPair |= eq >= 0 && !bare;
+            // The rebuilt `declare v='1'` keeps NAME= bare, so it is not taken for a quoted pair again.
+            anyQuotedPair |= eq >= 0 && !bare && !(declares && w.Parts[0] is WordPart.Literal first && first.Value.Contains('='));
         }
-        if (!anyQuotedPair || BashParser.Parse(text.ToString()) is not Command.ShAssignment declaration) return false;
-        result = EmitCommand(cmd.Redirects.IsDefaultOrEmpty ? declaration : declaration with { Redirects = cmd.Redirects });
+        if (!anyQuotedPair) return false;
+        var parsed = BashParser.Parse(text.ToString());
+        if (parsed is Command.ShAssignment declaration)
+            result = EmitCommand(cmd.Redirects.IsDefaultOrEmpty ? declaration : declaration with { Redirects = cmd.Redirects });
+        else if (declares && parsed is Command.Simple written)
+            result = EmitCommand(cmd.Redirects.IsDefaultOrEmpty ? written : written with { Redirects = cmd.Redirects });
+        else return false;
         return true;
     }
 
@@ -5735,7 +5748,7 @@ public static partial class PsEmitter
             return dynamicAssignResult;
 
         if (TryEmitDeclare(cmd, out var declareResult))
-            return declareResult;
+            return RunTimeDeclareScope(cmd, declareResult);
 
         if (TryEmitSpecialBuiltins(cmd, out var builtinResult))
             return builtinResult;
@@ -6059,6 +6072,51 @@ public static partial class PsEmitter
             PsBuild.SimpleInputRedirectGuard(target, feed(b), failTail));
     }
 
+    /// <summary>
+    /// <c>declare</c>/<c>typeset</c> in eval text (<c>eval "$c"</c>, <c>declare "$2"</c>, <c>builtin declare v=$1</c>, a
+    /// sourced file): the text cannot know whether a function runs it, so each scalar it declares becomes the running
+    /// function's local at run time (<see cref="PsBuild.LocalWhenInFunction"/>, the frame a run-time <c>local</c> takes),
+    /// and the declaration stays global at the top level. <c>-g</c>, the print forms and anything but the attribute
+    /// letters a local takes keep it global; arrays and namerefs stay global, as a run-time <c>local</c>'s do.
+    /// REGRESSION: <c>f(){ declare "$1"; }; f e=b</c> left e set after f returned (bash: <c>declare: e: not found</c>).
+    /// </summary>
+    private static string RunTimeDeclareScope(Command.Simple cmd, string declaration)
+    {
+        if (_context != TranspileContext.Eval || _functionDepth != 0 || _dynLocals is not null) return declaration;
+        if (GetLiteralValue(cmd.Words[0]) is not ("declare" or "typeset")) return declaration;
+        var scope = new StringBuilder();
+        foreach (var w in cmd.Words.Skip(1))
+        {
+            string? lit = GetLiteralValue(w);
+            if (lit == "--") continue;
+            if (lit is { Length: > 1 } && lit[0] is '-' or '+')
+            {
+                if (lit.AsSpan(1).IndexOfAnyExcept(RunTimeLocalDeclareFlags) >= 0) return declaration;
+                continue;
+            }
+            string name;
+            bool keepsValue;
+            if (lit is not null)
+            {
+                int eq = lit.IndexOf('=');
+                name = eq < 0 ? lit : lit[..eq];
+                // `declare s+=x`: a new local starts empty, as `local s+=x` does.
+                bool append = name.EndsWith('+');
+                if (append) name = name[..^1];
+                keepsValue = eq > 0 && !append;
+            }
+            else if (TrySplitAppendInitializer(w, out var appendName, out _)) { name = appendName; keepsValue = false; }
+            else if (TrySplitInitializer(w, out var initName, out _)) { name = initName; keepsValue = true; }
+            else return declaration;
+            if (!IsValidVarName(name) || !IsDynamicLocalName(name)) continue;
+            scope.Append(PsBuild.LocalWhenInFunction(name, keepsValue)).Append("; ");
+        }
+        return scope.Length == 0 ? declaration : scope + declaration;
+    }
+
+    /// <summary>The attribute letters a run-time <c>declare</c> may carry and still declare a scalar local (no -a/-A/-n, no -g).</summary>
+    private const string RunTimeLocalDeclareFlags = "ilrux";
+
     // declare/typeset -A map -> $map = @{} (associative array / hashtable declaration)
     // declare/typeset -a arr -> $arr = @() (indexed array declaration)
     private static bool TryEmitDeclare(Command.Simple cmd, out string result)
@@ -6109,7 +6167,7 @@ public static partial class PsEmitter
             }
             kept.Add(w);
             if (lit is null) { if (TrySplitInitializer(w, out var n0, out _)) names.Add(n0); }
-            else if (!lit.StartsWith('-') && !lit.StartsWith('+')) names.Add(lit.Split('=')[0]);
+            else if (!lit.StartsWith('-') && !lit.StartsWith('+')) names.Add(DeclaredName(lit));
         }
         // bash ignores -r on a nameref (`typeset -n -r ref=x` still lets `ref=v` assign through).
         bool isNameref = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { Length: > 1 } f && f[0] == '-' && f.AsSpan(1).IndexOfAnyExcept("pfF") >= 0 && f.Contains('n'));
@@ -6129,6 +6187,13 @@ public static partial class PsEmitter
         if (plusX) mark.Append("; ").Append(PsBuild.MarkUnexported(names.Where(IsValidVarName)));
         result = core + mark;
         return true;
+    }
+
+    /// <summary>The name a literal declaration operand declares: <c>s</c> for <c>s</c>, <c>s=1</c> and <c>s+=1</c>.</summary>
+    private static string DeclaredName(string operand)
+    {
+        string name = operand.Split('=')[0];
+        return name.EndsWith('+') ? name[..^1] : name;
     }
 
     /// <summary>
@@ -6220,7 +6285,7 @@ public static partial class PsEmitter
         }
         // `readonly r=1; typeset +r r=2` / `declare r=2`: assigning a read-only name is refused, the value kept (the direct
         // `$env:r = ...` below overwrote it). Same report as a plain `r=2` (EmitAssignment), with the builtin's name.
-        if (!isPrint && _readonlyVars is not null && (exprName ?? (varName is { } rv && rv.IndexOf('=') is > 0 and var req ? rv[..req] : null)) is { } assigned
+        if (!isPrint && _readonlyVars is not null && (exprName ?? (varName is { } rv && rv.IndexOf('=') > 0 ? DeclaredName(rv) : null)) is { } assigned
             && _readonlyVars.Contains(assigned))
         {
             // A builtin's failure: unlike `r=2`, the rest of the line still runs (no _readonlyViolation).
@@ -6257,19 +6322,19 @@ public static partial class PsEmitter
         }
         if (isAssoc && !isPrint && _assocVars is not null)
         {
-            string? assocName = exprName ?? (varName is null ? null : varName.Split('=')[0]);
+            string? assocName = exprName ?? (varName is null ? null : DeclaredName(varName));
             // `declare -A m; m[0]=x; echo $m`: a bare `$m` reads the element keyed 0.
             if (assocName is not null && IsValidVarName(assocName)) { _assocVars.Add(assocName); _arrayVars?.Add(assocName); }
         }
         if (!isPrint && !isAssoc && _intVars is not null && HasDeclareFlag(cmd, 'i'))
         {
-            string? intName = exprName ?? (varName is null ? null : varName.Split('=')[0]);
+            string? intName = exprName ?? (varName is null ? null : DeclaredName(varName));
             if (intName is not null && IsValidVarName(intName)) { _intVars.Add(intName); NoteGlobalAttr(intName, 'i'); }
         }
         if (!isPrint && !isAssoc && _caseVars is not null
             && DeclareCaseFlag(cmd) != '\0')
         {
-            string? caseName = exprName ?? (varName is null ? null : varName.Split('=')[0]);
+            string? caseName = exprName ?? (varName is null ? null : DeclaredName(varName));
             if (caseName is not null && IsValidVarName(caseName))
             {
                 _caseVars[caseName] = DeclareCaseFlag(cmd) == 'u';
@@ -6343,6 +6408,10 @@ public static partial class PsEmitter
         {
             string declName = varName[..eq];
             string rawVal = varName[(eq + 1)..];
+            // `declare s+=x` / `declare -i n+=2` appends to (adds to) the current value, as `s+=x` does. REGRESSION: it
+            // emitted `$env:s+ = 'x'`, which failed the parse of the whole script.
+            bool appends = declName.EndsWith('+') && IsValidVarName(declName[..^1]);
+            if (appends) declName = declName[..^1];
             if (isAssoc)
             {
                 result = "$global:" + declName + " = [PsBash.Cmdlets.BashAssoc]::new()";
@@ -6354,13 +6423,14 @@ public static partial class PsEmitter
                 // (`declare -i n=2+3` -> 5, `declare -i n=x*2` reads $x). A plain
                 // integer literal is emitted directly; any expression routes through
                 // the shared arithmetic evaluator instead of silently collapsing to 0.
-                string intVal = long.TryParse(rawVal, out _)
+                string intVal = appends ? $"[string](Invoke-BashArith {PsBuild.SingleQuote(declName + "+(" + rawVal + ")")})"
+                    : long.TryParse(rawVal, out _)
                     ? PsBuild.SingleQuote(rawVal)
                     : $"[string](Invoke-BashArith {PsBuild.SingleQuote(rawVal)})";
                 result = "$env:" + declName + " = " + intVal;
                 return true;
             }
-            result = "$env:" + declName + " = " + CaseAttr(declName, PsBuild.SingleQuote(rawVal));
+            result = "$env:" + declName + " = " + CaseAttr(declName, (appends ? "$env:" + declName + " + " : "") + PsBuild.SingleQuote(rawVal));
             return true;
         }
         bool indexedFlag = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { Length: > 1 } fl && fl[0] == '-' && fl.Contains('a'));

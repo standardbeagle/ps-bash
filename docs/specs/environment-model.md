@@ -173,6 +173,16 @@ back what the local hid.**
   `declare -- x`. `declare -a e` makes the empty array. A function's `local x` with no value exists while unset:
   `declare -p x` shows `declare -- x` in it and in the functions it calls (`VarFrameStack.HasLocal`). Under nounset,
   `$x` for an array with no element 0 (`local -a x`, `a=(); a[1]=z`) is unbound.
+- **Declarations in text built at run time** (`declare "$2"`, `builtin declare v=$1`, `$dc v=1`, `eval "$c"`, a
+  sourced file) are emitted without their function, so the run-time call decides: each scalar a `declare` / `typeset`
+  without `-g` names becomes the running function's local (`PsBuild.LocalWhenInFunction` over `PsBuild.RunTimeLocal`,
+  the frame a run-time `local` takes: `$__lsd_NAME` + `VarFrameStack.DeclareLocal`), and stays global at the top level.
+  An inner function's declaration is local to it (dynamic scope): such text looks for its park slot in its own
+  PowerShell scope only (`PsBuild.NotParked`), since dynamic scope would show it the caller's. The quoted field a
+  run-time call hands over (`declare 'v=1'`) is the written declaration `declare v='1'`
+  (`PsEmitter.TryEmitQuotedStaticDeclaration`). `-g`, the print forms, `-a`/`-A` and `-n` keep the
+  declaration global, as a run-time `local` array is. REGRESSION: `f(){ declare "$2"; }; f a e=b` left e set after f.
+  Behavior: `Differential.Tests/RunTimeDeclareScopeDifferentialTests`.
 - **A callee's array write** reaches the nearest caller's local of that name, else the global (bash's dynamic
   scope). The function's prologue lists its local arrays (`PsBuild.LocalArrays` → `VarFrameStack.LocalArrays`), and
   every array write target goes through `PsBuild.ArraySlot` → `VarFrameStack.ArraySlot`. That covers element writes,

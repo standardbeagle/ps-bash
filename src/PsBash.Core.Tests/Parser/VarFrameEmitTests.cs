@@ -61,6 +61,95 @@ public class VarFrameEmitTests
         Assert.Contains("__psbash_ea_v", T("v=t eval \"echo $v\""));
     }
 
+    private static string Eval(string bash)
+        => PsBash.Core.Transpiler.BashTranspiler.Transpile(bash, PsBash.Core.Transpiler.TranspileContext.Eval)!;
+
+    [Theory]
+    [InlineData("declare d=p", "d", true)]
+    [InlineData("typeset t=$1", "t", true)]
+    [InlineData("declare -ix n=2*3", "n", true)]
+    [InlineData("declare -r r=1", "r", true)]
+    [InlineData("declare -- v=1", "v", true)]
+    [InlineData("declare u", "u", false)]
+    [InlineData("declare s+=x", "s", false)]
+    public void Transpile_EvalTextDeclare_IsTheRunningFunctionsLocal(string bash, string name, bool keepsValue)
+    {
+        // `f(){ declare "$1"; }; f e=b`, `eval 'declare d=p'` in f: the text is emitted at run time, without its function,
+        // so the run-time call takes the frame a run-time `local` takes (bash: e is gone once f returns).
+        var ps = Eval(bash);
+        int scope = ps.IndexOf(PsBuild.LocalWhenInFunction(name, keepsValue), StringComparison.Ordinal);
+        Assert.True(scope >= 0, ps);
+        Assert.True(ps.IndexOf("$env:" + name, scope + PsBuild.LocalWhenInFunction(name, keepsValue).Length, StringComparison.Ordinal) > 0, ps);
+    }
+
+    [Theory]
+    [InlineData("declare -g g=1")]          // global by request
+    [InlineData("declare -gx g=1")]
+    [InlineData("declare -p g")]            // a listing declares nothing
+    [InlineData("declare -a g=(1 2)")]      // arrays stay global, as a run-time local array does
+    [InlineData("declare -A g")]
+    [InlineData("declare -n g=x")]
+    [InlineData("export g=1")]
+    public void Transpile_EvalTextGlobalDeclaration_TakesNoFrame(string bash)
+        => Assert.DoesNotContain("VarFrameStack]::Current.Depth -gt 0", Eval(bash));
+
+    [Fact]
+    public void Transpile_DeclareInAFunctionOutsideEval_StaysTheParsersLocal()
+        // The function is known here: the static local path, no run-time branch.
+        => Assert.DoesNotContain("VarFrameStack]::Current.Depth -gt 0", T("f() { declare d=p; }"));
+
+    [Fact]
+    public void RunTimeLocal_IsTheOneFrameForLocalAndDeclare()
+    {
+        Assert.Contains(PsBuild.RunTimeLocal("v", keepsValue: true, inWrittenFunction: false), Eval("local v=1"));
+        Assert.Contains(PsBuild.RunTimeLocal("v", keepsValue: false, inWrittenFunction: false), Eval("local v"));
+        Assert.Contains(PsBuild.RunTimeLocal("v", keepsValue: true, inWrittenFunction: false), PsBuild.LocalWhenInFunction("v", keepsValue: true));
+        Assert.Contains(PsBuild.RunTimeLocal("v", keepsValue: true, inWrittenFunction: true), T("f() { local v=1; }"));
+    }
+
+    // Oracle: `d3(){ declare "$1"; d4 "$2"; echo "$dn"; }; d4(){ declare "$1"; }; d3 dn=3 dn=4` prints 3. Text built at run
+    // time tests its OWN scope for the park slot: PowerShell's dynamic scope shows it the calling function's slot.
+    // REGRESSION: d4 took d3's slot as its own and its declaration wrote d3's local (printed 4).
+    [Theory]
+    [InlineData("declare d=p", "d")]
+    [InlineData("local d=p", "d")]
+    [InlineData("local d+=p", "d")]
+    public void Transpile_EvalTextLocal_LooksForItsParkSlotInItsOwnScope(string bash, string name)
+    {
+        var ps = Eval(bash);
+        Assert.Contains(PsBuild.NotParked(name, inWrittenFunction: false), ps);
+        Assert.DoesNotContain("($null -eq $__lsd_" + name + ")", ps);
+    }
+
+    [Fact]
+    public void Transpile_WrittenFunctionLocal_ReadsItsOwnEntrySlot()
+        // A written function sets $__lsd_v = $null on entry: the plain read is its own slot, no Get-Variable per local.
+        => Assert.DoesNotContain("Get-Variable -Name '__lsd_v'", T("f() { local v=1; local w+=2; }"));
+
+    // Oracle: `f(){ dc=declare; $dc wv=1; }; f; echo "${wv-unset}"` prints unset. The run-time call hands the field over
+    // quoted (`declare 'wv=1'`): it is the written declaration, so the running function's local.
+    // REGRESSION: it was a straight Set-Item of the variable, global.
+    [Theory]
+    [InlineData("declare 'wv=1'", "wv", true)]
+    [InlineData("typeset 'e=b c'", "e", true)]
+    [InlineData("declare -x 'xv=3'", "xv", true)]
+    public void Transpile_EvalTextQuotedDeclare_IsTheRunningFunctionsLocal(string bash, string name, bool keepsValue)
+    {
+        var ps = Eval(bash);
+        Assert.Contains(PsBuild.LocalWhenInFunction(name, keepsValue), ps);
+        Assert.DoesNotContain("Set-Item -LiteralPath ('Env:' + $__psbN)", ps);
+    }
+
+    [Fact]
+    public void Transpile_EvalTextQuotedGlobalDeclare_TakesNoFrame()
+        => Assert.DoesNotContain("VarFrameStack]::Current.Depth -gt 0", Eval("declare -g 'gv=1'"));
+
+    // Oracle: `f(){ declare -- dv=3; }; f; echo "${dv-unset}"` prints unset: `--` ends the options of a local declaration.
+    // REGRESSION: it was a global declaration.
+    [Fact]
+    public void Transpile_DeclareDoubleDashInAFunction_IsALocal()
+        => Assert.Contains(PsBuild.RestoreLocal("dv"), T("f() { declare -- dv=3; }"));
+
     [Theory]
     [InlineData("v=t echo hi")]
     [InlineData("IFS=, read -r a b <<< 'x,y'")]

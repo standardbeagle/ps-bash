@@ -248,6 +248,16 @@ and `set -e` in a subshell; under `set -e` or an ERR trap `[[ 1 ]] && { return 6
 `eval 'return 7' <f` failed the parse of the whole script. Guard: `Core.Tests/RedirectGroupGuardTests` (source inventory + emitted shapes); behavior
 `Differential.Tests/RedirectGroupReturnDifferentialTests`.
 
+**Conditions and errexit wrappers keep a return at statement position.** A condition that runs a command (`if return 6;
+then`, `while ! return 6`, `until return 6`, `if [[ 1 ]] && return 6`) is hoisted to a statement before the `if`/loop
+test (`PsEmitter.EmitHoistedCondition`); only a test that runs no command stays in expression position
+(`PsEmitter.EmitExpressionCondition`, which refuses any other, so `PsBuild.ExitCodeTest`'s `(& { })` never holds a
+command). Every errexit / ERR-trap wrapper (`PsBuild.ErrexitSuppressed`, `ErrexitSuppressedIfOn` for `!`,
+`ErrexitAndOrList` for `&&`/`||` left operands, `ErrexitLifted`, `ErrexitSuppressedFrom`) is a try/finally, which a
+return passes through; the one that is a block (`ErrexitFinalOperand`) goes through `RedirectGroup`. Guard:
+`RedirectGroupGuardTests.ErrexitWrappersPassAReturnOrAreBlockMakers` (a PsBuild errexit wrapper that makes a block must
+be a listed block maker) and the condition shapes in `Transpile_ReturnInAnErrexitCondition_StaysAStatement`.
+
 ---
 
 ## 3. `EmitPassthrough`

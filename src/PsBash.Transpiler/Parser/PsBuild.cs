@@ -1262,13 +1262,6 @@ public static class PsBuild
         + ErrexitSuppressVar + "++ }; try { " + statements + " } finally { if (-not $__psbash_ie) { " + ErrexitSuppressVar + "-- } }";
 
     /// <summary>
-    /// <see cref="ErrexitSuppressed"/> for a boolean CONDITION expression (<c>if</c>/<c>while</c>):
-    /// a script block, so it stays an expression whose value is the condition's.
-    /// </summary>
-    public static string ErrexitSuppressedExpr(string condition) =>
-        "(& { " + ErrexitSuppressed(condition) + " })";
-
-    /// <summary>
     /// The FINAL operand of an <c>&amp;&amp;</c>/<c>||</c> list at statement position: it is NOT
     /// exempt (bash exits when it runs and fails), so it lifts one level of the list's
     /// suppression, and records its status in <c>$global:__BashErrexitTail</c> — the list's
@@ -1677,6 +1670,36 @@ public static class PsBuild
     /// </summary>
     public static string DeclareLocal(string name)
         => "[PsBash.Cmdlets.VarFrameStack]::DeclareLocal(" + SingleQuote(name) + ", $env:" + name + ")";
+
+    /// <summary>
+    /// The run-time <c>local NAME</c> (a shell-variable local, and every local of text whose function is unknown when it is
+    /// emitted: eval text, a sourced file, <c>local "$1"</c>): park the caller's value in this call's <c>$__lsd_NAME</c>
+    /// once (the function's finally puts it back, PsEmitter.EmitFunction), then take the frame (<see cref="DeclareLocal"/>).
+    /// With <paramref name="keepsValue"/> an initializer follows and assigns (it may still read the caller's value);
+    /// without, the name takes the value a bare <c>local</c> leaves. <paramref name="inWrittenFunction"/>: see
+    /// <see cref="NotParked"/>. One source for <c>local</c> and <see cref="LocalWhenInFunction"/>.
+    /// </summary>
+    public static string RunTimeLocal(string name, bool keepsValue, bool inWrittenFunction) =>
+        "if (" + NotParked(name, inWrittenFunction) + ") { $__lsd_" + name + " = @{ v = $env:" + name + " } }; "
+        + (keepsValue ? "[void]" + DeclareLocal(name) : "$env:" + name + " = " + DeclareLocal(name));
+
+    /// <summary>
+    /// "This call has not parked NAME yet". A written function sets its <c>$__lsd_NAME</c> to $null on entry, so the plain
+    /// read sees its own slot. Text built at run time has no such entry: PowerShell's dynamic scope would show it the
+    /// CALLING function's slot, so it looks in its own scope only. REGRESSION: <c>d3(){ declare "$1"; d4 "$2"; }; d4(){
+    /// declare "$1"; }</c> took d3's slot as d4's own, so d4's declaration wrote d3's local (bash: each its own).
+    /// </summary>
+    public static string NotParked(string name, bool inWrittenFunction) =>
+        inWrittenFunction ? "$null -eq $__lsd_" + name
+            : "$null -eq (Get-Variable -Name '__lsd_" + name + "' -Scope 0 -ValueOnly -ErrorAction Ignore)";
+
+    /// <summary>
+    /// <c>declare</c>/<c>typeset</c> (no <c>-g</c>) in text that cannot know whether a function runs it: while one runs,
+    /// NAME becomes its local (<see cref="RunTimeLocal"/>, the run-time <c>local</c>'s own frame); at the top level the
+    /// declaration that follows is global. Emitted before the declaration's write.
+    /// </summary>
+    public static string LocalWhenInFunction(string name, bool keepsValue) =>
+        "if ([PsBash.Cmdlets.VarFrameStack]::Current.Depth -gt 0) { " + RunTimeLocal(name, keepsValue, inWrittenFunction: false) + " }";
 
     /// <summary>
     /// A function call's temp binding frame (<c>name=v f</c>, owned by the called function), pushed once the binding is
