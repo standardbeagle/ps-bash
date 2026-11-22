@@ -58,18 +58,30 @@ public class SharedLocationGateTests
         Assert.Equal(SpecRunner.RealLauncherGapTimeout, SpecRunner.TimeoutFor(c));
     }
 
-    private sealed class OverlapRecorder : IScriptExecutor
+    // holdFirst: the first own-directory case waits (bounded) until a second case is running, so "cases still run
+    // together" is decided by the gate, not by whether 20 yields happen to interleave. They did not on a loaded fleet
+    // host (s24q: "no two cases ever ran together" at parallelism 2). A gate that serialised everything never starts the
+    // second case, so the wait times out and MaxTogether stays 1: the check still fails for the bug it is there for.
+    private sealed class OverlapRecorder(bool holdFirst) : IScriptExecutor
     {
         private int _active;
+        private int _held;
+        private readonly TaskCompletionSource _secondStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int MaxTogether;
         public readonly List<string> AloneViolations = new();
 
         public async Task<ExecResult> RunAsync(string script, TimeSpan timeout, CancellationToken cancel)
         {
             int now = Interlocked.Increment(ref _active);
+            if (now >= 2) _secondStarted.TrySetResult();
             bool alone = CaseIsolation.UsesSharedLocation(script);
             try
             {
+                if (holdFirst && !alone && Interlocked.Exchange(ref _held, 1) == 0)
+                {
+                    try { await _secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel); }
+                    catch (TimeoutException) { }
+                }
                 for (int i = 0; i < 20; i++)
                 {
                     lock (AloneViolations)
@@ -95,7 +107,7 @@ public class SharedLocationGateTests
         var cases = new List<SpecCase>();
         for (int i = 0; i < 40; i++)
             cases.Add(new SpecCase("c" + i, i % 5 == 4 ? $"echo {i} > /tmp/shared" : $"echo {i} > own.txt", none, [], null, null, RealLauncher: i % 7 == 0));
-        var executor = new OverlapRecorder();
+        var executor = new OverlapRecorder(holdFirst: parallelism > 1);
         var results = await SpecRunner.RunAsync(new SpecFile("t.spec.sh", "", cases), executor, parallelism, launcher: executor);
         Assert.Equal(40, results.Count);
         Assert.All(results, r => Assert.Equal(Verdict.Pass, r.Verdict));
