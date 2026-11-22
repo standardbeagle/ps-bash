@@ -32,12 +32,16 @@ public class ArrayKindConversionTests
     public void Transpile_DeclareKindAtTopLevel_GuardsTheConversion(string bash, string expected)
         => Assert.Contains(expected, T(bash));
 
-    // In a function `declare` makes a new local: nothing to convert.
-    [Theory]
-    [InlineData("f() { declare -A a=([k]=v); }")]
-    [InlineData("f() { declare -A q; }")]
-    public void Transpile_DeclareKindInFunction_IsNotGuarded(string bash)
-        => Assert.DoesNotContain("cannot convert", T(bash));
+    // In a function `declare` makes a new local: a caller's array of the other kind is not converted
+    // (`q=(1); h() { declare -A q; }` is fine), the function's own is (`local -a q; declare -A q`: bash refuses).
+    // Known gap (environment-model.md 8.1): the `=( )` form is not guarded.
+    [Fact]
+    public void Transpile_DeclareKindInFunction_GuardsOnlyTheFramesOwn()
+    {
+        string ps = T("f() { declare -A q; }");
+        Assert.Contains("Get-Variable -Name 'q' -Scope 0", ps);
+        Assert.Contains("declare: q: cannot convert indexed to associative array", ps);
+    }
 
     // The builtin's redirects cover its error: `declare -A q 2>/dev/null`, `declare -A w v=(1 2) 2>/dev/null`.
     [Theory]

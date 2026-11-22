@@ -224,7 +224,7 @@ public sealed class InvokeBashAliasCommand : BashCmdlet
                         try { $ps = [PsBash.Cmdlets.BashRuntime]::TranspileEval($src) }
                         catch {
                             $m = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message }
-                            Write-Error ('bash: syntax error: ' + $m) -ErrorAction Continue
+                            Write-Error -Message ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + 'syntax error: ' + $m) -ErrorAction Continue
                             $global:LASTEXITCODE = 2
                             return
                         }

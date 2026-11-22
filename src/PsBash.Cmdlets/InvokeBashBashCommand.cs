@@ -66,7 +66,7 @@ public sealed class InvokeBashBashCommand : BashCmdlet
     /// <summary>
     /// Pipeline input. Usually the child's stdin, streamed into it record by record as it arrives
     /// (<c>producer | bash -c 'while read l; ...'</c>). When the argv names no program (<see cref="ProgramOnStdin"/>:
-    /// <c>echo cmd | bash</c>, <c>bash &lt;&lt;&lt; cmd</c>, <c>curl … | sh</c>) it IS the program, collected and run as <c>-c</c>.
+    /// <c>echo cmd | bash</c>, <c>bash &lt;&lt;&lt; cmd</c>, <c>curl … | sh</c>) it IS the program, collected and fed to the child's stdin.
     /// </summary>
     [Parameter(ValueFromPipeline = true)]
     [AllowNull]
@@ -119,14 +119,11 @@ public sealed class InvokeBashBashCommand : BashCmdlet
     {
         if (_programOnStdin)
         {
-            // A nested ps-bash given the program as -c runs the same text.
-            if (_stdinScript is { Length: > 0 })
-            {
-                _argv.RemoveAll(a => a is "-s" or "-");
-                _argv.Add("-c");
-                _argv.Add(_stdinScript.ToString());
-            }
-            Start(keepStdinOpen: false);
+            // The child reads the program from its stdin, as bash does: a stdin script, not `bash -c` ($- has s, a
+            // function defined there is BASH_SOURCE `main`, `-s x y` sets $1 $2). REGRESSION: it was rerun as `-c TEXT`.
+            Start(keepStdinOpen: _stdinScript is { Length: > 0 });
+            if (_child is { StdinOpen: true } && _stdinScript is { } script)
+                _child.WriteStdin(this, PsBash.Core.RawBytes.Encoding.GetBytes(script.ToString()));
         }
         Finish();
     }

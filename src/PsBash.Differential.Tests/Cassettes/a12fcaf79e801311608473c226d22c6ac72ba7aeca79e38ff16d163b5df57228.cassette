@@ -1,0 +1,56 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 551
+stdout-length: 961
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+{
+( for i in 1; do break x; done ); echo "b rc=$?"
+( for i in 1; do v=y; continue $v; done ); echo "c rc=$?"
+f() { return x; }; f; echo "r rc=$?"
+g() { v=z; return $v; }; g; echo "r2 rc=$?"
+( exit q ); echo "e rc=$?"
+( v=w; exit $v ); echo "e2 rc=$?"
+shift x; echo "s rc=$?"
+( exit "" ); echo "e0 rc=$?"
+( exit "3x" ); echo "e5 rc=$?"
+( exit " 4 " ); echo "e6 rc=$?"
+history x; echo "h rc=$?"
+cd /nonexistent_zz; break; continue 2; f() { break; }; f; eval break
+} 2>&1
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+t.sh: line 2: break: x: numeric argument required
+b rc=128
+t.sh: line 3: continue: y: numeric argument required
+c rc=128
+t.sh: line 4: return: x: numeric argument required
+r rc=2
+t.sh: line 5: return: z: numeric argument required
+r2 rc=2
+t.sh: line 6: exit: q: numeric argument required
+e rc=2
+t.sh: line 7: exit: w: numeric argument required
+e2 rc=2
+t.sh: line 8: shift: x: numeric argument required
+s rc=1
+t.sh: line 9: exit: : numeric argument required
+e0 rc=2
+t.sh: line 10: exit: 3x: numeric argument required
+e5 rc=2
+e6 rc=4
+t.sh: line 12: history: x: numeric argument required
+h rc=1
+t.sh: line 13: cd: /nonexistent_zz: No such file or directory
+t.sh: line 13: break: only meaningful in a `for', `while', or `until' loop
+t.sh: line 13: continue: only meaningful in a `for', `while', or `until' loop
+t.sh: line 13: break: only meaningful in a `for', `while', or `until' loop
+t.sh: line 13: break: only meaningful in a `for', `while', or `until' loop
+rc=0
+
+==== STDERR ====
+

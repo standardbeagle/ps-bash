@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using PsBash.Core;
+using PsBash.Core.Parser;
 using Xunit;
 
 namespace PsBash.Core.Tests;
@@ -115,16 +116,20 @@ public class ProgramFileTests
     [Theory]
     // A shell reads the records' bytes itself; another interpreter is a native program, so its input goes through
     // ConvertTo-BashNativeStdin (exact bytes, no added line end) on the way in.
-    [InlineData("/bin/sh", "", "Invoke-BashBash 'C:\\t\\it''s' @__psbash_argv")]
-    [InlineData("/usr/bin/env bash", "", "Invoke-BashBash 'C:\\t\\it''s' @__psbash_argv")]
-    [InlineData("/bin/bash -e", "", "Invoke-BashBash '-e' 'C:\\t\\it''s' @__psbash_argv")]
-    [InlineData("/usr/bin/env -S python3 -u", "ConvertTo-BashNativeStdin 'python3' | ", "& 'python3' '-u' 'C:\\t\\it''s' @__psbash_argv")]
-    [InlineData("/usr/local/bin/node", "ConvertTo-BashNativeStdin 'node' | ", "& 'node' 'C:\\t\\it''s' @__psbash_argv")]
-    public void StandInScript_RunsTheInterpreterWithTheFileThenTheArguments(string shebang, string feed, string run)
+    [InlineData("/bin/sh", "", "Invoke-BashBash 'C:\\t\\it''s' @__psbash_argv", null)]
+    [InlineData("/usr/bin/env bash", "", "Invoke-BashBash 'C:\\t\\it''s' @__psbash_argv", null)]
+    [InlineData("/bin/bash -e", "", "Invoke-BashBash '-e' 'C:\\t\\it''s' @__psbash_argv", null)]
+    [InlineData("/usr/bin/env -S python3 -u", "ConvertTo-BashNativeStdin 'python3' | ", "& 'python3' '-u' 'C:\\t\\it''s' @__psbash_argv", "python3")]
+    [InlineData("/usr/local/bin/node", "ConvertTo-BashNativeStdin 'node' | ", "& 'node' 'C:\\t\\it''s' @__psbash_argv", "node")]
+    public void StandInScript_RunsTheInterpreterWithTheFileThenTheArguments(string shebang, string feed, string run, string? lookedUp)
     {
-        string script = ProgramFile.FromShebang(@"C:\t\it's", shebang).StandInScript("ignored");
+        string script = ProgramFile.FromShebang(@"C:\t\it's", shebang).StandInScript("./x");
+        string forward = "$__psbash_in = @($input); if ($__psbash_in.Count -gt 0) { $__psbash_in | " + feed + run + " } else { " + run + " }";
+        // An interpreter run by name is looked up first: none on PATH is bash's missing interpreter (127), not "command not found".
         Assert.Equal(
-            "$__psbash_argv = [string[]]$args; $__psbash_in = @($input); if ($__psbash_in.Count -gt 0) { $__psbash_in | " + feed + run + " } else { " + run + " }",
+            "$__psbash_argv = [string[]]$args; " + (lookedUp is null ? forward
+                : "if (-not (Get-Command -Name '" + lookedUp + "' -CommandType Application -ErrorAction Ignore)) { "
+                  + PsBuild.ShellDiagnosticLine("'./x: cannot execute: required file not found'") + "; $global:LASTEXITCODE = 127 } else { " + forward + " }"),
             script);
         // ConvertTo-BashNativeStdin recognises it and hands it the records unchanged.
         Assert.True(ProgramLaunch.IsRunnableStandIn(script));
@@ -149,7 +154,7 @@ public class ProgramFileTests
     [Fact]
     public void PermissionDeniedScript_QuotesTheNameAndSets126()
         => Assert.Equal(
-            "Write-Error -Message 'bash: /it''s/LICENSE: Permission denied' -Category PermissionDenied -ErrorAction Continue; $global:LASTEXITCODE = 126",
+            PsBuild.ShellDiagnosticLine("'/it''s/LICENSE: Permission denied'") + "; $global:LASTEXITCODE = 126",
             ProgramLaunch.PermissionDeniedScript("/it's/LICENSE"));
 
     // A site that must start a process itself (nohup): the launcher for a shell, the interpreter found on PATH

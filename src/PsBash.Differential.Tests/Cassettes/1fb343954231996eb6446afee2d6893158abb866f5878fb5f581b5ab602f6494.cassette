@@ -1,0 +1,32 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 564
+stdout-length: 180
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+f() { declare -r ro=1; ro=2; echo "in ro=$ro"; }; f; echo "st=$?"; ro=3; echo "out ro=$ro"
+g() { declare -x ex=1; bash -c 'echo "child ex=$ex"'; }; g; echo "after ex=${ex-unset}"; bash -c 'echo "child2 ex=${ex-unset}"'
+t=5; h() { declare -n r=t; r=6; declare -p r; }; h; echo "t=$t"
+k() { declare -ri cnt=3; echo "$cnt"; declare -p cnt; }; k; declare -p cnt 2>&1
+m() { typeset -a ta=(1 2); typeset -A tb=([k]=v); echo "${ta[1]} ${tb[k]}"; }; m; echo "${ta[*]-unset} ${tb[k]-unset}"
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+t.sh: line 1: ro: readonly variable
+child ex=1
+after ex=unset
+child2 ex=unset
+declare -n r="t"
+t=6
+3
+declare -ir cnt="3"
+t.sh: line 4: declare: cnt: not found
+2 v
+unset unset
+rc=0
+
+==== STDERR ====
+

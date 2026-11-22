@@ -77,6 +77,21 @@ public class ShellArgsTests
     }
 
     [Fact]
+    public void Parse_StdinFlagWithOperands_MakesThemPositionals()
+    {
+        // bash: `bash -s x -y < s.txt` reads the script from stdin with $0=bash $1=x $2=-y (options end at the first
+        // operand; `--` ends them too). REGRESSION: x was taken for a script file ("x: No such file or directory").
+        var result = ShellArgs.Parse(["-s", "x", "-y"]);
+        Assert.True(result.ReadFromStdin);
+        Assert.Null(result.ScriptPath);
+        Assert.Equal(["bash", "x", "-y"], result.ScriptArgs);
+
+        var dashed = ShellArgs.Parse(["-s", "--", "-x", "y"]);
+        Assert.Null(dashed.ScriptPath);
+        Assert.Equal(["bash", "-x", "y"], dashed.ScriptArgs);
+    }
+
+    [Fact]
     public void Parse_StdinFlag_SetsReadFromStdin()
     {
         var result = ShellArgs.Parse(["-s"]);

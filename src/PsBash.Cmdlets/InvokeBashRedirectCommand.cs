@@ -244,6 +244,10 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
     private bool TryOpen(string raw, bool append, bool force, out RedirectFileWriter? stream, Action<string>? report = null)
     {
         stream = null;
+        // `> $x` that expanded to several words or none: bash's "$x: ambiguous redirect", a failed open like any other.
+        if (RedirectTarget.IsAmbiguous(raw, out string shown)) return FailOpen(shown, "ambiguous redirect", raw, report);
+        // `> ''`: no file is named (bash: ": No such file or directory"; .NET's own text named its parameter).
+        if (raw.Length == 0) return FailOpen(raw, "No such file or directory", raw, report);
         // Opening a stream device, /dev/null or /dev/full always succeeds and creates nothing (null stream: written
         // elsewhere, or discarded).
         var device = DevicePath.Classify(raw);
@@ -280,28 +284,37 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
             string reason = Directory.Exists(target) ? "Is a directory"
                 : ex is UnauthorizedAccessException ? "Permission denied"
                 : FileSystemHelpers.ReadErrorMessage(ex);
-            string message = ShellDiagnostic.Prefix(SessionState) + $"{raw}: {reason}";
-            if (report is null) FileSystemHelpers.WriteBashError(this, message);
-            else report(message);
-            // With an ERR trap the emitted statement check runs it first and then exits (the trap makes the
-            // script errexit-checked), so the failure stays a status here.
-            if (SessionState.PSVariable.GetValue("__BashErrexit") is true
-                && SessionState.PSVariable.GetValue("__BashTrapERR") is null)
-            {
-                FileSystemHelpers.SetLastExitCode(this, 1);
-                // Already reported above, where fd 2 pointed (`2>/dev/null >nodir/f` ends the script silently): the
-                // host must not print it again (SdkWorker reads the mark; the script's status is 1).
-                var reported = new IOException(message);
-                reported.Data["psbash.reported"] = true;
-                reported.Data["psbash.exitcode"] = 1;
-                Close();
-                ThrowTerminatingError(new ErrorRecord(reported, "BashRedirectError", ErrorCategory.WriteError, raw));
-            }
-            MarkOpenFailed();
-            Close();
-            UpstreamStop.Throw(this);
-            return false; // UpstreamStop unavailable: the cmdlet then just drops its input
+            return FailOpen(raw, reason, raw, report);
         }
+    }
+
+    /// <summary>
+    /// A redirect that cannot be opened: bash's <c>s.sh: line 3: SHOWN: REASON</c>, status 1, and the command does not
+    /// run; under <c>set -e</c> (no ERR trap) the script ends. Always false (the open failed).
+    /// </summary>
+    private bool FailOpen(string shown, string reason, string raw, Action<string>? report)
+    {
+        string message = ShellDiagnostic.Prefix(SessionState) + $"{shown}: {reason}";
+        if (report is null) FileSystemHelpers.WriteBashError(this, message);
+        else report(message);
+        // With an ERR trap the emitted statement check runs it first and then exits (the trap makes the
+        // script errexit-checked), so the failure stays a status here.
+        if (SessionState.PSVariable.GetValue("__BashErrexit") is true
+            && SessionState.PSVariable.GetValue("__BashTrapERR") is null)
+        {
+            FileSystemHelpers.SetLastExitCode(this, 1);
+            // Already reported above, where fd 2 pointed (`2>/dev/null >nodir/f` ends the script silently): the
+            // host must not print it again (SdkWorker reads the mark; the script's status is 1).
+            var reported = new IOException(message);
+            reported.Data["psbash.reported"] = true;
+            reported.Data["psbash.exitcode"] = 1;
+            Close();
+            ThrowTerminatingError(new ErrorRecord(reported, "BashRedirectError", ErrorCategory.WriteError, raw));
+        }
+        MarkOpenFailed();
+        Close();
+        UpstreamStop.Throw(this);
+        return false; // UpstreamStop unavailable: the cmdlet then just drops its input
     }
 
     private bool _openFailed;
@@ -371,7 +384,7 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
         if (!_fullReported)
         {
             _fullReported = true;
-            FileSystemHelpers.WriteStderr(this, "bash: write error: No space left on device");
+            FileSystemHelpers.WriteStderr(this, ShellDiagnostic.Prefix(SessionState) + "write error: No space left on device");
         }
     }
 

@@ -156,13 +156,13 @@ function Get-BashIndirectValue {
         # (`arr=(); ${!arr}`) is neither.
         if (-not $refSet -and $RefName -and $RefName -ne 'OPTIND') {
             $global:LASTEXITCODE = 1
-            Write-BashHostStderr "bash: ${RefName}: invalid indirect expansion"
+            Write-BashShellDiagnostic "${RefName}: invalid indirect expansion"
             if ([PsBash.Cmdlets.BashLineDiscard]::Armed) { throw [PsBash.Cmdlets.BashParamErrorException]::Discard("${RefName}: ", 'invalid indirect expansion') }
             $global:__BashExpansionFailed = "$($at.ScriptLineNumber):$($at.OffsetInLine)"
         }
         elseif ($null -ne $Ref) {
             $global:LASTEXITCODE = 1
-            Write-BashHostStderr "bash: : invalid variable name"
+            Write-BashShellDiagnostic ": invalid variable name"
             if ([PsBash.Cmdlets.BashLineDiscard]::Armed) { throw [PsBash.Cmdlets.BashParamErrorException]::Discard(': ', 'invalid variable name') }
             $global:__BashExpansionFailed = "$($at.ScriptLineNumber):$($at.OffsetInLine)"
         }
@@ -205,7 +205,7 @@ function Get-BashIndirectValue {
             if ($null -eq $word) {
                 $global:LASTEXITCODE = 1
                 $global:__BashExpansionFailed = "$($at.ScriptLineNumber):$($at.OffsetInLine)"
-                Write-BashHostStderr "bash: ${n}: bad substitution"
+                Write-BashShellDiagnostic "${n}: bad substitution"
                 if ([PsBash.Cmdlets.BashLineDiscard]::Armed) { throw [PsBash.Cmdlets.BashParamErrorException]::Discard("${n}: ", 'bad substitution') }
                 return $null
             }
@@ -239,7 +239,7 @@ function Get-BashIndirectValue {
     if ($n -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') {
         # bash: `${!a}` with a='bad var name' is "invalid variable name"; the command is abandoned with status 1.
         $global:LASTEXITCODE = 1
-        Write-BashHostStderr "bash: ${n}: invalid variable name"
+        Write-BashShellDiagnostic "${n}: invalid variable name"
         if ([PsBash.Cmdlets.BashLineDiscard]::Armed) { throw [PsBash.Cmdlets.BashParamErrorException]::Discard("${n}: ", 'invalid variable name') }
         $global:__BashExpansionFailed = "$($at.ScriptLineNumber):$($at.OffsetInLine)"
         return $null
@@ -270,12 +270,12 @@ function Write-BashExpansionError([string]$Prefix, [string]$Message) {
     # Inside a line scope (PsBuild.DiscardLineScope) bash's DISCARD: the rest of this input line is dropped, status 1,
     # and the shell reads the next line (a -c string too).
     if ([PsBash.Cmdlets.BashLineDiscard]::Armed) {
-        Write-BashHostStderr "bash: ${Prefix}${Message}"
+        Write-BashShellDiagnostic "${Prefix}${Message}"
         throw [PsBash.Cmdlets.BashParamErrorException]::Discard($Prefix, $Message)
     }
     if ($env:PSBASH_DASH_C -eq '1') {
         $pe = [PsBash.Cmdlets.BashParamErrorException]::Reported($Prefix, $Message)
-        Write-Error ('ps-bash: ' + $pe.Message) -ErrorAction Continue
+        Write-Error -Message ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + $pe.Message) -ErrorAction Continue
         throw $pe
     }
     $at = $MyInvocation
@@ -284,8 +284,23 @@ function Write-BashExpansionError([string]$Prefix, [string]$Message) {
     # bash also drops the rest of the input line: the commands after this one on its line are guarded by this mark
     # (PsBuild.UnlessGlobFailed, which a failglob error sets too); the next line clears it.
     $global:__BashFailGlob = $true
-    Write-BashHostStderr "bash: ${Prefix}${Message}"
+    Write-BashShellDiagnostic "${Prefix}${Message}"
     return $null
+}
+
+# A shell diagnostic on stderr with bash's source prefix (`t.sh: line 3: `, `bash: line 1: ` under -c, `bash: `
+# interactive): ShellDiagnostic.Prefix, the one rule. REGRESSION: the expansion errors here spelled a bare "bash: ".
+function Write-BashShellDiagnostic([string]$Message) {
+    Write-BashHostStderr ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + $Message)
+}
+
+# `b[-5]=x`: bash's "bad array subscript", naming the element as written; status 1 and, like an expansion error, the
+# rest of the input line is dropped (a line scope ends it; otherwise the line mark guards the commands after it).
+function Write-BashBadSubscript([string]$Written) {
+    $global:LASTEXITCODE = 1
+    Write-BashShellDiagnostic "${Written}: bad array subscript"
+    if ([PsBash.Cmdlets.BashLineDiscard]::Armed) { throw [PsBash.Cmdlets.BashParamErrorException]::Discard("${Written}: ", 'bad array subscript') }
+    $global:__BashFailGlob = $true
 }
 
 # A word with a control character as bash's xtrace shows it: $'...' with \a \b \t \n \v \f \r \E escapes and \ooo for
@@ -404,11 +419,11 @@ function Resolve-BashCommand {
             return {
                 $st = if ($args.Count -gt 0) { [string]$args[0] } else { $null }
                 if ($null -ne $st -and $st -notmatch '^-?[0-9]+$') {
-                    Write-Error ('return: ' + $st + ': numeric argument required') -ErrorAction Continue
+                    Write-Error -Message ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + 'return: ' + $st + ': numeric argument required') -ErrorAction Continue
                     $global:LASTEXITCODE = 2
                 } elseif ($null -ne $st) { $global:LASTEXITCODE = (([long]$st % 256) + 256) % 256 }
                 if ([PsBash.Cmdlets.VarFrameStack]::Current.Depth -eq 0) {
-                    Write-Error "return: can only ``return' from a function or sourced script" -ErrorAction Continue
+                    Write-Error -Message ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + "return: can only ``return' from a function or sourced script") -ErrorAction Continue
                     $global:LASTEXITCODE = 2
                     return
                 }
@@ -446,15 +461,22 @@ function Invoke-BashEnable {
     foreach ($n in $ops) { if (-not $names.Contains("$n")) { Write-BashBuiltinError "enable: ${n}: not a shell builtin" 1 } }
 }
 function Invoke-BashCaller {
-    # With no frame at all (`bash -c 'caller -Q'`) bash fails before it reads its words; in a script or a function
-    # an option it does not have is the usage error. Its operand is a frame number (`-1` is one too).
-    $inFrame = -not [string]::IsNullOrEmpty("$global:BASH_SOURCE") -or [PsBash.Cmdlets.VarFrameStack]::Current.Depth -gt 0
-    if ($inFrame -and $args.Count -gt 0 -and "$($args[0])" -notmatch '^-[0-9]') {
-        $optErr = [PsBash.Cmdlets.BashRuntime]::BuiltinOptionError('caller', [string[]]@($args), '', '', [PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0))
+    # The frame arrays the shell keeps (ShellCaller has the rule). With no frame at all (`bash -c 'caller -Q'`) bash
+    # fails before it reads its words; in a script or a function an option word (`-1` too) is the usage error.
+    $lineNo = [string[]]@([PsBash.Cmdlets.VarFrameStack]::BashLineNo($global:BASH_SOURCE))
+    if ($lineNo.Count -eq 0) { $global:LASTEXITCODE = 1; return }
+    $prefix = [PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0)
+    if ($args.Count -gt 0) {
+        $optErr = [PsBash.Cmdlets.BashRuntime]::BuiltinOptionError('caller', [string[]]@($args), '', '', $prefix)
         if ($null -ne $optErr) { Write-BashHostStderr $optErr; $global:LASTEXITCODE = 2; return }
     }
-    # Outside a function bash prints nothing and fails; ps-bash keeps no call frames to report from inside one either.
-    $global:LASTEXITCODE = 1
+    # An object, not a string: PowerShell hands a string parameter "" for $null, and no operand is not an empty one.
+    $operand = if ($args.Count -gt 0) { [string]$args[0] } else { $null }
+    $r = [PsBash.Cmdlets.ShellCaller]::Report($lineNo, [string[]]@(Get-BashFuncNames),
+        [string[]]@([PsBash.Cmdlets.VarFrameStack]::BashSource($global:BASH_SOURCE)), $operand)
+    if ($null -ne $r.Error) { Write-BashHostStderr ($prefix + $r.Error); Write-BashHostStderr ([PsBash.Cmdlets.ShellCaller]::Usage) }
+    if ($null -ne $r.Output) { Emit-BashLine -Text ($r.Output + "`n") }
+    $global:LASTEXITCODE = $r.Status
 }
 function Invoke-BashDisown {
     $optErr = [PsBash.Cmdlets.BashRuntime]::BuiltinOptionError('disown', [string[]]@($args), 'ahr', '', [PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0))
@@ -1014,7 +1036,10 @@ function Set-BashElement {
         array evaluates the subscript as ARITHMETIC (`a[i+1]`, `a[$n]`), and an index past the end pads the gap
         (a PowerShell array cannot be indexed past its Count). Returns the array/table to assign back.
     #>
-    param($__psbashTarget, [string]$__psbashKey, $__psbashValue, [Alias('Append')][switch]$__psbashAppend)
+    param($__psbashTarget, [string]$__psbashKey, $__psbashValue, [Alias('Append')][switch]$__psbashAppend,
+        # The element as the script wrote it (`b[$i]`), which a bad subscript is reported as.
+        [Alias('Written')][string]$__psbashWritten)
+    if (-not $__psbashWritten) { $__psbashWritten = "[${__psbashKey}]" }
     $__psbashSparse = $__psbashTarget -is [PsBash.Cmdlets.BashSparseArray]
     if ($__psbashTarget -is [System.Collections.IDictionary] -and -not $__psbashSparse) {
         $__psbashTarget[$__psbashKey] = if ($__psbashAppend) { "$($__psbashTarget[$__psbashKey])$__psbashValue" } else { $__psbashValue }
@@ -1030,14 +1055,14 @@ function Set-BashElement {
     }
     if ($__psbashSparse) {
         $__psbashAt = $__psbashTarget.Resolve($__psbashIdx)
-        if ($null -eq $__psbashAt) { Write-BashHostStderr "bash: ${__psbashKey}: bad array subscript"; $global:LASTEXITCODE = 1; return $__psbashTarget }
+        if ($null -eq $__psbashAt) { Write-BashBadSubscript $__psbashWritten; return $__psbashTarget }
         $__psbashTarget[$__psbashAt] = if ($__psbashAppend) { "$($__psbashTarget[$__psbashAt])$__psbashValue" } else { $__psbashValue }
         return $__psbashTarget
     }
     $__psbashArr = [System.Collections.Generic.List[object]]::new()
     if ($null -ne $__psbashTarget) { $__psbashArr.AddRange([object[]]@($__psbashTarget)) }
     if ($__psbashIdx -lt 0) { $__psbashIdx += $__psbashArr.Count }
-    if ($__psbashIdx -lt 0) { Write-BashHostStderr "bash: ${__psbashKey}: bad array subscript"; $global:LASTEXITCODE = 1; return ,$__psbashArr.ToArray() }
+    if ($__psbashIdx -lt 0) { Write-BashBadSubscript $__psbashWritten; return ,$__psbashArr.ToArray() }
     if ($__psbashIdx -gt $__psbashArr.Count) {
         # A gap: a dense PowerShell array cannot hold it, so the array becomes a sparse one.
         $__psbashSp = [PsBash.Cmdlets.BashSparseArray]::FromList($__psbashArr)
@@ -3084,15 +3109,20 @@ function Write-BashBgSignalReport {
     <#
     .SYNOPSIS
         bash reports a background job that a signal ended when it collects it (`kill -HUP $!; wait` prints
-        "PID Hangup"), on stderr. A non-interactive shell says nothing for SIGPIPE and SIGTERM, and its jobs ignore SIGINT and SIGQUIT. The
-        script line and the job's command text that bash adds are not known here.
+        "t.sh: line 4: PID Hangup                  sleep 5"), on stderr: the shell's source prefix (the line of the
+        `wait`), the pid, the description padded to 22 columns, two spaces, the job's command as written. A
+        non-interactive shell says nothing for SIGPIPE and SIGTERM, and its jobs ignore SIGINT and SIGQUIT. bash
+        prints a compound command re-formatted (`( a )` as `(a)`) and a pipeline one row per process; here the
+        command is the source text, one row.
     #>
     param([Parameter(Mandatory)]$Job)
     $sig = $Job.PSObject.Properties['Signal']?.Value
     if ($null -eq $sig -or $sig -in 2, 3, 13, 15) { return }
     $desc = $script:BashSignalDescriptions[[int]$sig]
     if (-not $desc) { $desc = "Unknown signal $sig" }
-    Write-BashHostStderr "bash: $($Job.Id) $desc"
+    $text = [string]$Job.PSObject.Properties['Text']?.Value
+    $row = "$($Job.Id) " + $(if ($text) { $desc.PadRight(22) + '  ' + $text.Trim() } else { $desc })
+    Write-BashHostStderr ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + $row)
 }
 
 function Remove-BashBgFinished {

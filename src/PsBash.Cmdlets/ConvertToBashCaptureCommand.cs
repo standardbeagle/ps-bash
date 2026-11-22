@@ -63,7 +63,7 @@ public sealed class ConvertToBashCaptureCommand : BashCmdlet
             if (!_warnedNul)
             {
                 _warnedNul = true;
-                FileSystemHelpers.WriteStderr(this, "bash: warning: command substitution: ignored null byte in input");
+                FileSystemHelpers.WriteStderr(this, ShellDiagnostic.Prefix(SessionState) + "warning: command substitution: ignored null byte in input");
             }
         }
         _hasPending = true;

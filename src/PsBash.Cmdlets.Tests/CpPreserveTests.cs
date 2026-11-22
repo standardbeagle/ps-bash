@@ -1,3 +1,4 @@
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Cmdlets.Tests;
@@ -27,7 +28,7 @@ public class CpPreserveTests : IDisposable, IClassFixture<SharedPwshFixture>
         Directory.CreateDirectory(_tmp);
         File.WriteAllText(P("s"), "hi\n");
         File.SetLastWriteTime(P("s"), Old);
-        File.SetLastAccessTime(P("s"), Old);
+        new AccessTimePin().Set(P("s"), Old);   // only mtimes are checked here
     }
 
     public void Dispose()

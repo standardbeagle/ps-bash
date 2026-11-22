@@ -1,0 +1,51 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 884
+stdout-length: 323
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+f() { local -i k=1+1; echo "k=$k"; k+=3; echo "k=$k"; local -l lo=ABC; echo "lo=$lo"; local -u up=abc; echo "up=$up"; up=def; echo "up=$up"; declare -p k lo up; local -i n; declare -p n; }; f
+declare -i n=1; g() { local n; n=2+2; echo "n=$n"; }; g; n=3+3; echo "outer n=$n"
+h() { declare -i d=2*3; echo "d=$d"; typeset -u t=xy; echo "t=$t"; }; h; echo "d=${d-unset}"
+k() { declare -gi gi=2+2; declare -gu gu=ab; declare -g -l gl=CD; }; k; echo "gi=$gi gu=$gu gl=$gl"; gi=3+3; gu=xy; echo "gi=$gi gu=$gu"; declare -p gi gu gl
+declare -ix top=1+1; echo "top=$top"; declare -lu lu=Mx; echo "lu=$lu"; declare -ul ul=Mx; echo "ul=$ul"
+declare -l -u a=Mx; declare -l c; declare -u c; c=Mx; echo "$a $c"; declare -p a c
+f2() { local -lu q=Mx; local -l r; local -u r; r=Mx; echo "$q $r"; declare -p q r; }; f2
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+k=2
+k=5
+lo=abc
+up=ABC
+up=DEF
+declare -i k="5"
+declare -l lo="abc"
+declare -u up="DEF"
+declare -i n
+n=2+2
+outer n=6
+d=6
+t=XY
+d=unset
+gi=4 gu=AB gl=cd
+gi=6 gu=XY
+declare -i gi="6"
+declare -u gu="XY"
+declare -l gl="cd"
+top=2
+lu=Mx
+ul=Mx
+Mx MX
+declare -- a="Mx"
+declare -u c="MX"
+Mx MX
+declare -- q="Mx"
+declare -u r="MX"
+rc=0
+
+==== STDERR ====
+

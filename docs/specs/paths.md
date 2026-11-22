@@ -136,6 +136,9 @@ Rules:
   UNC-rooted (`\\server\share\dev\stdout`), any letter case. A relative `dev/stdout` or `C:\work\dev\zero`
   is an ordinary file. A device name wins over a real file of that name directly under a drive's `dev`
   directory (after mapping the two cannot be told apart).
+- **`source` / `.`** classify the name first (`InvokeBashSourceCommand`). A `Stdin` device runs the shell's stdin
+  (`TakeStdinText`). Any other device (`/dev/fd/N`, a process substitution, `/dev/null`) is read through
+  `BashFileSystem`, never resolved as a path. The oracle is `ShellLanguageGapDifferentialTests.Source_FromDevicesAndStdin`.
 - **Inbound mapper.** `FileSystemHelpers.ProviderPath` returns a device name as written; it is never
   resolved against the current drive or PSDrive.
 - **Choke points classify for themselves**, so a site that forgets cannot create a file:

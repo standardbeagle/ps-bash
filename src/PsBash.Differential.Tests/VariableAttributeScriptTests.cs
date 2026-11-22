@@ -80,12 +80,13 @@ public class VariableAttributeScriptTests
     }
 
     // bash: a `readonly x` later in a function is not in force at an earlier `local x=...` / `x=1`. The body is emitted
-    // more than once (stdin-scope probe), and the second emission saw the first one's read-only names.
+    // more than once (stdin-scope probe), and the second emission saw the first one's read-only names. The refused `x=2`
+    // after it drops the rest of the line `g` was called on (bash 5.2 ASSIGNMENT_ERROR), so g prints no "st=" line.
     [SkippableFact]
     public async Task ReadonlyLaterInFunction_DoesNotRefuseAnEarlierWrite()
     {
         var r = await RunAsync("f() {\n  local v=555\n  echo \"v=$v st=$?\"\n  readonly -p v >/dev/null\n  local -p v\n}\nf\ng() {\n  x=1\n  readonly x\n  echo \"x=$x\"\n  x=2\n  echo \"st=$? x=$x\"\n}\ng\n");
-        Assert.Equal("v=555 st=0\ndeclare -r v=\"555\"\nx=1\nst=1 x=1\n", Out(r));
+        Assert.Equal("v=555 st=0\ndeclare -r v=\"555\"\nx=1\n", Out(r));
     }
 
     // bash: `export a[7]=8` is refused (`a[7]': not a valid identifier) with status 1; ps-bash printed the error and

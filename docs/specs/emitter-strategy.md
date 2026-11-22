@@ -545,6 +545,24 @@ passes its pipeline to `$input` only, so the emitter builds the sharing itself
   (`IsWhileRead`; the flag's value used to be taken for a variable name, so `while read -u 3 a; …;
   done 3< f` read stdin into `$3`).
 
+### A pipe stage is a subshell
+
+bash runs every stage of a multi-stage pipeline in a subshell, the last one included unless `lastpipe` is set, so
+nothing a stage does reaches the caller. ps-bash runs stages in-process, so a stage that can change shell state gets
+the subshell guard. Two kinds of stage get it:
+
+- a compound stage (`EmitCompoundStage`);
+- a simple stage whose command is in `SubshellStageBuiltins` (also behind `builtin` / `command`): `.`, `source`, `eval`,
+  `cd`, `set`, `shift`, `export`, `declare`, `unset`, `umask`, `readonly`, `mapfile`, `trap`, `alias`, and so on. It
+  is rewritten to a `Command.Subshell` with `KeepsLoopLevel`.
+
+Loop control in a stage ends only that stage, never the caller's loop. A compound stage starts with no loop (`break`
+there warns, status 0). A simple stage keeps the loop level, so `echo q | break` in a loop ends the stage silently.
+`exec CMD` in a stage or `( )` reads the stdin it inherits (`EmitSimpleFed`) unless it has its own here-document or
+`<` file. A here-string's word is one expanded, quote-removed word (`HereDoc.Word`, `PsBuild.HereStringValue`) plus
+a newline. It is never re-scanned from raw text, globbed or brace-expanded. Oracle:
+`ShellLanguageGapDifferentialTests.PipeStage_*`, `Subshell_*`, `Exec_*`, `HereString_*`.
+
 ### Stage stdin (one model for every pipe stage)
 
 bash connects a pipe to the WHOLE next stage's fd 0. In PowerShell the records reach only `$input`

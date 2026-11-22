@@ -1,0 +1,68 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1330
+stdout-length: 269
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+{
+mkdir sub; echo 'set -- a b; v=1' > f
+set -- x; v=; top=$PWD
+cd sub | cat; [ "$PWD" = "$top" ] && echo cd-first-kept
+set -- a b | cat; echo "set first n=$#"
+echo q | cd sub; [ "$PWD" = "$top" ] && echo cd-last-kept
+echo q | export Z=1; echo "export Z=${Z-unset}"
+echo q | declare w=1; echo "declare w=${w-unset}"
+echo q | unset v; echo "unset v=${v-unset}"
+v=; echo q | let v=3; echo "let v=$v"
+echo q | read r | cat; echo "read mid r=${r-unset}"
+echo q | set -- a b | cat; echo "set mid n=$#"
+f2() { echo q | return 3; echo "after return $?"; }; f2
+echo q | exec cat; echo "exec rc=$?"
+echo q | shopt -s nullglob; shopt -q nullglob; echo "shopt=$?"
+echo q | alias zz=echo; alias zz 2>/dev/null; echo "alias=$?"
+u=$(umask); echo q | umask 077; [ "$(umask)" = "$u" ] && echo umask-kept
+echo q | trap 'echo trapped' USR1; trap -p USR1; echo "trap=$?"
+OPTIND=1; echo q | getopts a o -a; echo "getopts OPTIND=$OPTIND"
+echo q | readonly ro=1; ro=2; echo "ro=$ro"
+for i in 1 2; do echo q | break; echo "loop $i"; done
+echo q | mapfile -t m; echo "mapfile ${#m[@]}"
+set -- x y; echo q | shift; echo "shift n=$#"
+echo q | eval 'v=e'; echo "eval v=$v"
+echo q | . ./f; echo "src n=$# v=$v"
+x=$(echo q | set -- a b c; echo "in=$#"); echo "$x out=$#"
+} 2>&1
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+cd-first-kept
+set first n=1
+cd-last-kept
+export Z=unset
+declare w=unset
+unset v=
+let v=
+read mid r=unset
+set mid n=1
+after return 3
+q
+exec rc=0
+shopt=1
+alias=1
+umask-kept
+trap=0
+getopts OPTIND=1
+ro=2
+loop 1
+loop 2
+mapfile 0
+shift n=2
+eval v=
+src n=2 v=
+in=2 out=2
+rc=0
+
+==== STDERR ====
+

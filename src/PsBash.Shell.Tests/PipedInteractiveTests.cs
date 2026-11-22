@@ -98,7 +98,7 @@ public class PipedInteractiveTests
         Assert.EndsWith("exit $__psbash_status\n", script);
     }
 
-    // bash 5.2 oracle: `printf 'echo $-\n' | bash --norc -i` prints himBH (interactive, no c), and with --rcfile rc the rc
+    // bash 5.2 oracle: `printf 'echo $-\n' | bash --norc -i` prints himBHs (interactive, reading stdin, no c), and with --rcfile rc the rc
     // runs before the first prompt, already interactive (an rc's `case $- in *i*)` guard holds) and its PS1 is the prompt.
     [Fact]
     public void BuildScript_MarksTheShellInteractive_ThenSourcesTheRcfile_BeforeTheFirstPrompt()

@@ -1,0 +1,34 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 556
+stdout-length: 46
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+{
+g() { return 1 2; echo in-g; }; g; echo "after-g rc=$?"
+echo next2
+for i in 1 2; do shift 1 2; echo "loop $i"; done; echo "after-loop rc=$?"
+echo next3
+for i in 1 2; do break 1 2; echo "bl $i"; done; echo "after-bl rc=$?"
+echo next4
+( exit 1 2; echo in-sub ); echo "after-sub rc=$?"
+echo next5
+x=$(exit 1 2; echo in-cs); echo "cs=$x rc=$?"
+echo next6
+exit 1 2; echo "after rc=$?"
+echo next7
+{ exit 1 2; echo "after2 rc=$?"; }
+echo pre; exit 1 2
+echo "after3 rc=$?"
+} 2>&1
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+t.sh: line 2: return: too many arguments
+rc=1
+
+==== STDERR ====
+

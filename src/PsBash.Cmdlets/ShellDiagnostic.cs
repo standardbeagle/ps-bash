@@ -15,7 +15,8 @@ public static class ShellDiagnostic
 {
     /// <summary>The prefix, from <c>$global:BASH_SOURCE</c> and <c>$global:BashPositional0</c> (the emitted code's names).</summary>
     public static string Prefix(object? bashSource, object? arg0)
-        => Prefix(bashSource, arg0, VarFrameStack.Current.Line, InvokeBashShoptCommand.InteractiveShell);
+        // The name is BASH_SOURCE[0] as the script sees it: in a function, the file the function was defined in.
+        => Prefix(VarFrameStack.BashSource(bashSource), arg0, VarFrameStack.Current.Line, InvokeBashShoptCommand.InteractiveShell);
 
     /// <summary><see cref="Prefix(object?, object?)"/> for a cmdlet, reading the two variables from its session.</summary>
     public static string Prefix(SessionState session)

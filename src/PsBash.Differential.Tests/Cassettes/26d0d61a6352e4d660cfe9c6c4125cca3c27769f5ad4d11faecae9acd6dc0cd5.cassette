@@ -1,0 +1,36 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 606
+stdout-length: 303
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+mask() { grep -v ": command substitution: line [0-9]*: \`" | sed 's/substitution: line \([0-9]*\): .*/substitution: line \1: MSG/; s/[0-9]\{3,\}/PID/'; }
+printf ': pad\nx=`echo (`\necho "after $?"\n' > t1.sh
+{ bash t1.sh; echo "rc=$?"; } 2>&1 | mask
+printf ': pad\nf() {\n  y=`echo (`\n}\n: x\nf; echo "r=$?"\necho a; z=`\nfi`; echo after\nq=`echo a\nfi`; echo "q=$?"\n' > t2.sh
+{ bash t2.sh; echo "rc=$?"; } 2>&1 | mask
+{ bash -c 'x=`echo (`; echo r=$?'; } 2>&1 | mask
+printf ': pad\nsleep 5 &\nkill -HUP $!\nwait\necho "w=$?"\n' > t3.sh
+{ bash t3.sh; echo "rc=$?"; } 2>&1 | mask
+==== STDOUT ====
+t1.sh: command substitution: line 2: MSG
+after 2
+rc=0
+t2.sh: command substitution: line 3: MSG
+r=2
+a
+t2.sh: command substitution: line 9: MSG
+after
+t2.sh: command substitution: line 11: MSG
+q=2
+rc=0
+bash: command substitution: line 1: MSG
+r=2
+t3.sh: line 4: PID Hangup                  sleep 5
+w=0
+rc=0
+
+==== STDERR ====
+

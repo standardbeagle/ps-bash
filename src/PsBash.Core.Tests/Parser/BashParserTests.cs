@@ -2197,6 +2197,28 @@ public class BashParserTests
         Assert.False(ps.IsInput);
     }
 
+    // Oracle: `cat <<< "a"'b'\"$x{1,2}` prints `ab"<x>{1,2}`: a here-string is ONE word, quote-removed and expanded, with no
+    // brace expansion. REGRESSION: the emitter re-scanned the raw text as a heredoc body and kept the quotes.
+    [Fact]
+    public void Parse_HereString_CarriesItsWordWithoutBraceExpansion()
+    {
+        var simple = Assert.IsType<Command.Simple>(Parse("cat <<< \"a\"'b'\\\"$x{1,2}"));
+
+        var word = Assert.Single(simple.HereDocs).Word;
+        Assert.NotNull(word);
+        var parts = word!.Parts;
+        Assert.IsType<WordPart.DoubleQuoted>(parts[0]);
+        Assert.Equal("b", Assert.IsType<WordPart.SingleQuoted>(parts[1]).Value);
+        Assert.Equal("\"", Assert.IsType<WordPart.EscapedLiteral>(parts[2]).Value);
+        Assert.Equal("x", Assert.IsType<WordPart.SimpleVarSub>(parts[3]).Name);
+        // `{1,2}` stays literal text (in pieces), never a brace tuple.
+        Assert.Equal("{1,2}", string.Concat(parts.Skip(4).Select(p => Assert.IsType<WordPart.Literal>(p).Value)));
+    }
+
+    [Fact]
+    public void Parse_Heredoc_HasNoWord()
+        => Assert.Null(Assert.Single(Assert.IsType<Command.Simple>(Parse("cat <<EOF\nx\nEOF")).HereDocs).Word);
+
     [Fact]
     public void Parse_BasicHeredoc_ProducesHereDocNode()
     {

@@ -93,7 +93,9 @@ public sealed class InvokeBashHistoryCommand : BashCmdlet
                         }
                         delete = rest; k = a.Length; break;
                     default:
-                        e.Add($"history: -{(char.IsAsciiDigit(ch) ? a[1..] : ch.ToString())}: invalid option");
+                        // Through Fail like every message here: Err lines carry no prefix, the cmdlet adds it (the
+                        // interactive host's HistoryBuiltin shares this core and writes them as they are).
+                        Fail(2, $"-{(char.IsAsciiDigit(ch) ? a[1..] : ch.ToString())}: invalid option");
                         e.Add(Usage);
                         return Done(2);
                 }
@@ -196,7 +198,11 @@ public sealed class InvokeBashHistoryCommand : BashCmdlet
             }, mark, defaultFile);
 
         foreach (var line in r.Out) WriteObject(line);
-        foreach (var line in r.Err) FileSystemHelpers.WriteStderr(this, line);
+        // A shell diagnostic carries the source prefix (`s.sh: line 3: history: x: numeric argument required`); the
+        // usage line after an invalid option does not, as in bash.
+        foreach (var line in r.Err)
+            FileSystemHelpers.WriteStderr(this, line.StartsWith("history: usage:", StringComparison.Ordinal)
+                ? line : ShellDiagnostic.Prefix(SessionState) + line);
         FileSystemHelpers.SetLastExitCode(this, r.Status);
     }
 }

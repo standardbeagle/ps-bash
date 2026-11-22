@@ -980,7 +980,7 @@ public sealed partial class BashParser
         try { body = Parse(inner); }
         catch (ParseException ex) when (ex.Rule is not ("nesting" or "breadth"))
         {
-            body = BacktickSyntaxErrorBody(ex);
+            body = BacktickSyntaxErrorBody(ex, inner);
         }
         parts.Add(new WordPart.CommandSub(body ?? new Command.Simple(
             ImmutableArray<CompoundWord>.Empty,
@@ -991,12 +991,20 @@ public sealed partial class BashParser
 
     /// <summary>
     /// The run-time stand-in for a backtick body that does not parse: bash's report on stderr
-    /// (<c>bash: command substitution: line N: MSG</c>) and status 2, from the substitution's own shell.
+    /// (<c>t.sh: command substitution: line N: MSG</c>) and status 2, from the substitution's own shell. The name is the
+    /// script's (<c>${BASH_SOURCE[0]:-$0}</c>: <c>bash</c> under <c>-c</c>) and N the outer line the substitution is on
+    /// (<c>${LINENO:-1}</c>: the lexer resolves it to the substitution's word, where a plain <c>$LINENO</c> in this
+    /// generated text would read its own line 1) plus the failing line's offset in the body. bash's line count has
+    /// already passed the body's newlines when it parses it, so a multi-line body adds those too
+    /// (<c>z=`&lt;newline&gt;fi`</c> on line 7 reports line 9).
     /// </summary>
-    internal static Command? BacktickSyntaxErrorBody(ParseException ex)
+    internal static Command? BacktickSyntaxErrorBody(ParseException ex, string body)
     {
-        string report = "bash: command substitution: line " + Math.Max(1, ex.Line) + ": " + ex.Message;
-        return Parse("printf '%s\\n' '" + report.Replace("'", "'\\''") + "' >&2; (exit 2)");
+        int offset = Math.Max(1, ex.Line) - 1 + body.AsSpan().Count('\n');
+        string line = offset == 0 ? "${LINENO:-1}" : "$(( ${LINENO:-1} + " + offset + " ))";
+        string message = ": " + ex.Message;
+        return Parse("printf '%s\\n' \"${BASH_SOURCE[0]:-$0}\"': command substitution: line '\"" + line + "\"'"
+            + message.Replace("'", "'\\''") + "' >&2; (exit 2)");
     }
 
     /// <summary>

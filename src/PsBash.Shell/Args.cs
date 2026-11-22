@@ -127,7 +127,9 @@ public record ShellArgs(
             if (endOfOptions)
             {
                 // After --, all remaining args are positional
-                if (scriptPath is null)
+                if (stdin && command is null)
+                    scriptArgs = StdinOperand(scriptArgs, expanded[i]);
+                else if (scriptPath is null)
                     scriptPath = expanded[i];
                 else
                     scriptArgs = [..scriptArgs, expanded[i]];
@@ -291,7 +293,14 @@ public record ShellArgs(
                     }
                     // Non-flag positional argument: first becomes ScriptPath,
                     // subsequent become ScriptArgs (only when no -c command given)
-                    if (command is null && !expanded[i].StartsWith('-'))
+                    // `bash -s x y`: the program is stdin and the operands are $1 $2 (options end at the first).
+                    // REGRESSION: x was taken for a script file.
+                    if (command is null && stdin)
+                    {
+                        scriptArgs = StdinOperand(scriptArgs, expanded[i]);
+                        endOfOptions = true;
+                    }
+                    else if (command is null && !expanded[i].StartsWith('-'))
                     {
                         if (scriptPath is null)
                         {
@@ -343,6 +352,11 @@ public record ShellArgs(
     /// it, <c>exit</c> ends the shell, and <c>BASH_SOURCE</c> is the path as typed), and a file that cannot be read is
     /// skipped silently with status 0. The one form for every interactive entry (<c>-i -c</c> prelude, piped <c>-i</c>).
     /// </summary>
+    /// <summary>A <c>-s</c> operand: the next positional of the stdin script. ScriptArgs[0] is $0 (as for <c>-c CMD NAME</c>),
+    /// which for a stdin script is <c>bash</c>.</summary>
+    private static string[] StdinOperand(string[] scriptArgs, string operand) =>
+        scriptArgs.Length == 0 ? ["bash", operand] : [.. scriptArgs, operand];
+
     public static string RcSourceCommand(string rcFile)
     {
         string q = "'" + rcFile.Replace("'", "'\\''") + "'";

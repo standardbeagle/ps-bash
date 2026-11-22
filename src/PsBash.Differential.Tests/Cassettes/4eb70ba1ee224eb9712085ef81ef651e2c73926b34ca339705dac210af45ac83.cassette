@@ -1,0 +1,28 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 333
+stdout-length: 45
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+{
+u=$(umask); ( umask 077 ); [ "$(umask)" = "$u" ] && echo umask-kept
+( readonly ro=1 ); ro=2; echo "ro=$ro"
+( mapfile -t m <<< x ); echo "mapfile ${#m[@]}"
+( arr=(1 2) ); echo "arr ${#arr[@]}"
+( declare -A as=([k]=v) ); echo "assoc ${#as[@]}"
+} 2>&1
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+umask-kept
+ro=2
+mapfile 0
+arr 0
+assoc 0
+rc=0
+
+==== STDERR ====
+

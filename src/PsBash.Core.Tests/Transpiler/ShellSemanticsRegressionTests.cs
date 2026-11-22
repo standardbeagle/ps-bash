@@ -117,13 +117,29 @@ public class ShellSemanticsRegressionTests
         Assert.DoesNotContain("SetOptionOn('posix')", BashTranspiler.Transpile("foo=bar :"));
     }
 
+    // Oracle: `readonly r=1; r=2` drops the rest of its line and the script goes on; in POSIX mode the shell ends with
+    // 127. The mode is a run-time state. REGRESSION: a `set -o posix` anywhere in the text made the emitter drop every
+    // command after the assignment, also before the mode was set.
+    [Fact]
+    public void Transpile_ReadonlyAssignment_EndsTheShellOnlyWhenPosixIsOnAtRunTime()
+    {
+        var ps = BashTranspiler.Transpile("readonly r=1; r=2; echo dropped\necho next\nset -o posix");
+        Assert.Contains("if (" + PsBuild.PosixOn + ") { $global:LASTEXITCODE = 127; exit $global:LASTEXITCODE }", ps);
+        Assert.Contains("Invoke-BashEcho next", ps);
+        Assert.DoesNotContain("dropped", ps);
+    }
+
     // Oracle (set -o posix): `eval() { :; }` prints "`eval': is a special builtin" and the shell ends with status 2;
     // a function defined before the option is passed over by a call once it is on (`eval 'echo after posix'`).
     [Fact]
     public void Transpile_SpecialBuiltinFunction_InPosixMode_IsRefusedAndPassedOver()
     {
         var def = BashTranspiler.Transpile("set -o posix; eval() { :; }");
-        Assert.Contains("SetOptionOn('posix')) { Write-Error -Message 'bash: `eval'': is a special builtin' -ErrorAction Continue; $global:LASTEXITCODE = 2; exit 2 } else { function eval ", def);
+        Assert.Contains("SetOptionOn('posix')) { " + PsBuild.SetCallLine(1), def);
+        Assert.Contains(PsBuild.SpecialBuiltinRedefined("eval") + "; $global:LASTEXITCODE = 2; exit $global:LASTEXITCODE } else { function eval ", def);
+        // In ( ) only the subshell ends. REGRESSION: its bare `exit 2` ended the whole script.
+        Assert.Contains(PsBuild.SpecialBuiltinRedefined("export") + "; $global:LASTEXITCODE = 2; return }",
+            BashTranspiler.Transpile("( set -o posix; export() { :; }; echo no ); echo after"));
 
         var call = BashTranspiler.Transpile("eval() { echo f; }\nset -o posix\neval 'echo hi'");
         int split = call.IndexOf("SetOptionOn('posix')) {", StringComparison.Ordinal);

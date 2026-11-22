@@ -60,8 +60,19 @@ public sealed class VarFrameStack
     /// <summary>The <see cref="LineBase"/> and <see cref="Line"/> outside each running <c>eval</c> or sourced file (<see cref="EnterLines"/>).</summary>
     private readonly List<(int Base, int Line)> _lineScopes = new();
 
-    public void Enter()
+    /// <summary>
+    /// For each active function, outermost first: the file it was defined in (its BASH_SOURCE entry, null when unknown:
+    /// a frame pushed by <see cref="Enter()"/>), and how many files were being read (<c>$global:BASH_SOURCE</c>: the
+    /// script, sourced files) when it was called. See <see cref="Compose"/>.
+    /// </summary>
+    private readonly List<(string? Source, int Outer)> _funcSources = new();
+
+    public void Enter() => Enter(null, 0);
+
+    /// <summary>A function defined in <paramref name="source"/> is called while <paramref name="outer"/> files are being read.</summary>
+    public void Enter(string? source, int outer)
     {
+        _funcSources.Add((source, outer));
         _callLines.Add(Line);
         _callLineBases.Add(LineBase);
         LineBase = 0;
@@ -73,10 +84,46 @@ public sealed class VarFrameStack
     {
         if (Depth == 0) return;
         foreach (var list in _frames.Values) list.RemoveAll(f => f.Depth >= Depth);
+        _localArrays.RemoveAll(a => a.Depth >= Depth);
+        for (int i = _localAttrs.Count - 1; i >= 0 && _localAttrs[i].Depth >= Depth; i--)
+        {
+            var held = _localAttrs[i];
+            BashShellState.RestoreAttributes(held.Name, held.Attrs);
+            if (!held.Readonly) BashShellState.UnmarkReadonly(held.Name);
+            BashShellState.RestoreNameref(held.Name, held.Nameref);
+            _localAttrs.RemoveAt(i);
+        }
         Depth--;
         // The caller goes on at its call: a call inside the same statement (`f $(g)`) is still made from that line.
         if (_callLines.Count > 0) { Line = _callLines[^1]; _callLines.RemoveAt(_callLines.Count - 1); }
         if (_callLineBases.Count > 0) { LineBase = _callLineBases[^1]; _callLineBases.RemoveAt(_callLineBases.Count - 1); }
+        if (_funcSources.Count > 0) _funcSources.RemoveAt(_funcSources.Count - 1);
+    }
+
+    /// <summary>
+    /// <c>${BASH_SOURCE[@]}</c>, innermost first: one entry per frame, as bash keeps it beside FUNCNAME. A function's
+    /// frame is the file it was defined in; the files being read (<paramref name="files"/>, <c>$global:BASH_SOURCE</c>:
+    /// a sourced file, the script) sit between the function frames at the depth each was entered.
+    /// </summary>
+    public string[] Visible(IReadOnlyList<string> files) => Compose(files, _funcSources);
+
+    /// <summary>The pure rule of <see cref="Visible"/> (unit-tested).</summary>
+    internal static string[] Compose(IReadOnlyList<string> files, IReadOnlyList<(string? Source, int Outer)> frames)
+    {
+        var result = new List<string>(files.Count + frames.Count);
+        int taken = 0;
+        for (int k = frames.Count - 1; k >= 0; k--)
+        {
+            var (source, outer) = frames[k];
+            if (source is null) continue;
+            // The files read since this function was called (a `source` in its body) are above it.
+            int above = Math.Max(0, files.Count - taken - outer);
+            for (int i = 0; i < above; i++) result.Add(files[taken + i]);
+            taken += above;
+            result.Add(source);
+        }
+        for (int i = taken; i < files.Count; i++) result.Add(files[i]);
+        return result.ToArray();
     }
 
     /// <summary>
@@ -119,7 +166,43 @@ public sealed class VarFrameStack
         // The local keeps the attribute of the variable it hides (bash: `export v; f() { local v=2; }` exports 2); an
         // `export`/`declare +x` in the function changes it for the local only (LocalWasExported, at the return).
         list.Add(new Frame { Local = true, Depth = Depth, Hidden = current, Id = ++_nextId, WasExported = PsBash.Core.ShellExports.IsExported(name) });
+        TakeAttributes(name);
         return top is { Local: false } ? current : null;
+    }
+
+    /// <summary>The local arrays each active function declares (held as PowerShell variables of its scope), by depth.</summary>
+    private readonly List<(int Depth, string Name)> _localArrays = new();
+
+    /// <summary>The function at the current depth holds <paramref name="names"/> as local arrays (its prologue says so).</summary>
+    public void AddLocalArrays(string[] names)
+    {
+        foreach (var name in names) _localArrays.Add((Depth, name));
+    }
+
+    /// <summary>True while some active function holds <paramref name="name"/> as a local array.</summary>
+    public bool IsLocalArray(string name)
+    {
+        foreach (var held in _localArrays)
+            if (held.Name == name) return true;
+        return false;
+    }
+
+    /// <summary>The declare attributes (<see cref="BashShellState.MarkAttribute"/>) each function's locals hid, put back at its return.</summary>
+    private readonly List<(int Depth, string Name, string? Attrs, bool Readonly, string? Nameref)> _localAttrs = new();
+
+    /// <summary>
+    /// A local of the current function is declared: it starts with no declare attributes of its own (bash: a local does
+    /// not inherit <c>-i</c>, nor the declared-but-unset mark, nor a nameref), and the hidden variable's are put back
+    /// when the function returns (<see cref="Exit"/>), when a read-only mark the local took goes too. Once per name per call; a no-op at top level. REGRESSION: attributes were one
+    /// name-keyed table, so <c>f() { local -a o; }</c> left the caller's <c>o=()</c> printing as <c>declare -a o</c>.
+    /// </summary>
+    public void TakeAttributes(string name)
+    {
+        if (Depth == 0) return;
+        foreach (var saved in _localAttrs)
+            if (saved.Depth == Depth && saved.Name == name) return;
+        // Read-only stays as it is (a local over a read-only name is refused before this); a nameref is the local's own.
+        _localAttrs.Add((Depth, name, BashShellState.TakeAttributes(name), BashShellState.IsReadonly(name), BashShellState.TakeNameref(name)));
     }
 
     /// <summary>
@@ -160,6 +243,13 @@ public sealed class VarFrameStack
     /// </summary>
     public bool OwnsLocal(string name)
         => _frames.TryGetValue(name, out var list) && list.Exists(f => f.Local && f.Depth == Depth);
+
+    /// <summary>
+    /// Whether a running function (this one or a caller, bash's scope being dynamic) declared <paramref name="name"/>
+    /// local: the name exists even while unset (<c>local x; declare -p x</c> prints <c>declare -- x</c>).
+    /// </summary>
+    public bool HasLocal(string name)
+        => _frames.TryGetValue(name, out var list) && list.Exists(f => f.Local);
 
     /// <summary>The export attribute the current function's local <paramref name="name"/> hid; null when it owns no such local.</summary>
     public bool? LocalWasExported(string name)
@@ -229,7 +319,7 @@ public sealed class VarFrameStack
         }
     }
 
-    public void Clear() { _frames.Clear(); _bindings.Clear(); _tempExports.Clear(); _unsetTemps.Clear(); _callLines.Clear(); _callLineBases.Clear(); _lineScopes.Clear(); Line = 0; LineBase = 0; Depth = 0; }
+    public void Clear() { _frames.Clear(); _bindings.Clear(); _tempExports.Clear(); _unsetTemps.Clear(); _callLines.Clear(); _callLineBases.Clear(); _funcSources.Clear(); _lineScopes.Clear(); Line = 0; LineBase = 0; Depth = 0; }
 
     /// <summary>A copy of the frames, for a subshell to put back when it ends (BashShellState.Save/Restore).</summary>
     public sealed class Saved
@@ -276,6 +366,8 @@ public sealed class VarFrameStack
         to._callLines.AddRange(from._callLines);
         to._callLineBases.Clear();
         to._callLineBases.AddRange(from._callLineBases);
+        to._funcSources.Clear();
+        to._funcSources.AddRange(from._funcSources);
         to.LineBase = from.LineBase;
         // Ids stay unique across the restore: a frame pushed after it never reuses one a saved frame holds.
         to._nextId = Math.Max(to._nextId, from._nextId);
@@ -312,16 +404,35 @@ public sealed class VarFrameStack
     public static void ExitFunction() => Current.Exit();
 
     /// <summary>
-    /// A bash function body starts (<c>PsBuild.FunctionPrologue</c>): a new frame, and the ERR trap put aside unless
+    /// A bash function body starts (<c>PsBuild.FunctionPrologue</c>; <paramref name="name"/> is the function's): a new frame, and the ERR trap put aside unless
     /// errtrace is on (<see cref="ErrTrapInheritance"/>). Returns what was put aside, for <see cref="ExitFunction(SessionState, object)"/>.
     /// </summary>
-    public static object? EnterFunction(SessionState session)
+    public static object? EnterFunction(SessionState session, string? name)
     {
-        Current.Enter();
+        // Its BASH_SOURCE frame: the file it was defined in (FunctionSources), above the files being read now.
+        Current.Enter(FunctionSources.Of(session, name), Files(session.PSVariable.GetValue("global:BASH_SOURCE")).Length);
         return ErrTrapInheritance.Hide(session);
     }
 
-    /// <summary>The function body that <see cref="EnterFunction(SessionState)"/> started ends (<c>PsBuild.FunctionEpilogue</c>).</summary>
+    /// <summary>The value of <c>${BASH_SOURCE[@]}</c> (<see cref="Visible"/>); <paramref name="bashSource"/> is <c>$global:BASH_SOURCE</c>.</summary>
+    public static string[] BashSource(object? bashSource) => Current.Visible(Files(bashSource));
+
+    /// <summary>The files being read, innermost first, from <c>$global:BASH_SOURCE</c> (a string, an array, or nothing).</summary>
+    internal static string[] Files(object? bashSource)
+    {
+        if (bashSource is PSObject w) bashSource = w.BaseObject;
+        if (bashSource is null) return [];
+        if (bashSource is string s) return s.Length > 0 ? [s] : [];
+        if (bashSource is System.Collections.IEnumerable seq)
+        {
+            var list = new List<string>();
+            foreach (var item in seq) list.Add((item is PSObject p ? p.BaseObject : item)?.ToString() ?? "");
+            return list.ToArray();
+        }
+        return [bashSource.ToString() ?? ""];
+    }
+
+    /// <summary>The function body that <see cref="EnterFunction(SessionState, string)"/> started ends (<c>PsBuild.FunctionEpilogue</c>).</summary>
     public static void ExitFunction(SessionState session, object? hiddenErrTrap)
     {
         Current.Exit();
@@ -382,6 +493,35 @@ public sealed class VarFrameStack
     public static string? EndTemp(string name, long id, object? saved, object? current)
         => Current.EndTemp(name, id) ? saved?.ToString() : current?.ToString();
     public static string? DeclareLocal(string name, object? current) => Current.Local(name, current?.ToString());
+
+    /// <summary>A function body starts holding <paramref name="names"/> as local arrays (PsBuild.LocalArrays, after the prologue).</summary>
+    public static void LocalArrays(params string[] names) => Current.AddLocalArrays(names);
+
+    /// <summary>
+    /// The variable a function's write to array <paramref name="name"/> goes to when the function did not declare it
+    /// local (PsBuild.ArraySlot): bash's scope is dynamic, so a calling function's local array of that name, the nearest
+    /// one (PowerShell's scope chain follows the calls, as reads of <c>$name</c> already do); else the shell's global,
+    /// made when missing. A PowerShell-owned name (<c>$args</c>, which every function has) is never a caller's local.
+    /// REGRESSION: such writes went to the global, so <c>f() { local -A cfg; load; }; load() { cfg[b]=2; }</c> lost b.
+    /// </summary>
+    public static PSVariable ArraySlot(SessionState session, string name)
+        => BashVariableLookup.ArrayWriteSlot(session, name,
+            Current.IsLocalArray(name) && !PsBash.Core.PowerShellOwnedVariables.Contains(name));
+
+    /// <summary>A local held as a PowerShell variable (<c>local -A m</c>) is declared: see <see cref="TakeAttributes"/>.</summary>
+    public static void LocalAttributes(string name) => Current.TakeAttributes(name);
+
+    /// <summary>
+    /// <c>local -n NAME=$1</c> ran: NAME is the current function's nameref to <paramref name="target"/> (the run-time value),
+    /// so code that resolves names when it runs (arithmetic: <c>(( NAME++ ))</c>) reaches the target. An outer nameref of
+    /// that name comes back when the function returns. A target that is no variable name records nothing.
+    /// </summary>
+    public static void LocalNameref(string name, string? target)
+    {
+        Current.TakeAttributes(name);
+        if (!string.IsNullOrEmpty(target) && target != name && BashArrayElement.IsTarget(target))
+            BashShellState.SetNameref(name, target);
+    }
     /// <summary>The function returns: the value its local leaves behind (the caller's, or <paramref name="current"/> after <c>unlocal</c>).</summary>
     public static string? LeaveLocal(string name, object? saved, object? current)
     {

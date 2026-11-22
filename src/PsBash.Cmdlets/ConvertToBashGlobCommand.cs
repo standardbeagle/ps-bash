@@ -65,7 +65,7 @@ public sealed class ConvertToBashGlobCommand : BashCmdlet
         FileSystemHelpers.SetLastExitCode(cmdlet, 1);
         cmdlet.SessionState.PSVariable.Set("global:__BashFailGlob", true);
         cmdlet.ThrowTerminatingError(new ErrorRecord(
-            new InvalidOperationException("bash: no match: " + word),
+            new InvalidOperationException(ShellDiagnostic.Prefix(cmdlet.SessionState) + "no match: " + word),
             "NoGlobMatch", ErrorCategory.ObjectNotFound, word));
     }
 }

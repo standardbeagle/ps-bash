@@ -242,6 +242,8 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
 
     private string? ReadRawVar(string name)
     {
+        // `local -n c=$1; (( c++ ))`: a nameref reads its target. REGRESSION: it read a variable named c.
+        name = BashShellState.ResolveNameref(name);
         // BASH_LINENO is the runtime's call-line stack, not a stored variable (`$((BASH_LINENO))` is element 0).
         if (name == "BASH_LINENO")
         {
@@ -262,6 +264,7 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
     private void WriteVar(string name, long value)
     {
         var s = value.ToString(CultureInfo.InvariantCulture);
+        name = BashShellState.ResolveNameref(name);   // a nameref writes its target
         if (TrySplitElement(name, out var elemBase, out var elemSub)) { WriteElement(elemBase, elemSub, s); return; }
         if (BashVariableLookup.ArrayHolder(SessionState, name) is not null) { WriteElement(name, "0", s); return; }
         BashVariableStore.Set(name, s);

@@ -1,0 +1,36 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 656
+stdout-length: 116
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+echo 'set -- a b; v=1' > f
+set -- x; v=; echo q | . ./f; echo "src n=$# v=$v"
+set -- x; v=; echo q | source ./f; echo "source n=$# v=$v"
+set -- x; v=; echo q | eval 'set -- a b; v=2'; echo "eval n=$# v=$v"
+set -- x; v=; c='set -- a b; v=2'; echo q | eval "$c"; echo "evaldyn n=$# v=$v"
+set -- x; v=; echo q | { set -- a b; v=3; }; echo "grp n=$# v=$v"
+h() { set -- a b; v=4; }
+set -- x; v=; echo q | h; echo "fn n=$# v=$v"
+set -- x; echo q | shift; echo "shift n=$#"
+set -- x; echo q | builtin shift; echo "bshift n=$#"
+set -- x; v=; . ./f | cat; echo "first src n=$# v=$v"
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+src n=1 v=
+source n=1 v=
+eval n=1 v=
+evaldyn n=1 v=
+grp n=1 v=
+fn n=1 v=
+shift n=1
+bshift n=1
+first src n=1 v=
+rc=0
+
+==== STDERR ====
+

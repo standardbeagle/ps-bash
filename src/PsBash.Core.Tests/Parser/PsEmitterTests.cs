@@ -2142,7 +2142,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo ${VAR:?error msg}");
 
-        Assert.Equal("Invoke-BashEcho ($env:VAR ? $env:VAR : $($__psbash_pe = [PsBash.Cmdlets.BashParamErrorException]::Reported('VAR: ', \"error msg\"); Write-Error ('ps-bash: ' + $__psbash_pe.Message) -ErrorAction Continue; throw $__psbash_pe))", result);
+        Assert.Equal("Invoke-BashEcho ($env:VAR ? $env:VAR : $($__psbash_pe = [PsBash.Cmdlets.BashParamErrorException]::Reported('VAR: ', \"error msg\"); Write-Error -Message ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + $__psbash_pe.Message) -ErrorAction Continue; throw $__psbash_pe))", result);
     }
 
     [Fact]
@@ -2175,7 +2175,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo ${VAR?must be set}");
 
-        Assert.Equal("Invoke-BashEcho ($env:VAR ?? $($__psbash_pe = [PsBash.Cmdlets.BashParamErrorException]::Reported('VAR: ', \"must be set\"); Write-Error ('ps-bash: ' + $__psbash_pe.Message) -ErrorAction Continue; throw $__psbash_pe))", result);
+        Assert.Equal("Invoke-BashEcho ($env:VAR ?? $($__psbash_pe = [PsBash.Cmdlets.BashParamErrorException]::Reported('VAR: ', \"must be set\"); Write-Error -Message ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + $__psbash_pe.Message) -ErrorAction Continue; throw $__psbash_pe))", result);
     }
 
     [Fact]
@@ -4016,7 +4016,8 @@ public class PsEmitterTests
             "function greet { echo hello; }; function main { greet; }")!);
 
         Assert.Equal(
-            $"function greet {{ {FnPre}Invoke-BashEcho hello{FnPost} }}; function main {{ {FnPre}greet{FnPost} }}",
+            // A call to a function this text defines records its line (the callee's BASH_LINENO / caller).
+            $"function greet {{ {FnPre}Invoke-BashEcho hello{FnPost} }}; function main {{ {FnPre}{PsBuild.SetCallLine(1)}greet{FnPost} }}",
             result);
     }
 
@@ -4252,7 +4253,7 @@ public class PsEmitterTests
     [InlineData("a[$i]=x", true)]
     [InlineData("a=(1); echo ${a[0]}", false)]
     [InlineData("a[3]=x", false)]
-    [InlineData("a[-1]=x", false)]
+    [InlineData("a[-1]=x", true)]                     // bash: a[-1]: bad array subscript on an empty array, the line dropped
     public void Transpile_ArithmeticWord_GetsALineScope(string bash, bool scoped)
         => Assert.Equal(scoped, (PsEmitter.Transpile(bash) ?? "").Contains("[PsBash.Cmdlets.BashLineDiscard]::Enter()", StringComparison.Ordinal));
 
@@ -5144,7 +5145,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("declare -A map");
         // A scalar map becomes element 0; an indexed map is refused (ArrayKindGuard).
-        Assert.Equal(PsBuild.ArrayKindGuard("map", toAssoc: true,
+        Assert.Equal(PsBuild.ArrayKindGuard("declare", "map", toAssoc: true,
             "if ($global:map -isnot [System.Collections.IDictionary]) { $global:map = [PsBash.Cmdlets.BashAssoc]::Unset(); if ($null -ne $env:map) { $global:map['0'] = $env:map } }; $global:LASTEXITCODE = 0"), result);
     }
 
@@ -5153,7 +5154,20 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("map[key]=val");
         // A key that is not a plain integer may be arithmetic on an indexed array (`a[1/0]=x` discards the line).
-        Assert.Equal(PsBuild.DiscardLineScope("if ($null -eq $map -and $null -ne $env:map) { $map = @($env:map) }; $map = Set-BashElement $map \"key\" \"val\""), result);
+        Assert.Equal(PsBuild.DiscardLineScope("if ($null -eq $map -and $null -ne $env:map) { $map = @($env:map) }; $map = Set-BashElement $map \"key\" \"val\" -Written 'map[key]'"), result);
+    }
+
+    // Oracle: `b=(1); i=-5; b[$i]=x; echo no` prints "t.sh: line 1: b[$i]: bad array subscript" and drops the rest of the
+    // line: the element is named as written, and a negative literal index also gets the line scope. REGRESSION: it said
+    // "bash: -5: bad array subscript" and ran `echo no`.
+    [Theory]
+    [InlineData("b[$i]=x; echo no", "-Written 'b[$i]'")]
+    [InlineData("b[-5]=x; echo no", "-Written 'b[-5]'")]
+    public void Transpile_ElementAssignment_NamesTheElementAsWrittenAndCanDropTheLine(string bash, string written)
+    {
+        var ps = PsEmitter.Transpile(bash)!;
+        Assert.Contains(written, ps);
+        Assert.True(PsBuild.CanDiscardLine(ps), ps);
     }
 
     // Oracle: bash `c[$i]=v` assigns element $i (the subscript was the literal text '$i') and `a[2]=x` on a
@@ -5980,7 +5994,10 @@ public class PsEmitterTests
     {
         var ps = PsEmitter.Transpile("f() { echo ${BASH_LINENO[0]}; }\n\nf");
         Assert.Contains("[PsBash.Cmdlets.VarFrameStack]::SetLine(3); ", ps);
-        Assert.DoesNotContain("SetLine(", PsEmitter.Transpile("f() { echo hi; }\nf"));
+        Assert.DoesNotContain("SetLine(", PsEmitter.Transpile("f() { echo hi; }\necho done"));
+        // A call to a function the text defines records the line: the function's BASH_LINENO[0] / `caller` is read by
+        // code this text cannot see (a sourced library). REGRESSION: it reported an earlier statement's line.
+        Assert.Contains("[PsBash.Cmdlets.VarFrameStack]::SetLine(2); f", PsEmitter.Transpile("f() { echo hi; }\nf"));
     }
 
     [Fact]

@@ -31,14 +31,19 @@ public class BuiltinNamesNeverReachPowerShellTests
         ["alias"] = "the runtime's alias for Invoke-BashAlias (kept by PowerShellAliases.IsBashRuntimeAlias)",
     };
 
+    /// <summary>The builtin as a statement or as a pipe stage. A state builtin in a stage runs in a subshell (bash
+    /// forks one), so the stage alone no longer shows the bare name the statement still uses.</summary>
     private static bool EmittedBare(string name)
     {
+        // PowerShell's dot operator before a script block or subexpression (`. $(...)`, `. { }`) is not a name lookup.
+        var bare = new System.Text.RegularExpressions.Regex("^" + System.Text.RegularExpressions.Regex.Escape(name) + @" (?![$\{])");
+        if (bare.IsMatch(PsEmitter.Transpile(name + " zz") ?? "")) return true;
         string emitted = PsEmitter.Transpile(name + " zz | head -1") ?? "";
         // A pipeline of shell code sits in PsBuild.WithPipeEntryStatus (`. { capture; ... }`): its `.` is not the builtin.
         string entry = PsBuild.WithPipeEntryStatus("");
         string open = entry[..(entry.Length - 2)];
         if (emitted.StartsWith(open, StringComparison.Ordinal)) emitted = emitted[open.Length..];
-        return emitted.StartsWith(name + " ", StringComparison.Ordinal);
+        return bare.IsMatch(emitted);
     }
 
     [Fact]

@@ -1,0 +1,66 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 632
+stdout-length: 398
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+t() { printf '%s\n' "$1" > s.sh; bash s.sh; echo "rc=$?"; }
+t 'set -e; readonly r=1; f() { r=2; echo in; }; f; echo same
+echo next'
+t 'set -e
+readonly q=1; q=2 || echo or
+echo next'
+t 'set -e
+if true; then readonly q=1; q=2; echo same; fi
+echo next'
+t 'set -e
+readonly q=1
+( q=2; echo sub ); echo same
+echo next'
+t 'set -e
+readonly q=1
+y=$(q=2; echo sub); echo "same $?"
+echo next'
+t 'set -e
+a[]=1; echo same
+echo next'
+t 'set -o posix
+readonly x=1
+x=2
+echo hi'
+t 'set -e
+echo $((1/0)); echo same
+echo next'
+t 'readonly q=1
+q=2; echo same
+echo next'
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+s.sh: line 1: r: readonly variable
+rc=1
+s.sh: line 2: q: readonly variable
+rc=1
+s.sh: line 2: q: readonly variable
+rc=1
+s.sh: line 3: q: readonly variable
+rc=1
+s.sh: line 3: q: readonly variable
+rc=1
+s.sh: line 2: a[]: bad array subscript
+rc=1
+s.sh: line 3: x: readonly variable
+rc=1
+s.sh: line 2: 1/0: division by 0 (error token is "0")
+next
+rc=0
+s.sh: line 2: q: readonly variable
+next
+rc=0
+rc=0
+
+==== STDERR ====
+

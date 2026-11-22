@@ -25,6 +25,20 @@ namespace PsBash.Cmdlets;
 public static class BashVariableLookup
 {
     /// <summary>
+    /// The PowerShell variable an array write to <paramref name="name"/> goes to (<c>VarFrameStack.ArraySlot</c> decides
+    /// the frame): with <paramref name="callerLocal"/> the nearest one the scope chain sees (a calling function's local),
+    /// else the shell's global, made (unset) when missing.
+    /// </summary>
+    public static PSVariable ArrayWriteSlot(SessionState state, string name, bool callerLocal)
+    {
+        if (callerLocal && state.PSVariable.Get(name) is { } nearest) return nearest;
+        string global = "global:" + name;
+        if (state.PSVariable.Get(global) is { } existing) return existing;
+        state.PSVariable.Set(global, null);
+        return state.PSVariable.Get(global)!;
+    }
+
+    /// <summary>
     /// The array that holds <paramref name="name"/> (an <see cref="IList"/> other than a string, or an
     /// <see cref="IDictionary"/>: indexed, sparse or associative) as the caller's scope sees it, out to the global
     /// scope; null when the name holds no array.
@@ -90,9 +104,24 @@ public static class BashVariableLookup
         if (existing is not null && !PowerShellOwnedVariables.Contains(name)
             && (existing.Options & (ScopedItemOptions.ReadOnly | ScopedItemOptions.Constant)) == 0)
             existing.Value = holder;
+        // A new array made in a subshell (`( mapfile -t m <<< x )`, `x=$(read -a a <<< "1 2")`) lives in the subshell's
+        // scope and ends with it, as an assigned one (`( arr=(1 2) )`) does. REGRESSION: it was created global and leaked.
+        else if (BashRuntime.SubshellDepth(state) > 0)
+            state.InvokeCommand.InvokeScript(true, SetInSubshellScope, null, name, holder);
         else
             state.PSVariable.Set("global:" + name, holder);
     }
+
+    /// <summary>
+    /// Creates variable <c>$args[0]</c> = <c>$args[1]</c> in the innermost subshell scope: the nearest scope that holds
+    /// <see cref="BashRuntime.SubshellDepthVariable"/> itself (BashShellState.Save sets it there), else the global one.
+    /// Run in a child scope (its own variables stay there); scope numbers count up from it.
+    /// </summary>
+    private static readonly ScriptBlock SetInSubshellScope = ScriptBlock.Create(
+        "for ($i = 1; ; $i++) { try { $null = Get-Variable -Name '" + BashRuntime.SubshellDepthVariable + "' -Scope $i -ErrorAction Stop; "
+        + "Set-Variable -Name $args[0] -Value $args[1] -Scope $i; return } "
+        + "catch [System.Management.Automation.ItemNotFoundException] { } "
+        + "catch { Set-Variable -Name $args[0] -Value $args[1] -Scope Global; return } }");
 
     /// <summary>
     /// Replace the array <paramref name="name"/> holds with <paramref name="holder"/> in the scope that owns it (the

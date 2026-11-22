@@ -180,9 +180,7 @@ public sealed class ProgramLaunch
     public string StandInScript(string shown)
     {
         if (!Runnable) return PermissionDeniedScript(shown);
-        if (InterpreterMissing)
-            return "Write-Error -Message 'bash: " + PsBuild.EscapeForSingleQuote(BashPath.ToShell(shown))
-                   + ": cannot execute: required file not found' -Category ObjectNotFound -ErrorAction Continue; $global:LASTEXITCODE = 127";
+        if (InterpreterMissing) return MissingInterpreterScript(shown);
         var sb = new System.Text.StringBuilder(Shell ? "Invoke-BashBash" : "& " + PsBuild.SingleQuote(Interpreter!));
         foreach (var a in InterpreterArgs) sb.Append(' ').Append(PsBuild.SingleQuote(a));
         sb.Append(' ').Append(PsBuild.SingleQuote(Path)).Append(' ').Append(PsBuild.ArgvSplat);
@@ -190,8 +188,18 @@ public sealed class ProgramLaunch
         // The stand-in is handed the records unchanged (IsRunnableStandIn): ps-bash's bash reads their bytes itself; an
         // interpreter is a native program, so its records become exact stdin bytes on the way in.
         string feed = Shell ? "" : PsBuild.NativeStdinFeed(Interpreter!) + " | ";
-        return PsBuild.ArgvLiterals + "; " + PsBuild.ForwardStageInputIfAny(run, feed);
+        string forward = PsBuild.ForwardStageInputIfAny(run, feed);
+        if (Shell) return PsBuild.ArgvLiterals + "; " + forward;
+        // An interpreter found by name (`#!/nonexistent/interp` runs `interp` from PATH): none there is bash's missing
+        // interpreter, "./p: cannot execute: required file not found", 127. REGRESSION: "interp: command not found".
+        return PsBuild.ArgvLiterals + "; if (-not (Get-Command -Name " + PsBuild.SingleQuote(Interpreter!)
+               + " -CommandType Application -ErrorAction Ignore)) { " + MissingInterpreterScript(shown) + " } else { " + forward + " }";
     }
+
+    /// <summary>bash's report for a <c>#!</c> interpreter that does not exist: status 127, the file named as <paramref name="shown"/>.</summary>
+    private static string MissingInterpreterScript(string shown)
+        => PsBuild.ShellDiagnosticLine(PsBuild.SingleQuote(BashPath.ToShell(shown) + ": cannot execute: required file not found"))
+           + "; $global:LASTEXITCODE = 127";
 
     /// <summary>
     /// True when <paramref name="scriptText"/> is a runnable stand-in (<see cref="StandInScript"/>) that a command
@@ -216,6 +224,6 @@ public sealed class ProgramLaunch
 
     /// <summary>The stand-in for a file that cannot run: bash's message on stderr and status 126.</summary>
     public static string PermissionDeniedScript(string shown)
-        => "Write-Error -Message 'bash: " + PsBuild.EscapeForSingleQuote(BashPath.ToShell(shown))
-           + ": Permission denied' -Category PermissionDenied -ErrorAction Continue; $global:LASTEXITCODE = 126";
+        => PsBuild.ShellDiagnosticLine(PsBuild.SingleQuote(BashPath.ToShell(shown) + ": Permission denied"))
+           + "; $global:LASTEXITCODE = 126";
 }

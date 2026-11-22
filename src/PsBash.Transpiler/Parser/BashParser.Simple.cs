@@ -14,11 +14,28 @@ public sealed partial class BashParser
 
     /// <summary>`declare`/`typeset` followed directly by a NAME[=VAL] word (no -g/-x/-A… flag) inside a function body.</summary>
     private bool IsFunctionScopedDeclare()
-        => _functionDepth > 0
-           && Peek().Value is "declare" or "typeset"
-           && _pos + 1 < _tokens.Count
-           && _tokens[_pos + 1] is { Kind: BashTokenKind.Word or BashTokenKind.AssignmentWord } next
-           && !next.Value.StartsWith('-');
+    {
+        if (_functionDepth == 0 || Peek().Value is not ("declare" or "typeset")) return false;
+        // `declare -i n=1` / `declare -A m` in a function make a local, as `local` does: attribute flags only. -g (global),
+        // the print forms (-p -f -F) and -t stay on the declare path. REGRESSION: any flag sent the declaration there,
+        // which writes globals, so `f() { declare -a e; }` left e set after f returned.
+        int k = _pos + 1;
+        for (; k < _tokens.Count && _tokens[k] is { Kind: BashTokenKind.Word } flag && flag.Value.Length > 1 && flag.Value[0] == '-'; k++)
+            if (flag.Value.AsSpan(1).IndexOfAnyExcept(LocalDeclareFlags) >= 0) return false;
+        return k < _tokens.Count
+               && _tokens[k] is { Kind: BashTokenKind.Word or BashTokenKind.AssignmentWord } next
+               && !next.Value.StartsWith('-');
+    }
+
+    /// <summary>The attribute letters a function's <c>declare</c> may carry and still be a local declaration.</summary>
+    private const string LocalDeclareFlags = "aAilnrux";
+
+    /// <summary>The value attributes (<c>-i</c>, <c>-l</c>, <c>-u</c>) the declaration being parsed set; null for none. -l and -u together cancel (bash).</summary>
+    private string? DeclaredValueAttrs()
+    {
+        string letters = (_declSawInteger ? "i" : "") + (_declSawLower == _declSawUpper ? "" : _declSawLower ? "l" : "u");
+        return letters.Length == 0 ? null : letters;
+    }
 
     /// <summary>`command export x=1`, `builtin local y`, `\builtin declare z`, `command command readonly r=1`: the wrappers
     /// only bypass functions and aliases, so a declaration builtin behind them is parsed exactly as the bare form (otherwise
@@ -60,6 +77,10 @@ public sealed partial class BashParser
         if (!(Peek().Kind == BashTokenKind.Word && Peek().Value == "-p" && _tokens[saved].Value == "local")
             && ParseDeclarationPairs() is { } pairs)
             return new Command.ShAssignment(pairs, IsLocal: isLocal, IsExport: !isLocal, IsReadonly: isLocal && _declSawReadonly, IsNameref: isLocal && _declSawNameref,
+                // `local -A m` / `local -a q`: the kind is part of the declaration (REGRESSION: dropped, so `m[x]=1` wrote m[0]).
+                IsAssoc: isLocal && _declSawAssoc, IsIndexed: isLocal && _declSawIndexed && !_declSawAssoc,
+                Attrs: isLocal ? DeclaredValueAttrs() : null,
+                Builtin: isLocal ? _tokens[saved].Value : null,
                 Redirects: _declRedirects.Count == 0 ? default : [.. _declRedirects],
                 // `export -n NAME` takes the attribute away (-n is no nameref there); `local -x` / `typeset +x` set / clear it.
                 ExportAttr: isLocal ? _declExport : _declSawNameref ? -1 : 0);
@@ -470,6 +491,9 @@ public sealed partial class BashParser
     private bool _declSawAssoc;
     /// <summary>Set by <see cref="ParseDeclarationPairs"/> when an attribute flag of the declaration carried `a` (an indexed array).</summary>
     private bool _declSawIndexed;
+    private bool _declSawInteger;
+    private bool _declSawLower;
+    private bool _declSawUpper;
     /// <summary>Set by <see cref="ParseDeclarationPairs"/>: +1 after a flag with <c>x</c> (<c>-x</c>), -1 after <c>+x</c>, else 0.</summary>
     private int _declExport;
     /// <summary>The redirects <see cref="ParseDeclarationPairs"/> consumed (the builtin's own).</summary>
@@ -576,6 +600,9 @@ public sealed partial class BashParser
         _declSawNameref = false;
         _declSawAssoc = false;
         _declSawIndexed = false;
+        _declSawInteger = false;
+        _declSawLower = false;
+        _declSawUpper = false;
         _declExport = 0;
         _declRedirects.Clear();
         var pairs = ImmutableArray.CreateBuilder<Assignment>();
@@ -613,6 +640,9 @@ public sealed partial class BashParser
                 if (value[1] != '-' && value.Contains('n')) _declSawNameref = true;
                 if (value[1] != '-' && value.Contains('A')) _declSawAssoc = true;
                 if (value[1] != '-' && value.Contains('a')) _declSawIndexed = true;
+                if (value[1] != '-' && value.Contains('i')) _declSawInteger = true;
+                if (value[1] != '-' && value.Contains('l')) _declSawLower = true;
+                if (value[1] != '-' && value.Contains('u')) _declSawUpper = true;
                 if (value[1] != '-' && value.Contains('x')) _declExport = 1;
                 Advance();
                 continue;
@@ -1030,7 +1060,11 @@ public sealed partial class BashParser
         // Always, even when the word already ends in a newline: `mapfile -t a <<< $'hello\n'` reads two lines.
         raw += "\n";
 
-        return new HereDoc(raw, expand, StripTabs: false);
+        // The word itself, parsed as any word is (without brace expansion, which a here-string does not get): the emitter
+        // expands it from this. REGRESSION: the text above, unquoted by hand and expanded as a heredoc body, kept `\"` and
+        // inner quotes (`<<< a\"b`, `<<< "a"'b'`, `<<< "a\\\"b"` printed a\"b, "a"'b', a\\"b).
+        return new HereDoc(raw, expand, StripTabs: false,
+            Word: new CompoundWord(DecomposeWord(wordToken.Value, braceExpansion: false)));
     }
 
     private ImmutableArray<Redirect> ParseTrailingRedirects()

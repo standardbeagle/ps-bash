@@ -297,6 +297,9 @@ if (shellArgs.ScriptPath is not null)
 }
 
 // Auto-detect piped stdin: if no command given and stdin is redirected, try reading it.
+// The script runs as a command string, but it is not `bash -c` (stdinScript): $- has s, not c; an expansion error
+// drops the rest of its line as in a script file; a function defined there is BASH_SOURCE `main`.
+bool stdinScript = false;
 if (shellArgs.ReadFromStdin || (!shellArgs.Interactive && shellArgs.Command is null && Console.IsInputRedirected))
 {
     string stdinCommand;
@@ -327,7 +330,10 @@ if (shellArgs.ReadFromStdin || (!shellArgs.Interactive && shellArgs.Command is n
         return 0;
     }
     if (!string.IsNullOrWhiteSpace(stdinCommand))
+    {
         shellArgs = shellArgs with { Command = stdinCommand };
+        stdinScript = true;
+    }
 }
 
 // `echo cmds | bash -i`: an interactive shell reading its commands from the pipe (PipedInteractive). The REPL is
@@ -598,7 +604,8 @@ int exitCode = await HostFailureGuard.RunAsync(async () =>
         : null;
     var rc = await worker.ExecuteAsync(
         BuildInvocationCwdPreamble() + pwshCommand,
-        environment: CaptureLauncherEnvironment(dashC: shellArgs.Command is not null && !pipedInteractive));
+        environment: CaptureLauncherEnvironment(dashC: shellArgs.Command is not null && !pipedInteractive && !stdinScript,
+            readsStdin: stdinScript || pipedInteractive));
     Stamp("executed");
     return rc;
 });
@@ -702,16 +709,19 @@ static bool LooksLikePowerShell(string input)
 // The host is a shared daemon whose environment is process-global, so without
 // this a `-c` invocation inherits the env of whichever launcher spawned the
 // daemon plus every `$env:`/`export` write from earlier requests. R06.
-// PSBASH_DASH_C is the launcher's own mark ("this is a -c command"): never inherited from a parent shell.
-static IReadOnlyList<KeyValuePair<string, string>> CaptureLauncherEnvironment(bool dashC = false)
+// PSBASH_DASH_C ("this is a -c command") and PSBASH_STDIN_SHELL ("the commands came from stdin": a piped script,
+// `bash -s`, a piped `bash -i`) are the launcher's own marks: never inherited from a parent shell.
+static IReadOnlyList<KeyValuePair<string, string>> CaptureLauncherEnvironment(bool dashC = false, bool readsStdin = false)
 {
     var entries = new List<KeyValuePair<string, string>>();
     foreach (System.Collections.DictionaryEntry e in Environment.GetEnvironmentVariables())
     {
-        if (e.Key is string name && name != "PSBASH_DASH_C" && name != PsBash.Core.ShellVariables.LauncherParentPidVariable)
+        if (e.Key is string name && name != "PSBASH_DASH_C" && name != "PSBASH_STDIN_SHELL"
+            && name != PsBash.Core.ShellVariables.LauncherParentPidVariable)
             entries.Add(new KeyValuePair<string, string>(name, e.Value as string ?? string.Empty));
     }
     if (dashC) entries.Add(new KeyValuePair<string, string>("PSBASH_DASH_C", "1"));
+    if (readsStdin) entries.Add(new KeyValuePair<string, string>("PSBASH_STDIN_SHELL", "1"));
     // $PPID is the process that started this shell, which only the launcher knows (ShellVariables.SeedShellStart).
     if (PsBash.Core.Platform.ProcessInfo.OwnParentPid() is int parent)
         entries.Add(new KeyValuePair<string, string>(PsBash.Core.ShellVariables.LauncherParentPidVariable,

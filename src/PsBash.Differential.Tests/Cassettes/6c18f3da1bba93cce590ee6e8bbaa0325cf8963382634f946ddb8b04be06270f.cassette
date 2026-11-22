@@ -1,0 +1,49 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 519
+stdout-length: 533
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+{
+break | cat; echo "a $?"
+echo q | break; echo "b $?"
+for i in 1 2; do break | cat; echo "c$i"; done
+for i in 1 2; do echo q | continue; echo "d$i"; done
+for i in 1 2; do echo q | eval break; echo "e$i"; done
+for i in 1 2; do eval break | cat; echo "f$i"; done
+for i in 1 2; do echo q | break 2; echo "g$i"; done
+for i in 1 2; do echo q | { break; }; echo "grp loop $i"; done
+for i in 1 2; do ( break ); echo "sub loop $i"; done
+} 2>&1
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+t.sh: line 2: break: only meaningful in a `for', `while', or `until' loop
+a 0
+t.sh: line 3: break: only meaningful in a `for', `while', or `until' loop
+b 0
+c1
+c2
+d1
+d2
+e1
+e2
+f1
+f2
+g1
+g2
+t.sh: line 9: break: only meaningful in a `for', `while', or `until' loop
+grp loop 1
+t.sh: line 9: break: only meaningful in a `for', `while', or `until' loop
+grp loop 2
+t.sh: line 10: break: only meaningful in a `for', `while', or `until' loop
+sub loop 1
+t.sh: line 10: break: only meaningful in a `for', `while', or `until' loop
+sub loop 2
+rc=0
+
+==== STDERR ====
+

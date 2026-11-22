@@ -293,7 +293,7 @@ public static class PsBuild
     /// </summary>
     public static string ParamErrorThrowStatements(string prefixLiteral, string messageExpr) =>
         "$__psbash_pe = [PsBash.Cmdlets.BashParamErrorException]::Reported(" + prefixLiteral + ", " + messageExpr + "); "
-        + "Write-Error ('ps-bash: ' + $__psbash_pe.Message) -ErrorAction Continue; throw $__psbash_pe";
+        + "Write-Error -Message (" + DiagnosticPrefix + " + $__psbash_pe.Message) -ErrorAction Continue; throw $__psbash_pe";
 
     /// <summary>
     /// Under <c>set -u</c>, an arithmetic expression that reads an unset name: <c>Invoke-BashArith</c>
@@ -355,18 +355,54 @@ public static class PsBuild
     /// <c>$__psbash_av = Invoke-BashArith ..</c>: the forms the cmdlet's IsWordExpansion recognises; an indexed
     /// subscript <c>${a[1/0]}</c> is written the same way), or an element assignment whose subscript is not a plain
     /// integer (<c>a[1/0]=x</c>: Set-BashElement evaluates it as a word). The arithmetic command <c>(( 1/0 ))</c> is not
-    /// a word: it fails with status 1 and the line goes on, as in bash.
+    /// a word: it fails with status 1 and the line goes on, as in bash. Also a builtin handed an element operand
+    /// (<c>unset 'a[1/0]'</c>, <c>read</c>, <c>printf -v</c>, <c>test -v</c> / <c>[ -v ]</c>): it evaluates the subscript at
+    /// run time, and one that is not an expression drops the line (<c>BashArrayElement.FailSubscript</c>).
     /// </summary>
     public static bool CanDiscardLine(string emitted) =>
-        emitted.Contains("Get-BashIndirectValue", StringComparison.Ordinal)
+        emitted.Contains(UsageDiscardMark, StringComparison.Ordinal)
+        || emitted.Contains(AssignmentDiscardMark, StringComparison.Ordinal)
+        || s_shiftExtraOperand.IsMatch(emitted)
+        || emitted.Contains("Get-BashIndirectValue", StringComparison.Ordinal)
         || emitted.Contains(ExpansionErrorFunction, StringComparison.Ordinal)
         || emitted.Contains("$(Invoke-BashArith", StringComparison.Ordinal)
         || emitted.Contains("$__psbash_av = Invoke-BashArith", StringComparison.Ordinal)
-        || (emitted.Contains("Set-BashElement ", StringComparison.Ordinal) && s_computedElementKey.IsMatch(emitted));
+        || (emitted.Contains("Set-BashElement ", StringComparison.Ordinal) && s_computedElementKey.IsMatch(emitted))
+        || (s_elementOperandBuiltin.IsMatch(emitted) && s_elementOperand.IsMatch(emitted));
 
-    /// <summary>A <c>Set-BashElement $a "key"</c> whose key is not a plain integer literal (evaluated as arithmetic).</summary>
+    /// <summary>
+    /// Emitted text that can print a shell diagnostic naming the line (<c>t.sh: line 2: ro: readonly variable</c>), so the
+    /// statement records its line first (<c>PsEmitter.LateLineRecord</c>): it builds the prefix
+    /// (<see cref="DiagnosticPrefix"/>: <see cref="ShellDiagnosticLine"/>, a readonly or parameter error), can discard the
+    /// line (<see cref="CanDiscardLine"/>), or expands a glob (failglob's <c>no match</c>). Quote-blind on purpose: a false
+    /// hit only records a line.
+    /// </summary>
+    public static bool MayReportDiagnostic(string emitted) =>
+        emitted.Contains(DiagnosticPrefix, StringComparison.Ordinal)
+        || emitted.Contains("ConvertTo-BashGlob", StringComparison.Ordinal)
+        || emitted.Contains("ConvertTo-BashWords", StringComparison.Ordinal)
+        || CanDiscardLine(emitted);
+
+    /// <summary><c>shift 1 2</c>: Invoke-BashShift reports "too many arguments" and drops the line (<c>BashLineDiscard.UsageError</c>).</summary>
+    private static readonly System.Text.RegularExpressions.Regex s_shiftExtraOperand =
+        new(@"\bInvoke-BashShift\s+[^\s;|}]+\s+[^\s;|}]", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    /// <summary>A builtin that evaluates an element operand's subscript itself (<c>BashArrayElement.FailSubscript</c>).</summary>
+    private static readonly System.Text.RegularExpressions.Regex s_elementOperandBuiltin =
+        new(@"\bInvoke-Bash(?:Unset|Read|Printf|Test)\b", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// A word that starts <c>NAME[</c> (<c>'a[i]'</c>, <c>"m[$env:k]"</c>, a glob-hoisted <c>'a[i]'</c>). Quote-blind on
+    /// purpose: a false hit only arms a line scope, which changes nothing unless a discard is raised.
+    /// </summary>
+    private static readonly System.Text.RegularExpressions.Regex s_elementOperand =
+        new(@"[\s'""][A-Za-z_][A-Za-z0-9_]*\[", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// A <c>Set-BashElement $a "key"</c> whose key may fail: not a non-negative integer literal (evaluated as arithmetic,
+    /// or a negative index past the start, <c>b[-5]=x</c>: "bad array subscript", the rest of the line dropped).
+    /// </summary>
     private static readonly System.Text.RegularExpressions.Regex s_computedElementKey =
-        new(@"Set-BashElement \$\S+ ""(?!-?[0-9]+"")", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        new(@"Set-BashElement \$\S+ ""(?!(?:0|[1-9][0-9]*)"")", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     /// <summary>An assignment consumes the mark without abandoning anything: only its own status (1) records the failure.</summary>
     public const string ClearExpansionFailed = "$global:__BashExpansionFailed = $false";
@@ -437,7 +473,7 @@ public static class PsBuild
 
     /// <summary>A parameter error ends the subshell it happens in (reported once, status 1), not the script.</summary>
     private const string ParamErrorCatch =
-        " catch [PsBash.Cmdlets.BashParamErrorException] { if (-not $_.Exception.Data['psbash.reported']) { Write-Error ('ps-bash: ' + $_.Exception.Message) -ErrorAction Continue }; $global:LASTEXITCODE = 1 }";
+        " catch [PsBash.Cmdlets.BashParamErrorException] { if (-not $_.Exception.Data['psbash.reported']) { Write-Error -Message (" + DiagnosticPrefix + " + $_.Exception.Message) -ErrorAction Continue }; $global:LASTEXITCODE = 1 }";
     /// <summary>
     /// An <c>exit</c> that <see cref="DynamicExit"/> threw from a callee ends the enclosing subshell scope with its status.
     /// </summary>
@@ -515,7 +551,7 @@ public static class PsBuild
 
     /// <summary>bash's warning for a <c>break</c>/<c>continue</c> with no loop in reach; the status is 0.</summary>
     public static string LoopControlWarning(string keyword) =>
-        "Write-Error " + SingleQuote(keyword + ": only meaningful in a `for', `while', or `until' loop") + " -ErrorAction Continue; " + SetStatus(0);
+        ShellDiagnosticLine(SingleQuote(keyword + ": only meaningful in a `for', `while', or `until' loop")) + "; " + SetStatus(0);
 
     /// <summary>Wrap in a subexpression: <c>$(expr)</c>.</summary>
     public static string Subexpr(string expr) => "$(" + expr + ")";
@@ -542,6 +578,29 @@ public static class PsBuild
     /// `c=s; c[1]=t`: before an element write, a variable that so far holds only a scalar becomes an array whose
     /// element 0 is that scalar (bash: `declare -a c=([0]="s" [1]="t")`).
     /// </summary>
+    /// <summary>
+    /// A function's write target for array <paramref name="name"/> it did not declare local: a calling function's local
+    /// array of that name, else the global (<c>VarFrameStack.ArraySlot</c>). Reads and assigns like a variable.
+    /// </summary>
+    public static string ArraySlot(string name)
+        => "[PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, " + SingleQuote(name) + ").Value";
+
+    /// <summary>
+    /// A write target as a COMMAND argument (<c>Set-BashElement T ...</c>): an <see cref="ArraySlot"/> is wrapped in
+    /// parentheses, since argument mode reads <c>[Type]::M()</c> as text; a variable stays as it is.
+    /// </summary>
+    public static string TargetArg(string target) => IsArraySlot(target) ? "(" + target + ")" : target;
+
+    /// <summary>True for a write target <see cref="ArraySlot"/> made.</summary>
+    public static bool IsArraySlot(string target) => target.StartsWith("[PsBash.Cmdlets.VarFrameStack]::ArraySlot(", StringComparison.Ordinal);
+
+    /// <summary>A function body's first statement: the locals it holds as PowerShell variables, which its callees' array writes reach (<see cref="ArraySlot"/>).</summary>
+    public static string LocalArrays(IEnumerable<string> names)
+    {
+        var list = string.Join(", ", names.Select(SingleQuote));
+        return list.Length == 0 ? "" : "[PsBash.Cmdlets.VarFrameStack]::LocalArrays(" + list + "); ";
+    }
+
     public static string SeedArrayFromScalar(string arrayVar, string scalarVar)
         => "if ($null -eq " + arrayVar + " -and $null -ne " + scalarVar + ") { " + arrayVar + " = @(" + scalarVar + ") }";
 
@@ -551,7 +610,7 @@ public static class PsBuild
     /// </summary>
     public static string WriteElementZeroOrScalar(string arrayVar, string value, bool append, string scalarWrite)
         => "if (" + arrayVar + " -is [array] -or " + arrayVar + " -is [System.Collections.IDictionary]) { " + arrayVar
-           + " = Set-BashElement " + arrayVar + " '0' (" + value + ")" + (append ? " -Append" : "") + " } else { " + scalarWrite + " }";
+           + " = Set-BashElement " + TargetArg(arrayVar) + " '0' (" + value + ")" + (append ? " -Append" : "") + " } else { " + scalarWrite + " }";
 
     /// <summary>
     /// The value of one emitted COMMAND-MODE argument, as an expression: <c>&amp; { $args[0] } arg</c>. An argument
@@ -741,11 +800,38 @@ public static class PsBuild
     public static string BoolStatus(string boolExpr) => "[int](-not (" + boolExpr + "))";
 
     /// <summary>
-    /// A builtin usage error that discards the rest of the shell's input (<c>break 1 2</c> "too many arguments"): under
-    /// <c>bash -c</c> that is the whole command string, so the shell ends with status 1; a script goes on with its next
-    /// command.
+    /// A builtin usage error that drops the rest of the input line (bash <c>no_args</c>: <c>break 1 2</c>, <c>return 1 2</c>,
+    /// <c>exit 1 2</c> "too many arguments"): <c>NAME: line N: MESSAGE</c>, status 1, then the discard. Inside a line scope
+    /// (<see cref="DiscardLineScope"/>, which <see cref="CanDiscardLine"/> asks for) the discard error ends the line, a loop
+    /// or function on it included; outside one the line mark skips the commands after it on its line (<see cref="UnlessGlobFailed"/>).
+    /// Under <c>bash -c</c> the whole command string is the input, so the shell ends, status 1 (a subshell ends only itself):
+    /// the reported parameter error, which a line scope passes on. The runtime twin is <c>BashLineDiscard.UsageError</c>.
+    /// REGRESSION: a script went on with the rest of the line.
     /// </summary>
-    public const string DashCInputDiscard = "if ($env:PSBASH_DASH_C -eq '1') { $global:LASTEXITCODE = 1; exit 1 }";
+    public static string UsageDiscard(string message) =>
+        ShellDiagnosticLine(SingleQuote(message)) + "; " + SetStatus(1) + "; " + UsageDiscardMark;
+
+    /// <summary>
+    /// A refused assignment (<c>r=2</c> with r read-only, <c>a[]=1</c>, a write through a circular nameref):
+    /// <c>NAME: line N: MESSAGE</c>, status 1, then the rest of the input line is dropped. Inside a line scope the discard
+    /// error ends the line, a loop or the functions it called included (<c>g() { readonly y=1; y=2; echo no; }; g; echo no</c>);
+    /// outside one the line mark skips the commands after it on its line. Unlike <see cref="UsageDiscard"/>, <c>bash -c</c>
+    /// goes on with its next line. Under <c>set -e</c>, or in a non-interactive posix-mode shell, the shell ends with 1
+    /// instead, even in an errexit-exempt context (<c>r=2 || echo</c>; <c>BashParamErrorException.AssignmentEnd</c>). REGRESSION: in a function the refusal only set
+    /// the status, and the function and its caller's line went on; under set -e the script went on to its next line.
+    /// </summary>
+    public static string AssignmentError(string message) =>
+        ShellDiagnosticLine(SingleQuote(message)) + "; " + SetStatus(1) + "; " + AssignmentDiscardMark;
+
+    /// <summary>The discard step of <see cref="AssignmentError"/> (and the run-time readonly guard); <see cref="CanDiscardLine"/> recognises it.</summary>
+    internal const string AssignmentDiscardMark =
+        "if ($global:__BashErrexit -or (" + PosixOn + " -and -not [PsBash.Cmdlets.InvokeBashShoptCommand]::InteractiveShell)) { throw [PsBash.Cmdlets.BashParamErrorException]::AssignmentEnd() }; "
+        + "if ([PsBash.Cmdlets.BashLineDiscard]::Armed) { throw [PsBash.Cmdlets.BashParamErrorException]::Discard('', 'assignment error') }; $global:__BashFailGlob = $true";
+
+    /// <summary>The discard step of <see cref="UsageDiscard"/>; <see cref="CanDiscardLine"/> recognises it.</summary>
+    internal const string UsageDiscardMark =
+        "if ($env:PSBASH_DASH_C -eq '1') { throw [PsBash.Cmdlets.BashParamErrorException]::UsageEnd() }; "
+        + "if ([PsBash.Cmdlets.BashLineDiscard]::Armed) { throw [PsBash.Cmdlets.BashParamErrorException]::Discard('', 'usage error') }; $global:__BashFailGlob = $true";
 
     /// <summary>
     /// <c>set -n</c> / <c>set -o noexec</c>: a non-interactive shell reads on but runs nothing more, so the (sub)shell
@@ -757,11 +843,13 @@ public static class PsBuild
     /// <summary>
     /// The status <c>exit N</c> leaves with: the low 8 bits of N, as bash keeps them (<c>exit 256</c> is 0, <c>exit 257</c>
     /// is 1, <c>exit -2</c> is 254). A Windows process status is 32 bits, so <c>exit 256</c> reached the caller as 256.
-    /// A value that is not a number is passed on unchanged.
+    /// A value that is not a number is bash's <c>exit: V: numeric argument required</c>, status 2. REGRESSION: it was
+    /// passed on unchanged, so <c>( exit w ); echo $?</c> printed <c>w</c>.
     /// </summary>
     public static string StatusByte(string valueExpr) =>
         "$(& { $__psb_es = [string](" + valueExpr + "); if ($__psb_es -match '^\\s*[+-]?[0-9]{1,27}\\s*$') "
-        + "{ [int]((([decimal]$__psb_es.Trim() % 256) + 256) % 256) } else { $__psb_es } })";
+        + "{ [int]((([decimal]$__psb_es.Trim() % 256) + 256) % 256) } else { "
+        + ShellDiagnosticLine("'exit: ' + $__psb_es + ': numeric argument required'") + "; 2 } })";
 
     /// <summary>
     /// An <c>if</c>/<c>while</c> condition that runs a command, hoisted to statement position:
@@ -824,7 +912,7 @@ public static class PsBuild
     /// later in some unrelated way (a dropped loop, <c>coproc: command not found</c>).
     /// </summary>
     public static string NotSupported(string construct) =>
-        StderrLine("bash: " + construct + ": not supported by ps-bash") + "; " + SetStatus(2);
+        ShellDiagnosticLine(SingleQuote(construct + ": not supported by ps-bash")) + "; " + SetStatus(2);
 
     /// <summary>True while <c>set -o posix</c> is on (a remembered option of InvokeBashShoptCommand).</summary>
     public const string PosixOn = "[PsBash.Cmdlets.InvokeBashShoptCommand]::SetOptionOn('posix')";
@@ -839,10 +927,11 @@ public static class PsBuild
 
     /// <summary>
     /// <c>name() { ...; }</c> where name is a special builtin, in POSIX mode: bash reports
-    /// <c>`name': is a special builtin</c> and a non-interactive shell ends with status 2.
+    /// <c>`name': is a special builtin</c> with the source prefix; the caller then ends the shell with status 2 (a
+    /// subshell only itself: PsEmitter.EndShell).
     /// </summary>
     public static string SpecialBuiltinRedefined(string name) =>
-        StderrLine("bash: `" + name + "': is a special builtin") + "; " + SetStatus(2) + "; exit 2";
+        ShellDiagnosticLine(SingleQuote("`" + name + "': is a special builtin"));
 
     // ──────────────────────── Exit-code propagation (&& / || chains) ───────────────────
 
@@ -954,14 +1043,15 @@ public static class PsBuild
     public static string BashSingleQuote(string text) => "'" + text.Replace("'", "'\\''") + "'";
     /// <summary>
     /// <c>declare -A a</c> when <c>a</c> is an indexed array (<c>declare -a</c> when it is associative): bash reports
-    /// <c>a: cannot convert indexed to associative array</c>, sets status 1 and leaves <c>a</c> as it was; otherwise
+    /// <c>declare: a: cannot convert indexed to associative array</c> (the <paramref name="builtin"/> as invoked, after
+    /// the source prefix), sets status 1 and leaves <c>a</c> as it was; otherwise
     /// <paramref name="declaration"/> runs.
     /// </summary>
-    public static string ArrayKindGuard(string name, bool toAssoc, string declaration) =>
+    public static string ArrayKindGuard(string builtin, string name, bool toAssoc, string declaration) =>
         "if ([PsBash.Cmdlets.BashAssoc]::" + (toAssoc ? "IsIndexedValue" : "IsAssocValue") + "((Get-Variable -Name " + SingleQuote(name)
-        + " -ValueOnly -ErrorAction Ignore))) { Write-Error "
-        + SingleQuote("ps-bash: " + name + ": cannot convert " + (toAssoc ? "indexed to associative" : "associative to indexed") + " array")
-        + " -ErrorAction Continue; $global:LASTEXITCODE = 1 } else { " + declaration + " }";
+        + " -ValueOnly -ErrorAction Ignore))) { "
+        + ShellDiagnosticLine(SingleQuote(builtin + ": " + name + ": cannot convert " + (toAssoc ? "indexed to associative" : "associative to indexed") + " array"))
+        + "; $global:LASTEXITCODE = 1 } else { " + declaration + " }";
     /// <summary>The end of the message <see cref="KeyOnlySubscriptGuard"/> reports (callers recognise a refused write by it).</summary>
     public const string BadArithSubscriptMessage = ": arithmetic syntax error in array subscript";
     /// <summary>
@@ -971,8 +1061,8 @@ public static class PsBuild
     /// </summary>
     public static string KeyOnlySubscriptGuard(string name, string written, string assignment) =>
         "if ([PsBash.Cmdlets.BashAssoc]::IsAssocValue((Get-Variable -Name " + SingleQuote(name) + " -ValueOnly -ErrorAction Ignore))) { "
-        + assignment + "; " + SetStatus(0) + " } else { Write-Error " + SingleQuote("ps-bash: " + written + BadArithSubscriptMessage)
-        + " -ErrorAction Continue; " + SetStatus(1) + " }";
+        + assignment + "; " + SetStatus(0) + " } else { " + ShellDiagnosticLine(SingleQuote(written + BadArithSubscriptMessage))
+        + "; " + SetStatus(1) + " }";
     /// <summary>
     /// A plain assignment to <paramref name="names"/> in a script that made names read-only at run time
     /// (<c>readonly $names</c>, <c>readonly</c> in a function): when one of them is read-only now, report
@@ -980,7 +1070,8 @@ public static class PsBuild
     /// </summary>
     public static string RuntimeReadonlyGuard(IEnumerable<string> names, string assignment) =>
         "if ($__psbRo = [PsBash.Cmdlets.BashShellState]::FirstReadonly(" + string.Join(", ", names.Select(SingleQuote))
-        + ")) { Write-Error ('ps-bash: ' + $__psbRo + ': readonly variable') -ErrorAction Continue; $global:LASTEXITCODE = 1 } else { "
+        + ")) { Write-Error -Message (" + DiagnosticPrefix + " + $__psbRo + ': readonly variable') -ErrorAction Continue; $global:LASTEXITCODE = 1; "
+        + AssignmentDiscardMark + " } else { "
         + assignment + " }";
 
     /// <summary>
@@ -1011,7 +1102,9 @@ public static class PsBuild
         + "if ($global:__BashNounset) { $f += 'u' }; if ($global:__BashVerbose) { $f += 'v' }; if ($global:__BashXtrace) { $f += 'x' }; $f += 'B'; if ($global:__BashNoclobber) { $f += 'C' }; if ($global:__BashErrtrace) { $f += 'E' }; "
         + "if ([PsBash.Cmdlets.InvokeBashShoptCommand]::SetOptionOn('histexpand')) { $f += 'H' }; "
         // `c` under `bash -c` (last, as in bash's `hBCc`): the launcher's PSBASH_DASH_C mark, never inherited by a nested shell.
-        + "if ($env:PSBASH_DASH_C -eq '1') { $f += 'c' }; $f";
+        // `s` when the commands come from stdin: a piped script or `bash -s` (`hBs`, the launcher's PSBASH_STDIN_SHELL mark),
+        // an interactive shell (`himBHs`); a script file has neither.
+        + "if ($env:PSBASH_DASH_C -eq '1') { $f += 'c' } elseif ($env:PSBASH_STDIN_SHELL -eq '1' -or [PsBash.Cmdlets.InvokeBashShoptCommand]::InteractiveShell) { $f += 's' }; $f";
 
     /// <summary>The value of <c>$SHELLOPTS</c>: the <c>set -o</c> options currently on, alphabetical, colon-joined.</summary>
     public const string ShellOptsExpr =
@@ -1033,6 +1126,16 @@ public static class PsBuild
 
     /// <summary><c>${BASH_LINENO[@]}</c>: the line each active function was called from, innermost first (then 0 in a script file).</summary>
     public const string BashLineNoArray = "[PsBash.Cmdlets.VarFrameStack]::BashLineNo($global:BASH_SOURCE)";
+
+    /// <summary>
+    /// <c>${BASH_SOURCE[@]}</c>: a frame per function (the file it was defined in) between the files being read
+    /// (<c>$global:BASH_SOURCE</c>), as bash keeps it beside FUNCNAME (<c>VarFrameStack.BashSource</c>).
+    /// </summary>
+    public const string BashSourceArray = "[PsBash.Cmdlets.VarFrameStack]::BashSource($global:BASH_SOURCE)";
+
+    /// <summary>A here-string's stdin text: the expanded word <paramref name="valueExpr"/> (an assignment-value expression)
+    /// plus the newline bash always appends.</summary>
+    public static string HereStringValue(string valueExpr) => "([string](" + valueExpr + ") + \"`n\")";
 
     /// <summary>
     /// A statement on <paramref name="line"/> starts: a function it calls reports that line in BASH_LINENO, and a
@@ -1420,7 +1523,7 @@ public static class PsBuild
         "$__psbash_eval_pwsh = $null; try { $__psbash_eval_pwsh = [PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]::Transpile("
         + "$__psbash_eval_src, [PsBash.Core.Transpiler.TranspileContext, PsBash.Transpiler]::Eval" + localsArg
         + ", ($null -ne (Get-Variable -Name __BashStdIn -Scope Global -ValueOnly -ErrorAction SilentlyContinue))) } "
-        + "catch { Write-Error ('ps-bash: " + label + ": ' + $(if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message })) -ErrorAction Continue; $global:LASTEXITCODE = 2 }; "
+        + "catch { Write-Error -Message (" + DiagnosticPrefix + " + '" + label + ": ' + $(if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message })) -ErrorAction Continue; $global:LASTEXITCODE = 2 }; "
         + "if ($null -ne $__psbash_eval_pwsh) { " + EvalReturnVar + " = $false; " + EvalLinesScope("Invoke-Expression $__psbash_eval_pwsh") + " }";
 
     /// <summary>
@@ -1474,7 +1577,7 @@ public static class PsBuild
     public static string? ShellArrayExpr(string name) => name switch
     {
         "BASH_VERSINFO" => "$global:BashVersionInfo",
-        "BASH_SOURCE" => "$global:BASH_SOURCE",
+        "BASH_SOURCE" => "@(" + BashSourceArray + ")",
         "FUNCNAME" => "@(Get-BashFuncNames)",
         "BASH_LINENO" => "@(" + BashLineNoArray + ")",
         "GROUPS" => "@([PsBash.Cmdlets.ShellArrays]::Groups())",
@@ -1494,12 +1597,45 @@ public static class PsBuild
     /// re-read as a plain <c>[string]</c>, which drops that mark; other values (a FileInfo, an int) are kept as they are.
     /// The body starts without the caller's ERR trap unless errtrace is on (<c>ErrTrapInheritance</c>; <c>$__bet</c>).
     /// </summary>
-    public const string FunctionPrologue = " $__bp = $global:BashPositional; $global:BashPositional = @(foreach ($__psba in $args) { if ($__psba -is [string]) { [string]$__psba } else { $__psba } }); $__bet = [PsBash.Cmdlets.VarFrameStack]::EnterFunction($ExecutionContext.SessionState); try { ";
+    public const string FunctionPrologue = " $__bp = $global:BashPositional; $global:BashPositional = @(foreach ($__psba in $args) { if ($__psba -is [string]) { [string]$__psba } else { $__psba } }); $__bet = [PsBash.Cmdlets.VarFrameStack]::EnterFunction($ExecutionContext.SessionState, $MyInvocation.MyCommand.Name); try { ";
+
+    /// <summary>
+    /// The statement after every bash function definition: it records the file the definition ran in, the function's
+    /// BASH_SOURCE entry and diagnostic name while it runs (<c>PsBash.Cmdlets.FunctionSources</c>).
+    /// </summary>
+    public static string FunctionDefined(string name) =>
+        "[PsBash.Cmdlets.FunctionSources]::Defined($ExecutionContext.SessionState, " + SingleQuote(name) + ")";
 
     /// <summary>The text every bash function body ends with (see <see cref="FunctionPrologue"/>).</summary>
     public const string FunctionEpilogue = " } finally { [PsBash.Cmdlets.VarFrameStack]::ExitFunction($ExecutionContext.SessionState, $__bet); $global:BashPositional = $__bp } ";
 
     // ─────────────────── bash variable contexts (PsBash.Cmdlets.VarFrameStack) ───────────────────
+
+    /// <summary>
+    /// <c>local -A m</c> / <c>local -a q</c> with no value: a new local of that kind in this call's scope (an empty
+    /// <c>BashAssoc</c> / array), unless this call already holds <paramref name="name"/> as that kind (bash keeps a
+    /// redeclared local's elements). Held as the other kind: bash's <c>local: q: cannot convert associative to indexed
+    /// array</c>, status 1, the local unchanged; else status 0. A caller's variable of either kind is shadowed, not converted.
+    /// <paramref name="builtin"/> is the word as invoked (<c>local</c>, or <c>declare</c> in a function).
+    /// </summary>
+    public static string DeclareLocalArray(string builtin, string name, bool assoc)
+    {
+        string held = "$__psbLk.Value";
+        string other = "[PsBash.Cmdlets.BashAssoc]::" + (assoc ? "IsIndexedValue(" : "IsAssocValue(") + held + ")";
+        string same = assoc ? "[PsBash.Cmdlets.BashAssoc]::IsAssocValue(" + held + ")" : "(" + held + " -is [array])";
+        return "$__psbLk = Get-Variable -Name " + SingleQuote(name) + " -Scope 0 -ErrorAction Ignore; "
+            + "if ($null -eq $__psbLk) { [PsBash.Cmdlets.VarFrameStack]::LocalAttributes(" + SingleQuote(name) + ") }; "
+            + "if ($null -ne $__psbLk -and " + other + ") { "
+            + ShellDiagnosticLine(SingleQuote(builtin + ": " + name + ": cannot convert "
+                + (assoc ? "indexed to associative" : "associative to indexed") + " array"))
+            + "; $global:LASTEXITCODE = 1 } else { if ($null -eq $__psbLk -or -not " + same + ") { $" + name + " = "
+            // Declared, not yet assigned: `declare -p` shows `declare -A m` (no `=()`), as for a top-level `declare -A m`.
+            + (assoc ? "[PsBash.Cmdlets.BashAssoc]::Unset()" : "@(); [PsBash.Cmdlets.BashShellState]::MarkAttribute(" + SingleQuote(name) + ", '~')")
+            + " }; $global:LASTEXITCODE = 0 }";
+    }
+
+    /// <summary>Text of every <see cref="DeclareLocalArray"/>, which sets the status itself on each path.</summary>
+    public const string DeclareLocalArrayMark = "$__psbLk = Get-Variable -Name ";
 
     /// <summary>
     /// <c>local name</c>: records the local's frame and yields the value a <c>local</c> without an initializer leaves
@@ -2069,9 +2205,9 @@ public static class PsBuild
                 // Element 0 of the call-line stack: the line the running function was called from.
                 return "$(@(" + BashLineNoArray + ")[0])";
             case "BASH_SOURCE":
-                // A bare `$BASH_SOURCE` / `${BASH_SOURCE##*/}` is element 0: the running script file ('' under -c).
-                // It read the (unset) environment variable of that name.
-                return "$(@($global:BASH_SOURCE)[0])";
+                // A bare `$BASH_SOURCE` / `${BASH_SOURCE##*/}` is element 0: the running script file ('' under -c), in a
+                // function the file it was defined in. It read the (unset) environment variable of that name.
+                return "$(@(" + BashSourceArray + ")[0])";
             case "$":
                 return braced ? "${PID}" : "$PID";
             case "!":

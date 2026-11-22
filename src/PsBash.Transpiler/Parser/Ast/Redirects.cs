@@ -43,8 +43,11 @@ public sealed record Redirect(
 /// <paramref name="Body"/> is the collected text between delimiters.
 /// <paramref name="Expand"/> is true when variable expansion should occur (unquoted delimiter).
 /// <paramref name="StripTabs"/> is true for <c>&lt;&lt;-</c> (leading tabs stripped from body).
+/// <paramref name="Word"/> is set for a here-string (<c>&lt;&lt;&lt; word</c>): the parsed word, which the emitter expands
+/// as a word (tilde, parameter, command and arithmetic expansion, quote removal; no splitting or globbing) plus a
+/// newline. <paramref name="Body"/> then holds an approximation of its text for static scans.
 /// </summary>
-public sealed record HereDoc(string Body, bool Expand, bool StripTabs, string? FdVar = null, int Fd = 0) : BashNode;
+public sealed record HereDoc(string Body, bool Expand, bool StripTabs, string? FdVar = null, int Fd = 0, CompoundWord? Word = null) : BashNode;
 
 /// <summary>
 /// Assignment operator: <c>=</c> or <c>+=</c>.

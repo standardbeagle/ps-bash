@@ -54,9 +54,13 @@ public sealed class InvokeBashSourceCommand : BashCmdlet
         if (FileSystemHelpers.TryRejectBuiltinOptions(this, "source", new[] { Path }, ""))
             return null;
 
-        string resolvedPath = FindOnPath(Path) ?? ResolveSourcePath(Path);
+        // A device name is never a file (DevicePath; docs/specs/paths.md "Device names"): `. /dev/stdin <<< "$code"`,
+        // `cmd | source /dev/fd/0` run the shell's stdin, `. /dev/fd/3` what is left of fd 3, `. /dev/null` nothing.
+        // REGRESSION: the name was mapped to a path (C:\dev\stdin) and reported "No such file or directory".
+        var device = PsBash.Core.DevicePath.Classify(Path);
+        string resolvedPath = device != PsBash.Core.DeviceKind.None ? Path : FindOnPath(Path) ?? ResolveSourcePath(Path);
 
-        if (!System.IO.File.Exists(resolvedPath))
+        if (device == PsBash.Core.DeviceKind.None && !System.IO.File.Exists(resolvedPath))
         {
             if (TryCreateOptionalSnapshot(resolvedPath, Path))
                 return null;
@@ -67,13 +71,13 @@ public sealed class InvokeBashSourceCommand : BashCmdlet
             return null;
         }
 
-        if (System.IO.Path.GetExtension(resolvedPath).Equals(".ps1", StringComparison.OrdinalIgnoreCase))
+        if (device == PsBash.Core.DeviceKind.None && System.IO.Path.GetExtension(resolvedPath).Equals(".ps1", StringComparison.OrdinalIgnoreCase))
             return ScriptBlock.Create(". " + PsBash.Core.Parser.PsBuild.SingleQuote(resolvedPath));
 
         string content;
         try
         {
-            content = BashFileSystem.ReadAllTextRaw(resolvedPath);
+            content = device == PsBash.Core.DeviceKind.Stdin ? TakeStdinText() : BashFileSystem.ReadAllTextRaw(resolvedPath);
         }
         catch (IOException ex)
         {
@@ -126,6 +130,15 @@ public sealed class InvokeBashSourceCommand : BashCmdlet
             + "\n} finally { $global:BASH_SOURCE = @($global:BASH_SOURCE | Select-Object -Skip 1); " + PsBash.Core.Parser.PsBuild.EvalReturnVar + " = $false }";
         return ScriptBlock.Create(result);
     }
+    /// <summary>The rest of the shell's stdin (the stdin scope this command runs in), as text: <c>source /dev/stdin</c>.</summary>
+    private string TakeStdinText()
+    {
+        var stdin = SharedStdin.Get(SessionState);
+        var text = new System.Text.StringBuilder();
+        while (SharedStdin.TryTake(stdin, out var record)) text.Append(BashRuntime.RecordBytes(record));
+        return text.ToString();
+    }
+
     // The shared runtime path policy (ProviderPath → RuntimePath.Map). This used to carry its own
     // copy — /tmp → GetTempPath (not $env:TEMP) and /c/ — only under PSBASH_UNIX_PATHS=1, so
     // `. $d/f` (d=/tmp) and `cat $d/f` could name different files.

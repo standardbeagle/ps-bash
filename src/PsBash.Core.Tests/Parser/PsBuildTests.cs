@@ -50,11 +50,11 @@ public class PsBuildTests
     public void PosixElse_TestsTheRunTimeOption() =>
         Assert.Equal("if ([PsBash.Cmdlets.InvokeBashShoptCommand]::SetOptionOn('posix')) { P } else { N }", PsBuild.PosixElse("P", "N"));
 
-    // Oracle: `set -o posix; eval() { :; }` prints "`eval': is a special builtin" and the shell ends with status 2.
+    // Oracle: `set -o posix; eval() { :; }` prints "t.sh: line 1: `eval': is a special builtin" (the source prefix); the
+    // emitter then ends the shell with 2 (PsEmitter.EndShell: a subshell ends only itself).
     [Fact]
-    public void SpecialBuiltinRedefined_ReportsAndEndsWithStatusTwo() =>
-        Assert.Equal("Write-Error -Message 'bash: `eval'': is a special builtin' -ErrorAction Continue; $global:LASTEXITCODE = 2; exit 2",
-            PsBuild.SpecialBuiltinRedefined("eval"));
+    public void SpecialBuiltinRedefined_ReportsWithThePrefix() =>
+        Assert.Equal(PsBuild.ShellDiagnosticLine("'`eval'': is a special builtin'"), PsBuild.SpecialBuiltinRedefined("eval"));
 
     // ─────────────── ParenSafeLiteral / UnlessExpansionFailed ───────────────
 
@@ -377,7 +377,7 @@ public class PsBuildTests
     {
         string ps = PsBuild.RuntimeReadonlyGuard(["m", "it's"], "$env:m = '1'");
         Assert.StartsWith("if ($__psbRo = [PsBash.Cmdlets.BashShellState]::FirstReadonly('m', 'it''s')) { ", ps);
-        Assert.Contains("Write-Error ('ps-bash: ' + $__psbRo + ': readonly variable') -ErrorAction Continue; $global:LASTEXITCODE = 1", ps);
+        Assert.Contains(PsBuild.ShellDiagnosticLine("$__psbRo + ': readonly variable'") + "; $global:LASTEXITCODE = 1; " + PsBuild.AssignmentDiscardMark, ps);
         Assert.EndsWith(" } else { $env:m = '1' }", ps);
     }
 
@@ -396,17 +396,20 @@ public class PsBuildTests
     [Fact]
     public void ArrayKindGuard_RefusesTheOtherKindElseDeclares()
     {
-        Assert.Equal("if ([PsBash.Cmdlets.BashAssoc]::IsIndexedValue((Get-Variable -Name 'a' -ValueOnly -ErrorAction Ignore))) { Write-Error 'ps-bash: a: cannot convert indexed to associative array' -ErrorAction Continue; $global:LASTEXITCODE = 1 } else { DECL }",
-            PsBuild.ArrayKindGuard("a", toAssoc: true, "DECL"));
-        Assert.Contains("IsAssocValue", PsBuild.ArrayKindGuard("a", toAssoc: false, "DECL"));
-        Assert.Contains("cannot convert associative to indexed array", PsBuild.ArrayKindGuard("a", toAssoc: false, "DECL"));
+        // Oracle: "t.sh: line 2: declare: a: cannot convert indexed to associative array" (the builtin as invoked, after
+        // the source prefix). REGRESSION: it said "ps-bash: a: ...".
+        Assert.Equal("if ([PsBash.Cmdlets.BashAssoc]::IsIndexedValue((Get-Variable -Name 'a' -ValueOnly -ErrorAction Ignore))) { "
+            + PsBuild.ShellDiagnosticLine("'declare: a: cannot convert indexed to associative array'") + "; $global:LASTEXITCODE = 1 } else { DECL }",
+            PsBuild.ArrayKindGuard("declare", "a", toAssoc: true, "DECL"));
+        Assert.Contains("IsAssocValue", PsBuild.ArrayKindGuard("typeset", "a", toAssoc: false, "DECL"));
+        Assert.Contains("typeset: a: cannot convert associative to indexed array", PsBuild.ArrayKindGuard("typeset", "a", toAssoc: false, "DECL"));
     }
 
     // `a['2']=3`: the subscript is only a key; on anything but an associative array it is an arithmetic syntax error.
     [Fact]
     public void KeyOnlySubscriptGuard_AssignsOnAssocElseRefusesWithStatus1()
     {
-        Assert.Equal("if ([PsBash.Cmdlets.BashAssoc]::IsAssocValue((Get-Variable -Name 'a' -ValueOnly -ErrorAction Ignore))) { SET; $global:LASTEXITCODE = 0 } else { Write-Error 'ps-bash: a[''2'']: arithmetic syntax error in array subscript' -ErrorAction Continue; $global:LASTEXITCODE = 1 }",
+        Assert.Equal("if ([PsBash.Cmdlets.BashAssoc]::IsAssocValue((Get-Variable -Name 'a' -ValueOnly -ErrorAction Ignore))) { SET; $global:LASTEXITCODE = 0 } else { Write-Error -Message ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + 'a[''2'']: arithmetic syntax error in array subscript') -ErrorAction Continue; $global:LASTEXITCODE = 1 }",
             PsBuild.KeyOnlySubscriptGuard("a", "a['2']", "SET"));
     }
 
@@ -487,4 +490,99 @@ public class PsBuildTests
         }
         finally { PsBuild.InTrapAction = false; PsBuild.TrapLine = priorLine; }
     }
+
+    // ─────────────── Builtin usage errors / exit status / here-string ───────────────
+
+    [Fact]
+    public void UsageDiscard_ReportsWithThePrefix_SetsOne_AndMarksTheLine()
+    {
+        // bash no_args (`shift 1 2`, `exit 1 2`): the message with the shell prefix, status 1, the rest of the line
+        // dropped (a script) or the shell ended (`bash -c`). The statement carrying it gets a line scope.
+        var ps = PsBuild.UsageDiscard("exit: too many arguments");
+        Assert.StartsWith(PsBuild.ShellDiagnosticLine("'exit: too many arguments'"), ps);
+        Assert.Contains(PsBuild.SetStatus(1), ps);
+        Assert.EndsWith(PsBuild.UsageDiscardMark, ps);
+        Assert.Contains("UsageEnd()", PsBuild.UsageDiscardMark);
+        Assert.True(PsBuild.CanDiscardLine(ps));
+    }
+
+    [Fact]
+    public void AssignmentError_ReportsSetsOne_AndDropsTheLineButNeverEndsADashCShell()
+    {
+        // `r=2` with r read-only: the message with the prefix, status 1, the line dropped (a function's caller's line too).
+        // Unlike a usage error, `bash -c` goes on with its next line: no UsageEnd.
+        var ps = PsBuild.AssignmentError("r: readonly variable");
+        Assert.StartsWith(PsBuild.ShellDiagnosticLine("'r: readonly variable'"), ps);
+        Assert.Contains(PsBuild.SetStatus(1), ps);
+        Assert.EndsWith(PsBuild.AssignmentDiscardMark, ps);
+        Assert.DoesNotContain("UsageEnd()", PsBuild.AssignmentDiscardMark);
+        Assert.DoesNotContain("PSBASH_DASH_C", PsBuild.AssignmentDiscardMark);
+        // Under set -e, or in a non-interactive posix shell, the shell ends with 1 first (bash FORCE_EOF / errexit).
+        Assert.StartsWith("if ($global:__BashErrexit -or (" + PsBuild.PosixOn + " -and -not [PsBash.Cmdlets.InvokeBashShoptCommand]::InteractiveShell)) "
+            + "{ throw [PsBash.Cmdlets.BashParamErrorException]::AssignmentEnd() }; ", PsBuild.AssignmentDiscardMark);
+        Assert.True(PsBuild.CanDiscardLine(ps));
+        Assert.True(PsBuild.MayReportDiagnostic(ps));
+    }
+
+    [Fact]
+    public void RuntimeReadonlyGuard_RefusalDropsTheLine()
+        => Assert.True(PsBuild.CanDiscardLine(PsBuild.RuntimeReadonlyGuard(["y"], "$env:y = '2'")));
+
+    // ─────────────── Function-local arrays (DeclareLocalArray, ArraySlot) ───────────────
+
+    [Theory]
+    [InlineData("local", true, "IsIndexedValue(", "local: m: cannot convert indexed to associative array")]
+    [InlineData("declare", false, "IsAssocValue(", "declare: m: cannot convert associative to indexed array")]
+    public void DeclareLocalArray_RefusesTheOtherKindWithTheBuiltinsName(string builtin, bool assoc, string otherKind, string message)
+    {
+        var ps = PsBuild.DeclareLocalArray(builtin, "m", assoc);
+        Assert.StartsWith(PsBuild.DeclareLocalArrayMark + "'m' -Scope 0", ps);
+        Assert.Contains("[PsBash.Cmdlets.BashAssoc]::" + otherKind, ps);
+        Assert.Contains(message, ps);
+        Assert.Contains(PsBuild.SetStatus(1), ps);
+        Assert.Contains("[PsBash.Cmdlets.VarFrameStack]::LocalAttributes('m')", ps);
+        Assert.EndsWith(PsBuild.SetStatus(0) + " }", ps);
+    }
+
+    [Fact]
+    public void ArraySlot_IsRecognisedAndParenthesisedAsAnArgument()
+    {
+        // `Set-BashElement [T]::ArraySlot(...).Value` in argument mode is a string, not a call: TargetArg wraps it.
+        string slot = PsBuild.ArraySlot("a");
+        Assert.Equal("[PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a').Value", slot);
+        Assert.True(PsBuild.IsArraySlot(slot));
+        Assert.Equal("(" + slot + ")", PsBuild.TargetArg(slot));
+        Assert.False(PsBuild.IsArraySlot("$global:a"));
+        Assert.Equal("$global:a", PsBuild.TargetArg("$global:a"));
+    }
+
+    [Fact]
+    public void LocalArrays_ListsTheNames_OrNothing()
+    {
+        Assert.Equal("[PsBash.Cmdlets.VarFrameStack]::LocalArrays('a', 'b'); ", PsBuild.LocalArrays(["a", "b"]));
+        Assert.Equal("", PsBuild.LocalArrays([]));
+    }
+
+    [Theory]
+    [InlineData("Invoke-BashShift 1 2", true)]
+    [InlineData("Invoke-BashShift $n x", true)]
+    [InlineData("Invoke-BashShift 1", false)]
+    [InlineData("Invoke-BashShift 1; Invoke-BashEcho x", false)]
+    [InlineData("Invoke-BashShift | Invoke-BashCat", false)]
+    public void CanDiscardLine_ShiftWithAnExtraOperand(string emitted, bool expected)
+        => Assert.Equal(expected, PsBuild.CanDiscardLine(emitted));
+
+    [Fact]
+    public void StatusByte_NonNumeric_ReportsWithThePrefixAndYieldsTwo()
+    {
+        // `( exit q )`: "q: numeric argument required" named with the script and line, status 2; never a bare Write-Error.
+        var ps = PsBuild.StatusByte("'q'");
+        Assert.Contains("[PsBash.Cmdlets.ShellDiagnostic]::Prefix", ps);
+        Assert.Contains("': numeric argument required'", ps);
+        Assert.Contains("; 2 }", ps);
+    }
+
+    [Fact]
+    public void HereStringValue_IsTheWordPlusOneNewline()
+        => Assert.Equal("([string]($x) + \"`n\")", PsBuild.HereStringValue("$x"));
 }

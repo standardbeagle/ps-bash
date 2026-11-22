@@ -1,3 +1,4 @@
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Cmdlets.Tests;
@@ -936,12 +937,15 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
 
     private static readonly DateTime OldStamp = new(2001, 2, 3, 4, 5, 6, DateTimeKind.Utc);
 
+    // Access times the test sets; a check that reads them runs through it (something reading new files moves them).
+    private readonly AccessTimePin _atimes = new();
+
     private string TouchTarget(string name)
     {
         var f = Path.Combine(_tmpRoot, name);
         File.WriteAllText(f, "x");
         File.SetLastWriteTimeUtc(f, OldStamp);
-        File.SetLastAccessTimeUtc(f, OldStamp);
+        _atimes.Set(f, OldStamp);
         return f;
     }
 
@@ -960,7 +964,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     public void Touch_QuotedMOnly_LeavesAccessTimeAlone()
     {
         var f = TouchTarget("tm.txt");
-        Run($"Invoke-BashTouch '-m' {Q(f)}");
+        _atimes.Run(() => Run($"Invoke-BashTouch '-m' {Q(f)}"));
         Assert.True(File.GetLastWriteTimeUtc(f) > OldStamp.AddYears(1));
         Assert.Equal(OldStamp, File.GetLastAccessTimeUtc(f));
     }

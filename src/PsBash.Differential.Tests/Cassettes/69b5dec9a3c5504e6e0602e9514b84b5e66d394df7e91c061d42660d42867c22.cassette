@@ -1,0 +1,53 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 915
+stdout-length: 600
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+f() { local -A m; m[x]=1; m[y]=2; m[10]=3; echo "n=${#m[@]} x=${m[x]} y=${m[y]}"; declare -p m; local -a q; q[i+1]=5; declare -p q; }
+f; echo "after=${m-unset}"
+g() { local -A z=([a]=1); echo "${z[a]}"; local -a z; echo "rc=$?"; }; g
+f2() { local -A m=(); m[x]=1; m[y]=2; echo "n=${#m[@]} x=${m[x]}"; declare -p m; }; f2
+h() { local -A m; declare -p m; [[ -v m ]]; echo "v=$?"; echo "n=${#m[@]}"; local -a e; declare -p e; }; h
+k() { local -a m=(1 2); local -A m; echo "rc=$?"; declare -p m; }; k
+f3() { declare -a e; e[0]=1; declare -A g; g[k]=v; declare -p e g; }; f3; declare -p e g 2>&1
+o=(); h2() { local -a o; o[3]=x; }; h2; declare -p o
+p=(1); i() { local -a p; declare -p p; p+=(z); declare -p p; local -a p; declare -p p; }; i; declare -p p
+j() { local -A a; a[k]=1; local -A a; declare -p a; local -i n; declare -p n; }; j
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+n=3 x=1 y=2
+declare -A m=([y]="2" [x]="1" [10]="3" )
+declare -a q=([1]="5")
+after=unset
+1
+t.sh: line 3: local: z: cannot convert associative to indexed array
+rc=1
+n=2 x=1
+declare -A m=([y]="2" [x]="1" )
+declare -A m
+v=1
+n=0
+declare -a e
+t.sh: line 6: local: m: cannot convert indexed to associative array
+rc=1
+declare -a m=([0]="1" [1]="2")
+declare -a e=([0]="1")
+declare -A g=([k]="v" )
+t.sh: line 7: declare: e: not found
+t.sh: line 7: declare: g: not found
+declare -a o=()
+declare -a p
+declare -a p=([0]="z")
+declare -a p=([0]="z")
+declare -a p=([0]="1")
+declare -A a=([k]="1" )
+declare -i n
+rc=0
+
+==== STDERR ====
+

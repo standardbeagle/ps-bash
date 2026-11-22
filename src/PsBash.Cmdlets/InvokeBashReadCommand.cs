@@ -212,10 +212,10 @@ public sealed class InvokeBashReadCommand : BashCmdlet
             }
             // Non-flag token: a destination variable name. Validate up-front
             // (Directive 12 — reject metacharacters that could re-parse as
-            // PowerShell when the emitter later expands $NAME).
+            // PowerShell when the emitter later expands $NAME). An array element is a target too (`read -r 'a[i]'`).
             if (!a.StartsWith('-'))
             {
-                if (!IsValidIdentifier(a))
+                if (!IsValidIdentifier(a) && !BashArrayElement.IsTarget(a))
                 {
                     FileSystemHelpers.WriteBashError(
                         this, $"read: `{a}': not a valid identifier");
@@ -462,7 +462,8 @@ public sealed class InvokeBashReadCommand : BashCmdlet
                 AssignVariable(varNames[j], j < parts.Length ? parts[j] : "");
         }
 
-        FileSystemHelpers.SetLastExitCode(this, recordTerminated ? 0 : 1);   // -d: the stream ended before the delimiter
+        // -d: the stream ended before the delimiter; an element target with a bad subscript (`read 'a[-5]'`) fails too.
+        FileSystemHelpers.SetLastExitCode(this, recordTerminated && !_assignFailed ? 0 : 1);
     }
 
     /// <summary>
@@ -512,10 +513,14 @@ public sealed class InvokeBashReadCommand : BashCmdlet
     /// (<c>-a</c>) to the array variable. Never a scalar PowerShell copy: one storage per variable
     /// (environment-model.md section 8); a function-scope copy outlived the function's <c>local</c>.
     /// </summary>
+    private bool _assignFailed;
+
     private void AssignVariable(string name, object value)
     {
         if (value is string scalarValue)
         {
+            // `read 'a[i+1]'` / `read "m[$k]"`: one element, the subscript resolved as printf -v resolves it.
+            if (name.IndexOf('[') >= 0) { if (!BashArrayElement.Assign(this, name, scalarValue)) _assignFailed = true; return; }
             try { BashVariableLookup.SetScalar(SessionState, name, scalarValue); }
             catch { /* env-set may fail for restricted names; non-fatal */ }
             return;

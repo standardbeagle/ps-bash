@@ -1,0 +1,48 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 461
+stdout-length: 70
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+{
+printf 'l1\nl2\n' > f
+( exec cat <<< a1 )
+echo m1
+( exec echo a2 )
+x=$( exec cat <<< a4 ); echo "x=$x"
+( exec cat <<< a5 ) | cat
+( exec cat < <(echo q3) )
+( exec cat ) < f
+echo q | exec sort -r; echo "b rc=$?"
+x=$(echo zz | exec cat); echo "x=$x"
+while read -r l; do echo "r=$l"; done < f | exec cat
+echo q | exec cat; echo "a rc=$?"
+{ exec cat; } < f; echo "unreached"
+} 2>&1
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+a1
+m1
+a2
+x=a4
+a5
+q3
+l1
+l2
+q
+b rc=0
+x=zz
+r=l1
+r=l2
+q
+a rc=0
+l1
+l2
+rc=0
+
+==== STDERR ====
+

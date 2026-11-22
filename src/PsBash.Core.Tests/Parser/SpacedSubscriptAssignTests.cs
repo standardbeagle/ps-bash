@@ -87,7 +87,7 @@ public class ElementDeclarationTests
     [Fact] public void Transpile_EmptySubscriptAssignment_IsBadArraySubscript()
     {
         var ps = T("a[]=42; echo same\necho next $?");
-        Assert.Contains("a[]: bad array subscript' -ErrorAction Continue; $global:LASTEXITCODE = 1", ps);
+        Assert.Contains(PsBuild.AssignmentError("a[]: bad array subscript"), ps);
         Assert.DoesNotContain("Set-BashElement", ps);
         Assert.DoesNotContain("same", ps);
         Assert.Contains("next", ps);

@@ -1,0 +1,34 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 461
+stdout-length: 205
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+declare c; c=x; declare -p c; declare -a e; e=y; declare -p e; echo "${e[0]}"; declare g; g=(1); declare -p g
+declare h; echo "${h-unset} ${#h}"; declare -p h; [[ -v h ]]; echo "v=$?"; unset h; declare -p h; echo "rc=$?"
+declare -i n=1; unset n; declare -p n; echo "rc=$?"
+c() { echo fn; }; declare c2; unset c2; declare w; unset w; type -t c
+declare -l c3; c3=AB; declare -p c3
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+declare -- c="x"
+declare -a e=([0]="y")
+y
+declare -a g=([0]="1")
+unset 0
+declare -- h
+v=1
+t.sh: line 2: declare: h: not found
+rc=1
+t.sh: line 3: declare: n: not found
+rc=1
+function
+declare -l c3="ab"
+rc=0
+
+==== STDERR ====
+

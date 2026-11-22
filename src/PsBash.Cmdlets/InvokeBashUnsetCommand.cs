@@ -75,13 +75,10 @@ public sealed class InvokeBashUnsetCommand : BashCmdlet
         }
 
         var value = BashVariableLookup.ArrayHolder(SessionState, baseName);
-        long ReadNumber(string n)
+        // A subscript that is not an expression is bash's expansion error, reported by TryIndex: nothing is unset.
+        if (value is BashSparseArray sparse)
         {
-            var raw = BashVariableLookup.Scalar(SessionState, n);
-            return long.TryParse(raw?.Trim(), out var v) ? v : 0;
-        }
-        if (value is BashSparseArray sparse && (long.TryParse(key, out var sparseIdx) || TryEvaluate(key, ReadNumber, out sparseIdx)))
-        {
+            if (!TryIndex(key, out var sparseIdx)) return true;
             if (sparseIdx < 0 && sparse.Resolve(sparseIdx) is null)
             {
                 FileSystemHelpers.WriteStderr(this, $"unset: [{key}]: bad array subscript");
@@ -98,10 +95,9 @@ public sealed class InvokeBashUnsetCommand : BashCmdlet
             return true;
         }
         // An indexed array's subscript is an arithmetic expression (`unset 'stack[n-1]'`).
-        long parsed = 0;
-        bool numeric = value is System.Collections.IList && (long.TryParse(key, out parsed) || TryEvaluate(key, ReadNumber, out parsed));
-        if (value is System.Collections.IList list && numeric)
+        if (value is System.Collections.IList list)
         {
+            if (!TryIndex(key, out long parsed)) return true;
             int index = (int)parsed;
             if (index < 0) index += list.Count;   // `unset 'a[-1]'`: counted from the end
             if (index < 0 && parsed < 0)
@@ -133,12 +129,22 @@ public sealed class InvokeBashUnsetCommand : BashCmdlet
             }
             return true;
         }
+        // A scalar is a one-element array: its subscript is evaluated too (`b=x; unset 'b[1/0]'` is an error). An unset
+        // name's is not.
+        if (value is null && BashVariableLookup.Scalar(SessionState, baseName) is not null && !TryIndex(key, out _)) return true;
         return false;
     }
-    private static bool TryEvaluate(string expr, Func<string, long> read, out long result)
+
+    /// <summary>
+    /// An indexed subscript as an arithmetic expression. False when it is not one: bash's expansion error, reported and
+    /// handled by <see cref="BashArrayElement.FailSubscript"/> (the line is dropped; under <c>bash -c</c> the shell ends).
+    /// </summary>
+    private bool TryIndex(string key, out long result)
     {
-        try { result = BashArith.Evaluate(expr, read, (_, _) => { }); return true; }
-        catch (BashArith.BashArithException) { result = 0; return false; }
+        if (long.TryParse(key, out result)) return true;
+        var vars = BashArrayElement.ReadOnly(SessionState);
+        try { result = BashArith.Evaluate(key, vars.Read, vars.Write, vars.ReadRaw); return true; }
+        catch (BashArith.BashArithException ex) { BashArrayElement.FailSubscript(this, key, ex); return false; }
     }
 
     protected override void EndProcessing()
@@ -220,12 +226,15 @@ public sealed class InvokeBashUnsetCommand : BashCmdlet
                     "Remove-Variable -Name $n -Scope 1 -ErrorAction SilentlyContinue; " +
                     "if (Test-Path ('Env:\\' + $n)) { Remove-Item -Path ('Env:\\' + $n) -Force -ErrorAction SilentlyContinue } " +
                     "elseif (-not $isVar -and -not $explicitVar -and -not $n.Contains('[')) { Remove-Item -Path ('Function:\\' + $n) -Force -ErrorAction SilentlyContinue }",
-                    name, explicitVar);
+                    // `declare c; unset c`: a declared name is a variable even with no value yet (no function is unset).
+                    name, explicitVar || BashShellState.HasAttributes(name));
                 // SHELL has a startup value even when the environment lacks it (PsBuild maps a read of it to
                 // BashRuntime.DefaultShell); once unset it reads as unset, as in bash.
                 if (name == "SHELL") SessionState.PSVariable.Set("global:__BashShellUnset", true);
-                // The attributes go with the variable: a later `NAME=v` is a new, unexported one.
+                // The attributes go with the variable: a later `NAME=v` is a new, unexported one, and `declare -p NAME`
+                // finds nothing (the declared-but-unset mark and -i/-l/-u went too).
                 PsBash.Core.ShellExports.Forget(name);
+                BashShellState.TakeAttributes(name);
             }
         }
     }

@@ -513,7 +513,8 @@ public sealed class InvokeBashPrintfCommand : BashCmdlet
 
         if (assignTo is not null)
         {
-            AssignVariable(assignTo, result);
+            // NAME, or one element (the subscript resolved as bash does at run time: m[$k] is key K, a[i+1] a position).
+            BashArrayElement.Assign(this, assignTo, result);
             if (badFormat is not null || numErr) FileSystemHelpers.SetLastExitCode(this, 1);
             return;
         }
@@ -526,36 +527,7 @@ public sealed class InvokeBashPrintfCommand : BashCmdlet
     }
 
     // NAME or NAME[subscript] (bash accepts an array element as the -v target).
-    private static readonly System.Text.RegularExpressions.Regex AssignableName =
-        new(@"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]+\])?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-
-    internal static bool IsAssignableName(string s) => AssignableName.IsMatch(s);
-
-    /// <summary>
-    /// <c>printf -v NAME</c>: set the shell variable (or element 0 of the array the name holds), exactly as
-    /// <c>read</c> does. <c>NAME[subscript]</c> sets one element, the subscript resolved as bash does at run time
-    /// (<see cref="BashArrayElement"/>: <c>m[$k]</c> is key K, <c>a[i+1]</c> a position).
-    /// </summary>
-    private void AssignVariable(string target, string value)
-    {
-        int br = target.IndexOf('[');
-        if (br < 0)
-        {
-            try { BashVariableLookup.SetScalar(SessionState, target, value); } catch { }
-            return;
-        }
-
-        string name = target.Substring(0, br);
-        string? sub = BashArrayElement.ExpandSubscript(InvokeCommand, target.Substring(br + 1, target.Length - br - 2), out bool expanded);
-        bool written;
-        try { written = sub is not null && BashArrayElement.Write(SessionState, name, sub, expanded, value, BashArrayElement.ReadOnly(SessionState)); }
-        catch (BashArith.BashArithException) { written = false; }
-        if (!written)
-        {
-            FileSystemHelpers.WriteStderr(this, $"{target}: bad array subscript");
-            FileSystemHelpers.SetLastExitCode(this, 1);
-        }
-    }
+    internal static bool IsAssignableName(string s) => BashArrayElement.IsTarget(s);
 
     /// <summary>
     /// Pad a formatted numeric string to <paramref name="width"/>. With

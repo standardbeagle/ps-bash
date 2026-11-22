@@ -56,4 +56,46 @@ public class ArrayElementGuardTests
             + string.Join('\n', offenders));
         Assert.Contains(KeyExpansionRegex, File.ReadAllText(Path.Combine(root, "BashArrayElement.cs")), StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// A builtin that evaluates an element operand's subscript itself (<c>BashArrayElement.Index</c> / <c>Write</c>:
+    /// <c>unset 'a[1/0]'</c>, <c>test -v 'a[1/0]'</c>) hands an arithmetic error to <c>BashArrayElement.FailSubscript</c>,
+    /// bash's expansion error: the line is dropped (a <c>bash -c</c> shell ends). The bug class: each builtin caught it
+    /// its own way, as a plain failed command (status 1, the script went on) or not at all (a PowerShell error).
+    /// Behavior against bash: <c>ShellLanguageGapDifferentialTests</c> element-operand theories. The arithmetic command
+    /// is exempt: it marks the error <c>InSubscript</c> and rethrows to its own handler, the same expansion error.
+    /// </summary>
+    [Fact]
+    public void ABuiltinEvaluatingASubscript_FailsItThroughFailSubscript()
+    {
+        string root = Path.Combine(RepoRoot(), "src", "PsBash.Cmdlets");
+        var offenders = new List<string>();
+        foreach (var file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
+        {
+            string rel = Path.GetRelativePath(root, file);
+            if (rel.StartsWith("bin" + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                || rel.StartsWith("obj" + Path.DirectorySeparatorChar, StringComparison.Ordinal)) continue;
+            if (EvaluatesWithoutFailSubscript(Path.GetFileName(file), File.ReadAllText(file))) offenders.Add(rel);
+        }
+        Assert.True(offenders.Count == 0,
+            "Catch BashArith.BashArithException from BashArrayElement.Index / Write and call BashArrayElement.FailSubscript:\n"
+            + string.Join('\n', offenders));
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex s_evaluates =
+        new(@"BashArrayElement\.(Index|Write)\(", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    internal static bool EvaluatesWithoutFailSubscript(string fileName, string code)
+        => fileName is not ("BashArrayElement.cs" or "InvokeBashArithmeticCommand.cs")
+           && s_evaluates.IsMatch(code)
+           && !code.Contains("BashArrayElement.FailSubscript(", StringComparison.Ordinal);
+
+    [Theory]
+    [InlineData("InvokeBashFoo.cs", "try { i = BashArrayElement.Index(s, n, v); } catch (BashArith.BashArithException) { return false; }", true)]
+    [InlineData("InvokeBashFoo.cs", "BashArrayElement.Write(SessionState, n, s, e, v, vars);", true)]
+    [InlineData("InvokeBashFoo.cs", "try { i = BashArrayElement.Index(s, n, v); } catch (BashArith.BashArithException ex) { BashArrayElement.FailSubscript(this, s, ex); }", false)]
+    [InlineData("InvokeBashFoo.cs", "BashArrayElement.Assign(this, target, value);", false)]
+    [InlineData("InvokeBashArithmeticCommand.cs", "try { BashArrayElement.Write(SessionState, n, s, e, v, vars); } catch (BashArith.BashArithException ex) { ex.InSubscript = true; throw; }", false)]
+    public void EvaluatesWithoutFailSubscript_FlagsAnUnroutedSubscriptError(string file, string code, bool flagged)
+        => Assert.Equal(flagged, EvaluatesWithoutFailSubscript(file, code));
 }

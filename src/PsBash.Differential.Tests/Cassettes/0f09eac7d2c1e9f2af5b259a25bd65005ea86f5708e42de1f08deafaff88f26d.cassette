@@ -1,0 +1,81 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 888
+stdout-length: 751
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+readonly r=1; r=2; echo "same line $?"
+echo "next $?"
+f(){ local -r x=1; x=2; echo in; }; f; echo "st=$?"
+echo "n2 $?"
+g(){ readonly y=1; y=2; echo in-g; }
+g; echo "st=$?"
+r=3 true; echo "prefix $?"
+h(){ local -r z=1
+z=2
+echo in-h; }
+h; echo "h=$?"
+r+=x; echo "app $?"
+for i in 1 2; do r=2; echo "in $i"; done; echo "after $?"
+echo "loop-next $?"
+a[]=4; echo same; echo "nx $?"
+k(){ a[]=5; echo in-k; }
+k; echo "k=$?"
+w(){ while :; do r=9; echo loop; break; done; echo w-after; }
+w
+echo "w=$?"
+s=$(r=2; echo in-sub); echo "s=[$s] $?"
+r=3 echo hi; echo "st=$?"
+fp(){ echo "f r=$r"; }; r=4 fp; echo "st=$?"
+u=$(r=2); echo "u=[$u] $?"
+v=$(echo a; r=2; echo b); echo "v=[$v] $?"
+( echo c; r=7 ); echo "sub $?"
+{ r=8; echo no; }; echo "no2"
+bash -c 'readonly q=1; q=2; echo a
+echo b' 2>&1; echo "c=$?"
+echo end
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+t.sh: line 1: r: readonly variable
+next 1
+t.sh: line 3: x: readonly variable
+n2 1
+t.sh: line 5: y: readonly variable
+t.sh: line 7: r: readonly variable
+prefix 0
+t.sh: line 9: z: readonly variable
+t.sh: line 12: r: readonly variable
+t.sh: line 13: r: readonly variable
+loop-next 1
+t.sh: line 15: a[]: bad array subscript
+t.sh: line 16: a[]: bad array subscript
+t.sh: line 18: r: readonly variable
+w=1
+t.sh: line 21: r: readonly variable
+s=[] 1
+t.sh: line 22: r: readonly variable
+hi
+st=0
+t.sh: line 23: r: readonly variable
+f r=1
+st=0
+t.sh: line 24: r: readonly variable
+u=[] 1
+t.sh: line 25: r: readonly variable
+v=[a] 1
+c
+t.sh: line 26: r: readonly variable
+sub 1
+t.sh: line 27: r: readonly variable
+bash: line 1: q: readonly variable
+b
+c=0
+end
+rc=0
+
+==== STDERR ====
+

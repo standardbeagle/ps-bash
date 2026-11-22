@@ -44,21 +44,23 @@ public sealed class InvokeBashShiftCommand : BashCmdlet
             return;
         }
 
-        if (args.Length > 1)
-        {
-            FileSystemHelpers.WriteBashError(this, "shift: too many arguments");
-            return;
-        }
-
+        // bash get_numeric_arg: the count is checked first (status 1, the line goes on), then `shift 1 2` is
+        // "too many arguments", which drops the rest of the line (BashLineDiscard.UsageError).
         int n = 1;
         if (args.Length > 0)
         {
             if (!int.TryParse(args[0], out n) || n < 0)
             {
                 FileSystemHelpers.WriteBashError(
-                    this, $"shift: {args[0]}: numeric argument required");
+                    this, ShellDiagnostic.Prefix(SessionState) + $"shift: {args[0]}: numeric argument required");
                 return;
             }
+        }
+        if (args.Length > 1)
+        {
+            FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + "shift: too many arguments");
+            BashLineDiscard.UsageError(this);
+            return;
         }
 
         // Read $global:BashPositional. The oracle treated an unset / null

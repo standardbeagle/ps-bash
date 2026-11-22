@@ -1,0 +1,39 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1036
+stdout-length: 242
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+g() { echo "g sees ${m[k]} ${#a[@]} n=$n"; m[x]=2; a+=(z); }
+f() { declare -A m=([k]=v); declare -a a=(1 2); declare -i n=5; g; echo "f: ${m[x]} ${a[*]} n=$n"; declare -p m a n; }
+f; echo "after: ${m[k]-unset} ${a[*]-unset} ${n-unset}"
+h() { local -A cfg; cfg[a]=1; load; echo "h: ${!cfg[*]}"; }; load() { cfg[b]=2; }; h
+k() { declare -g -A G; G[q]=1; declare -gi gi=2+2; }; k; echo "G=${G[q]} gi=$gi"; gi=3+3; echo "gi=$gi"
+fill() { mapfile -t lines < <(printf 'a\nb\n'); read -ra parts <<< "x y z"; unset 'arr[1]'; printf -v 'arr[5]' '%s' P; }
+f2() { local -a lines parts; local arr=(0 1 2); fill; echo "${#lines[@]} ${parts[*]} ${!arr[*]} ${arr[5]}"; }; f2
+echo "outer: ${lines[*]-unset} ${parts[*]-unset} ${arr[*]-unset}"
+fill; echo "global: ${lines[*]} ${parts[*]} ${#arr[@]}"
+counter() { local -A seen; for w in a b a c b a; do seen[$w]=$(( ${seen[$w]:-0} + 1 )); done; for k in a b c; do printf '%s=%s ' "$k" "${seen[$k]}"; done; echo; }; counter
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+g sees v 2 n=5
+f: 2 1 2 z n=5
+declare -A m=([x]="2" [k]="v" )
+declare -a a=([0]="1" [1]="2" [2]="z")
+declare -i n="5"
+after: unset unset unset
+h: b a
+G=1 gi=4
+gi=6
+2 x y z 0 2 5 P
+outer: unset unset unset
+global: a b x y z 1
+a=3 b=2 c=1
+rc=0
+
+==== STDERR ====
+

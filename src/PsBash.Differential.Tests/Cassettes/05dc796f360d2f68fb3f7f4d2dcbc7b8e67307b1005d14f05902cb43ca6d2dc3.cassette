@@ -1,0 +1,33 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 349
+stdout-length: 402
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+printf 'echo "a $- ${BASH_SOURCE[0]-unset} $0 $# ${1-}"; cd /nonexist_a\n' > s.txt
+{ bash < s.txt; } 2>&1
+{ cat s.txt | bash; } 2>&1
+{ bash -s < s.txt; } 2>&1
+{ bash -s x y < s.txt; } 2>&1
+{ bash -s -- -x y < s.txt; } 2>&1
+{ bash <<< 'echo "b $- $0 $#"'; } 2>&1
+{ printf 'echo c' | bash; printf 'echo d\n' | bash -s; } 2>&1
+==== STDOUT ====
+a hBs unset bash 0
+bash: line 1: cd: /nonexist_a: No such file or directory
+a hBs unset bash 0
+bash: line 1: cd: /nonexist_a: No such file or directory
+a hBs unset bash 0
+bash: line 1: cd: /nonexist_a: No such file or directory
+a hBs unset bash 2 x
+bash: line 1: cd: /nonexist_a: No such file or directory
+a hBs unset bash 2 -x
+bash: line 1: cd: /nonexist_a: No such file or directory
+b hBs bash 0
+c
+d
+
+==== STDERR ====
+

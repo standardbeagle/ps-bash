@@ -1,0 +1,46 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 627
+stdout-length: 369
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+{ bash -c 'exit 1 2; echo after1
+echo next1'; echo "st=$?"; } 2>&1
+{ bash -c 'for i in 1 2; do break 1 2; echo in; done; echo after2
+echo next2'; echo "st=$?"; } 2>&1
+{ bash -c 'set -- a; shift 1 2; echo after3
+echo next3'; echo "st=$?"; } 2>&1
+{ bash -c 'f() { return 1 2; }; f; echo after4
+echo next4'; echo "st=$?"; } 2>&1
+{ bash -c '( exit 1 2; echo in5 ); echo "after5 $?"
+echo next5'; echo "st=$?"; } 2>&1
+{ bash -c 'x=$(shift 1 2; echo in6); echo "after6 [$x] $?"
+echo next6'; echo "st=$?"; } 2>&1
+{ bash -c 'echo a | { shift 1 2; echo in7; }; echo "after7 $?"
+echo next7'; echo "st=$?"; } 2>&1
+==== STDOUT ====
+bash: line 1: exit: too many arguments
+st=1
+bash: line 1: break: too many arguments
+st=1
+bash: line 1: shift: too many arguments
+st=1
+environment: line 1: return: too many arguments
+st=1
+bash: line 1: exit: too many arguments
+after5 1
+next5
+st=0
+bash: line 1: shift: too many arguments
+after6 [] 1
+next6
+st=0
+bash: line 1: shift: too many arguments
+after7 1
+next7
+st=0
+
+==== STDERR ====
+

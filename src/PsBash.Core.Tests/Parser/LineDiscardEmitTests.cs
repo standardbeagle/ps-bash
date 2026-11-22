@@ -69,12 +69,16 @@ public class LineDiscardEmitTests
     }
 
     // bash parses a backtick body when it runs: a syntax error in it is reported then (status 2), not a parse error
-    // of the whole script. A $( ) body is parsed with the script.
+    // of the whole script. A $( ) body is parsed with the script. Oracle (bash): `t.sh: command substitution: line N:`,
+    // the script's name (not a hard-coded `bash`), N the line the word ends on plus the error's line in the body.
     [Fact]
     public void Transpile_BacktickBodySyntaxError_IsARunTimeReport()
     {
         string ps = T("echo `echo \\\\\\\\\"`; echo after");
-        Assert.Contains("bash: command substitution: line 1: unexpected EOF while looking for matching", ps);
+        Assert.Contains("[PsBash.Cmdlets.VarFrameStack]::BashSource($global:BASH_SOURCE)", ps);
+        Assert.Contains("): command substitution: line ", ps);
+        Assert.Contains(": unexpected EOF while looking for matching", ps);
+        Assert.DoesNotContain("bash: command substitution", ps);
         Assert.Contains("Invoke-BashEcho after", ps);
         Assert.Throws<ParseException>(() => T("echo $(echo \")"));
     }

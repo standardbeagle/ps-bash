@@ -1,0 +1,99 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 998
+stdout-length: 1109
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+n=0
+while IFS= read -r line; do
+  n=$((n+1)); printf ': pad\n%s\necho end\n' "$line" > "t$n.sh"
+  { bash "t$n.sh"; echo "rc=$?"; } 2>&1
+done <<'EOF'
+a=(1); declare -A a; echo "L1 rc=$?"
+declare -n r=r; echo "L2 rc=$?"
+b=(1); b[-5]=x; echo "L3 no"
+f() { local -A q; local -a q; echo "L4 rc=$?"; }; f
+readonly ro=1; ro=2; echo "L5 rc=$?"
+declare -n n1=ro; n1=3; echo "L6 rc=$?"
+declare -n n2='1bad'; echo "L7 rc=$?"
+x='a b'; echo hi > $x; echo "L8 rc=$?"
+( echo ${zz?unset here}; echo no ); echo "L9 rc=$?"
+v=$(printf 'a\0b'); echo "L10 $v"
+shopt -s failglob; echo zz*q; echo "L11 no"; shopt -u failglob
+ref='a b'; echo ${!ref}; echo "L12 rc=$?"
+echo ${x!}; echo "L13 no"
+eval 'ro2=1'; readonly ro2; f2() { ro2=5; echo "L14 rc=$?"; }; f2
+declare -n c1=c2; declare -n c2=c1; c1=1; echo "L15 rc=$?"
+printf '#!/nonexistent/interp\n' > p; chmod +x p; ./p; echo "L16 rc=$?"
+( set -o posix; export() { :; }; echo no ); echo "L17 rc=$?"
+declare -n n4=b; n4[-9]=z; echo "L18 no"
+EOF
+==== STDOUT ====
+t1.sh: line 2: declare: a: cannot convert indexed to associative array
+L1 rc=1
+end
+rc=0
+t2.sh: line 2: declare: r: nameref variable self references not allowed
+L2 rc=1
+end
+rc=0
+t3.sh: line 2: b[-5]: bad array subscript
+end
+rc=0
+t4.sh: line 2: local: q: cannot convert associative to indexed array
+L4 rc=1
+end
+rc=0
+t5.sh: line 2: ro: readonly variable
+end
+rc=0
+L6 rc=0
+end
+rc=0
+t7.sh: line 2: declare: `1bad': invalid variable name for name reference
+L7 rc=1
+end
+rc=0
+t8.sh: line 2: $x: ambiguous redirect
+L8 rc=1
+end
+rc=0
+t9.sh: line 2: zz: unset here
+L9 rc=1
+end
+rc=0
+t10.sh: line 2: warning: command substitution: ignored null byte in input
+L10 ab
+end
+rc=0
+t11.sh: line 2: no match: zz*q
+end
+rc=0
+t12.sh: line 2: a b: invalid variable name
+end
+rc=0
+t13.sh: line 2: ${x!}: bad substitution
+end
+rc=0
+t14.sh: line 2: ro2: readonly variable
+end
+rc=0
+t15.sh: line 2: warning: c1: circular name reference
+end
+rc=0
+t16.sh: line 2: ./p: cannot execute: required file not found
+L16 rc=127
+end
+rc=0
+t17.sh: line 2: `export': is a special builtin
+L17 rc=2
+end
+rc=0
+t18.sh: line 2: n4[-9]: bad array subscript
+end
+rc=0
+
+==== STDERR ====
+

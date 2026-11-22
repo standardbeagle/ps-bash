@@ -24,13 +24,30 @@ public static class BashArrayElement
     /// <summary>How the subscript reads and writes variables (an arithmetic subscript may assign: <c>a[i++]</c>).</summary>
     public readonly record struct Vars(Func<string, long> Read, Action<string, long> Write, Func<string, string?> ReadRaw);
 
-    /// <summary>Variables seen through <paramref name="state"/>, with no side effects allowed.</summary>
+    /// <summary>
+    /// Variables seen through <paramref name="state"/>, with no side effects allowed. A value that is not a plain number
+    /// is itself an expression, as in bash (<c>i='0+1'; unset 'a[i]'</c> is element 1; <c>i=1/0</c> fails the subscript).
+    /// </summary>
     public static Vars ReadOnly(SessionState state)
     {
         string? Raw(string name) => BashVariableLookup.Scalar(state, name);
-        long Number(string name) => long.TryParse(Raw(name)?.Trim(), out var v) ? v : 0;
-        return new Vars(Number, (_, _) => { }, Raw);
+        long Number(string name, int depth)
+        {
+            string? value = Raw(name)?.Trim();
+            if (string.IsNullOrEmpty(value)) return 0;
+            // A leading 0 is octal (010 is 8, 08 an error), so only a plain decimal is read directly.
+            if (value[0] != '0' && long.TryParse(value, System.Globalization.NumberStyles.AllowLeadingSign,
+                    System.Globalization.CultureInfo.InvariantCulture, out var direct))
+                return direct;
+            if (depth >= MaxRecursionDepth)
+                throw new BashArith.BashArithException("expression recursion level exceeded") { Expression = name, Token = name };
+            return BashArith.Evaluate(value, n => Number(n, depth + 1), (_, _) => { }, Raw);
+        }
+        return new Vars(n => Number(n, 0), (_, _) => { }, Raw);
     }
+
+    /// <summary>bash's EXPR_NEST_MAX: how deep a value naming another value is followed.</summary>
+    private const int MaxRecursionDepth = 1024;
 
     /// <summary>
     /// The subscript after a command substitution in it has run, and whether that happened (the result is then used as
@@ -118,5 +135,52 @@ public static class BashArrayElement
         BashVariableLookup.SetArray(state, baseName, array);
         if (wasScalar) BashVariableStore.Set(baseName, null);
         return true;
+    }
+
+    // NAME or NAME[subscript]: a run-time assignment target (`read NAME`, `printf -v NAME`).
+    private static readonly System.Text.RegularExpressions.Regex s_target =
+        new(@"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]+\])?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>True for <c>NAME</c> or <c>NAME[subscript]</c>, what <c>read</c> and <c>printf -v</c> accept as a target.</summary>
+    public static bool IsTarget(string s) => s_target.IsMatch(s);
+
+    /// <summary>
+    /// Set a run-time target (<see cref="IsTarget"/>) to <paramref name="value"/>: a scalar (element 0 of the array the
+    /// name holds), or one element by <see cref="Write"/>. False when nothing was set: a negative or empty subscript is
+    /// bash's "bad array subscript" (status 1), and one that is not an expression is <see cref="FailSubscript"/>.
+    /// </summary>
+    public static bool Assign(PSCmdlet cmdlet, string target, string value)
+    {
+        int br = target.IndexOf('[');
+        if (br < 0)
+        {
+            try { BashVariableLookup.SetScalar(cmdlet.SessionState, target, value); } catch { /* a restricted name: not fatal */ }
+            return true;
+        }
+        string name = target[..br], subscript = target[(br + 1)..^1];
+        string? sub = ExpandSubscript(cmdlet.InvokeCommand, subscript, out bool expanded);
+        bool written;
+        try { written = sub is not null && Write(cmdlet.SessionState, name, sub, expanded, value, ReadOnly(cmdlet.SessionState)); }
+        catch (BashArith.BashArithException ex) { FailSubscript(cmdlet, subscript, ex); return false; }
+        if (!written)
+        {
+            FileSystemHelpers.WriteBashError(cmdlet, ShellDiagnostic.Prefix(cmdlet.SessionState) + target + ": bad array subscript");
+        }
+        return written;
+    }
+
+    /// <summary>
+    /// A subscript a builtin was handed that is not a valid arithmetic expression (<c>unset 'a[1/0]'</c>,
+    /// <c>read 'a[1/0]'</c>, <c>printf -v 'a[1/0]'</c>, <c>test -v 'a[1/0]'</c>). bash reports it as it does
+    /// <c>${a[1/0]}</c> and treats it as that expansion error, not a failed command: a script drops the rest of the
+    /// input line and <c>bash -c</c> ends the shell (<see cref="FileSystemHelpers.MarkExpansionFailed(PSCmdlet, bool)"/>).
+    /// Returns only when neither applies (no line scope armed), with status 1.
+    /// <para>The bug class: each builtin caught the error as a plain failure (status 1, the line went on). Guard:
+    /// <c>Cmdlets.Tests/SubscriptErrorGuardTests</c> (a builtin's subscript arithmetic error reaches this one path).</para>
+    /// </summary>
+    public static void FailSubscript(PSCmdlet cmdlet, string subscript, BashArith.BashArithException ex)
+    {
+        FileSystemHelpers.WriteBashError(cmdlet, ShellDiagnostic.Prefix(cmdlet.SessionState) + ex.Describe(subscript));
+        FileSystemHelpers.MarkExpansionFailed(cmdlet, inSubscript: true);
     }
 }

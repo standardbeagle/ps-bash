@@ -135,7 +135,7 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
         catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex))
         {
             // Found but not runnable (bash: "cannot execute", 126).
-            FileSystemHelpers.WriteBashError(this, $"bash: {Name}: {ex.Message}");
+            FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + $"{Name}: {ex.Message}");
             FileSystemHelpers.SetLastExitCode(this, 126);
         }
     }

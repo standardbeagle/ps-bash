@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Cmdlets.Tests;
@@ -24,6 +25,8 @@ public class FindPredicateTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
     private readonly SharedPwshFixture _fixture;
     private readonly string _dir;
+    // Access times the test sets; a check that reads them runs through it (something reading new files moves them).
+    private readonly AccessTimePin _atimes = new();
 
     public FindPredicateTests(SharedPwshFixture fixture)
     {
@@ -72,7 +75,7 @@ public class FindPredicateTests : IClassFixture<SharedPwshFixture>, IDisposable
     private void Age(string rel, TimeSpan age)
     {
         File.SetLastWriteTimeUtc(P(rel), DateTime.UtcNow - age);
-        File.SetLastAccessTimeUtc(P(rel), DateTime.UtcNow - age);
+        _atimes.Set(P(rel), DateTime.UtcNow - age);
     }
 
     /// <summary>A directory link: a junction on Windows (no privilege), a symlink elsewhere.</summary>
@@ -200,10 +203,10 @@ public class FindPredicateTests : IClassFixture<SharedPwshFixture>, IDisposable
     {
         Directory.CreateDirectory(P("t"));
         File.WriteAllText(P("t/old"), "x");
-        File.SetLastAccessTimeUtc(P("t/old"), DateTime.UtcNow.AddDays(-3));
+        _atimes.Set(P("t/old"), DateTime.UtcNow.AddDays(-3));
         File.SetLastWriteTimeUtc(P("t/old"), DateTime.UtcNow);
-        Assert.Equal(new[] { "t/old" }, Sorted("t '-type' f '-atime' 3"));
-        Assert.Equal(new[] { "t/old" }, Sorted("t '-type' f '-amin' '+3000'"));
+        Assert.Equal(new[] { "t/old" }, _atimes.Run(() => Sorted("t '-type' f '-atime' 3")));
+        Assert.Equal(new[] { "t/old" }, _atimes.Run(() => Sorted("t '-type' f '-amin' '+3000'")));
         Assert.Empty(Sorted("t '-type' f '-mtime' 3"));
         Assert.Equal(new[] { "t/old" }, Sorted("t '-type' f '-mmin' '-2'"));
         // ctime (change time) of a file written just now is "now": within the last minute.
@@ -240,11 +243,11 @@ public class FindPredicateTests : IClassFixture<SharedPwshFixture>, IDisposable
         Assert.Equal(new[] { "./a.txt" }, Sorted(". '-type' f '-newermt' '@1709600000'"));            // 2024-03-05T01:33:20Z
         Assert.Equal(new[] { "./sub/b.txt" }, Sorted(". '-type' f '!' '-newermt' 2024-03-02T00:00:00Z"));
         Assert.Equal(new[] { "./a.txt", "./d2/c.log", "./sub/b.txt" }, Sorted(". '-type' f '-newerBt' 2000-01-01T00:00:00Z"));
-        File.SetLastAccessTimeUtc(P("sub/b.txt"), new DateTime(2024, 3, 1, 0, 0, 0, DateTimeKind.Utc));
-        File.SetLastAccessTimeUtc(P("a.txt"), new DateTime(2024, 3, 11, 0, 0, 0, DateTimeKind.Utc));
-        File.SetLastAccessTimeUtc(P("d2/c.log"), new DateTime(2024, 3, 4, 0, 0, 0, DateTimeKind.Utc));
-        Assert.Equal(new[] { "./a.txt" }, Sorted(". '-type' f '-anewer' d2/c.log"));
-        Assert.Equal(new[] { "./a.txt" }, Sorted(". '-type' f '-neweram' d2/c.log"));                  // atime of item vs mtime of ref
+        _atimes.Set(P("sub/b.txt"), new DateTime(2024, 3, 1, 0, 0, 0, DateTimeKind.Utc));
+        _atimes.Set(P("a.txt"), new DateTime(2024, 3, 11, 0, 0, 0, DateTimeKind.Utc));
+        _atimes.Set(P("d2/c.log"), new DateTime(2024, 3, 4, 0, 0, 0, DateTimeKind.Utc));
+        Assert.Equal(new[] { "./a.txt" }, _atimes.Run(() => Sorted(". '-type' f '-anewer' d2/c.log")));
+        Assert.Equal(new[] { "./a.txt" }, _atimes.Run(() => Sorted(". '-type' f '-neweram' d2/c.log")));  // atime of item vs mtime of ref
         Find(". '-newerat' d2/c.log").AssertFailed(1, "I cannot figure out how to interpret ‘d2/c.log’ as a date or time");
         Find(". '-newermt' garbage").AssertFailed(1, "I cannot figure out how to interpret ‘garbage’ as a date or time");
         Find(". '-newerXm' a.txt").AssertFailed(1, "invalid predicate `-newerXm'");

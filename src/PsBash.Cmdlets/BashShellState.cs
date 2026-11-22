@@ -14,7 +14,7 @@ namespace PsBash.Cmdlets;
 /// <item>bash variables — <c>$env:NAME</c>, read and written through <see cref="BashVariableStore"/>;</item>
 /// <item>the <c>$global:</c> shell state: errexit, <c>$-</c> flags, positional parameters, <c>BASH_REMATCH</c>,
 /// traps, <c>$!</c>, the xtrace flag;</item>
-/// <item>the per-runspace <c>shopt</c> table;</item>
+/// <item>the per-runspace <c>shopt</c> table and file-creation mask (<c>umask</c>);</item>
 /// <item><c>Set-PSDebug</c> tracing (<c>set -x</c>) — session-wide and not queryable, so it is tracked by
 /// <c>$global:__BashXtrace</c> and <see cref="Restore"/> returns the level the caller must re-apply.</item>
 /// <item>the working directory, both halves (the PowerShell location and the process's
@@ -33,6 +33,20 @@ public static class BashShellState
 
     /// <summary>Records <c>readonly NAME</c>; only <c>unset</c> consults it (assignment is not blocked: see intentional-differences.md).</summary>
     public static void MarkReadonly(string name) { lock (ReadonlyNames) ReadonlyNames.Add(name); }
+
+    /// <summary>A function's read-only local goes when the function returns (VarFrameStack.Exit): the name is writable again.</summary>
+    internal static void UnmarkReadonly(string name) { lock (ReadonlyNames) ReadonlyNames.Remove(name); }
+
+    /// <summary>Removes and returns NAME's nameref target (null when none): a local of that name is a plain variable.</summary>
+    internal static string? TakeNameref(string name) { lock (Namerefs) return Namerefs.Remove(name, out var t) ? t : null; }
+
+    /// <summary>Puts back the target <see cref="TakeNameref"/> returned (null: NAME is no nameref).</summary>
+    internal static void RestoreNameref(string name, string? target)
+    {
+        lock (Namerefs)
+            if (target is null) Namerefs.Remove(name);
+            else Namerefs[name] = target;
+    }
 
     /// <summary>A new, independent invocation starts with nothing readonly (the daemon outlives the scripts it runs).</summary>
     public static void ClearReadonly() { lock (ReadonlyNames) ReadonlyNames.Clear(); lock (Attributes) Attributes.Clear(); lock (Namerefs) Namerefs.Clear(); }
@@ -54,6 +68,25 @@ public static class BashShellState
 
     internal static string? NamerefTarget(string name) { lock (Namerefs) return Namerefs.TryGetValue(name, out var t) ? t : null; }
 
+    /// <summary>
+    /// The variable NAME stands for when the shell resolves it at run time: its nameref target, followed through a chain
+    /// (a cycle stops where it closes), or NAME itself. <c>c[1]</c> resolves the base (<c>m[1]</c>); a base that names an
+    /// element (<c>declare -n c='a[2]'</c>) takes no subscript, so the name is left as written.
+    /// </summary>
+    public static string ResolveNameref(string name)
+    {
+        lock (Namerefs)
+        {
+            if (Namerefs.Count == 0) return name;
+            int bracket = name.IndexOf('[');
+            string current = bracket < 0 ? name : name[..bracket];
+            for (int hop = 0; hop < 16 && Namerefs.TryGetValue(current, out var next) && next.Length > 0 && next != current; hop++)
+                current = next;
+            if (bracket < 0) return current;
+            return current.Contains('[') ? name : current + name[bracket..];
+        }
+    }
+
     internal static string[] NamerefNames() { lock (Namerefs) return [.. Namerefs.Keys]; }
 
     private static readonly Dictionary<string, string> Attributes = new(StringComparer.Ordinal);
@@ -66,8 +99,26 @@ public static class BashShellState
     {
         if (letter == "x") { PsBash.Core.ShellExports.Export(name); return; }
         lock (Attributes)
-            if (!(Attributes.TryGetValue(name, out var cur) && cur.Contains(letter)))
-                Attributes[name] = (cur ?? "") + letter;
+        {
+            Attributes.TryGetValue(name, out var cur);
+            // -l and -u replace each other (bash keeps the last).
+            if (letter is "l" or "u" && cur is not null) cur = cur.Replace(letter == "l" ? "u" : "l", "");
+            Attributes[name] = cur is not null && cur.Contains(letter) ? cur : (cur ?? "") + letter;
+        }
+    }
+
+    /// <summary>True when NAME has declare attribute letters (it was declared, if only with no value).</summary>
+    internal static bool HasAttributes(string name) { lock (Attributes) return Attributes.ContainsKey(name); }
+
+    /// <summary>Removes and returns NAME's attribute letters (null when it has none): a local now hides them (VarFrameStack.TakeAttributes).</summary>
+    internal static string? TakeAttributes(string name) { lock (Attributes) return Attributes.Remove(name, out var s) ? s : null; }
+
+    /// <summary>Puts back the letters <see cref="TakeAttributes"/> returned, when the local that hid them goes.</summary>
+    internal static void RestoreAttributes(string name, string? saved)
+    {
+        lock (Attributes)
+            if (saved is null) Attributes.Remove(name);
+            else Attributes[name] = saved;
     }
 
     /// <summary><c>declare x</c> (no value, no -a): declared as a scalar that is still unset.</summary>
@@ -76,7 +127,7 @@ public static class BashShellState
     /// <summary><c>declare x</c> / <c>declare -a x</c> with no value: declared but unset, so <c>declare -p</c> shows no <c>=()</c>.</summary>
     internal static bool IsDeclaredUnset(string name) { lock (Attributes) return Attributes.TryGetValue(name, out var s) && (s.Contains('-') || s.Contains('~')); }
 
-    /// <summary>The <c>declare -p</c> flag letters of NAME in bash order (<c>i</c>, <c>r</c>, <c>x</c>), "" for none.</summary>
+    /// <summary>The <c>declare -p</c> flag letters of NAME in bash order (<c>i</c>, <c>r</c>, <c>x</c>, <c>l</c>/<c>u</c>), "" for none.</summary>
     internal static string AttributeLetters(string name)
     {
         string set;
@@ -85,6 +136,8 @@ public static class BashShellState
         if (set.Contains('i')) sb.Append('i');
         if (IsReadonly(name)) sb.Append('r');
         if (PsBash.Core.ShellExports.IsExported(name)) sb.Append('x');
+        if (set.Contains('l')) sb.Append('l');
+        else if (set.Contains('u')) sb.Append('u');
         return sb.ToString();
     }
 
@@ -105,7 +158,7 @@ public static class BashShellState
         "__BashErrexit", "__BashErrexitSuppress", "__BashErrexitTail", "__BashXtrace", "__BashVerbose", "__BashNoglob", "__BashPipefail", "__BashNounset", "__BashNoclobber", "__BashErrtrace",
         "BashFlags", "BashPositional", "BashPositional0", "BASH_REMATCH", "BASH_SOURCE",
         "BashTrapHandlers", "__BashTrapERR", "__BashTrapEXIT", "__BashTrapRETURN", "BashBgLastPid",
-        "BashUserAliases", "BashLastArg", "BashDirStack", "__BashShellUnset",
+        "BashUserAliases", "BashLastArg", "BashDirStack", "__BashShellUnset", FunctionSources.TableVariable,
     ];
 
     /// <summary>Every shell-state global, for the inventory guard (<see cref="BashStateSnapshot"/>).</summary>
@@ -148,6 +201,9 @@ public static class BashShellState
         internal Dictionary<string, bool> Shopt { get; }
         internal bool Xtrace { get; }
         internal WorkingDirectory Cwd { get; }
+
+        /// <summary>The file-creation mask: <c>umask 077</c> in the body ends with it.</summary>
+        internal int Umask { get; init; }
     }
 
     /// <summary>The working directory a subshell must put back (see <see cref="SaveWorkingDirectory"/>).</summary>
@@ -248,7 +304,8 @@ public static class BashShellState
         lock (ReadonlyNames) readonlyNow = new HashSet<string>(ReadonlyNames, StringComparer.Ordinal);
         return new Snapshot(env, globals, InvokeBashShoptCommand.SnapshotOptions(),
             IsTrue(session.PSVariable.GetValue("global:__BashXtrace")), readonlyNow, SaveAliasFunctions(session),
-            VarFrameStack.Current.Save(), PsBash.Core.ShellExports.Save(), SaveWorkingDirectory(session));
+            VarFrameStack.Current.Save(), PsBash.Core.ShellExports.Save(), SaveWorkingDirectory(session))
+        { Umask = InvokeBashUmaskCommand.ShellMask };
     }
 
     /// <summary>
@@ -296,6 +353,8 @@ public static class BashShellState
     private static object? RestoreRunspaceGlobals(SessionState session, Snapshot saved)
     {
         RestoreWorkingDirectory(session, saved.Cwd);
+        // REGRESSION: `( umask 077 ); umask` printed 0077 - the mask was not part of the snapshot.
+        InvokeBashUmaskCommand.ShellMask = saved.Umask;
         RestoreAliasFunctions(session, saved.AliasFunctions);
         VarFrameStack.Current.Restore(saved.VarFrames);
         bool tracingNow = IsTrue(session.PSVariable.GetValue("global:__BashXtrace"));
@@ -399,6 +458,24 @@ public sealed class BashParamErrorException : Exception
         return ex;
     }
 
+    /// <summary>A builtin usage error under <c>bash -c</c> (<c>shift 1 2</c>): reported already, and the shell ends with 1.</summary>
+    public static BashParamErrorException UsageEnd() => End("usage error");
+
+    /// <summary>
+    /// A refused assignment (<c>r=2</c> with r read-only, <c>a[]=1</c>) while <c>set -e</c> is on: reported already, and
+    /// the shell ends with 1 even where errexit is otherwise ignored (<c>r=2 || echo</c>, an <c>if</c> body); a subshell or
+    /// <c>$( )</c> ends only itself, and its status 1 ends the caller under the same errexit.
+    /// </summary>
+    public static BashParamErrorException AssignmentEnd() => End("assignment error");
+
+    // A reported error that ends a non-interactive shell (or the subshell it runs in) with status 1.
+    private static BashParamErrorException End(string kind)
+    {
+        var ex = Reported("", kind);
+        ex.Data["psbash.exitcode"] = 1;
+        return ex;
+    }
+
     /// <summary>
     /// An expansion error that discards the rest of the shell's current input line (bash jump_to_top_level(DISCARD)):
     /// a bad substitution, an invalid indirect name. The line's <see cref="BashLineDiscard"/> scope catches it (status 1)
@@ -450,4 +527,23 @@ public static class BashLineDiscard
     /// </summary>
     public static bool Discards(Exception? ex) =>
         ex?.Data["psbash.discard"] is true || InvokeBashShoptCommand.InteractiveShell;
+
+    /// <summary>
+    /// A builtin usage error that drops the rest of the input line (bash <c>no_args</c>: <c>shift 1 2</c>, <c>return 1 2</c>,
+    /// <c>exit 1 2</c>, <c>break 1 2</c>), already reported: status 1, and inside a line scope the discard error ends the
+    /// line (a loop or function on it too); outside one the line mark (<c>PsBuild.UnlessGlobFailed</c>) skips the commands
+    /// after it on its line. Under <c>bash -c</c> the shell ends, status 1 (the reported parameter error; a subshell ends
+    /// only itself). The emitted twin is <c>PsBuild.UsageDiscard</c>.
+    /// </summary>
+    public static void UsageError(PSCmdlet cmdlet)
+    {
+        if (ShellReader.DashC)
+            cmdlet.ThrowTerminatingError(new ErrorRecord(BashParamErrorException.UsageEnd(),
+                "BashUsageError", ErrorCategory.InvalidArgument, null));
+        if (Armed)
+            cmdlet.ThrowTerminatingError(new ErrorRecord(BashParamErrorException.Discard("", "usage error"),
+                "BashUsageDiscard", ErrorCategory.InvalidArgument, null));
+        FileSystemHelpers.SetLastExitCode(cmdlet, 1);
+        cmdlet.SessionState.PSVariable.Set("global:__BashFailGlob", true);
+    }
 }

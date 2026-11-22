@@ -35,7 +35,7 @@ public class ShellBuiltinDiagnosticGuardTests
     private static readonly string[] ProductDirs =
         ["PsBash.Cmdlets", "PsBash.Transpiler", "PsBash.Host", "PsBash.Core", "PsBash.Shell", "PsBash.Module"];
 
-    private const string Builtins = @"(?:cd|type|declare|typeset|local|alias|unalias|wait|command|builtin|help|let|source|test|\[\[?|\(\()";
+    private const string Builtins = @"(?:cd|type|declare|typeset|local|alias|unalias|wait|command|builtin|help|let|source|test|break|continue|return|exit|shift|history|\[\[?|\(\()";
 
     /// <summary>A string literal that starts a builtin's error with a hard-coded shell name: <c>"bash: type: </c>.</summary>
     private static readonly Regex HardCoded = new(@"[""'](?:ps-)?bash: " + Builtins + ": ", RegexOptions.Compiled);
@@ -43,22 +43,27 @@ public class ShellBuiltinDiagnosticGuardTests
     /// <summary>A string literal that starts a builtin's error with no prefix: <c>"cd: x: No such file or directory"</c>.</summary>
     private static readonly Regex Bare = new(
         @"[""'`]" + Builtins + @": [^""'\r\n]*(?:not found|invalid option|too many arguments|not set|No such file|not a |no such job"
-        + @"|integer expression|missing|readonly variable|division by|syntax error)",
+        + @"|integer expression|missing|readonly variable|division by|syntax error|numeric argument required|only meaningful in a)",
         RegexOptions.Compiled);
+
+    /// <summary>The same with the operand spliced in: <c>'return: ' + $r + ': numeric argument required'</c>.</summary>
+    private static readonly Regex Spliced = new(
+        @"[""'`]" + Builtins + @": [""'`][^\r\n]*: (?:numeric argument required|too many arguments)", RegexOptions.Compiled);
 
     /// <summary>A line that builds the prefix through the primitive.</summary>
     private static readonly Regex Primitive = new(
-        @"ShellDiagnostic\b|ShellDiagnostic\.Prefix|PsBuild\.DiagnosticPrefix|ShellDiagnosticLine|\$\{prefix\}",
+        @"ShellDiagnostic\b|ShellDiagnostic\.Prefix|PsBuild\.DiagnosticPrefix|ShellDiagnosticLine|PsBuild\.UsageDiscard\(|PsBuild\.AssignmentError\(|\$\{prefix\}",
         RegexOptions.Compiled);
 
     /// <summary>file name -> why it spells such a message without the prefix.</summary>
     private static readonly Dictionary<string, string> Allowed = new(StringComparer.Ordinal)
     {
         ["AliasExpander.cs"] = "the interactive host's own alias table, outside any runspace (no ShellDiagnostic there)",
+        ["HistoryBuiltin.cs"] = "the interactive host's own history store, outside any runspace (no ShellDiagnostic there)",
     };
 
     internal static bool IsOffender(string code)
-        => (HardCoded.IsMatch(code) || Bare.IsMatch(code)) && !Primitive.IsMatch(code);
+        => (HardCoded.IsMatch(code) || Bare.IsMatch(code) || Spliced.IsMatch(code)) && !Primitive.IsMatch(code);
 
     [Fact]
     public void ProductCode_SpellsABuiltinErrorOnlyAfterTheSharedPrefix()
@@ -108,10 +113,19 @@ public class ShellBuiltinDiagnosticGuardTests
     [InlineData("Write-BashHostStderr \"bash: wait: ${pidArg}: no such job\"", true, true)]
     [InlineData("FileSystemHelpers.WriteBashError(this, $\"[: {text}: integer expression expected\");", false, true)]
     [InlineData("FileSystemHelpers.WriteBashError(this, $\"unalias: {name}: not found\");", false, true)]
+    // The numeric-argument builtins (InvokeBashShiftCommand, PsEmitter break / return / exit, psm1 return, PsBuild).
+    [InlineData("FileSystemHelpers.WriteBashError(this, $\"shift: {args[0]}: numeric argument required\");", false, true)]
+    [InlineData("FileSystemHelpers.WriteBashError(this, \"shift: too many arguments\");", false, true)]
+    [InlineData("Write-Error ('return: ' + $st + ': numeric argument required') -ErrorAction Continue", true, true)]
+    [InlineData("\"Write-Error \" + SingleQuote(\"break: only meaningful in a `for' loop\")", false, true)]
+    [InlineData("specialResult = $\"Write-Error 'exit: too many arguments' -ErrorAction Continue\";", false, true)]
+    [InlineData("FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + \"shift: too many arguments\");", false, false)]
     // Through the primitive, a usage line, or only quoted in a comment: not a site.
     [InlineData("FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + $\"type: {name}: not found\");", false, false)]
     [InlineData("return PsBuild.ShellDiagnosticLine(\"'cd: too many arguments'\") + \"; \" + PsBuild.SetStatus(1);", false, false)]
     [InlineData("Write-BashHostStderr ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + \"wait: ${n}: no such job\")", true, false)]
+    [InlineData("specialResult = PsBuild.UsageDiscard(\"exit: too many arguments\");", false, false)]
+    [InlineData("sb.Append(PsBuild.AssignmentError($\"local: {n}: readonly variable\"));", false, false)]
     [InlineData("FileSystemHelpers.WriteBashError(this, \"unalias: usage: unalias [-a] name [name ...]\");", false, false)]
     [InlineData("// bash says \"cd: x: No such file or directory\"", false, false)]
     [InlineData("string report = \"bash: command substitution: line \" + line;", false, false)]

@@ -80,3 +80,18 @@ public class SdkWorkerCmdletErrorTests : IAsyncLifetime
         Assert.Equal(new[] { $"O:cat: {missing}: No such file or directory" }, r.Order);
     }
 }
+
+/// <summary>
+/// The line for an error that ended the script carries ONE <c>ps-bash: </c> prefix (SdkWorker.ErrorLine). ps-bash-specific
+/// (bash has no loop iteration limit), so hand asserts. REGRESSION: the loop limit's own message printed
+/// "ps-bash: ps-bash: loop iteration limit exceeded (3)".
+/// </summary>
+public class SdkWorkerErrorLineTests
+{
+    [Theory]
+    [InlineData("loop iteration limit exceeded (3)", "ps-bash: loop iteration limit exceeded (3)")]
+    [InlineData("ps-bash: loop iteration limit exceeded (3)", "ps-bash: loop iteration limit exceeded (3)")]
+    [InlineData("ps-bashful", "ps-bash: ps-bashful")]
+    public void ErrorLine_HasOnePrefix(string message, string expected)
+        => Assert.Equal(expected, SdkWorker.ErrorLine(message));
+}

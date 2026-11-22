@@ -250,9 +250,10 @@ ends a `-c` shell for it (`PSBASH_DASH_C`, `ShellReader.DashC`), through `ShellS
 `exit` (innermost subshell scope, else the job, else `SetShouldExit`). A terminating error there ended only the
 statement where no line scope re-threw it. The arithmetic COMMAND `(( 1/0 ))` and a `[[ 1/0 -eq 1 ]]` operand are not words: status 1,
 the line goes on. A SUBSCRIPT error discards (or ends a `-c` shell) in every context, `(( a[1/0] ))`, `let`, `[[ ]]`,
-`declare a[1/0]=x`, `unset 'a[1/0]'`, `read 'a[1/0]'` alike. Not yet: in a script file those non-word forms get no line
-scope (`CanDiscardLine` does not see them), and `declare`/`unset`/`read`/`printf -v`/`test -v` catch the error as a
-plain failure. In an interactive shell (`bash -i -c`) an unbound variable or `${x:?}` under `set -u` does the same.
+`declare a[1/0]=x`, `unset 'a[1/0]'`, `read 'a[1/0]'` alike. A builtin's element operand (`unset`, `read`,
+`printf -v`, `test -v` / `[ -v ]`) fails through one path, `BashArrayElement.FailSubscript`, and `CanDiscardLine`
+gives its statement a scope. Not yet: in a script file `(( ))`, `let`, `[[ ]]` and `declare` get no line scope
+(`CanDiscardLine` does not see them). In an interactive shell (`bash -i -c`) an unbound variable or `${x:?}` under `set -u` does the same.
 When the text can raise one (`PsBuild.CanDiscardLine`: its emission holds `Get-BashIndirectValue`,
 `Write-BashExpansionError`, an arithmetic word `$(Invoke-BashArith` / `$__psbash_av = Invoke-BashArith`, or a
 `Set-BashElement` with a computed key; or it is interactive under nounset), every top-level command runs in
@@ -261,6 +262,35 @@ inside the redirection (one scope around them all ended the script at the first 
 `BashParamErrorException.Discard` while `BashLineDiscard.Armed`, the scope catches it, and the line mark
 (`$global:__BashFailGlob`) drops the commands after it on its line. Outside any scope (a function defined by text
 that had none) the runtime keeps the older per-command abandon mark.
+
+**Builtin usage errors (bash `no_args`).** `shift 1 2`, `return 1 2`, `exit 1 2`, `break 1 2` / `continue 1 2` report
+"too many arguments", set status 1 and drop the rest of the line the same way, a loop or function on it included. The
+script goes on with the next line, and `exit 1 2` does not exit. Under `bash -c` the whole string is the input, so
+the shell ends with status 1; a `( )`, `$( )` or pipe stage ends only itself. The numeric check comes first, and its
+outcome differs per builtin. `shift x` gives status 1 and the line goes on; `return x` / `exit x` give 2; `break x` gives
+128, which ends the shell. There is one primitive per side: emitted text uses `PsBuild.UsageDiscard`, and its
+`UsageDiscardMark` is what makes `CanDiscardLine` give the statement a scope; the runtime uses
+`BashLineDiscard.UsageError` (`Invoke-BashShift`). Under `-c` both throw `BashParamErrorException.UsageEnd`, which is
+status 1 and not a discard. The oracle is `ShellLanguageGapDifferentialTests.NumericArgBuiltins_*`.
+
+**Assignment errors (bash `ASSIGNMENT_ERROR`).** A refused assignment drops the rest of the top-level line, status 1:
+a read-only variable (`r=2`, `r+=x`, `local -r x=1; x=2`), `a[]=x`, a write through a circular nameref, and an element
+that is not a valid identifier through a nameref. The functions and loops on the line unwind, and so does the line
+of a function's caller. A `$( )`, `<( )` or `( )` ends only itself: `u=$(r=2); echo after` runs the echo. Unlike a
+usage error, `bash -c` goes on with its next line, so there is no `UsageEnd`. A read-only PREFIX binding (`r=3 cmd`)
+is reported, and the command runs without the binding. There is one primitive: `PsBuild.AssignmentError(message)`
+emits the diagnostic, status 1 and `AssignmentDiscardMark`, and the run-time read-only guard
+(`PsBuild.RuntimeReadonlyGuard`) ends with the same mark. `CanDiscardLine` sees the mark, and the scope is unit-wide.
+Once any piece can discard, every top-level line gets a scope, so a mark in a function body arms its caller's line.
+The emitter's static "this line hit a read-only write" flag (`_readonlyViolation`) is saved and restored around a
+substitution and a subshell, so it never drops the line outside them. The oracle is
+`ShellLanguageGapDifferentialTests.RefusedAssignment_DropsTheLineAndUnwindsFunctions`.
+
+Under `set -e`, or in a non-interactive posix-mode shell (bash `FORCE_EOF`), the mark ends the shell with 1 instead
+(`BashParamErrorException.AssignmentEnd`). That happens even where errexit is otherwise ignored (`q=2 || echo`, an
+`if` body). A `( )` or `$( )` ends with 1, and that status ends its caller under the same errexit. An arithmetic
+expansion error or a usage error still only drops its line. The oracle is
+`ShellLanguageGapDifferentialTests.AssignmentError_UnderErrexitOrPosix_EndsTheShell`.
 
 ### 2.6 Diagnostic prefix
 
@@ -292,6 +322,12 @@ A diagnostic from the shell itself carries bash's source prefix (error.c `error_
 - builtins: cd (emitted), type, declare/typeset, alias, unalias, command -V, builtin (emitted), help, local (emitted),
   wait (psm1), `[`/`test` (`Invoke-BashTest`, `Invoke-BashTestInt`). Their usage line after `invalid option` has no
   prefix, as in bash.
+- loop control and status builtins: `break` / `continue` / `return` / `exit`. The emitted forms are `PsBuild.LoopControlWarning`,
+  `PsBuild.StatusByte`, `PsBuild.UsageDiscard` and `ShellDiagnosticLine`; the run-time `return` is in the psm1. Also
+  `shift` (`Invoke-BashShift`) and `history` (`Invoke-BashHistory`; its usage line has no prefix). Their line comes
+  from `VarFrameStack.SetLine`, which the emitter adds when `PsEmitter.NumericBuiltinMayReport` says the command can
+  report: an operand that is not a plain number, more than one operand, or a loop jump with no loop. A plain
+  `break` / `exit 1` records nothing.
 
 `CommandNotFoundReport.Describe` builds only the reason after the prefix. Guards (Core.Tests):
 `ShellDiagnosticPrefixGuardTests` fails on a line that spells "command not found" without the primitive;

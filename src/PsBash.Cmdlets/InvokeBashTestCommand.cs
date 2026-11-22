@@ -195,39 +195,33 @@ public sealed class InvokeBashTestCommand : BashCmdlet
         {
             string name = operand[..open], sub = operand[(open + 1)..^1];
             object? holder = BashVariableLookup.ArrayHolder(SessionState, name);
+            var vars = BashArrayElement.ReadOnly(SessionState);
+            // An indexed subscript is an expression, for every kind of holder; one that is not is bash's expansion error.
+            bool TryIndex(int count, out long index)
+            {
+                try { index = BashArrayElement.Index(sub, count, vars); return true; }
+                catch (BashArith.BashArithException ex) { BashArrayElement.FailSubscript(this, sub, ex); index = 0; return false; }
+            }
+            // A sparse indexed array (`unset 'a[1]'` made it one) is a dictionary too, keyed by position: not by a word.
+            if (holder is BashSparseArray sparse)
+            {
+                if (sub is "@" or "*") return sparse.Count > 0;
+                return TryIndex(0, out long at) && sparse.Contains(at);   // Contains resolves a negative one from the end
+            }
             if (holder is System.Collections.IDictionary dict)
             {
                 if (sub is "@" or "*") return dict.Count > 0;
-                // `-v 'assoc["k"]'` / `-v 'assoc[$key]'`: the subscript is still a word — drop quotes, expand a plain $name.
-                if (sub.Length >= 2 && (sub[0] == '"' && sub[^1] == '"' || sub[0] == '\'' && sub[^1] == '\'')) sub = sub[1..^1];
-                else if (sub.Length > 1 && sub[0] == '$')
-                {
-                    string vn = sub[1] == '{' && sub.EndsWith('}') ? sub[2..^1] : sub[1..];
-                    if (vn.Length > 0 && vn.All(ch => char.IsAsciiLetterOrDigit(ch) || ch == '_')) sub = BashVariableStore.Get(vn) ?? "";
-                }
-                return dict.Contains(sub);
+                // `-v 'assoc["k"]'` / `-v 'assoc[$key]'`: the subscript is still a word (BashArrayElement's one key rule).
+                string? word = BashArrayElement.ExpandSubscript(InvokeCommand, sub, out bool expanded);
+                return word is not null && dict.Contains(BashArrayElement.AssocKey(word, expanded, vars.ReadRaw));
             }
-            if (holder is System.Collections.IList list)
-            {
-                if (sub is "@" or "*") return list.Count > 0;
-                if (!long.TryParse(sub, out long idx))
-                {
-                    // A variable holding an expression is itself evaluated (`i='0+2'; [[ -v a[i] ]]` is index 2).
-                    long Read(string n, int depth)
-                    {
-                        string? raw = BashVariableStore.Get(n)?.Trim();
-                        if (long.TryParse(raw, out var v)) return v;
-                        if (string.IsNullOrEmpty(raw) || depth > 8) return 0;
-                        try { return BashArith.Evaluate(raw, m => Read(m, depth + 1), (_, _) => { }); }
-                        catch (BashArith.BashArithException) { return 0; }
-                    }
-                    try { idx = BashArith.Evaluate(sub, n => Read(n, 0), (_, _) => { }); }
-                    catch (BashArith.BashArithException) { return false; }
-                }
-                if (idx < 0) idx += list.Count;
-                return idx >= 0 && idx < list.Count;
-            }
-            return BashVariableStore.Get(name) is not null && sub is "0" or "@" or "*";
+            var list = holder as System.Collections.IList;
+            bool scalarSet = list is null && BashVariableStore.Get(name) is not null;
+            if (sub is "@" or "*") return list is not null ? list.Count > 0 : scalarSet;
+            // An indexed subscript is an expression, also for a scalar (element 0) or an unset name: a variable holding one
+            // is evaluated (`i='0+2'; [[ -v a[i] ]]` is index 2), and one that is not an expression is bash's expansion error.
+            int count = list?.Count ?? (scalarSet ? 1 : 0);
+            return TryIndex(count, out long idx) && idx >= 0 && idx < count;
         }
         if (BashVariableStore.Get(operand) is not null) return true;
         // Shell variables computed on read (PsBuild.TryMapSpecialVar), never stored: always set in bash.

@@ -763,7 +763,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
                 // A parameter error the script already wrote to its error stream (so `2>/dev/null` applied).
                 bool reported = ex.ErrorRecord?.Exception?.Data["psbash.reported"] is true
                     || ex.InnerException?.Data["psbash.reported"] is true;
-                if (!reported) deliverError($"ps-bash: {ex.Message}");
+                if (!reported) deliverError(ErrorLine(ex.Message));
                 _ps.Commands.Clear();
                 // The expansion error carries bash's status (127 for ${x?} / unbound variable, 1 for a bad substitution).
                 int paramStatus = ex.ErrorRecord?.Exception?.Data["psbash.exitcode"] as int?
@@ -1009,6 +1009,13 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         _ps.Invoke();
         _ps.Commands.Clear();
     }
+
+    /// <summary>
+    /// The stderr line for an error that ended the script: one <c>ps-bash: </c> prefix. Emitted code that throws its own
+    /// message may carry it already (the loop iteration limit). REGRESSION: that printed "ps-bash: ps-bash: ...".
+    /// </summary>
+    internal static string ErrorLine(string message)
+        => message.StartsWith("ps-bash:", StringComparison.Ordinal) ? message : "ps-bash: " + message;
 
     private static int UnwrapExitCode(object? arg)
     {

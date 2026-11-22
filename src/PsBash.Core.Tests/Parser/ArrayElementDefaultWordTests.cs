@@ -27,6 +27,7 @@ public class ArrayElementDefaultWordTests
     public void Transpile_BashSourceIndex_ReadsTheGlobalArray()
     {
         var ps = BashTranspiler.Transpile("echo \"${BASH_SOURCE[0]}\" \"${#BASH_SOURCE[@]}\"");
-        Assert.Contains("$global:BASH_SOURCE['0']", ps);
+        // Through the frame stack (VarFrameStack.BashSource), which adds the running functions' defining files.
+        Assert.Contains("@([PsBash.Cmdlets.VarFrameStack]::BashSource($global:BASH_SOURCE))['0']", ps);
     }
 }

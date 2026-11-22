@@ -420,12 +420,13 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_BareNameSubscript_IsArithmeticOnIndexedArrays()
         => Assert.Contains("Invoke-BashArith", BashTranspiler.Transpile("a=(x y); i=0; echo \"${a[i+1]}\""));
 
-    // Oracle: an array a function writes without declaring it `local` is the shell's own - push() { st+=("$1"); } must reach the caller.
+    // Oracle: an array a function writes without declaring it `local` is the nearest caller's local, else the shell's
+    // own - push() { st+=("$1"); } must reach the caller (VarFrameStack.ArraySlot decides at run time).
     [Theory]
-    [InlineData("push() { st+=(\"$1\"); }; push a", "$global:st = Add-BashArray ($global:st ?? ${env:st}) @(")]
-    [InlineData("f() { a=(x y); }; f", "$global:a = @(")]
-    [InlineData("f() { a[2]=z; }; f", "$global:a = Set-BashElement $global:a")]
-    public void Transpile_ArrayWrittenInFunction_TargetsTheGlobal(string bash, string expected)
+    [InlineData("push() { st+=(\"$1\"); }; push a", "[PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'st').Value = Add-BashArray ([PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'st').Value ?? ${env:st}) @(")]
+    [InlineData("f() { a=(x y); }; f", "[PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a').Value = @(")]
+    [InlineData("f() { a[2]=z; }; f", "[PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a').Value = Set-BashElement ([PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a').Value)")]
+    public void Transpile_ArrayWrittenInFunction_TargetsTheCallersSlot(string bash, string expected)
         => Assert.Contains(expected, BashTranspiler.Transpile(bash + "\ndeclare -p"));
 
     [Theory]
@@ -894,7 +895,7 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_LocalNamerefToAnArray_AppendsToTheCallersArray()
     {
         var ps = BashTranspiler.Transpile("addto() { local -n a=$1; a+=(\"$2\"); }\nl=(a)\naddto l c");
-        Assert.Contains("$global:l = Add-BashArray ($global:l ?? ${env:l}) @(", ps);
+        Assert.Contains("[PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'l').Value = Add-BashArray ([PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'l').Value ?? ${env:l}) @(", ps);
     }
 
     [Fact]
@@ -910,6 +911,93 @@ public class BashTranspilerReviewRegressionTests
     [InlineData("f3() { local -n ref=$1; ref=x; f3 \"$1\"; }\nf3 R", "R")]
     public void Transpile_LocalNamerefTargetForwardedByAnotherFunction_EmitsTheCallersName(string script, string target)
         => Assert.Contains("($__nrt -ceq '" + target + "')", BashTranspiler.Transpile(script));
+
+    // Oracle (bash): `cnt() { local -n c=$1; (( c++ )); }; n=4; cnt n` makes n 5. Arithmetic resolves names when it
+    // runs, so the run-time nameref table learns the target the caller passed (whichever variant runs).
+    [Fact]
+    public void Transpile_LocalNamerefFromPositional_RecordsTheRunTimeTarget()
+    {
+        var ps = BashTranspiler.Transpile("cnt() { local -n c=$1; (( c++ )); }\ncnt n");
+        int record = ps.IndexOf("[PsBash.Cmdlets.VarFrameStack]::LocalNameref('c', $__nrt); ", StringComparison.Ordinal);
+        Assert.True(record > 0, "no run-time nameref record");
+        Assert.Contains("$__nrt = \"", ps[..record]);
+    }
+
+    // Oracle (bash): `t=5; h() { local -n r=t; r=6; }; h` sets t; `local -n s=s` only warns (status 0) in a function;
+    // `declare -n u=1` is refused naming the builtin. REGRESSION: a literal target was never recorded.
+    [Theory]
+    [InlineData("h() { local -n r=t; r=6; }", "[PsBash.Cmdlets.BashShellState]::SetNameref('r', 't')")]
+    [InlineData("h() { local -n r=t; r=6; }", "$env:t = ")]
+    [InlineData("h() { local -n r=t; r=6; }", "[PsBash.Cmdlets.VarFrameStack]::LocalAttributes('r')")]
+    [InlineData("h() { local -n s=s; }", "local: warning: s: circular name reference")]
+    [InlineData("h() { declare -n u=1; }", "declare: `1'': invalid variable name for name reference")]
+    [InlineData("h() { local -n q=y; local -n q=x; q=4; }", "$env:x = ")]
+    public void Transpile_LocalNamerefWithALiteralTarget_IsTheFunctionsOwn(string script, string expected)
+        => Assert.Contains(expected, BashTranspiler.Transpile(script));
+
+    // Oracle (bash): `declare -n g=y; f() { local g=9; }` leaves y alone: f's g is a plain variable.
+    [Fact]
+    public void Transpile_PlainLocalOverAnOuterNameref_DoesNotWriteTheTarget()
+    {
+        var ps = BashTranspiler.Transpile("declare -n g=y\nf() { local g=9; echo $g; }");
+        string body = ps[ps.IndexOf("function f", StringComparison.Ordinal)..];
+        Assert.DoesNotContain("$env:y", body);
+    }
+
+    // Oracle (bash): `declare c; c=x; declare -p c` prints `declare -- c="x"`. A plain no-value declaration only marks
+    // the name; an empty array hid the later scalar. `declare -a e` still makes the array.
+    [Fact]
+    public void Transpile_DeclareWithNoValue_OnlyAnArrayDeclarationMakesTheArray()
+    {
+        Assert.DoesNotContain("$global:c = @()", BashTranspiler.Transpile("declare c"));
+        Assert.Contains("$global:e = @()", BashTranspiler.Transpile("declare -a e"));
+    }
+
+    // Oracle (bash): a refused assignment in a function ends the function and its caller's line (status 1); in `$( )`
+    // it ends only the substitution (`u=$(r=2); echo after` runs the echo); a readonly prefix binding is reported.
+    [Fact]
+    public void Transpile_RefusedAssignmentInAFunction_DiscardsTheLine()
+        => Assert.Contains(PsBuild.AssignmentDiscardMark, BashTranspiler.Transpile("f() { local -r x=1; x=2; echo in; }\nf; echo after"));
+
+    [Fact]
+    public void Transpile_RefusedAssignmentInASubstitution_KeepsTheOuterLine()
+        => Assert.Contains("Invoke-BashEcho after", BashTranspiler.Transpile("readonly r=1\nu=$(r=2); echo after"));
+
+    [Fact]
+    public void Transpile_ReadonlyPrefixBinding_IsReportedAndTheCommandRuns()
+    {
+        var ps = BashTranspiler.Transpile("readonly r=1\nr=3 true");
+        Assert.Contains("r: readonly variable", ps);
+        Assert.DoesNotContain("$env:r = '3'", ps);
+    }
+
+    // Oracle (bash): `f() { local -r ro=1; declare -p ro; }` prints `declare -r ro="1"`, and ro is writable after f
+    // returns: the mark is the local's, taken back by its frame.
+    [Fact]
+    public void Transpile_LocalReadonly_MarksTheFramesLocal()
+    {
+        var ps = BashTranspiler.Transpile("f() { local -r ro=1; }");
+        Assert.Contains("[PsBash.Cmdlets.VarFrameStack]::LocalAttributes('ro'); [PsBash.Cmdlets.BashShellState]::MarkReadonly('ro')", ps);
+    }
+
+    // Oracle: `f() { local -n lr=x; local +n lr; }; f` leaves no lr. The nameref local parks the caller's value and is the
+    // frame's own, so the return restores it. REGRESSION: the +n write to $env:lr outlived the function.
+    [Fact]
+    public void Transpile_LocalNameref_IsTheFramesOwnName()
+    {
+        var ps = BashTranspiler.Transpile("f() { local -n lr=x; local +n lr; }");
+        Assert.Contains("if ($null -eq $__lsd_lr) { $__lsd_lr = @{ v = $env:lr } }; [void]" + PsBuild.DeclareLocal("lr")
+            + "; [PsBash.Cmdlets.VarFrameStack]::LocalAttributes('lr'); [PsBash.Cmdlets.BashShellState]::SetNameref('lr', 'x')", ps);
+        Assert.Contains(PsBuild.RestoreLocal("lr"), ps);
+    }
+
+    // Oracle: under nounset `local -a x; echo $x` is "x: unbound variable"; an array's $x reads element 0.
+    // REGRESSION: the array branch of a plain read skipped the check and printed an empty line.
+    [Theory]
+    [InlineData("set -u\nf() { local -a x; echo $x; }")]
+    [InlineData("set -u\ndeclare -a x; echo \"$x\"")]
+    public void Transpile_ArrayReadUnderNounset_IsChecked(string bash)
+        => Assert.Contains("Reported('x: ', 'unbound variable')", BashTranspiler.Transpile(bash));
 
     // Oracle (bash): $BASHPID differs in ( ) and $( ) while $$ does not; the read goes through the subshell's id and a
     // $( ) that reads it takes the subshell scope that sets it (BashShellState.Save), even around a plain mapped echo.
@@ -1107,12 +1195,18 @@ public class BashTranspilerReviewRegressionTests
         => Assert.Contains("$global:__BashTrapEXIT = $null; $global:LASTEXITCODE = 0; exit 0", BashTranspiler.Transpile(bash + "; echo hi"));
 
     // Oracle: `bash -c 'for i in a; do continue 1 x; done; echo st=$?'` prints nothing, status 1 (the error discards
-    // the rest of the -c string); in a script file the next command runs. It used to go on under -c too.
+    // the rest of the -c string); in a script file the rest of the LINE is dropped and the next line runs. Both go
+    // through the one usage-error primitive (PsBuild.UsageDiscard), whose line scope the statement gets.
     [Theory]
-    [InlineData("for i in a; do continue 1 x; done; echo st=$?")]
-    [InlineData("for i in a; do break 1 2; done")]
-    public void Transpile_LoopControlTooManyArgs_EndsADashCShell(string bash)
-        => Assert.Contains("too many arguments' -ErrorAction Continue; $global:LASTEXITCODE = 1; if ($env:PSBASH_DASH_C -eq '1') { $global:LASTEXITCODE = 1; exit 1 }", BashTranspiler.Transpile(bash));
+    [InlineData("for i in a; do continue 1 x; done; echo st=$?", "continue")]
+    [InlineData("for i in a; do break 1 2; done", "break")]
+    public void Transpile_LoopControlTooManyArgs_EndsADashCShell(string bash, string keyword)
+    {
+        var ps = BashTranspiler.Transpile(bash);
+        Assert.Contains(keyword + ": too many arguments'", ps);
+        Assert.Contains(PsBuild.UsageDiscardMark, ps);
+        Assert.Contains("[PsBash.Cmdlets.BashLineDiscard]::Enter()", ps);
+    }
 
     // Oracle: `echo ${BASHOPTS:+set}` prints set: BASHOPTS lists the shopt options that are on.
     [Fact]
@@ -1291,10 +1385,11 @@ public class BashTranspilerReviewRegressionTests
         Assert.DoesNotContain("__psbash_cx", BashTranspiler.Transpile("case $x in (*) echo hi ;; esac"));
     }
 
-    // Oracle: `bash -c 'set -C; echo $-'` is `hBCc`: `c` comes last, and only under -c (the launcher's PSBASH_DASH_C mark).
+    // Oracle: `bash -c 'set -C; echo $-'` is `hBCc`: `c` comes last, and only under -c (the launcher's PSBASH_DASH_C mark);
+    // a shell reading its script from stdin (`cat s | bash`, `bash -s`) or interactive has `s` there instead.
     [Fact]
     public void Transpile_DollarDash_EndsWithCUnderDashC()
-        => Assert.Contains("if ($global:__BashNoclobber) { $f += 'C' }; if ($global:__BashErrtrace) { $f += 'E' }; if ([PsBash.Cmdlets.InvokeBashShoptCommand]::SetOptionOn('histexpand')) { $f += 'H' }; if ($env:PSBASH_DASH_C -eq '1') { $f += 'c' }; $f", BashTranspiler.Transpile("echo \"$-\""));
+        => Assert.Contains("if ($global:__BashNoclobber) { $f += 'C' }; if ($global:__BashErrtrace) { $f += 'E' }; if ([PsBash.Cmdlets.InvokeBashShoptCommand]::SetOptionOn('histexpand')) { $f += 'H' }; if ($env:PSBASH_DASH_C -eq '1') { $f += 'c' } elseif ($env:PSBASH_STDIN_SHELL -eq '1' -or [PsBash.Cmdlets.InvokeBashShoptCommand]::InteractiveShell) { $f += 's' }; $f", BashTranspiler.Transpile("echo \"$-\""));
 
     // Oracle: `bash -i -c 'echo $-'` is `himBHc`; `bash -c` has no i/m/H. Interactive = the launcher's PSBASH_DASH_I mark.
     [Fact]
@@ -1305,13 +1400,14 @@ public class BashTranspilerReviewRegressionTests
     }
 
     // Oracle: a bare `$BASH_SOURCE` / `${BASH_SOURCE##*/}` is element 0 of the array (the script file); it read $env:BASH_SOURCE.
+    // The array is composed with the function frames (VarFrameStack.BashSource): in a function it is the defining file.
     [Theory]
     [InlineData("echo \"$BASH_SOURCE\"")]
     [InlineData("echo \"${BASH_SOURCE##*/}\"")]
     public void Transpile_BareBashSource_IsElementZero(string bash)
     {
         var ps = BashTranspiler.Transpile(bash);
-        Assert.Contains("@($global:BASH_SOURCE)[0]", ps);
+        Assert.Contains("@([PsBash.Cmdlets.VarFrameStack]::BashSource($global:BASH_SOURCE))[0]", ps);
         Assert.DoesNotContain("$env:BASH_SOURCE", ps);
     }
 

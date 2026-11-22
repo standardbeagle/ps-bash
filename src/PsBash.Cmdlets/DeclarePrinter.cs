@@ -31,9 +31,12 @@ internal static class DeclarePrinter
         object? val = BashVariableLookup.ArrayHolder(cmdlet.SessionState, name) ?? BashVariableStore.Get(name);
         if (val is null)
         {
-            // `readonly nv` / `declare -i nv` with no value: the name exists, unset, with its attributes (bash: `declare -r nv`).
-            if (!BashShellState.IsReadonly(name) && !BashShellState.AttributeLetters(name).Contains('i')) return false;
-            foreach (var line in BashRuntime.EmitBashLines($"declare -{BashShellState.AttributeLetters(name)} {name}\n"))
+            // `readonly nv` / `declare -i nv` / `declare nv` with no value: the name exists, unset, with its attributes
+            // (bash: `declare -r nv`, `declare -- nv`). So does a function's `local x` with no value, here or in a caller.
+            string unsetLetters = BashShellState.AttributeLetters(name);
+            if (!BashShellState.IsReadonly(name) && !unsetLetters.Contains('i') && !BashShellState.IsDeclaredScalar(name)
+                && !VarFrameStack.Current.HasLocal(name)) return false;
+            foreach (var line in BashRuntime.EmitBashLines($"declare -{(unsetLetters.Length == 0 ? "-" : unsetLetters)} {name}\n"))
                 cmdlet.WriteObject(line);
             return true;
         }

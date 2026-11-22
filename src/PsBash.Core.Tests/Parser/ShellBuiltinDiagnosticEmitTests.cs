@@ -51,7 +51,7 @@ public class ShellBuiltinDiagnosticEmitTests
 
     [Theory]
     [InlineData("(( 1/0 ))")]                              // line 1 is where every command starts
-    [InlineData("echo a\necho ${a[1]} ${a[@]}")]           // a literal subscript evaluates nothing
+    [InlineData("echo a\necho \"${a[1]}\" \"${a[@]}\"")]   // a literal subscript evaluates nothing (unquoted, failglob may report)
     public void Transpile_StatementThatNeedsNoLine_RecordsNone(string bash)
         => Assert.DoesNotContain("VarFrameStack]::SetLine(", T(bash));
 

@@ -74,7 +74,12 @@ public abstract record Command : BashNode
         ImmutableArray<Assignment> TempPrefix = default,
         // The export attribute the declaration sets on its names: +1 (`declare -x`, `local -x`), -1 (`export -n`,
         // `declare +x`), 0 none. `export NAME` itself is IsExport.
-        int ExportAttr = 0) : Command;
+        int ExportAttr = 0,
+        // `local -i n` / `declare -l s` in a function: the value attributes a local declaration sets (letters of "ilu",
+        // null for none). REGRESSION: they were parsed and dropped, so `local -i k=1+1` held "1+1".
+        string? Attrs = null,
+        // The builtin a local declaration was made with (`local`, `declare`, `typeset`): its diagnostics name it.
+        string? Builtin = null) : Command;
 
     /// <summary>
     /// An if/elif/else statement.
@@ -208,10 +213,14 @@ public abstract record Command : BashNode
     /// A subshell: <c>(cmd1; cmd2)</c> runs commands in a child process.
     /// Maps to PowerShell <c>&amp; { cmd1; cmd2 }</c>.
     /// </summary>
+    /// <remarks><c>KeepsLoopLevel</c> is set for a simple pipe stage the emitter runs as a subshell (a state builtin): bash
+    /// forks a simple command without leaving the loop it is in, so <c>echo q | break</c> inside a loop ends only the
+    /// stage, silently, where <c>( break )</c> warns.</remarks>
     public sealed record Subshell(
         Command Body,
         ImmutableArray<Redirect> Redirects,
-        int EndLine = 0) : Command;
+        int EndLine = 0,
+        bool KeepsLoopLevel = false) : Command;
 
     /// <summary>
     /// A brace group: <c>{ cmd1; cmd2; }</c> runs commands in the current shell.

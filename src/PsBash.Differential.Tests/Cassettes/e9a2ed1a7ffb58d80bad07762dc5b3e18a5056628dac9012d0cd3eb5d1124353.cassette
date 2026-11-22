@@ -1,0 +1,26 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 340
+stdout-length: 49
+stderr-length: 41
+==== SCRIPT ====
+a=(1 2); read 'a[1]' <<< hi; echo "r=$? ${a[*]}"
+i=0; read -r 'a[i+2]' <<< yo; echo "${a[*]}"
+declare -A m; k=key; read "m[$k]" <<< v; echo "${m[key]}"
+read 'a[0]' b <<< 'p q'; echo "${a[*]} b=$b"
+read 'a[-9]' <<< x; echo "neg $?"
+unset 'a[1]'; j='0+2'; test -v 'a[j]'; echo "v=$?"; test -v 'a[1]'; echo "h=$?"; test -v 'a[-1]'; echo "n=$?"
+==== STDOUT ====
+r=0 1 hi
+1 hi yo
+v
+p hi yo b=q
+neg 1
+v=0
+h=1
+n=0
+
+==== STDERR ====
+bash: line 5: a[-9]: bad array subscript
+

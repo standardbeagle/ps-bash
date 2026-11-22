@@ -176,60 +176,25 @@ public class GlobBraceExpansionDifferentialTests
     }
 
     // -----------------------------------------------------------------------
-    // 8. Letter range — {a..e}  [KNOWN BUG — Golden mode]
-    //
-    // Failure-surface: Axis 3 (non-numeric sequence). bash: "a b c d e".
-    // ps-bash: "a..e" (literal passthrough — parser only handles int.TryParse).
-    //
-    // Root cause: ParseBraceExpansion checks int.TryParse(startStr) and falls
-    // through to a comma-split tuple when both operands are letters.
-    // The tuple split produces ["a..e"] (no comma), so the original text is
-    // emitted verbatim by FormatBraceArray → @('a..e').
-    //
-    // This golden is the known-bad baseline; a future fix will switch this to
-    // EqualAsync once letter ranges are implemented.
+    // 8. Letter range — {a..e}: bash "a b c d e" (ParseBraceExpansion's single-letter range; it was the literal "a..e").
     // -----------------------------------------------------------------------
 
-    /// <summary>
-    /// Documents the known gap: letter brace ranges ({a..e}) are not expanded.
-    /// ps-bash emits the literal string "a..e" instead of "a b c d e".
-    /// Frozen as a golden so a regression does not silently change the output.
-    /// To fix: extend ParseBraceExpansion to handle char.TryParse and emit
-    /// a BracedRange with char Start/End, or expand inline as a string tuple.
-    /// </summary>
     [SkippableFact]
-    public async Task Differential_BraceRange_LetterRange_KnownGap()
+    public async Task Differential_BraceRange_LetterRange()
     {
-        // Fixed: ParseBraceExpansion now handles single-char alphabetic ranges.
         await AssertOracle.EqualAsync(
             "echo {a..e}",
             timeout: TimeSpan.FromSeconds(15));
     }
 
     // -----------------------------------------------------------------------
-    // 9. Nested braces — {a,b{1,2},c}  [KNOWN BUG — Golden mode]
-    //
-    // Failure-surface: Axis 12 (nested expansion). bash: "a b1 b2 c".
-    // ps-bash: "a,c} b{1,c} 2,c}" — naive comma split treats nested braces
-    // as flat items, producing garbage.
-    //
-    // Root cause: ParseBraceExpansion uses inner.Split(',') which does not
-    // account for nested brace groups. The split should only split on commas
-    // at depth 0.
+    // 9. Nested braces — {a,b{1,2},c}: bash "a b1 b2 c" (a depth-aware comma split and ExpandNestedBraces; a flat
+    // Split(',') gave "a,c} b{1,c} 2,c}").
     // -----------------------------------------------------------------------
 
-    /// <summary>
-    /// Documents the known gap: nested brace expansion is not supported.
-    /// ps-bash naively splits on all commas including those inside nested
-    /// brace groups, producing incorrect output.
-    /// Frozen as a golden so a regression does not silently change the output.
-    /// To fix: replace Split(',') with a depth-aware comma splitter that
-    /// recurses into nested braces.
-    /// </summary>
     [SkippableFact]
-    public async Task Differential_BraceTuple_NestedBraces_KnownGap()
+    public async Task Differential_BraceTuple_NestedBraces()
     {
-        // Fixed: ParseBraceExpansion uses depth-aware splitting and ExpandNestedBraces.
         await AssertOracle.EqualAsync(
             "echo {a,b{1,2},c}",
             timeout: TimeSpan.FromSeconds(15));

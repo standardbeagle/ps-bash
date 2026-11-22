@@ -105,7 +105,6 @@ missing. The fix is to start those programs through `ChildStdio` as the merged o
 Smaller differences:
 
 - Under `set -a`, re-assigning a previously unexported variable the value it already has does not export it.
-- `declare -x NAME=v` inside a function sets a global (declare with flags is not function-local yet).
 - `export -f`: functions are not passed to a nested shell.
 
 ## 8. One storage per variable
@@ -161,6 +160,49 @@ outside `BashVariableLookup` (internal `__Bash*` variables named through a const
 psm1 function does (`Get-Variable -Name $n`); every binding construct, at top level and in a function, emits no
 PowerShell variable for the bash scalar. Behavior: `Differential.Tests/VariableScopeChainTests` (loop kind × callee
 access × shadowing × the loop variable after the call, against bash).
+
+### 8.1 Function-local declarations and attributes
+
+**A local and everything `declare` attaches to it belong to the function's frame (`VarFrameStack`). The return puts
+back what the local hid.**
+
+- **Kinds.** `local -A m` / `local -a q`, and `declare` / `typeset` with those flags in a function, make a local of
+  that kind, empty or with a value, through `PsBuild.DeclareLocalArray`. Converting one kind to the other is refused
+  with `BUILTIN: q: cannot convert ...`, status 1, using the builtin word as invoked (`ShAssignment.Builtin`). A plain
+  `declare x` with no value only marks the name declared; it is unset until assigned, and `declare -p` shows
+  `declare -- x`. `declare -a e` makes the empty array. A function's `local x` with no value exists while unset:
+  `declare -p x` shows `declare -- x` in it and in the functions it calls (`VarFrameStack.HasLocal`). Under nounset,
+  `$x` for an array with no element 0 (`local -a x`, `a=(); a[1]=z`) is unbound.
+- **A callee's array write** reaches the nearest caller's local of that name, else the global (bash's dynamic
+  scope). The function's prologue lists its local arrays (`PsBuild.LocalArrays` → `VarFrameStack.LocalArrays`), and
+  every array write target goes through `PsBuild.ArraySlot` → `VarFrameStack.ArraySlot`. That covers element writes,
+  `+=`, `mapfile`, `read -a`, `unset 'a[i]'` and `printf -v 'a[i]'`. As an argument the slot is wrapped by
+  `PsBuild.TargetArg`.
+- **Attributes** (`-i`, `-l`, `-u`, `-r`, `-x`, `-n`) of a local are its frame's. `VarFrameStack.TakeAttributes`
+  saves the caller's attribute letters, its read-only state and its nameref target when a local of that name is
+  made. `Exit` restores them: the attributes come back, a read-only mark the function added is removed, and the outer
+  nameref returns. `-l` with `-u` cancels. `-g` keeps the attribute global. A plain `local g` over an outer nameref
+  shadows it: writes go to the local, not the target.
+- **Namerefs.** A literal target (`local -n r=t`) is recorded statically and at run time
+  (`BashShellState.SetNameref`). A run-time target (`local -n c=$1`) is recorded by `VarFrameStack.LocalNameref` in
+  whichever per-caller variant runs. Code that resolves names when it runs (the arithmetic cmdlet's reads and writes)
+  follows `BashShellState.ResolveNameref`: a chain of up to 16 hops, stopping at a cycle; `c[1]` resolves the base.
+  `local -n s=s` warns `circular name reference` with status 0, and an invalid target is refused with status 1.
+  The name itself is the frame's, as for a plain local, so after `local +n r` the plain r (holding the target name)
+  ends with the function.
+
+Known gaps:
+
+- A callee's `n=n+1` to a caller's `declare -i` local is not evaluated as arithmetic. The integer attribute is known
+  at compile time (`_intVars`) per function, not looked up when the callee runs.
+- An array named after a PowerShell-owned variable (`input`, `args`, …) in a function goes global from a callee.
+- A kind conversion with a value in the same function (`local -a a=(1); declare -A a=([k]=v)`) is not refused. bash
+  refuses it with status 1 and keeps the indexed array; only the no-value form is guarded.
+- Arrays live as PowerShell variables, which are case-insensitive on every OS, so `ta` and `tA` are one array
+  (`intentional-differences.md`).
+
+Behavior: `ShellLanguageGapDifferentialTests.FunctionLocal*`, `FunctionDeclare_*`, `FunctionNameref_*`,
+`Declare_NoValueIsDeclaredButUnset`, `UnsetLocals_ExistAndUnsetArraysAreUnbound`.
 
 ## 9. Shell-owned variables
 

@@ -190,10 +190,10 @@ public class NativeStdioBytesTests
         Assert.Contains(Dump(expectedLatin1), got);
     }
 
-    // Not the stdin bytes: each of these wrappers is broken in ps-bash for its own reason today (`time` and `bash -c`
-    // reject piped input, timeout resolves to Windows timeout.exe, `eval` runs its text without the converter). Kept as
-    // an executable list of the gaps; remove Skip as each is fixed.
-    [SkippableTheory(Skip = "known gap: wrapper commands do not forward stdin to a native program")]
+    // A wrapper that runs its command itself (timeout, time, eval, a nested bash) hands it the same bytes. Each was a
+    // gap once (`time` and `bash -c` rejected piped input, timeout resolved to Windows timeout.exe, `eval` ran its text
+    // without the converter).
+    [SkippableTheory]
     [InlineData("printf 'a\\nb\\n' | timeout 60 {R}", "a\nb\n")]
     [InlineData("printf 'a\\nb\\n' | time {R}", "a\nb\n")]
     [InlineData("eval '{R}' <<< hi", "hi\n")]

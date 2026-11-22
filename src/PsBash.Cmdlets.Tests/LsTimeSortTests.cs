@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Cmdlets.Tests;
@@ -12,6 +13,7 @@ public class LsTimeSortTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
     private readonly SharedPwshFixture _fixture;
     private readonly string _dir;
+    private readonly AccessTimePin _atimes = new();
 
     public LsTimeSortTests(SharedPwshFixture fixture)
     {
@@ -35,18 +37,19 @@ public class LsTimeSortTests : IDisposable, IClassFixture<SharedPwshFixture>
         var p = Path.Combine(_dir, name);
         File.WriteAllText(p, "x");
         File.SetLastWriteTime(p, mtime);
-        File.SetLastAccessTime(p, atime);
+        _atimes.Set(p, atime);
         File.SetLastWriteTime(p, mtime);
     }
 
-    private string[] Ls(string args)
+    // Through the pin: something reading the new files on Windows moves their access times (fleet s24m).
+    private string[] Ls(string args) => _atimes.Run(() =>
     {
         var pwsh = _fixture.AcquireFresh();
         var res = pwsh.AddScript($"Invoke-BashLs {args} '{_dir}'").Invoke();
         pwsh.Commands.Clear();
         Assert.Empty(pwsh.Streams.Error);
         return res.Select(o => o?.Properties["BashText"]?.Value as string ?? o?.ToString() ?? "").ToArray();
-    }
+    });
 
     private static string[] Names(IEnumerable<string> lines) => lines.Where(l => !l.StartsWith("total ")).Select(l => l.Split(' ').Last()).ToArray();
 

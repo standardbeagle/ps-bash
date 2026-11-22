@@ -1,0 +1,49 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 583
+stdout-length: 249
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+t() { printf '%s\n' "$1" > s.sh; bash s.sh; echo "rc=$?"; }
+x=1
+f() { local x; declare -p x; g; }; g() { declare -p x; }; f; declare -p x
+x=foo
+h() { local -n lr=x; local +n lr; echo "lr=$lr"; }; h; echo "x=$x lr=[${lr-unset}]"
+lr=outer; h; echo "lr=$lr"
+t 'set -u
+f() { local -a x; echo $x; }; f; echo "after $?"'
+t 'set -u
+f() { local -a x; echo "[$x]"; }; f; echo "after $?"'
+t 'set -u
+declare -a y; echo "[$y]"; echo no'
+t 'set -u
+a=(); a[1]=z; echo "[$a]"; echo no'
+t 'set -u
+b=(v); echo "[$b]"'
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+declare -- x
+declare -- x
+declare -- x="1"
+lr=x
+x=foo lr=[unset]
+lr=x
+lr=outer
+s.sh: line 2: x: unbound variable
+rc=1
+s.sh: line 2: x: unbound variable
+rc=1
+s.sh: line 2: y: unbound variable
+rc=1
+s.sh: line 2: a: unbound variable
+rc=1
+[v]
+rc=0
+rc=0
+
+==== STDERR ====
+

@@ -155,7 +155,10 @@ public static partial class PsEmitter
         var targets = NamerefCandidates(function, nameref.Index);
         if (targets.Count == 0 || _namerefs is null) return emitBody();
         string positional = $"$(if ({PsBuild.PositionalIsShells}) {{ $global:BashPositional[{nameref.Index - 1}] }} else {{ $args[{nameref.Index - 1}] }})";
-        var sb = new System.Text.StringBuilder("$__nrt = \"" + positional + "\"; ");
+        // The run-time nameref table learns the target too (whichever variant runs, the fallback included): code that resolves
+        // names when it runs, arithmetic above all (`(( c++ ))`), reaches it. REGRESSION: it read and wrote a variable named c.
+        var sb = new System.Text.StringBuilder("$__nrt = \"" + positional + "\"; [PsBash.Cmdlets.VarFrameStack]::LocalNameref("
+            + PsBuild.SingleQuote(nameref.Name) + ", $__nrt); ");
         for (int i = 0; i < targets.Count; i++)
         {
             _namerefs[nameref.Name] = targets[i];

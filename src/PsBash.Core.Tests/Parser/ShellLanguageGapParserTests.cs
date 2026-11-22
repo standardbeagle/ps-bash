@@ -152,7 +152,7 @@ public class ShellLanguageGapParserTests
     public void Transpile_FunctionBody_EntersAndExitsTheErrTrapScope()
     {
         string ps = Emit("trap 'echo e' ERR; f() { false; }; f");
-        Assert.Contains("[PsBash.Cmdlets.VarFrameStack]::EnterFunction($ExecutionContext.SessionState)", ps);
+        Assert.Contains("[PsBash.Cmdlets.VarFrameStack]::EnterFunction($ExecutionContext.SessionState, $MyInvocation.MyCommand.Name)", ps);
         Assert.Contains("[PsBash.Cmdlets.VarFrameStack]::ExitFunction($ExecutionContext.SessionState, $__bet)", ps);
     }
 

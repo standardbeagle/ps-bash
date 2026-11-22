@@ -1,0 +1,63 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 774
+stdout-length: 388
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+{
+printf 'read l; echo "got $l"; cat\n' > f
+source ./f <<< $'hello\nrest'
+. ./f <<EOF2
+a1
+a2
+EOF2
+. ./f < f
+x=0; . /dev/stdin <<< 'x=5'; echo "x=$x"
+source /dev/stdin <<< "echo hi1; echo \"src=\${BASH_SOURCE[0]}\""; . /dev/stdin <<EOF2
+echo hi2
+cd /nonexist_zz
+EOF2
+echo "echo hi3" | source /dev/stdin; source <(echo echo hi4); . /dev/fd/0 <<< "echo hi5"; echo "rc=$?"
+. /dev/null; echo "null=$?"
+exec 3<<< 'echo hi6'; . /dev/fd/3; echo "fd3=$?"
+printf 'x=1\ny=2' | { . /dev/stdin; echo "x=$x y=$y"; }
+source /dev/stdin <<< 'g() { cd /nonexist_g; }'; g
+. ./nofile < f; echo "missing=$?"
+. ./f < nofile; echo "noin=$?"
+printf 'set -- a b; echo "n=$#"' | . /dev/stdin; echo "outer n=$#"
+} 2>&1
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+got hello
+rest
+got a1
+a2
+got read l; echo "got $l"; cat
+x=5
+hi1
+src=/dev/stdin
+hi2
+/dev/stdin: line 2: cd: /nonexist_zz: No such file or directory
+hi3
+hi4
+hi5
+rc=0
+null=0
+hi6
+fd3=0
+x=1 y=2
+/dev/stdin: line 1: cd: /nonexist_g: No such file or directory
+t.sh: line 19: ./nofile: No such file or directory
+missing=1
+t.sh: line 20: nofile: No such file or directory
+noin=1
+n=2
+outer n=0
+rc=0
+
+==== STDERR ====
+

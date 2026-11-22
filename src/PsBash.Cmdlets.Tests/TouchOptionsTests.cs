@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Cmdlets.Tests;
@@ -17,6 +18,8 @@ public class TouchOptionsTests : IDisposable, IClassFixture<SharedPwshFixture>
 
     private readonly string _tmp;
     private readonly SharedPwshFixture _fixture;
+    // Access times the test sets; a check that reads them runs through it (something reading new files moves them).
+    private readonly AccessTimePin _atimes = new();
 
     public TouchOptionsTests(SharedPwshFixture fixture)
     {
@@ -40,7 +43,7 @@ public class TouchOptionsTests : IDisposable, IClassFixture<SharedPwshFixture>
     {
         File.WriteAllText(P(rel), "x\n");
         File.SetLastWriteTime(P(rel), Old);
-        File.SetLastAccessTime(P(rel), Old);
+        _atimes.Set(P(rel), Old);
         return P(rel);
     }
 
@@ -120,7 +123,7 @@ public class TouchOptionsTests : IDisposable, IClassFixture<SharedPwshFixture>
     public void T_OnlyAccessTime_WithDashA()
     {
         OldFile("f");
-        InTmp("Invoke-BashTouch -a -t 202401021530 f").AssertSuccess();
+        _atimes.Run(() => InTmp("Invoke-BashTouch -a -t 202401021530 f").AssertSuccess(), (P("f"), Stamp));
         AssertSame(Stamp, File.GetLastAccessTime(P("f")));
         AssertSame(Old, File.GetLastWriteTime(P("f")));
     }
@@ -143,7 +146,7 @@ public class TouchOptionsTests : IDisposable, IClassFixture<SharedPwshFixture>
     public void Time_AccessWords_ChangeOnlyTheAccessTime(string flag)
     {
         OldFile("tm");
-        InTmp($"Invoke-BashTouch {flag} -t 202401021530 tm").AssertSuccess();
+        _atimes.Run(() => InTmp($"Invoke-BashTouch {flag} -t 202401021530 tm").AssertSuccess(), (P("tm"), Stamp));
         AssertSame(Stamp, File.GetLastAccessTime(P("tm")));
         AssertSame(Old, File.GetLastWriteTime(P("tm")));
     }
@@ -155,7 +158,7 @@ public class TouchOptionsTests : IDisposable, IClassFixture<SharedPwshFixture>
     public void Time_ModifyWords_ChangeOnlyTheModificationTime(string flag)
     {
         OldFile("tm");
-        InTmp($"Invoke-BashTouch {flag} -t 202401021530 tm").AssertSuccess();
+        _atimes.Run(() => InTmp($"Invoke-BashTouch {flag} -t 202401021530 tm").AssertSuccess());
         AssertSame(Stamp, File.GetLastWriteTime(P("tm")));
         AssertSame(Old, File.GetLastAccessTime(P("tm")));
     }
@@ -164,7 +167,7 @@ public class TouchOptionsTests : IDisposable, IClassFixture<SharedPwshFixture>
     public void Time_CombinedWithDashM_ChangesBothTimes()
     {
         OldFile("tm");
-        InTmp("Invoke-BashTouch --time=atime '-m' -t 202401021530 tm").AssertSuccess();
+        _atimes.Run(() => InTmp("Invoke-BashTouch --time=atime '-m' -t 202401021530 tm").AssertSuccess(), (P("tm"), Stamp));
         AssertSame(Stamp, File.GetLastAccessTime(P("tm")));
         AssertSame(Stamp, File.GetLastWriteTime(P("tm")));
     }
@@ -173,7 +176,7 @@ public class TouchOptionsTests : IDisposable, IClassFixture<SharedPwshFixture>
     public void Time_CombinedWithDashA_StillOnlyAccess()
     {
         OldFile("tm");
-        InTmp("Invoke-BashTouch --time=atime -a -t 202401021530 tm").AssertSuccess();
+        _atimes.Run(() => InTmp("Invoke-BashTouch --time=atime -a -t 202401021530 tm").AssertSuccess(), (P("tm"), Stamp));
         AssertSame(Stamp, File.GetLastAccessTime(P("tm")));
         AssertSame(Old, File.GetLastWriteTime(P("tm")));
     }
@@ -217,10 +220,10 @@ public class TouchOptionsTests : IDisposable, IClassFixture<SharedPwshFixture>
         catch { return false; }
     }
 
-    private static void SetDirTimes(string dir, DateTime t)
+    private void SetDirTimes(string dir, DateTime t)
     {
         Directory.SetLastWriteTime(dir, t);
-        Directory.SetLastAccessTime(dir, t);
+        _atimes.Set(dir, t);
     }
 
     [SkippableFact]

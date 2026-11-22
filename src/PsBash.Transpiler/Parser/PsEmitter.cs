@@ -180,6 +180,45 @@ public static partial class PsEmitter
     [ThreadStatic]
     private static Dictionary<string, bool>? _caseVars;
 
+    /// <summary>The names the function being emitted has declared local so far: a later <c>local n</c> keeps their attributes.</summary>
+    [ThreadStatic]
+    private static HashSet<string>? _localAttrNames;
+
+    /// <summary>
+    /// Attributes a <c>declare -g</c> in a function set (letter i, l or u): they outlive the function, whose own local
+    /// attribute changes are undone when its body ends (EmitFunction).
+    /// </summary>
+    [ThreadStatic]
+    private static List<(string Name, char Letter)>? _globalAttrsInFunctions;
+
+    /// <summary>
+    /// A local declaration of <paramref name="name"/> in a function: the compile-time attribute sets follow it for the rest
+    /// of the body. Its own <paramref name="attrs"/> (letters of "ilu") apply; the first declaration in this function
+    /// without them hides the caller's (bash: <c>declare -i n; f() { local n; n=2+2; }</c> stores "2+2"), and a later one
+    /// keeps what the local has. EmitFunction puts the sets back when the body ends.
+    /// </summary>
+    private static void ScopeLocalAttributes(string name, string? attrs)
+    {
+        bool first = (_localAttrNames ??= new HashSet<string>(StringComparer.Ordinal)).Add(name);
+        if (_intVars is not null)
+        {
+            if (attrs?.Contains('i') == true) _intVars.Add(name);
+            else if (first) _intVars.Remove(name);
+        }
+        if (_caseVars is not null)
+        {
+            if (attrs?.Contains('l') == true) _caseVars[name] = false;
+            else if (attrs?.Contains('u') == true) _caseVars[name] = true;
+            else if (first) _caseVars.Remove(name);
+        }
+    }
+
+    /// <summary>Records an attribute a declaration outside the local path set while a function is being emitted (see <see cref="_globalAttrsInFunctions"/>).</summary>
+    private static void NoteGlobalAttr(string name, char letter)
+    {
+        if (_functionDepth > 0) (_globalAttrsInFunctions ??= new()).Add((name, letter));
+    }
+
     /// <summary>A <c>declare -l/-u</c> variable converts the value it is assigned.</summary>
     private static string CaseAttr(string name, string valueExpr) =>
         _caseVars is not null && _caseVars.TryGetValue(name, out bool upper)
@@ -188,6 +227,19 @@ public static partial class PsEmitter
     // Names a literal `readonly NAME` made read-only earlier in this script: a later plain assignment is refused.
     [ThreadStatic]
     private static HashSet<string>? _readonlyVars;
+
+    /// <summary>
+    /// A subshell body starts (<c>( )</c>, <c>$( )</c>, <c>&lt;( )</c>, <c>cmd &amp;</c>, a pipe stage): it gets a copy of
+    /// <see cref="_readonlyVars"/>, and the set returned here is put back when it ends, because a <c>readonly</c> made in a
+    /// subshell ends with it (bash forks; at run time BashShellState restores the readonly table). REGRESSION:
+    /// <c>( readonly ro=1 ); ro=2</c> refused the assignment.
+    /// </summary>
+    private static HashSet<string>? EnterSubshellReadonly()
+    {
+        var outer = _readonlyVars;
+        if (outer is not null) _readonlyVars = new HashSet<string>(outer, StringComparer.Ordinal);
+        return outer;
+    }
     /// <summary>True when the script text reads `$?` somewhere: only then does a bare assignment need to reset the status to 0.</summary>
     [ThreadStatic] private static bool _scriptReadsStatus;
     [ThreadStatic] private static bool _scriptReadsLastArg;
@@ -442,6 +494,14 @@ public static partial class PsEmitter
     private static string ShellExit(string status) =>
         ExitDecidedAtRunTime ? PsBuild.DynamicExit(status) : "exit " + status;
 
+    /// <summary>
+    /// A fatal shell error ends the shell with <paramref name="status"/>: inside <c>( )</c> only that subshell, as
+    /// <c>exit</c> does there. REGRESSION: a POSIX-mode `export() { :; }` in a subshell ran a bare <c>exit 2</c> and ended
+    /// the whole script.
+    /// </summary>
+    private static string EndShell(string status) =>
+        "$global:LASTEXITCODE = " + status + "; " + (_subshellDepth > 0 ? "return" : ShellExit("$global:LASTEXITCODE"));
+
     /// <summary>`readonly r=1; r=2`: the assignment is refused with status 1, which errexit acts on.</summary>
     private static bool WritesReadonly(Command.ShAssignment assign)
     {
@@ -600,11 +660,12 @@ public static partial class PsEmitter
         if (outerRedirectLine == 0 && _functionDepth == 0) _redirectLine = StatementEndLine(cmd);
         try
         {
-            string record = RecordLineFor(cmd, statement: true);
-            // or and case set bash's line to their own as they run their body (after their own redirects opened).
+            string record = RecordLineFor(cmd, statement: true, out int lateLine);
+            // `for` and `case` set bash's line to their own as they run their body (after their own redirects opened).
             if (cmd is Command.ForIn { Line: > 0 } or Command.Case { Line: > 0 })
                 _redirectLine = cmd is Command.ForIn f ? f.Line : ((Command.Case)cmd).Line;
-            return record + EmitStatementCoreBody(cmd);
+            string body = EmitStatementCoreBody(cmd);
+            return LateLineRecord(record, lateLine, body) + body;
         }
         finally { _redirectLine = outerRedirectLine; }
     }
@@ -643,7 +704,13 @@ public static partial class PsEmitter
     /// (<see cref="PsBuild.DiagnosticPrefix"/>). A trap action keeps the line of the command the trap fired for. Sets
     /// <see cref="_statementLine"/> (a static <c>eval</c>'s text counts its lines from it).
     /// </summary>
-    private static string RecordLineFor(Command cmd, bool statement)
+    private static string RecordLineFor(Command cmd, bool statement) => RecordLineFor(cmd, statement, out _);
+
+    /// <summary>
+    /// <see cref="RecordLineFor(Command, bool)"/>, and when it records nothing though the line could be recorded,
+    /// <paramref name="lateLine"/> = that line, for <see cref="LateLineRecord"/> to decide from the emitted text.
+    /// </summary>
+    private static string RecordLineFor(Command cmd, bool statement, out int lateLine)
     {
         _statementLine = (cmd is Command.Simple { Line: > 0 } ls ? SimpleCommandLine(ls) : FirstSimpleLine(cmd)) is > 0 and var line
             ? _lineBase + line
@@ -652,9 +719,35 @@ public static partial class PsEmitter
         // A loop that reaches past line 1 runs its line-1 statements again after later lines recorded theirs.
         if (statement && _functionDepth == 0 && _loopDepth == 0) _loopReachesPastLine1 = RunsPastLine1(cmd);
         bool lineAlreadyRecorded = _statementLine == 1 && _scriptRoot && _functionDepth == 0 && (_loopDepth == 0 || !_loopReachesPastLine1);
-        return (_bashLinenoMode || (!PsBuild.InTrapAction && !lineAlreadyRecorded && MayRaiseShellDiagnostic(cmd))) && _statementLine > 0
-            ? PsBuild.SetCallLine(_statementLine) : "";
+        bool eligible = !PsBuild.InTrapAction && !lineAlreadyRecorded && _statementLine > 0;
+        bool now = (_bashLinenoMode || (eligible && (MayRaiseShellDiagnostic(cmd) || CallsScriptFunction(cmd)))) && _statementLine > 0;
+        lateLine = !now && eligible ? _statementLine : 0;
+        return now ? PsBuild.SetCallLine(_statementLine) : "";
     }
+
+    /// <summary>
+    /// The line record for a statement whose up-front test (<see cref="MayRaiseShellDiagnostic"/>) recorded nothing:
+    /// recorded after all when its emitted text can report a diagnostic (<see cref="PsBuild.MayReportDiagnostic"/>).
+    /// The emitted text is the one source: every site that reports builds the prefix, discards the line or expands a
+    /// glob, so a new diagnostic needs no entry in a list here. REGRESSION: <c>ro=2</c>, <c>${x?m}</c>, <c>${!r}</c>,
+    /// <c>${x!}</c>, a failglob word and a posix special-builtin function on line 2 reported line 1.
+    /// </summary>
+    private static string LateLineRecord(string record, int lateLine, string emitted)
+        => record.Length == 0 && lateLine > 0 && PsBuild.MayReportDiagnostic(emitted) ? PsBuild.SetCallLine(lateLine) : record;
+
+    /// <summary>
+    /// The statement calls a function this text defines: the function's BASH_LINENO[0] (and <c>caller</c>) is the line it
+    /// was called from, read by code this text cannot see (a sourced library's <c>caller</c>, a run-time eval), so the line
+    /// is recorded even when this text reads no BASH_LINENO. REGRESSION: <c>f</c> on line 6 of a script reported the line
+    /// of the last statement that recorded one (the <c>. ./lib.sh</c> on line 3).
+    /// </summary>
+    private static bool CallsScriptFunction(Command cmd) => cmd switch
+    {
+        Command.Simple { Words.IsDefaultOrEmpty: false } s => _definedFunctions is { } fns && GetLiteralValue(s.Words[0]) is { } name && fns.Contains(name),
+        Command.Pipeline p => p.Commands.Any(CallsScriptFunction),
+        Command.AndOrList a => a.Commands.Any(CallsScriptFunction),
+        _ => false,
+    };
 
     /// <summary>
     /// A builtin that looks a name up and runs it: <c>command x</c> / <c>builtin x</c> (not <c>command -v x</c>, a query),
@@ -739,7 +832,8 @@ public static partial class PsEmitter
     /// anything);</item>
     /// <item>a builtin given an option word (it may be invalid: <c>pwd -Q</c>);</item>
     /// <item>a builtin that reports its own errors with the prefix (<see cref="s_selfReportingBuiltins"/>: <c>let</c>,
-    /// <c>.</c> / <c>source</c>, <c>cd</c>, <c>type</c>, ...);</item>
+    /// <c>.</c> / <c>source</c>, <c>cd</c>, <c>type</c>, ...; <see cref="NumericBuiltinMayReport"/>: <c>shift x</c>, <c>break</c>
+    /// with no loop);</item>
     /// <item>arithmetic, which may fail as it is evaluated (<c>((: 1/0 : division by 0</c>): <c>(( ... ))</c>, a word with
     /// <c>$(( ... ))</c>, a <c>[[ ... ]]</c> with a numeric operator.</item>
     /// </list>
@@ -751,11 +845,14 @@ public static partial class PsEmitter
         Command.Simple s when HasOpenableRedirect(s.Redirects) => true,
         Command.ArithCommand => true,
         // `[[ 1/0 -eq 1 ]]` (`[[: 1/0: division by 0`), `[ a -eq 1 ]` (`[: a: integer expression expected`).
-        Command.BoolExpr b => b.Inner.Any(w => GetLiteralValue(w) is "-eq" or "-ne" or "-lt" or "-le" or "-gt" or "-ge"
+        // `[ -v 'a[1/0]' ]`: an element operand's subscript is evaluated (`1/0: division by 0`, BashArrayElement.FailSubscript).
+        Command.BoolExpr b => b.Inner.Any(w => GetLiteralValue(w) is "-eq" or "-ne" or "-lt" or "-le" or "-gt" or "-ge" or "-v"
             || ContainsCommandSub(w.Parts) || ContainsArithSub(w.Parts)),
         Command.Simple { Words.IsDefaultOrEmpty: false } s => GetLiteralValue(s.Words[0]) is not { Length: > 0 } name
             || s_selfReportingBuiltins.Contains(name)
+            || NumericBuiltinMayReport(s, name)
             || LooksUpACommand(s, name)
+            || (s_elementOperandBuiltins.Contains(name) && s.Words.Skip(1).Any(IsElementOperand))
             || s.Words.Any(w => ContainsCommandSub(w.Parts) || ContainsArithSub(w.Parts))
             // A builtin given an option word may reject it (`pwd -Q`: `script.sh: line N: pwd: -Q: invalid option`).
             || (BuiltinOptions.EmittedBuiltins.TryGetValue(name, out var emittedSpec) && BuiltinOptions.FindInvalid(s.Words.Skip(1).Select(TryGetStaticArgValue).ToList(), emittedSpec.Letters, emittedSpec.ValueLetters) is not null)
@@ -773,6 +870,42 @@ public static partial class PsEmitter
     };
 
     /// <summary>
+    /// Builtins that evaluate an element operand's subscript at run time (<c>unset 'a[i]'</c>, <c>read "m[$k]"</c>,
+    /// <c>printf -v 'a[i]'</c>, <c>test -v 'a[i]'</c>) and report one that is not an expression as the shell's diagnostic
+    /// (<c>s.sh: line 3: 1/0: division by 0</c>, BashArrayElement.FailSubscript).
+    /// </summary>
+    private static readonly IReadOnlySet<string> s_elementOperandBuiltins = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "unset", "read", "printf", "test", "[",
+    };
+
+    /// <summary>A word whose static start is <c>NAME[</c>: <c>'a[1/0]'</c>, <c>"m[$k]"</c>, <c>a[i]</c>.</summary>
+    private static bool IsElementOperand(CompoundWord word)
+    {
+        var start = new StringBuilder();
+        foreach (var part in word.Parts)
+        {
+            if (part is WordPart.Literal l) start.Append(l.Value);
+            else if (part is WordPart.EscapedLiteral e) start.Append(e.Value);
+            else if (part is WordPart.SingleQuoted q) start.Append(q.Value);
+            else if (part is WordPart.DoubleQuoted d)
+            {
+                foreach (var inner in d.Parts)
+                {
+                    if (inner is WordPart.Literal il) start.Append(il.Value);
+                    else break;
+                }
+                break;
+            }
+            else break;
+        }
+        return s_elementOperandStart.IsMatch(start.ToString());
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex s_elementOperandStart =
+        new(@"^[A-Za-z_][A-Za-z0-9_]*\[", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
     /// Builtins that report their own errors as the shell's diagnostic (<c>s.sh: line 3: cd: /x: No such file or
     /// directory</c>, ShellDiagnostic): a statement that runs one records its line. docs/specs/error-handling.md
     /// "Diagnostic prefix".
@@ -780,8 +913,21 @@ public static partial class PsEmitter
     private static readonly IReadOnlySet<string> s_selfReportingBuiltins = new HashSet<string>(StringComparer.Ordinal)
     {
         "let", ".", "source", "cd", "type", "declare", "typeset", "local", "alias", "unalias", "wait", "command", "builtin", "help",
-        "[", "test",
+        "[", "test", "history",
     };
+
+    /// <summary>
+    /// <c>break</c> / <c>continue</c> / <c>return</c> / <c>exit</c> / <c>shift</c> that may report (<c>s.sh: line 3: shift: x:
+    /// numeric argument required</c>, <c>break: only meaningful in a loop</c>, <c>exit: too many arguments</c>): an operand
+    /// that is not a plain number, more than one operand, or a loop jump with no loop label in reach. A plain
+    /// <c>break</c> in a loop or <c>exit 1</c> records nothing, so hot loops stay cheap. REGRESSION: these named the
+    /// line of an earlier statement.
+    /// </summary>
+    private static bool NumericBuiltinMayReport(Command.Simple s, string name) =>
+        name is "break" or "continue" or "return" or "exit" or "shift"
+        && (s.Words.Length > 2
+            || (s.Words.Length == 2 && !(GetLiteralValue(s.Words[1]) is { } count && count.Length > 0 && count.All(char.IsAsciiDigit)))
+            || (name is "break" or "continue" && _loopLabels is not { Count: > 0 }));
 
     /// <summary>
     /// Builtins whose invalid-option diagnostic carries the shell prefix with the line (FileSystemHelpers.
@@ -1172,8 +1318,11 @@ public static partial class PsEmitter
     {
         var savedCaptureBody = _captureBody;
         _captureBody = body;
+        // A refused assignment in `$( ... )` / `<( ... )` drops the rest of the substitution's line, not the line the
+        // substitution is on (`u=$(r=2; echo x); echo "$?"` prints 1). REGRESSION: the outer `echo` was dropped too.
+        bool savedReadonlyViolation = _readonlyViolation;
         try { return EmitCapturedCore(body, scoped); }
-        finally { _captureBody = savedCaptureBody; }
+        finally { _captureBody = savedCaptureBody; _readonlyViolation = savedReadonlyViolation; }
     }
 
     /// <param name="body">The command substitution\'s body.</param>
@@ -1211,7 +1360,7 @@ public static partial class PsEmitter
         // A substitution body is a SUBSHELL: `exit N` inside `$( … )` / `<( … )` leaves only it
         // (`v=$(exit 3); echo $?` prints 3). Raise the depth so `exit` emits the scoped `return`;
         // PipelineHead / Invoke-ProcessSub supply the script block it returns from.
-        _subshellDepth++;
+        _subshellDepth++; var subRoOuter = EnterSubshellReadonly();
         // A body that is sure to get the subshell scope (PipelineHead) has the ERR trap put aside at run time
         // (ErrTrapInheritance), so `x=$(trap 'echo E' ERR; false)` fires its own trap; one that may run unscoped keeps
         // the static errtrace test.
@@ -1236,7 +1385,7 @@ public static partial class PsEmitter
         }
         finally
         {
-            _captureDepth--; _pipeStageFeedsInput = savedFeed; _subshellDepth--; PsBuild.ErrTrapNeedsErrtrace = savedErrTrapSub;
+            _captureDepth--; _pipeStageFeedsInput = savedFeed; _subshellDepth--; _readonlyVars = subRoOuter; PsBuild.ErrTrapNeedsErrtrace = savedErrTrapSub;
             _errexitMode = savedMode; _errexitExemptDepth = savedExempt; _lineBase = savedLineBase; _redirectLine = savedRedirectLine;
             _loopLabels = capOuterLabels; _loopBarrier = capOuterBarrier;
         }
@@ -1338,6 +1487,7 @@ public static partial class PsEmitter
         var priorCaseVars = _caseVars;
         _caseVars = new Dictionary<string, bool>(StringComparer.Ordinal);
         _intVars = new HashSet<string>(StringComparer.Ordinal);
+        _globalAttrsInFunctions = null;
         var priorReadsStatus = _scriptReadsStatus;
         var priorFinalAssignment = _finalAssignment;
         var priorReadsLastArg = _scriptReadsLastArg;
@@ -1661,10 +1811,11 @@ public static partial class PsEmitter
     {
         // A condition names its command like a statement does: `if nosuch; then` on line 3 reports line 3, and a loop's
         // condition is tested again after its body recorded later lines. Recorded first: a static eval in it counts from it.
-        string record = RecordLineFor(cond, statement: false);
+        string record = RecordLineFor(cond, statement: false, out int lateLine);
         // While DEBUG is on every condition is hoisted, so the action can run before it (each time it is tested).
         var text = WithErrexitExempt(() => !DebugActive ? Emit(cond)
             : cond is Command.AndOrList andOr ? EmitDebugAndOr(andOr) : WithDebugLead(cond, () => Emit(cond)));
+        record = LateLineRecord(record, lateLine, text);
         if (_errexitMode) text = PsBuild.ErrexitSuppressed(text);
         return record + PsBuild.HoistedCondition(text);
     }
@@ -1787,19 +1938,19 @@ public static partial class PsEmitter
                         System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
                     n = parsed;
                 else
-                    check = $"Write-Error {PsBuild.SingleQuote($"{keyword}: {countText}: numeric argument required")} -ErrorAction Continue; {NumericArgExit}; ";
+                    check = PsBuild.ShellDiagnosticLine(PsBuild.SingleQuote($"{keyword}: {countText}: numeric argument required")) + "; " + NumericArgExit + "; ";
             }
             else
             {
                 string argText = EmitWord(cmd.Words[1]);
-                check = $"$__psb_n = [string]({argText}); if ($__psb_n -notmatch '^[1-9][0-9]*$') {{ Write-Error ({PsBuild.SingleQuote(keyword + ": ")} + $__psb_n + ': numeric argument required') -ErrorAction Continue; {NumericArgExit} }}; ";
+                check = $"$__psb_n = [string]({argText}); if ($__psb_n -notmatch '^[1-9][0-9]*$') {{ {PsBuild.ShellDiagnosticLine(PsBuild.SingleQuote(keyword + ": ") + " + $__psb_n + ': numeric argument required'")}; {NumericArgExit} }}; ";
             }
         }
-        // `break 1 2 3`: bash reports "too many arguments", sets status 1 and leaves the innermost loop
-        // (a `continue` with too many arguments breaks too). Under `bash -c` the error discards the rest of the string.
+        // `break 1 2 3`: bash reports "too many arguments", status 1, and drops the rest of the line, the loop with it
+        // (PsBuild.UsageDiscard). Outside a line scope the innermost loop is left (a `continue` breaks too).
         if (cmd.Words.Length > 2)
         {
-            check = $"Write-Error {PsBuild.SingleQuote($"{keyword}: too many arguments")} -ErrorAction Continue; {PsBuild.SetStatus(1)}; {PsBuild.DashCInputDiscard}; ";
+            check = PsBuild.UsageDiscard($"{keyword}: too many arguments") + "; ";
             keyword = "break";
         }
         var target = labels[Math.Max(0, labels.Count - n)];
@@ -2711,8 +2862,9 @@ public static partial class PsEmitter
         // eval'd text runs in the calling function's scope: an array it assigns is the shell's own unless that function declared it `local`.
         _context == TranspileContext.Eval && _functionDepth == 0 && _subshellDepth == 0
             ? (EvalLocalNames?.Contains(name) == true ? "$" + name : "$global:" + name) :
+        // Not this function's local: a calling function's local array of the name, else the global (bash's dynamic scope).
         _functionDepth > 0 && _subshellDepth == 0 && _functionLocalNames is { } locals && !locals.Contains(name)
-            ? "$global:" + name
+            ? PsBuild.ArraySlot(name)
         // A lastpipe stage runs in the shell, but inside the stage's `& { }`: `... | while read l; do a+=("$l"); done`
         // must append to the shell's array, not to one local to that block.
         : _lastpipeStageDepth > 0 && _functionDepth == 0 && _subshellDepth == 0
@@ -2729,7 +2881,9 @@ public static partial class PsEmitter
         {
             var priorNode = _posixSplitNode;
             _posixSplitNode = func;
-            try { return PsBuild.PosixElse(PsBuild.SpecialBuiltinRedefined(func.Name), EmitFunction(func)); }
+            // A definition has no line of its own: bash names the line its body starts on (`t.sh: line 2: `export': ...`).
+            string defLine = FirstLineIn(func.Body) is > 0 and var bodyLine ? PsBuild.SetCallLine(_lineBase + bodyLine) : "";
+            try { return PsBuild.PosixElse(defLine + PsBuild.SpecialBuiltinRedefined(func.Name) + "; " + EndShell("2"), EmitFunction(func)); }
             finally { _posixSplitNode = priorNode; }
         }
         // `$foo-bar() { :; }` / `foo-$(x)() { :; }`: the name is not expanded, so it is not a valid identifier (status 1).
@@ -2749,6 +2903,12 @@ public static partial class PsEmitter
         _dynLocals = dynLocals;
         var priorFunctionLocals = _functionLocalNames;
         var priorFunctionReadonly = _readonlyVars is null ? null : new HashSet<string>(_readonlyVars, StringComparer.Ordinal);
+        // A local's attributes (`local -i n`, or a plain `local n` hiding the caller's -i) hold in this body only.
+        var priorIntVars = _intVars is null ? null : new HashSet<string>(_intVars, StringComparer.Ordinal);
+        var priorCaseVars = _caseVars is null ? null : new Dictionary<string, bool>(_caseVars, StringComparer.Ordinal);
+        var priorLocalAttrNames = _localAttrNames;
+        _localAttrNames = null;
+        var priorNamerefs = _namerefs is null ? null : new Dictionary<string, string>(_namerefs, StringComparer.Ordinal);
         _functionLocalNames = new HashSet<string>(localVars.Concat(dynLocals), StringComparer.Ordinal);
         var vars = _lexicalLocals ??= new HashSet<string>();
         var added = new List<string>();
@@ -2828,6 +2988,8 @@ public static partial class PsEmitter
             // defines lib.sh's functions for the whole shell too.
             sb.Append("function ").Append(_functionDepth > 0 || _context == TranspileContext.Eval ? "global:" : "").Append(func.Name);
             sb.Append(" {").Append(PsBuild.FunctionPrologue).Append(PsBuild.FunctionSourceMark(func.Source));
+            // Its locals that may be arrays (PowerShell variables of this scope): a callee's array write reaches them.
+            sb.Append(PsBuild.LocalArrays(localVars.Concat(dynLocals).Where(n => IsValidVarName(n) && !PowerShellOwnedVariables.Contains(n)).Distinct(StringComparer.Ordinal)));
             if (dynLocals.Count > 0)
             {
                 // Each name's saved slot starts $null in THIS call (a bare read would see the caller's).
@@ -2840,6 +3002,8 @@ public static partial class PsEmitter
             else
                 sb.Append(body);
             sb.Append(PsBuild.FunctionEpilogue).Append('}');
+            // Where it was defined: its BASH_SOURCE entry and diagnostic name while it runs (FunctionSources).
+            sb.Append("; ").Append(PsBuild.FunctionDefined(func.Name));
             return sb.ToString();
         }
         finally
@@ -2847,6 +3011,22 @@ public static partial class PsEmitter
             _dynLocals = priorDyn;
             _functionLocalNames = priorFunctionLocals;
             if (priorFunctionReadonly is not null) _readonlyVars = priorFunctionReadonly;
+            if (priorIntVars is not null && _intVars is not null) { _intVars.Clear(); _intVars.UnionWith(priorIntVars); }
+            if (priorCaseVars is not null && _caseVars is not null)
+            {
+                _caseVars.Clear();
+                foreach (var kv in priorCaseVars) _caseVars[kv.Key] = kv.Value;
+            }
+            if (_globalAttrsInFunctions is not null)
+                foreach (var (gName, gLetter) in _globalAttrsInFunctions)
+                    if (gLetter == 'i') _intVars?.Add(gName);
+                    else if (_caseVars is not null) _caseVars[gName] = gLetter == 'u';
+            _localAttrNames = priorLocalAttrNames;
+            if (priorNamerefs is not null && _namerefs is not null)
+            {
+                _namerefs.Clear();
+                foreach (var kv in priorNamerefs) _namerefs[kv.Key] = kv.Value;
+            }
             _loopLabels = outerLabels;
             _loopBarrier = outerBarrier;
             foreach (var v in added) vars.Remove(v);
@@ -2957,15 +3137,15 @@ public static partial class PsEmitter
         // stopped and the `echo $?` never ran. Emit the body with the subshell
         // depth raised so `exit N` becomes a SCOPED `$LASTEXITCODE = N; return`,
         // and give that `return` a script block to return from.
-        _subshellDepth++;
+        _subshellDepth++; var subRoOuter = EnterSubshellReadonly(); bool subRoViolation = _readonlyViolation; // `( r=2 ); echo` goes on
         var outerLabels = _loopLabels; var outerBarrier = _loopBarrier;
-        _loopLabels = null; _loopBarrier = LoopBarrierKind.Warn;
+        _loopLabels = null; _loopBarrier = subshell.KeepsLoopLevel ? outerBarrier : LoopBarrierKind.Warn;
         // The ERR trap is put aside at run time (BashShellState.Save -> ErrTrapInheritance): `( trap 'echo err' ERR; false )`
         // fires the subshell's own trap, which a static errtrace test here kept from running.
         string body; bool savedErrTrapSh = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = false;
         // `( … ) < file` gives the body its own stdin (a scope); otherwise it inherits the enclosing one.
         try { body = EmitCompoundBody(subshell.Redirects, () => EmitBody(subshell.Body)); }
-        finally { _subshellDepth--; PsBuild.ErrTrapNeedsErrtrace = savedErrTrapSh; _loopLabels = outerLabels; _loopBarrier = outerBarrier; }
+        finally { _subshellDepth--; _readonlyVars = subRoOuter; _readonlyViolation = subRoViolation; PsBuild.ErrTrapNeedsErrtrace = savedErrTrapSh; _loopLabels = outerLabels; _loopBarrier = outerBarrier; }
 
         // One subshell scope (PsBuild.ShellStateScope): a child PS scope plus save/restore of the
         // shell state a scope does not isolate, so nothing the body changes — `set -e`, variables,
@@ -3140,7 +3320,7 @@ public static partial class PsEmitter
     {
         // The job is a subshell (as EmitSubshell): `exit` and an errexit failure leave only the job, and the ERR trap
         // fires in it only under errtrace. `{ false; echo x; } &` under set -e printed x and the job's status was 0.
-        _subshellDepth++;
+        _subshellDepth++; var subRoOuter = EnterSubshellReadonly();
         var outerLabels = _loopLabels; var outerBarrier = _loopBarrier;
         _loopLabels = null; _loopBarrier = LoopBarrierKind.Warn;
         bool savedErrTrap = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = true;
@@ -3153,7 +3333,7 @@ public static partial class PsEmitter
         string inner;
         HashSet<string> captured;
         try { inner = Emit(bg.Inner); captured = _jobCaptureUsed; }
-        finally { _subshellDepth--; PsBuild.ErrTrapNeedsErrtrace = savedErrTrap; _loopLabels = outerLabels; _loopBarrier = outerBarrier; _jobCapture = outerCapture; _jobCaptureUsed = outerCaptureUsed; }
+        finally { _subshellDepth--; _readonlyVars = subRoOuter; PsBuild.ErrTrapNeedsErrtrace = savedErrTrap; _loopLabels = outerLabels; _loopBarrier = outerBarrier; _jobCapture = outerCapture; _jobCaptureUsed = outerCaptureUsed; }
         // A job inside a job passes on the copy the outer job holds, which the outer job must then be handed too.
         if (outerCapture is not null)
             foreach (var v in captured)
@@ -3631,7 +3811,7 @@ public static partial class PsEmitter
     /// </summary>
     private static string WithConditionLine(Command cond, string expr)
     {
-        string record = RecordLineFor(cond, statement: false);
+        string record = LateLineRecord(RecordLineFor(cond, statement: false, out int lateLine), lateLine, expr);
         return record.Length == 0 ? expr : PsBuild.Subexpr(record + expr);
     }
 
@@ -4466,6 +4646,7 @@ public static partial class PsEmitter
         if (text.Contains(": not a valid identifier'", StringComparison.Ordinal)) return text; // and a write through `ref -> a[0]`
         if (text.Contains(PsBuild.BadArithSubscriptMessage + "'", StringComparison.Ordinal)) return text; // the guard sets it either way
         if (NeedsArrayKindGuard(cmd)) return text; // each declaration sets its own status (1 when the kind change is refused)
+        if (text.Contains(PsBuild.DeclareLocalArrayMark, StringComparison.Ordinal)) return text; // `local -A m`: so does this
         // `x=$((1/0))`: the failed expansion keeps status 1, and its mark must not abandon a LATER command.
         if (text.Contains("Invoke-BashArith", StringComparison.Ordinal) || text.Contains(PsBuild.ExpansionErrorFunction, StringComparison.Ordinal))
             return text + "; " + PsBuild.ClearExpansionFailed;
@@ -4514,7 +4695,7 @@ public static partial class PsEmitter
                 sb.Append("; ");
                 string one = EmitShAssignmentCore(cmd with { Pairs = [pair] });
                 sb.Append(IsValidVarName(pair.Name) && ResolveNameref(pair.Name) == pair.Name
-                    ? PsBuild.ArrayKindGuard(pair.Name, cmd.IsAssoc, one)
+                    ? PsBuild.ArrayKindGuard(cmd.IsLocal ? "local" : "declare", pair.Name, cmd.IsAssoc, one)
                     : one);
             }
             return sb.ToString();
@@ -4553,6 +4734,12 @@ public static partial class PsEmitter
                 sb.Append("; ");
 
             var pair = cmd.Pairs[i];
+            if (cmd.IsLocal && _functionDepth > 0 && pair.ArrayValue is null && IsValidVarName(pair.Name))
+                ScopeLocalAttributes(pair.Name, cmd.Attrs);
+            // `declare -n g=y; f() { local g=9; }`: f's g is a plain variable from here on, not the nameref (EmitFunction puts
+            // the outer one back; at run time VarFrameStack.Local takes the nameref aside). REGRESSION: `g=9` wrote y.
+            if (cmd.IsLocal && !cmd.IsNameref && _functionDepth > 0 && IsValidVarName(pair.Name) && _namerefs?.ContainsKey(pair.Name) == true)
+                _namerefs.Remove(pair.Name);
 
             // `export a[7]=8` / `readonly a[7]=8`: these take no subscript (`local`/`declare` do).
             if ((cmd.IsExport || cmd.IsReadonly) && !cmd.IsLocal && !cmd.IsDeclare && pair.Name.Contains('['))
@@ -4620,6 +4807,37 @@ public static partial class PsEmitter
                 continue;
             }
 
+            // `local -n r=t` / `declare -n r='a[2]'` in a function: a nameref local to it (EmitFunction restores the set). In a
+            // function bash only warns about `local -n s=s` (status 0); a target that is no name is refused (status 1).
+            // REGRESSION: a literal target was never recorded, so `r=6` wrote r, not t.
+            if (cmd.IsLocal && cmd.IsNameref && _functionDepth > 0 && _namerefs is not null
+                && pair.ArrayValue is null && pair.Op == AssignOp.Equal && IsValidVarName(pair.Name)
+                && pair.Value is not null && ExtractSingleQuotedOrLiteralValue(pair.Value) is { } localTarget)
+            {
+                string builtin = cmd.Builtin ?? "local";
+                if (localTarget == pair.Name)
+                    sb.Append(PsBuild.ShellDiagnosticLine(PsBuild.SingleQuote($"{builtin}: warning: {pair.Name}: circular name reference")))
+                      .Append("; ").Append(PsBuild.SetStatus(0));
+                else if (!IsValidVarName(localTarget) && !IsNamerefElementTarget(localTarget))
+                {
+                    sb.Append(PsBuild.ShellDiagnosticLine(PsBuild.SingleQuote($"{builtin}: `{localTarget}': invalid variable name for name reference")))
+                      .Append("; ").Append(PsBuild.SetStatus(1));
+                    localRefused = true;
+                }
+                else
+                {
+                    _namerefs[pair.Name] = localTarget;
+                    // The name is the frame's own, as for a plain local: the return restores the caller's value, also after
+                    // `local +n r` turned r into a plain variable holding the target name.
+                    // REGRESSION: `f() { local -n r=x; local +n r; }; f` left a global r=x.
+                    if (_dynLocals?.Contains(pair.Name) == true)
+                        sb.Append($"if ($null -eq $__lsd_{pair.Name}) {{ $__lsd_{pair.Name} = @{{ v = $env:{pair.Name} }} }}; [void]")
+                          .Append(PsBuild.DeclareLocal(pair.Name)).Append("; ");
+                    sb.Append("[PsBash.Cmdlets.VarFrameStack]::LocalAttributes(").Append(PsBuild.SingleQuote(pair.Name)).Append("); ")
+                      .Append(NamerefMark(pair.Name, localTarget)).Append("; ").Append(PsBuild.SetStatus(0));
+                }
+                continue;
+            }
             // `local -n r=$1` in a variant where r is already resolved to its target: nothing to declare.
             if (cmd.IsLocal && cmd.IsNameref && _namerefs is not null && _namerefs.ContainsKey(pair.Name))
             {
@@ -4639,8 +4857,8 @@ public static partial class PsEmitter
             // Mutually recursive namerefs (`ref1 -> ref2 -> ref1`) are only detected when written through.
             if (!cmd.IsLocal && !cmd.IsExport && _namerefs is { Count: > 0 } && _namerefs.ContainsKey(pair.Name) && _namerefs.ContainsKey(ResolveNameref(pair.Name)))
             {
-                sb.Append("Write-Error ").Append(PsBuild.SingleQuote($"ps-bash: {pair.Name}: circular name reference"))
-                  .Append(" -ErrorAction Continue; ").Append(PsBuild.SetStatus(1));
+                _readonlyViolation = true;   // a failed assignment: bash drops the rest of the line
+                sb.Append(PsBuild.AssignmentError($"warning: {pair.Name}: circular name reference"));
                 continue;
             }
             // `a[]=42`: an empty subscript is bash's 'bad array subscript' (status 1, and like a readonly write the
@@ -4648,8 +4866,7 @@ public static partial class PsEmitter
             if (pair.Name.EndsWith("[]", StringComparison.Ordinal) && pair.Name.IndexOf('[') == pair.Name.Length - 2)
             {
                 _readonlyViolation = true;
-                sb.Append("Write-Error ").Append(PsBuild.SingleQuote($"ps-bash: {pair.Name}: bad array subscript"))
-                  .Append(" -ErrorAction Continue; ").Append(PsBuild.SetStatus(1));
+                sb.Append(PsBuild.AssignmentError($"{pair.Name}: bad array subscript"));
                 continue;
             }
             // `typeset -n ref='a[0]'` (or 'a[@]'): `ref[1]=x` / `ref=(x y)` would make the ELEMENT an array; bash refuses
@@ -4659,8 +4876,7 @@ public static partial class PsEmitter
                 && ResolveNameref(nrWriteBase) is var nrWriteTarget && nrWriteTarget != nrWriteBase && nrWriteTarget.Contains('['))
             {
                 _readonlyViolation = true;
-                sb.Append("Write-Error ").Append(PsBuild.SingleQuote($"ps-bash: `{nrWriteTarget}': not a valid identifier"))
-                  .Append(" -ErrorAction Continue; ").Append(PsBuild.SetStatus(1));
+                sb.Append(PsBuild.AssignmentError($"`{nrWriteTarget}': not a valid identifier"));
                 continue;
             }
             string roName = ResolveNameref(pair.Name); // a write through a nameref is a write to its target
@@ -4668,11 +4884,20 @@ public static partial class PsEmitter
             if (!cmd.IsLocal && !cmd.IsExport && _readonlyVars?.Contains(roBase) == true)
             {
                 _readonlyViolation = true;
-                sb.Append("Write-Error ").Append(PsBuild.SingleQuote($"ps-bash: {roBase}: readonly variable"))
-                  .Append(" -ErrorAction Continue; ").Append(PsBuild.SetStatus(1));
+                sb.Append(PsBuild.AssignmentError($"{roBase}: readonly variable"));
                 continue;
             }
 
+            // `local -A m` / `local -a q` with no value, in a function: a local array of that kind (PsBuild.DeclareLocalArray).
+            // REGRESSION: it was a scalar local, so `m[x]=1` evaluated x as arithmetic and wrote m[0].
+            if (cmd.IsLocal && (cmd.IsAssoc || cmd.IsIndexed) && _functionDepth > 0 && pair.ArrayValue is null && pair.Value is null
+                && IsValidVarName(pair.Name) && ResolveNameref(pair.Name) == pair.Name)
+            {
+                if (cmd.IsAssoc) _assocVars?.Add(pair.Name);
+                _arrayVars?.Add(pair.Name);
+                sb.Append(PsBuild.DeclareLocalArray(cmd.Builtin ?? "local", pair.Name, cmd.IsAssoc));
+                continue;
+            }
             if (cmd.IsLocal && pair.ArrayValue is null && !pair.Name.Contains('[')
                 && (_dynLocals?.Contains(pair.Name) == true
                     // eval text built at run time declares `local`s of the CALLING function, which cannot know them: they live in the shell variable.
@@ -4699,6 +4924,10 @@ public static partial class PsEmitter
                             ? "$__psbashLocBase + (" + localAssigned + ")"
                             : CaseAttr(pair.Name, localAssigned));
                 }
+                // `local -i n`: declare -p shows the letters (VarFrameStack puts the caller's back at the return).
+                if (cmd.Attrs is { } localAttrs)
+                    foreach (char letter in localAttrs)
+                        sb.Append("; [PsBash.Cmdlets.BashShellState]::MarkAttribute(").Append(PsBuild.SingleQuote(pair.Name)).Append(", '").Append(letter).Append("')");
                 continue;
             }
 
@@ -4743,7 +4972,8 @@ public static partial class PsEmitter
                     continue;
                 }
                 // `declare -A a; a=(k v k2 v2)` (bash 5.1+): bare words are key/value pairs, a lone last key gets "".
-                bool wordsArePairs = pair.Op == AssignOp.Equal && _assocVars?.Contains(pair.Name) == true;
+                // An explicit `-a` (`local -a m=(1 2)`) is indexed whatever else m is declared as.
+                bool wordsArePairs = pair.Op == AssignOp.Equal && !cmd.IsIndexed && _assocVars?.Contains(pair.Name) == true;
                 // eval'd text cannot see the caller's `declare -A a`: the run time picks pairs or list by a's kind.
                 bool kindAtRunTime = pair.Op == AssignOp.Equal && !wordsArePairs && !cmd.IsAssoc && !cmd.IsDeclare
                     && _context == TranspileContext.Eval;
@@ -4778,6 +5008,8 @@ public static partial class PsEmitter
                 continue;
             }
 
+            // The element as written (`b[$i]`, `ref[-9]`): a bad subscript is reported under this name.
+            string writtenName = pair.Name;
             // A nameref to an array element (`declare -n ref='a[2]'; ref=X`) writes that element.
             if (!pair.Name.Contains('[') && ResolveNameref(pair.Name) is var elemTarget && IsNamerefElementTarget(elemTarget))
                 pair = pair with { Name = elemTarget };
@@ -4795,7 +5027,7 @@ public static partial class PsEmitter
                 {
                     _arrayVars?.Add(baseName); // a bare `$a` now reads `${a[0]}`
                     // `c=s; c[1]=t`: a scalar becomes element 0 of the array.
-                    if (target.StartsWith('$') && _assocVars?.Contains(baseName) != true && EnvShadowName(baseName) is null
+                    if ((target.StartsWith('$') || PsBuild.IsArraySlot(target)) && _assocVars?.Contains(baseName) != true && EnvShadowName(baseName) is null
                         && PsBuild.TryMapSpecialVar(baseName, braced: false, false) is null)
                         sb.Append(PsBuild.SeedArrayFromScalar(target, "$env:" + baseName)).Append("; ");
                 }
@@ -4808,9 +5040,10 @@ public static partial class PsEmitter
                       .Append(target).Append(" -isnot [PsBash.Cmdlets.BashSparseArray])) { $__psbK = [string](Invoke-BashArith $__psbK) }; ");
                     key = "$__psbK";
                 }
-                sb.Append(target).Append(" = Set-BashElement ").Append(target).Append(' ').Append(key).Append(' ')
+                sb.Append(target).Append(" = Set-BashElement ").Append(PsBuild.TargetArg(target)).Append(' ').Append(key).Append(' ')
                   .Append(EmitAssignmentValue(pair.Value));
                 if (pair.Op == AssignOp.PlusEqual) sb.Append(" -Append");
+                sb.Append(" -Written ").Append(PsBuild.SingleQuote(writtenName));
                 continue;
             }
 
@@ -4887,8 +5120,13 @@ public static partial class PsEmitter
         if (cmd.IsReadonly)
             foreach (var pair in cmd.Pairs)
             {
-                if (cmd.IsLocal && pair.ArrayValue is null) continue; // `local -r x=1` is refused statically, in its function
                 string roPair = pair.Name.Contains('[') ? pair.Name[..pair.Name.IndexOf('[')] : pair.Name;
+                // `local -r x=1`: writes are refused statically in its function; the run-time mark (declare -p: `-r`) is the
+                // local's, so its frame takes it back at the return. REGRESSION: a local scalar was never marked, and a local
+                // array's mark outlived the function.
+                if (cmd.IsLocal && _functionDepth > 0)
+                    sb.Append("; [PsBash.Cmdlets.VarFrameStack]::LocalAttributes(").Append(PsBuild.SingleQuote(roPair)).Append(")");
+                else if (cmd.IsLocal) continue;
                 sb.Append("; [PsBash.Cmdlets.BashShellState]::MarkReadonly(").Append(PsBuild.SingleQuote(roPair)).Append(")");
                 if (!cmd.IsLocal) _readonlyVars?.Add(roPair);
                 if (!cmd.IsLocal && _functionDepth > 0) _runtimeReadonly = true;
@@ -5067,7 +5305,7 @@ public static partial class PsEmitter
             sbOut.Append(EmitSimple(cmd with { Words = [cmd.Words[0], .. declFlags, new CompoundWord([new WordPart.Literal(baseName)])], Redirects = [] }))
                  .Append("; ");
             if (readonlyFlag)
-                sbOut.Append("Write-Error ").Append(PsBuild.SingleQuote($"ps-bash: {baseName}: readonly variable")).Append(" -ErrorAction Continue; ");
+                sbOut.Append(PsBuild.ShellDiagnosticLine(PsBuild.SingleQuote($"{baseName}: readonly variable"))).Append("; ");
             else
                 sbOut.Append(EmitStatement(new Command.ShAssignment([new Assignment(elemName, op, value)]))).Append("; ");
         }
@@ -5423,11 +5661,23 @@ public static partial class PsEmitter
             return false;
         }
 
-        // [1]=v cmd: an element is not an environment binding (it cannot be exported), so it is not wrapped around the command.
+        // `a[1]=v cmd`: an element is not an environment binding (it cannot be exported), so it is not wrapped around the command.
         if (cmd.EnvPairs.Any(p => p.Name.Contains('[')))
         {
             var kept = cmd.EnvPairs.RemoveAll(p => p.Name.Contains('['));
             result = EmitSimple(cmd with { EnvPairs = kept });
+            return true;
+        }
+
+        // `readonly r=1; r=3 cmd`: bash reports the binding and runs the command without it (its status is the command's;
+        // the line goes on). REGRESSION: nothing was reported.
+        if (!cmd.Words.IsDefaultOrEmpty && _readonlyVars is { Count: > 0 } && cmd.EnvPairs.Any(p => _readonlyVars.Contains(p.Name)))
+        {
+            var refused = cmd.EnvPairs.Where(p => _readonlyVars.Contains(p.Name)).ToList();
+            var sbRo = new StringBuilder();
+            foreach (var pair in refused)
+                sbRo.Append(PsBuild.ShellDiagnosticLine(PsBuild.SingleQuote($"{pair.Name}: readonly variable"))).Append("; ");
+            result = sbRo.Append(EmitSimple(cmd with { EnvPairs = cmd.EnvPairs.RemoveAll(p => refused.Contains(p)) })).ToString();
             return true;
         }
 
@@ -5515,7 +5765,10 @@ public static partial class PsEmitter
             result = EmitSimple(innerCmd);
             return true;
         }
-        if (cmd.EnvPairs.IsEmpty && GetLiteralValue(cmd.Words[0]) == "eval")
+        // eval / source / . run text in this shell whose commands read the here-document: a stdin scope around them
+        // (`. ./f <<< "$in"` with `read l` in f; `. /dev/stdin <<< "$code"` runs it). REGRESSION: source was piped
+        // into a bare `. $(...)`, so the file's commands read nothing and /dev/stdin was empty.
+        if (cmd.EnvPairs.IsEmpty && GetLiteralValue(cmd.Words[0]) is "eval" or "source" or ".")
         {
             result = $"{EmitHereDocLiteral(cmd.HereDocs[^1])} | Emit-BashLine | {EmitEvalWithStdin(() => EmitSimple(innerCmd), dotSource: true)}";
             return true;
@@ -5539,6 +5792,10 @@ public static partial class PsEmitter
     /// </summary>
     private static string EmitHereDocLiteral(HereDoc hereDoc)
     {
+        // A here-string is a word (bash 5.2: tilde, parameter, command and arithmetic expansion, quote removal - no
+        // splitting, no globbing), expanded as an assignment value is, plus its newline (HereDoc.Word).
+        if (hereDoc.Word is { } word)
+            return PsBuild.HereStringValue(EmitAssignmentValue(word));
         // <<-EOF tab stripping already happened in the parser
         // (BashParser.CollectHereDocBodies), so Body is exactly what bash stores.
         string body = hereDoc.Body;
@@ -5674,7 +5931,12 @@ public static partial class PsEmitter
         // terminate the last line (`wc -c < f` was one byte high). A mapped consumer takes those records
         // as-is; a native / unmapped consumer needs their TEXT (the binder would format a record object).
         bool mappedConsumer = TryEmitMappedCommand(innerCmd, out _);
-        result = mappedConsumer
+        // `. ./f < in`: the sourced commands read the file, in this shell - a stdin scope, as for a here-document
+        // (EmitEvalWithStdin). REGRESSION: piped into a bare `. $(...)`, `read` in f read nothing.
+        bool sourcesText = innerCmd.EnvPairs.IsDefaultOrEmpty && GetLiteralValue(innerCmd.Words[0]) is "source" or ".";
+        result = sourcesText
+            ? $"Invoke-BashCat {target} -RawStdinBytes | {EmitEvalWithStdin(() => EmitSimple(innerCmd), dotSource: true)}"
+            : mappedConsumer
             ? $"Invoke-BashCat {target} -RawStdinBytes | {inner}"
             : $"Invoke-BashCat {target} -RawStdinBytes | {NativeStdinFeedStage(innerCmd)}{inner}";
         if (guarded)
@@ -5720,6 +5982,8 @@ public static partial class PsEmitter
             {
                 if (lit.Contains('x')) attrs.Add('x');
                 if (lit.Contains('i') && _declarePrintMode) attrs.Add('i');
+                // `declare -l s`: declare -p shows the case letter (none when -l and -u cancel).
+                if (_declarePrintMode && DeclareCaseFlag(cmd) is not '\0' and var caseLetter) attrs.Add(caseLetter);
             }
             if (lit is { Length: > 1 } && lit[0] == '-' && lit.AsSpan(1).IndexOfAnyExcept("pfF") >= 0 && lit.Contains('r'))
             {
@@ -5750,6 +6014,31 @@ public static partial class PsEmitter
         if (plusX) mark.Append("; ").Append(PsBuild.MarkUnexported(names.Where(IsValidVarName)));
         result = core + mark;
         return true;
+    }
+
+    /// <summary>
+    /// A <c>declare</c> option word sets attribute <paramref name="letter"/>: alone (<c>-i</c>) or combined (<c>-gi</c>,
+    /// <c>-ix</c>). REGRESSION: only the bare word counted, so <c>declare -gi n=2+2</c> stored "2+2".
+    /// </summary>
+    private static bool HasDeclareFlag(Command.Simple cmd, char letter)
+    {
+        foreach (var w in cmd.Words.Skip(1))
+            if (GetLiteralValue(w) is { Length: > 1 } f && f[0] == '-' && f[1] != '-' && f.AsSpan(1).IndexOfAnyExcept("aAfFgilnprtux") < 0 && f.Contains(letter))
+                return true;
+        return false;
+    }
+
+    /// <summary>The case attribute a <c>declare</c> sets: 'l' or 'u', '\0' for none. Both in one declaration cancel (bash: <c>declare -lu v=Mx</c> keeps "Mx").</summary>
+    private static char DeclareCaseFlag(Command.Simple cmd)
+    {
+        bool lower = false, upper = false;
+        foreach (var w in cmd.Words.Skip(1))
+            if (GetLiteralValue(w) is { Length: > 1 } f && f[0] == '-' && f[1] != '-' && f.AsSpan(1).IndexOfAnyExcept("aAfFgilnprtux") < 0)
+            {
+                lower |= f.Contains('l');
+                upper |= f.Contains('u');
+            }
+        return lower == upper ? '\0' : lower ? 'l' : 'u';
     }
 
     private static bool TryEmitDeclareCore(Command.Simple cmd, out string result)
@@ -5820,7 +6109,18 @@ public static partial class PsEmitter
             && _readonlyVars.Contains(assigned))
         {
             // A builtin's failure: unlike `r=2`, the rest of the line still runs (no _readonlyViolation).
-            result = "Write-Error " + PsBuild.SingleQuote($"ps-bash: {name}: {assigned}: readonly variable") + " -ErrorAction Continue; " + PsBuild.SetStatus(1);
+            result = PsBuild.ShellDiagnosticLine(PsBuild.SingleQuote($"{name}: {assigned}: readonly variable")) + "; " + PsBuild.SetStatus(1);
+            return true;
+        }
+        // `declare -n r=r`: a nameref to itself; bash refuses it (status 1) and declares nothing. REGRESSION: it was declared
+        // silently, status 0.
+        if (isNameref && !isPrint
+            && (exprName is not null && exprValue is not null ? (exprName, ExtractSingleQuotedOrLiteralValue(exprValue))
+                : varName is not null && varName.IndexOf('=') is var selfEq and > 0 ? (varName[..selfEq], varName[(selfEq + 1)..]) : (null, null))
+               is (string selfName, string selfTarget)
+            && selfName == selfTarget && IsValidVarName(selfName))
+        {
+            result = PsBuild.ShellDiagnosticLine(PsBuild.SingleQuote($"{name}: {selfName}: nameref variable self references not allowed")) + "; " + PsBuild.SetStatus(1);
             return true;
         }
         // `typeset -n ref='@'` / `declare -n r=1`: the target is no variable name; bash refuses it (status 1) and declares nothing.
@@ -5829,7 +6129,7 @@ public static partial class PsEmitter
                 : varName is not null && varName.IndexOf('=') is var nrEq and > 0 && IsValidVarName(varName[..nrEq]) ? varName[(nrEq + 1)..] : null) is { } nrTarget
             && !IsValidVarName(nrTarget) && !IsNamerefElementTarget(nrTarget))
         {
-            result = "Write-Error " + PsBuild.SingleQuote($"ps-bash: {name}: `{nrTarget}': invalid variable name for name reference") + " -ErrorAction Continue; " + PsBuild.SetStatus(1);
+            result = PsBuild.ShellDiagnosticLine(PsBuild.SingleQuote($"{name}: `{nrTarget}': invalid variable name for name reference")) + "; " + PsBuild.SetStatus(1);
             return true;
         }
         // `declare -p ref` for a nameref prints the attribute line; the reference itself is resolved at transpile time, so the
@@ -5846,17 +6146,20 @@ public static partial class PsEmitter
             // `declare -A m; m[0]=x; echo $m`: a bare `$m` reads the element keyed 0.
             if (assocName is not null && IsValidVarName(assocName)) { _assocVars.Add(assocName); _arrayVars?.Add(assocName); }
         }
-        if (!isPrint && !isAssoc && _intVars is not null && cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-i"))
+        if (!isPrint && !isAssoc && _intVars is not null && HasDeclareFlag(cmd, 'i'))
         {
             string? intName = exprName ?? (varName is null ? null : varName.Split('=')[0]);
-            if (intName is not null && IsValidVarName(intName)) _intVars.Add(intName);
+            if (intName is not null && IsValidVarName(intName)) { _intVars.Add(intName); NoteGlobalAttr(intName, 'i'); }
         }
         if (!isPrint && !isAssoc && _caseVars is not null
-            && (cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-l") || cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-u")))
+            && DeclareCaseFlag(cmd) != '\0')
         {
             string? caseName = exprName ?? (varName is null ? null : varName.Split('=')[0]);
             if (caseName is not null && IsValidVarName(caseName))
-                _caseVars[caseName] = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-u") && !cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-l");
+            {
+                _caseVars[caseName] = DeclareCaseFlag(cmd) == 'u';
+                NoteGlobalAttr(caseName, _caseVars[caseName] ? 'u' : 'l');
+            }
         }
         // `typeset +n ref` drops the nameref attribute: `ref` is a plain variable again, holding the target name.
         if (!isPrint && varName is not null && IsValidVarName(varName) && _namerefs is not null
@@ -5896,7 +6199,7 @@ public static partial class PsEmitter
             // Value through the assignment machinery (TryEmitJoinedValue for a $( )); the status
             // is declare's own (0), not the substitution's.
             string value = EmitAssignmentValue(exprValue);
-            bool intAttr = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-i");
+            bool intAttr = HasDeclareFlag(cmd, 'i');
             result = "$env:" + exprName + " = "
                 + (intAttr ? "[string](Invoke-BashArith ([string](" + value + ")))" : CaseAttr(exprName, value))
                 + (exprName == "PATH" ? "; " + PsBuild.NormalizePathVariable : "")
@@ -5918,7 +6221,7 @@ public static partial class PsEmitter
         // single literal `name=value`; split it so we never emit the broken
         // `[int]$global:n=5 = 0`. No `=` → the bare-declaration defaults below.
         int eq = varName.IndexOf('=');
-        bool isInt = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-i");
+        bool isInt = HasDeclareFlag(cmd, 'i');
         // A scalar lives where every bash variable read looks: `$env:NAME` (`$x`, `[int]$env:x` in
         // arithmetic). `$global:NAME` was never read back — `declare x=hello; echo $x` printed "".
         if (eq >= 0)
@@ -5952,16 +6255,22 @@ public static partial class PsEmitter
             // `x=1; declare -A x`: the scalar becomes the element keyed 0.
             result = "if ($global:" + varName + " -isnot [System.Collections.IDictionary]) { $global:" + varName + " = [PsBash.Cmdlets.BashAssoc]::Unset()"
                 + "; if ($null -ne $env:" + varName + ") { $global:" + varName + "['0'] = $env:" + varName + " } }";
-            if (_functionDepth == 0) result = PsBuild.ArrayKindGuard(varName, toAssoc: true, result + "; " + PsBuild.SetStatus(0));
+            if (_functionDepth == 0) result = PsBuild.ArrayKindGuard(GetLiteralValue(cmd.Words[0]) ?? "declare", varName, toAssoc: true, result + "; " + PsBuild.SetStatus(0));
             return true;
         }
         // `declare -i x`: the attribute only (recorded above); x stays unset (it was set to 0) or keeps its value. An empty
         // array would shadow the scalar a later `x=3+4` writes (`${x[@]}`, `declare -p x`).
+        // `declare -a e`: e is an array from here on, so `e=y` writes element 0.
+        if (indexedFlag && !isInt && IsValidVarName(varName)) _arrayVars?.Add(varName);
         result = isInt ? PsBuild.SetStatus(0)
-            // `declare x` on an existing scalar leaves its value alone; only a name with nothing yet becomes the empty array.
-            : "if ($null -eq $env:" + varName + " -and $null -eq (Get-Variable -Name " + PsBuild.SingleQuote(varName) + " -Scope Global -ValueOnly -ErrorAction Ignore)) { $global:" + varName + " = @()" + "; [PsBash.Cmdlets.BashShellState]::MarkAttribute(" + PsBuild.SingleQuote(varName) + ", '" + (indexedFlag ? "~" : "-") + "')" + " }";
+            // `declare x` on an existing variable leaves it alone. A name with nothing yet is declared but unset: `declare -a e`
+            // makes the empty array; a plain `declare x` only records the mark (declare -p: `declare -- x`). REGRESSION: it
+            // made an empty array too, which then hid the scalar a later `x=v` wrote (`declare -p x` lost the value).
+            : "if ($null -eq $env:" + varName + " -and $null -eq (Get-Variable -Name " + PsBuild.SingleQuote(varName) + " -Scope Global -ValueOnly -ErrorAction Ignore)) { "
+              + (indexedFlag ? "$global:" + varName + " = @(); " : "")
+              + "[PsBash.Cmdlets.BashShellState]::MarkAttribute(" + PsBuild.SingleQuote(varName) + ", '" + (indexedFlag ? "~" : "-") + "')" + " }";
         // `declare -a m` on an associative m is refused.
-        if (indexedFlag && !isInt && _functionDepth == 0) result = PsBuild.ArrayKindGuard(varName, toAssoc: false, result + "; " + PsBuild.SetStatus(0));
+        if (indexedFlag && !isInt && _functionDepth == 0) result = PsBuild.ArrayKindGuard(GetLiteralValue(cmd.Words[0]) ?? "declare", varName, toAssoc: false, result + "; " + PsBuild.SetStatus(0));
         return true;
     }
 
@@ -6157,7 +6466,7 @@ public static partial class PsEmitter
             var only = ((WordPart.DoubleQuoted)dyn.Target.Parts[0]).Parts[0];
             string shown = only is WordPart.BracedVarSub b ? "\"${" + b.Name + b.Suffix + "}\"" : "\"$@\"";
             return "$__psbFdW = @(" + EmitUnquotedSplitWordArray(dyn.Target) + "); if ($__psbFdW.Count -ne 1) { "
-                + PsBuild.StderrLine("ps-bash: " + shown + ": ambiguous redirect") + "; " + PsBuild.SetStatus(1) + " } else { " + one + " }";
+                + PsBuild.ShellDiagnosticLine(PsBuild.SingleQuote(shown + ": ambiguous redirect")) + "; " + PsBuild.SetStatus(1) + " } else { " + one + " }";
         }
         // `>& 1*`: the word is pathname-expanded first; one match (a file named 10) is the descriptor 10. No match keeps the
         // pattern (a file); several leave '' so the file branch reports the ambiguous redirect.
@@ -6221,7 +6530,10 @@ public static partial class PsEmitter
         if (cmd.Words.Length > 1)
         {
             var inner = new Command.Simple(cmd.Words.RemoveAt(0), cmd.EnvPairs, cmd.Redirects);
-            result = EmitSimple(inner) + "; " + ErrexitExitStatement();
+            // The command reads the stdin exec had, the enclosing stdin scope's included (EmitSimpleFed). REGRESSION:
+            // `echo q | exec cat` and `{ exec cat; } < f` printed nothing. Not when exec's own here-document or `<` file
+            // is already piped in (the caller strips it and sets _pipeStageFeedsInput): the scope's feed displaced it.
+            result = (_pipeStageFeedsInput ? EmitSimple(inner) : EmitSimpleFed(inner)) + "; " + ErrexitExitStatement();
             return true;
         }
 
@@ -6422,7 +6734,11 @@ public static partial class PsEmitter
         {
             string evalSignal = _context == TranspileContext.Eval && _functionDepth == 0 && _subshellDepth == 0
                 ? PsBuild.EvalReturnSignal : "";
-            if (cmd.Words.Length >= 2)
+            // `return 1 2`: bash checks the status operand, then reports "too many arguments" and drops the rest of the
+            // line (PsBuild.UsageDiscard). REGRESSION: no message, and the line went on.
+            if (cmd.Words.Length > 2 && !IsNonNumericLiteral(cmd.Words[1]))
+                specialResult = PsBuild.UsageDiscard("return: too many arguments") + "; " + evalSignal + "return";
+            else if (cmd.Words.Length >= 2)
             {
                 if (TryGetPureLiteralText(cmd.Words[1].Parts, out var retLiteral)
                     && long.TryParse(retLiteral, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var retNum))
@@ -6441,7 +6757,7 @@ public static partial class PsEmitter
                             ? "$__psb_r = " + PsBuild.SingleQuote(retText)
                             : "$__psb_r = [string](" + EmitWord(cmd.Words[1]) + ")";
                     specialResult = retValue + "; if ($null -ne $__psb_r) { if ($__psb_r -match '^-?[0-9]+$') { $global:LASTEXITCODE = (([long]$__psb_r % 256) + 256) % 256 } "
-                        + "else { Write-Error ('return: ' + $__psb_r + ': numeric argument required') -ErrorAction Continue; $global:LASTEXITCODE = 2 } }; " + evalSignal + "return";
+                        + "else { " + PsBuild.ShellDiagnosticLine("'return: ' + $__psb_r + ': numeric argument required'") + "; $global:LASTEXITCODE = 2 } }; " + evalSignal + "return";
                 }
             }
             else
@@ -6495,6 +6811,15 @@ public static partial class PsEmitter
         // Inside a subshell, `exit` leaves only the subshell and sets $? in the
         // parent (`(exit 7); echo $?` prints 7 and continues). A bare PowerShell
         // `exit` terminated the whole shell, so the rest of the script never ran.
+        // `exit 7 8 9`: "too many arguments", status 1, the rest of the line dropped and the shell stays (bash 5.2), a
+        // subshell's too. A non-numeric first operand is checked first (below). REGRESSION: `( exit 1 2 )` said nothing.
+        else if (cmd0 == "exit" && cmd.Words.Length > 2 && (_context != TranspileContext.Eval || _subshellDepth > 0)
+                 && !IsNonNumericLiteral(cmd.Words[1]))
+        {
+            reportOnly = true;
+            specialResult = PsBuild.UsageDiscard("exit: too many arguments");
+        }
+
         else if (cmd0 == "exit" && _subshellDepth > 0)
         {
             specialResult = cmd.Words.Length >= 2
@@ -6504,17 +6829,10 @@ public static partial class PsEmitter
 
         // A bare `exit` leaves with the status of the last command; inside an EXIT trap handler that is the status
         // from before the handler ran (see BashTranspiler.TrapEpilogueClose).
-        // `exit 7 8 9`: "too many arguments", status 1, and the shell stays (bash 5.2).
-        else if (cmd0 == "exit" && cmd.Words.Length > 2 && _context != TranspileContext.Eval)
-        {
-            reportOnly = true;
-            specialResult = $"Write-Error 'exit: too many arguments' -ErrorAction Continue; {PsBuild.SetStatus(1)}";
-        }
-
         // `exit word` with a literal non-numeric word: "numeric argument required", and the shell leaves with 2.
-        else if (cmd0 == "exit" && cmd.Words.Length == 2 && GetLiteralValue(cmd.Words[1]) is { } exitLit
-                 && !System.Text.RegularExpressions.Regex.IsMatch(exitLit, @"^[+-]?[0-9]+$"))
-            specialResult = $"Write-Error {PsBuild.SingleQuote("exit: " + exitLit + ": numeric argument required")} -ErrorAction Continue; $global:LASTEXITCODE = 2; " + ShellExit("2");
+        else if (cmd0 == "exit" && cmd.Words.Length >= 2 && IsNonNumericLiteral(cmd.Words[1]))
+            specialResult = PsBuild.ShellDiagnosticLine(PsBuild.SingleQuote("exit: " + GetLiteralValue(cmd.Words[1]) + ": numeric argument required"))
+                + "; $global:LASTEXITCODE = 2; " + ShellExit("2");
 
         else if (cmd0 == "exit" && cmd.Words.Length == 1)
             specialResult = ShellExit("$(if ($null -ne $global:__BashPreTrapStatus) { $global:__BashPreTrapStatus } else { $global:LASTEXITCODE })");
@@ -7526,20 +7844,26 @@ public static partial class PsEmitter
 
     /// <summary>
     /// The path of a `> word` / `>> word` / `2> word` file redirect. An unquoted glob or variable is expanded like any word: exactly
-    /// one result is the file (no match leaves a glob as its own text); several, or none for a variable, is "ambiguous redirect" --
-    /// the empty path, which fails the redirect with status 1 as `> ''` does.
+    /// one result is the file (no match leaves a glob as its own text); several, or none for a variable, is "ambiguous redirect",
+    /// naming the word as written (<c>$x: ambiguous redirect</c>): the <see cref="RedirectTarget.Ambiguous"/> stand-in, which
+    /// fails the redirect's open (status 1, the command does not run).
     /// </summary>
     private static string EmitFileRedirectTarget(CompoundWord word)
     {
         // `> "$@"`, `> "${a[@]}"`: one word per element, so anything but exactly one is ambiguous too.
         // `> two-$star`: a variable glued to text is split and pathname-expanded too (star='*' writes two-bar).
         if (IsGlobWord(word) || IsPureUnquotedVarWord(word) || IsQuotedArrayAllWord(word) || IsUnquotedVarAffixWord(word))
-            return "$(& { $__rt = @(" + EmitUnquotedSplitWordArray(word) + "); if ($__rt.Count -eq 1) { $__rt[0] } else { '' } })";
+            return OneWordOrAmbiguous(EmitUnquotedSplitWordArray(word), word);
         // `> a-{one,two}`: brace expansion gives several words, also an ambiguous redirect (the array reached -Path).
         if (!word.Parts.IsDefaultOrEmpty && word.Parts.Any(p => p is WordPart.BracedTuple or WordPart.BracedRange))
-            return "$(& { $__rt = @(" + EmitArgWord(word) + "); if ($__rt.Count -eq 1) { $__rt[0] } else { '' } })";
+            return OneWordOrAmbiguous(EmitArgWord(word), word);
         return TransformRedirectTarget(EmitArgWord(word));
     }
+
+    /// <summary>The single word <paramref name="words"/> expands to, else the ambiguous-redirect stand-in naming <paramref name="word"/>.</summary>
+    private static string OneWordOrAmbiguous(string words, CompoundWord word)
+        => "$(& { $__rt = @(" + words + "); if ($__rt.Count -eq 1) { $__rt[0] } else { [PsBash.Core.RedirectTarget]::Ambiguous("
+           + PsBuild.SingleQuote(WordAsWritten(word)) + ") } })";
 
     private static string TransformRedirectTarget(string target)
     {
@@ -9281,6 +9605,15 @@ public static partial class PsEmitter
     };
 
     /// <summary>
+    /// The <see cref="StateChangingBuiltins"/> a pipe stage runs as a subshell of its own (EmitPipelineStages): all but the
+    /// wrappers (a <c>builtin</c>/<c>command</c> stage is guarded by what it wraps, and <c>command grep</c> must keep
+    /// streaming) and <c>wait</c> (which reads the shell's own job table). A loop jump is one: the stage keeps its loop
+    /// level (<see cref="Command.Subshell.KeepsLoopLevel"/>), so <c>echo q | break</c> ends only the stage.
+    /// </summary>
+    private static readonly HashSet<string> SubshellStageBuiltins =
+        new(StateChangingBuiltins.Where(n => n is not ("builtin" or "command" or "wait")), StringComparer.Ordinal);
+
+    /// <summary>
     /// True when <paramref name="body"/> is a simple command or pipeline whose every stage is a literal,
     /// MAPPED command (so it cannot be a user function) that is not a state-changing builtin and carries
     /// no assignment. Anything else might change shell state and needs the subshell scope.
@@ -9640,9 +9973,14 @@ public static partial class PsEmitter
             return $"${name}";
 
         if (arrayElem0 && _arrayVars is not null && _arrayVars.Contains(name))
+        {
             // $Matches (BASH_REMATCH) is keyed by int; every other array reads by the string key.
-            return "$(if ($null -eq $" + name + ") { $env:" + name + " } else { $" + name
+            string elem0 = "$(if ($null -eq $" + name + ") { $env:" + name + " } else { $" + name
                 + (name == "BASH_REMATCH" ? "[0]" : "['0']") + " })";
+            // Under nounset an array with no element 0 (`local -a x; echo $x`) is unbound, as a scalar never set is.
+            // REGRESSION: an array name read through this branch skipped the check and expanded to nothing.
+            return strict && _nounsetMode ? StrictRead(name, elem0) : elem0;
+        }
 
         var special = PsBuild.TryMapSpecialVar(name, braced: false, inDoubleQuote);
         if (special is not null) return strict && _nounsetMode ? StrictPositional(name, special) : special;
@@ -10485,8 +10823,9 @@ public static partial class PsEmitter
         if (GetLiteralValue(word) is { } exitLiteral
             && long.TryParse(exitLiteral, System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out var exitNumber))
             return (((exitNumber % 256) + 256) % 256).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        // The operand as a value: EmitWord is argument text, so `( exit q )` ran a command `q`. REGRESSION.
         if (!IsPureUnquotedVarWord(word))
-            return PsBuild.StatusByte(EmitWord(word));
+            return PsBuild.StatusByte(EmitAssignmentValue(word));
 
         return PsBuild.StatusByte("$(& { $__bashexit = " + EmitUnquotedVarSplitArray(word) +
                "; if ($__bashexit.Count) { $__bashexit[0] } " +
@@ -10494,6 +10833,10 @@ public static partial class PsEmitter
     }
 
     private static string EmitExitWithUnquotedVar(CompoundWord word) => ShellExit(EmitExitCodeValue(word));
+
+    /// <summary>A literal status operand that is not a number (<c>exit q</c>, <c>return x</c>): bash's "numeric argument required".</summary>
+    private static bool IsNonNumericLiteral(CompoundWord word) =>
+        GetLiteralValue(word) is { } text && !System.Text.RegularExpressions.Regex.IsMatch(text, @"^\s*[+-]?[0-9]+\s*$");
 
     /// <summary>
     /// True when any operand in <paramref name="args"/> (optionally skipping the
@@ -11973,11 +12316,15 @@ public static partial class PsEmitter
                 && lineOfThis > 0 && FirstSimpleLine(list.Commands[i + 1]) == LastSimpleLine(list.Commands[i]);
             if (lineStarts) sb.Append(PsBuild.FailGlobReset);
             string statement = readerCommand + EmitStatement(list.Commands[i]);
+            // In POSIX mode a refused readonly assignment ends a non-interactive shell (bash 5.2: status 127). Whether
+            // the mode is on is known only when it runs. REGRESSION: a `set -o posix` anywhere in the script made the
+            // emitter drop every command after the assignment, also when the mode was set later or never reached.
+            if (_readonlyViolation && _scriptPosix && _functionDepth == 0)
+                statement += "; if (" + PsBuild.PosixOn + ") { " + EndShell("127") + " }";
             sb.Append(sameLine ? PsBuild.UnlessGlobFailed(statement) : statement);
             if (rootPieces is not null) rootPieces[^1] = rootPieces[^1] with { Text = statement };
             if (_readonlyViolation)
             {
-                if (_scriptPosix && _functionDepth == 0) break;
                 int failedLine = SourceLine(list.Commands[i]);
                 while (failedLine > 0 && i + 1 < list.Commands.Length && SourceLine(list.Commands[i + 1]) == failedLine) i++;
             }
@@ -12353,10 +12700,6 @@ public static partial class PsEmitter
 
     private static string EmitPipelineStages(Command.Pipeline pipeline, bool entryScope)
     {
-        // Without shopt -s lastpipe the last stage is a subshell: cho hi | read x leaves x unset.
-        if (!_scriptLastpipe && pipeline.Commands.Length > 1 && pipeline.Commands[^1] is Command.Simple { Words.Length: > 0 } lastRead
-            && GetLiteralValue(lastRead.Words[0]) is "read" or "mapfile" or "readarray")
-            pipeline = pipeline with { Commands = pipeline.Commands.SetItem(pipeline.Commands.Length - 1, new Command.Subshell(lastRead, ImmutableArray<Redirect>.Empty)) };
         var sb = new StringBuilder();
         // pipefail script: each stage reports its own status (Invoke-BashPipeStage) into $__pf.
         bool perStage = _pipefailMode && pipeline.Commands.Length > 1;
@@ -12390,19 +12733,28 @@ public static partial class PsEmitter
                 && !HasOwnStdin(substStage.Redirects) && substStage.HereDocs.IsDefaultOrEmpty
                 && substStage.Words.Any(w => ContainsCommandSub(w.Parts)))
                 cmd = new Command.BraceGroup(substStage, ImmutableArray<Redirect>.Empty);
-            // `exit 55 | (exit 44)`: every pipe stage is a subshell, so `exit` there ends only that stage, with its
-            // status (PIPESTATUS 55 44). As a bare stage it ended the whole script. A lastpipe stage runs in the shell.
-            if (pipeline.Commands.Length > 1 && cmd is Command.Simple { EnvPairs.IsEmpty: true, Words.Length: >= 1 } exitStage
-                && GetLiteralValue(exitStage.Words[0]) == "exit"
+            // Every pipe stage is a subshell (the last one too, unless lastpipe): a builtin that changes the shell's state
+            // runs as `( cmd )`, whose scope saves and restores that state, hands it the pipe and ends at its exit -
+            // `... | read v`, `... | set -- a b`, `... | shift`, `... | . f`, `... | eval "$c"`, `cd / | cat`, `exit 55 | (exit 44)`
+            // (PIPESTATUS 55 44). REGRESSION: only read/mapfile (last stage) and exit were wrapped; `... | . f` and
+            // `... | eval` leaked variables and $#, `... | shift` could not bind the pipe, `... | set -- a b` was not valid
+            // PowerShell. A lastpipe stage runs in the shell itself.
+            if (pipeline.Commands.Length > 1 && cmd is Command.Simple { Words.Length: >= 1 } stateStage
+                && GetLiteralValue(stateStage.Words[0]) is { } stateName
+                && (SubshellStageBuiltins.Contains(stateName)
+                    || stateName is "builtin" or "command" && WrappedCommandName(stateStage) is { } wrappedState && SubshellStageBuiltins.Contains(wrappedState))
                 && !(_scriptLastpipe && i > 0 && i == pipeline.Commands.Length - 1))
-                cmd = new Command.Subshell(exitStage, ImmutableArray<Redirect>.Empty);
+                cmd = new Command.Subshell(stateStage, ImmutableArray<Redirect>.Empty, KeepsLoopLevel: true);
             // Every pipe stage is a subshell: a lexical `break` must not reach the enclosing loop through the stage's script
             // block (a lastpipe stage runs in the shell itself). A compound stage starts with no loop (bash warns); a simple
-            // FIRST stage keeps the loop level, so `eval break | cat` ends that stage (a later one warns: it has no scope).
+            // stage, at any position, keeps the loop level, so `eval break | cat` and `echo q | break` end only that stage
+            // (silently; with no loop around it the break warns). A later simple stage that runs a loop jump is a subshell
+            // (SubshellStageBuiltins), which gives it the scope to end. REGRESSION: `echo q | break` in a loop warned.
             bool lastpipeHere = _scriptLastpipe && i > 0 && i == pipeline.Commands.Length - 1;
             string? wholePipelineText = null;
             WithLoopBarrier(pipeline.Commands.Length > 1 && !lastpipeHere,
-                i == 0 && cmd is Command.Simple ? LoopBarrierKind.EndsSubshell : LoopBarrierKind.Warn, () => { EmitStage(); return 0; });
+                pipeline.Commands[i] is Command.Simple && !LoopControlWarnsHere ? LoopBarrierKind.EndsSubshell : LoopBarrierKind.Warn,
+                () => { EmitStage(); return 0; });
             if (mergeStage) _stderrMergeDepth--;
             // A read loop that ran its lazily read producer itself is the whole pipeline (set inside EmitStage).
             if (wholePipelineText is not null) return wholePipelineText;
@@ -12734,7 +13086,7 @@ public static partial class PsEmitter
                 finally { _lastpipeStageDepth--; _armedStages = lastArmed; _errexitExemptDepth = lastExempt; }
             }
             if (!ownsExit) return emit();
-            _subshellDepth++;
+            _subshellDepth++; var subRoOuter = EnterSubshellReadonly();
             // `{ echo one; false; echo two; } | cat` under set -e: the stage is a subshell that inherits -e, so it ends
             // at `false` (its status 1); the pipeline's status is still the last stage's. The stage's statements get
             // their errexit checks, which leave the stage's `& { }` (the scoped `return`), and the pipeline's suppression
@@ -12750,9 +13102,11 @@ public static partial class PsEmitter
             _armedStages = false;
             // A subshell starts with no loop (as EmitSubshell): `for i in 1 2; do echo x | { break; }; done` warns and
             // carries on in bash, and a `break 2` in a stage's own loop leaves that loop only. A labelled break here
-            // unwound the stage's pipeline into the enclosing loop and ended it.
+            // unwound the stage's pipeline into the enclosing loop and ended it. A simple stage run as a subshell keeps the
+            // stage's barrier (Command.Subshell.KeepsLoopLevel): `echo q | break` in a loop ends only the stage.
             var outerLabels = _loopLabels; var outerBarrier = _loopBarrier;
-            _loopLabels = null; _loopBarrier = LoopBarrierKind.Warn;
+            _loopLabels = null;
+            if (cmd is not Command.Subshell { KeepsLoopLevel: true }) _loopBarrier = LoopBarrierKind.Warn;
             try
             {
                 string text = emit();
@@ -12763,6 +13117,7 @@ public static partial class PsEmitter
             finally
             {
                 _subshellDepth--;
+                _readonlyVars = subRoOuter;
                 _armedStages = armed;
                 _errexitExemptDepth = savedExempt;
                 PsBuild.ErrTrapNeedsErrtrace = savedErrTrap;

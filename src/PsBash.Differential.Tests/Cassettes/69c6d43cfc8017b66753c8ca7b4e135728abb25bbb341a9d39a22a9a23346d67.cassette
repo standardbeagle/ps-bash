@@ -1,0 +1,53 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 663
+stdout-length: 516
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > lib.sh <<'EOF'
+lf() {
+  echo "lf src=${BASH_SOURCE[0]} caller-src=${BASH_SOURCE[1]} fn=${FUNCNAME[*]} ln=${BASH_LINENO[*]}"
+  cd /nonexist_lf
+  caller 0
+  inner
+}
+inner() { caller; caller 0; caller 1; caller 2; echo "c2=$?"; caller x; echo "cx=$?"; }
+EOF
+cat > main.sh <<'EOF'
+. ./lib.sh
+mf() { lf; }
+
+mf
+echo "top caller:"; caller; echo "tc=$?"
+EOF
+{ bash main.sh; echo "rc=$?"; } 2>&1
+{ bash -c 'g() { cd /nonexist_g; echo "src=${BASH_SOURCE[0]}-${#BASH_SOURCE[@]}"; caller 0; }; g'; } 2>&1
+{ bash -c 'g() { cd /nonexist_g; }
+g' me; } 2>&1
+{ printf 'h() { cd /nonexist_h; echo "s=$- src=${BASH_SOURCE[0]}"; }\nh\n' | bash; } 2>&1
+==== STDOUT ====
+lf src=./lib.sh caller-src=main.sh fn=lf mf main ln=2 4 0
+./lib.sh: line 3: cd: /nonexist_lf: No such file or directory
+2 mf main.sh
+5 ./lib.sh
+5 lf ./lib.sh
+2 mf main.sh
+4 main main.sh
+c2=0
+./lib.sh: line 7: caller: x: invalid number
+caller: usage: caller [expr]
+cx=2
+top caller:
+0 NULL
+tc=0
+rc=0
+environment: line 1: cd: /nonexist_g: No such file or directory
+src=environment-1
+environment: line 1: cd: /nonexist_g: No such file or directory
+main: line 1: cd: /nonexist_h: No such file or directory
+s=hBs src=main
+
+==== STDERR ====
+

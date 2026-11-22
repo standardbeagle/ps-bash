@@ -29,8 +29,8 @@ public sealed class InvokeBashUmaskCommand : BashCmdlet
         set => Box.Value = value;
     }
 
-    /// <summary>The current session's mask (as <c>umask</c> would print it).</summary>
-    internal static int ShellMask => Mask;
+    /// <summary>The current session's mask (as <c>umask</c> would print it); a subshell puts its parent's back (BashShellState).</summary>
+    internal static int ShellMask { get => Mask; set => Mask = value; }
 
     // Decoy for a direct `Invoke-BashUmask -p` (an ambiguous common-parameter prefix otherwise). The emitter
     // single-quotes umask's dash words, so transpiled calls always reach Arguments.

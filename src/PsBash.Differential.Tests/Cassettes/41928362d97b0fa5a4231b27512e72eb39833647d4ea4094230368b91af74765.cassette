@@ -1,0 +1,64 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 655
+stdout-length: 134
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+x=v
+cat <<< a\"b
+cat <<< "a"'b'$x
+cat <<< "$(echo \"in\")"
+cat <<< "a\\\"b"
+cat <<< "${x/v/\"}"
+cat <<< "`echo \"bq\"`"
+cat <<< "t\ab\n"
+cat <<< *.sh
+cat <<< a[1]{b,c}
+cat <<< ~/x | sed "s#$HOME#H#"
+set -- p1 "p 2"; cat <<< "$@"; cat <<< $*
+a=(x y); cat <<< "${a[@]}"
+cat <<< $'tab\there'
+cat <<< "$((2+3))"
+read -r l <<< "  lead \"q\"  "; echo "[$l]"
+while read -r w; do echo "w=$w"; done <<< "a \"b\""
+mapfile -t m <<< $'1\n2'; echo "${#m[@]}"
+cat <<< ''
+cat <<< "multi
+line"
+exec 4<<< "fd \"4\""; cat <&4
+y=$(cat <<< "in \"sub\""); echo "$y"
+cat <<< "$(printf 'a\n\n')"
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+a"b
+abv
+"in"
+a\"b
+"
+bq
+t\ab\n
+*.sh
+a[1]{b,c}
+H/x
+p1 p 2
+p1 p 2
+x y
+tab	here
+5
+[lead "q"]
+w=a "b"
+2
+
+multi
+line
+fd "4"
+in "sub"
+a
+rc=0
+
+==== STDERR ====
+

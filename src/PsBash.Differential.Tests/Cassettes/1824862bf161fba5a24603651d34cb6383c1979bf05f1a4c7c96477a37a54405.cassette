@@ -1,0 +1,48 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1015
+stdout-length: 106
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+x=1; f(){ local -n lr=x; local +n lr; echo "[$lr]"; lr=5; echo "$x $lr"; }; f
+y=2; g(){ local -n q=y; q=3; local -n q=x; q=4; }; g; echo "$x $y"
+h(){ local -n m=arr; m=(a b); m[2]=c; echo "${#arr[@]} ${m[1]}"; }; h; echo "${arr[*]}"
+k(){ local v=7; local -n p=v; p=8; echo "$v"; }; k; echo "v=${v-unset}"
+declare -n gref=y; f2(){ local gref=9; echo "$gref $y"; }; f2; echo "$y"
+setv() { local -n out=$1; out="val-$2"; }
+setv A 1; setv B 2; echo "$A $B"
+push() { local -n arr_ref=$1; shift; arr_ref+=("$@"); }
+list=(); push list x y; push list z; echo "${#list[@]} ${list[*]}"
+outer() { local res; setv res 9; echo "outer res=$res"; }; outer; echo "res=${res-unset}"
+cnt() { local -n c=$1; (( c++ )); }; n=4; cnt n; cnt n; echo "n=$n"
+inc() { local -n c=$1; c=$((c+1)); }; m=4; inc m; echo "m=$m"
+lit() { local -n c=k; (( c += 2 )); echo $((c * 10)); }; k=1; lit; echo "k=$k"
+g2() { local -n gc=$1; echo "$(( gc + 1 ))"; }; z=7; g2 z
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+[x]
+1 5
+4 3
+3 b
+a b c
+8
+v=unset
+9 3
+3
+val-1 val-2
+3 x y z
+outer res=val-9
+res=unset
+n=6
+m=5
+30
+k=3
+8
+rc=0
+
+==== STDERR ====
+
