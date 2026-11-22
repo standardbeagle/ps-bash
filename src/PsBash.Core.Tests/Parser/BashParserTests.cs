@@ -455,9 +455,12 @@ public class BashParserTests
         var indent = stripTabs ? "\t" : "";
         var result = Parse($"exec {{fd}}{op}EOF\n{indent}body\nEOF");
 
+        // A `{name}` here-document opens a descriptor of its own: a redirection carrying the text, not the command's stdin.
         var simple = Assert.IsType<Command.Simple>(result);
-        Assert.Empty(simple.Redirects);
-        var hereDoc = Assert.Single(simple.HereDocs);
+        Assert.True(simple.HereDocs.IsDefaultOrEmpty);
+        var redirect = Assert.Single(simple.Redirects);
+        Assert.Equal("fd", redirect.FdVar);
+        var hereDoc = Assert.IsType<HereDoc>(redirect.Here);
         Assert.Equal("fd", hereDoc.FdVar);
         Assert.Equal("body\n", hereDoc.Body);
         Assert.Equal(stripTabs, hereDoc.StripTabs);
@@ -494,8 +497,12 @@ public class BashParserTests
     [InlineData("cat 0<<EOF\nhi\nEOF", 0, 1)]           // `0<<` is plain stdin, not an operand and not a lost body
     public void Parse_NumberedHeredoc_CarriesDescriptorOnlyWhenAdjacent(string src, int fd, int words)
     {
+        // On stdin the here-document is the command's input (HereDocs); on another descriptor it is a redirection that
+        // opens that descriptor with the text (Redirect.Here).
         var simple = Assert.IsType<Command.Simple>(Parse(src));
-        var hereDoc = Assert.Single(simple.HereDocs);
+        var hereDoc = fd == 0
+            ? Assert.Single(simple.HereDocs)
+            : Assert.IsType<HereDoc>(Assert.Single(simple.Redirects, r => r.Fd == fd).Here);
         Assert.Equal(fd, hereDoc.Fd);
         Assert.Equal(words, simple.Words.Length);
         Assert.Equal("hi\n", hereDoc.Body);

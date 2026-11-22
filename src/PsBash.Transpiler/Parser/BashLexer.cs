@@ -34,7 +34,7 @@ public static class BashLexer
         // index) as it is seen and, at the newline that ends the command line, skip
         // past the bodies in raw source — recording each body's exact span on its
         // delimiter token so the parser never has to recompute it.
-        var pendingHeredocs = new List<(string Delim, bool StripTabs, int DelimTokenIndex)>();
+        var pendingHeredocs = new List<(string Delim, bool StripTabs, bool Expand, int DelimTokenIndex)>();
         // The next word token is a heredoc delimiter: 0 = none, 1 = `<<`, 2 = `<<-`.
         int heredocDelimPending = 0;
         // Line of the `for` command whose header word list is being scanned (0 = none).
@@ -145,6 +145,8 @@ public static class BashLexer
                 {
                     if (c3 == '<')
                     {
+                        // `3<<< w`: a here-string takes a descriptor prefix like every redirection (RedirectOperators).
+                        TryReclassifyIoNumber(tokens, pos);
                         tokens.Add(new BashToken(BashTokenKind.TLess, "<<<", pos));
                         pos += 3;
                         continue;
@@ -347,8 +349,8 @@ public static class BashLexer
             // so the body skip knows which line ends each body.
             if (heredocDelimPending != 0)
             {
-                var (delim, _) = ParseHeredocDelimiter(value);
-                pendingHeredocs.Add((delim, heredocDelimPending == 2, tokens.Count - 1));
+                var (delim, expand) = ParseHeredocDelimiter(value);
+                pendingHeredocs.Add((delim, heredocDelimPending == 2, expand, tokens.Count - 1));
                 heredocDelimPending = 0;
             }
         }
@@ -378,13 +380,13 @@ public static class BashLexer
     private static int SkipHeredocBodies(
         string input,
         int pos,
-        List<(string Delim, bool StripTabs, int DelimTokenIndex)> pending,
+        List<(string Delim, bool StripTabs, bool Expand, int DelimTokenIndex)> pending,
         List<BashToken> tokens)
     {
-        foreach (var (delim, stripTabs, delimTokenIndex) in pending)
+        foreach (var (delim, stripTabs, expand, delimTokenIndex) in pending)
         {
             int bodyStart = pos;
-            pos = SkipHeredocBody(input, pos, delim, stripTabs, out int bodyEnd);
+            pos = SkipHeredocBody(input, pos, delim, stripTabs, expand, out int bodyEnd);
             tokens[delimTokenIndex] = tokens[delimTokenIndex] with
             {
                 BodyStart = bodyStart,
@@ -396,33 +398,85 @@ public static class BashLexer
 
     /// <summary>
     /// Skip one heredoc body starting at <paramref name="pos"/> (the first body line): whole
-    /// physical lines, no quote or comment interpretation, until a line equal to
-    /// <paramref name="delim"/> (leading tabs stripped for <c>&lt;&lt;-</c>) or end of input.
-    /// Returns the offset just past the delimiter line; <paramref name="bodyEnd"/> is where
-    /// the delimiter line starts (the end of the body text).
+    /// lines, no quote or comment interpretation, until a line equal to <paramref name="delim"/>
+    /// (leading tabs stripped for <c>&lt;&lt;-</c>) or end of input. With an unquoted delimiter
+    /// (<paramref name="joinContinuations"/>) a line is what bash reads as one: a backslash-newline
+    /// joins the next physical line onto it (<see cref="JoinHereDocContinuations"/>), so <c>a\</c>
+    /// then <c>EOF</c> is the body line <c>aEOF</c>, not the end. Returns the offset just past the
+    /// delimiter line; <paramref name="bodyEnd"/> is where the delimiter line starts (the end of
+    /// the body text).
     /// </summary>
-    private static int SkipHeredocBody(string input, int pos, string delim, bool stripTabs, out int bodyEnd)
+    private static int SkipHeredocBody(string input, int pos, string delim, bool stripTabs, bool joinContinuations, out int bodyEnd)
     {
         int len = input.Length;
         bodyEnd = pos;
         while (pos < len)
         {
-            int nlPos = input.IndexOf('\n', pos);
-            int lineEnd = nlPos < 0 ? len : nlPos;
+            int lineEnd = joinContinuations ? LogicalHereDocLineEnd(input, pos) : input.IndexOf('\n', pos);
+            if (lineEnd < 0) lineEnd = len;
             int textEnd = lineEnd > pos && input[lineEnd - 1] == '\r' ? lineEnd - 1 : lineEnd;
-            var line = input.AsSpan(pos, textEnd - pos);
+            ReadOnlySpan<char> line = joinContinuations && lineEnd > pos
+                ? JoinHereDocContinuations(input[pos..textEnd]).AsSpan()
+                : input.AsSpan(pos, textEnd - pos);
             if (stripTabs) line = line.TrimStart('\t');
             if (line.SequenceEqual(delim))
             {
                 bodyEnd = pos;
-                return nlPos < 0 ? len : nlPos + 1;
+                return lineEnd >= len ? len : lineEnd + 1;
             }
-            bodyEnd = nlPos < 0 ? len : nlPos + 1;
+            bodyEnd = lineEnd >= len ? len : lineEnd + 1;
             pos = bodyEnd;
         }
         return pos;
     }
 
+    /// <summary>
+    /// The offset of the newline that ends the here-document line starting at <paramref name="pos"/> when
+    /// backslash-newline continues a line (the end of input when none does).
+    /// </summary>
+    private static int LogicalHereDocLineEnd(string input, int pos)
+    {
+        for (int i = pos; i < input.Length; i++)
+        {
+            char c = input[i];
+            if (c == '\n') return i;
+            // `\` takes the next character with it (`\\` is a pair), and a following newline (CRLF too) with it as well:
+            // the line goes on past it.
+            if (c == '\\' && i + 1 < input.Length)
+                i += input[i + 1] == '\r' && i + 2 < input.Length && input[i + 2] == '\n' ? 2 : 1;
+        }
+        return input.Length;
+    }
+
+    /// <summary>
+    /// The text of an unquoted-delimiter here-document as bash reads it: every backslash-newline (a line continuation)
+    /// removed, a backslash taking the character after it with it, so <c>\\</c> before a newline is a literal backslash
+    /// and the newline stays. bash removes them as it reads each line (before the <c>&lt;&lt;-</c> tab strip, the
+    /// delimiter match and expansion); <c>\$</c>, <c>\`</c> and <c>\\</c> are left for expansion.
+    /// The one rule the lexer's delimiter match and the parser's body share.
+    /// </summary>
+    public static string JoinHereDocContinuations(string text)
+    {
+        int at = text.IndexOf('\\');
+        if (at < 0) return text;
+        var sb = new System.Text.StringBuilder(text.Length);
+        sb.Append(text, 0, at);
+        for (int i = at; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c == '\\' && i + 1 < text.Length)
+            {
+                char n = text[i + 1];
+                if (n == '\n') { i++; continue; }
+                if (n == '\r' && i + 2 < text.Length && text[i + 2] == '\n') { i += 2; continue; }
+                sb.Append(c).Append(n);
+                i++;
+                continue;
+            }
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
     /// <summary>
     /// Is the next token an argument or a case pattern (not a command start)? True right after a
     /// non-reserved word; or after <c>in</c> (a for-list / the first case pattern) or a case-arm
@@ -1142,15 +1196,15 @@ public static class BashLexer
         // body is raw text, so an apostrophe (`it's`) or `)` in it must not be read as a quote or
         // the closer. Delimiters queue at `<<`; at the next newline their bodies are skipped
         // whole, exactly as the top-level lexer does (SkipHeredocBody).
-        List<(string Delim, bool StripTabs)>? heredocs = null;
+        List<(string Delim, bool StripTabs, bool Expand)>? heredocs = null;
         while (pos < len && depth > 0)
         {
             char c = input[pos];
             if (c == '\n' && heredocs is { Count: > 0 })
             {
                 pos++;
-                foreach (var (delim, stripTabs) in heredocs)
-                    pos = SkipHeredocBody(input, pos, delim, stripTabs, out _);
+                foreach (var (delim, stripTabs, expand) in heredocs)
+                    pos = SkipHeredocBody(input, pos, delim, stripTabs, expand, out _);
                 heredocs.Clear();
                 continue;
             }
@@ -1160,7 +1214,10 @@ public static class BashLexer
                 bool stripTabs = pos + 2 < len && input[pos + 2] == '-';
                 int after = ReadRawHeredocDelimiter(input, pos + (stripTabs ? 3 : 2), out var rawDelim);
                 if (rawDelim.Length > 0)
-                    (heredocs ??= new()).Add((ParseHeredocDelimiter(rawDelim).Delimiter, stripTabs));
+                {
+                    var (heredocDelim, heredocExpand) = ParseHeredocDelimiter(rawDelim);
+                    (heredocs ??= new()).Add((heredocDelim, stripTabs, heredocExpand));
+                }
                 pos = after;
                 continue;
             }
@@ -1300,11 +1357,8 @@ public static class BashLexer
         tokens[^1] = last with { Kind = BashTokenKind.IoNumber };
     }
 
-    private static bool IsRedirectKind(BashTokenKind kind) =>
-        kind is BashTokenKind.Less or BashTokenKind.Great
-            or BashTokenKind.DLess or BashTokenKind.DGreat
-            or BashTokenKind.LessAnd or BashTokenKind.GreatAnd
-            or BashTokenKind.DLessDash;
+    /// <summary>The operators a digit word right before them is the descriptor of: the one table, <see cref="RedirectOperators"/>.</summary>
+    private static bool IsRedirectKind(BashTokenKind kind) => RedirectOperators.TakesFdPrefix(kind);
 
     private static bool IsAllDigits(string s)
     {

@@ -242,13 +242,13 @@ public sealed partial class BashParser
         // Array assignments with no command after them are an assignment statement. Before a command word
         // (`B=(b b) cmd`) bash binds the temporary as the STRING "(b b)": the expanded elements joined by spaces.
         // `arr=(p q) >f` goes on to collect the redirects (the redirect token was left unparsed: a parse error).
-        if (hasArrayAssignment && Peek().Kind != BashTokenKind.Word && Peek().Kind != BashTokenKind.IoNumber && !IsCompoundRedirectOp(Peek().Kind))
+        if (hasArrayAssignment && Peek().Kind != BashTokenKind.Word && Peek().Kind != BashTokenKind.IoNumber && !IsRedirectOp(Peek().Kind))
             return new Command.ShAssignment(assignmentPairs.ToImmutable());
 
         var words = ImmutableArray.CreateBuilder<CompoundWord>();
         var redirects = ImmutableArray.CreateBuilder<Redirect>();
         var hereDocs = ImmutableArray.CreateBuilder<HereDoc>();
-        var pendingHeredocs = new List<(string Delimiter, bool Expand, bool StripTabs, string? FdVar, int BodyStart, int BodyEnd, int Fd)>();
+        Redirect? stdinHereText = null;
 
         while (true)
         {
@@ -259,24 +259,10 @@ public sealed partial class BashParser
                 // Named-fd redirect prefix `{name}` before a redirect (bash
                 // allocates a free fd into $name). Preserve the name in the AST;
                 // the emitter degrades it to the default-fd redirect form.
-                if (IsNamedFdToken(Peek().Value)
-                    && _pos + 1 < _tokens.Count
-                    && IsRedirectOp(_tokens[_pos + 1].Kind))
+                if (IsNamedFdRedirect())
                 {
-                    var fdVar = Peek().Value[1..^1];
-                    Advance();
-                    if (Peek().Kind is BashTokenKind.DLess or BashTokenKind.DLessDash)
-                    {
-                        bool stripTabs = Peek().Kind == BashTokenKind.DLessDash;
-                        Advance();
-                        var delimToken = Advance();
-                        var (delimiter, expand) = BashLexer.ParseHeredocDelimiter(delimToken.Value);
-                        pendingHeredocs.Add((delimiter, expand, stripTabs, fdVar, delimToken.BodyStart, delimToken.BodyEnd, 0));
-                    }
-                    else
-                    {
-                        AddRedirect(redirects, ParseRedirect(fdVar));
-                    }
+                    var fdVar = Advance().Value[1..^1];
+                    AddRedirect(redirects, ParseRedirect(fdVar));
                     continue;
                 }
 
@@ -348,37 +334,19 @@ public sealed partial class BashParser
                     bangText += Advance().Value;
                 words.Add(new CompoundWord(DecomposeWord(bangText)));
             }
-            else if (kind == BashTokenKind.TLess)
-            {
-                hereDocs.Add(ParseHereString());
-            }
-            else if (kind is BashTokenKind.DLess or BashTokenKind.DLessDash)
-            {
-                bool stripTabs = kind == BashTokenKind.DLessDash;
-                Advance(); // consume << or <<-
-                var delimToken = Advance();
-                // Quoted (`'EOF'` / `"EOF"`) or backslashed (`\EOF`) delimiters
-                // suppress expansion; the shared helper is the single source the
-                // lexer's body-skip also uses, so the two can't disagree on the
-                // terminator.
-                var (delimiter, expand) = BashLexer.ParseHeredocDelimiter(delimToken.Value);
-                pendingHeredocs.Add((delimiter, expand, stripTabs, null, delimToken.BodyStart, delimToken.BodyEnd, 0));
-            }
-            else if (kind == BashTokenKind.IoNumber && _pos + 1 < _tokens.Count
-                && _tokens[_pos + 1].Kind is BashTokenKind.DLess or BashTokenKind.DLessDash
-                && int.TryParse(Peek().Value, out var hereFd) && (hereFd >= 3 || hereFd == 0))
-            {
-                // `cmd 3<<EOF`: the here-document is descriptor N's input (read with `read -u N`), not stdin.
-                Advance();
-                bool stripTabsN = Peek().Kind == BashTokenKind.DLessDash;
-                Advance();
-                var delimTokenN = Advance();
-                var (delimiterN, expandN) = BashLexer.ParseHeredocDelimiter(delimTokenN.Value);
-                pendingHeredocs.Add((delimiterN, expandN, stripTabsN, null, delimTokenN.BodyStart, delimTokenN.BodyEnd, hereFd));
-            }
             else if (kind == BashTokenKind.IoNumber || IsRedirectOp(kind))
             {
-                AddRedirect(redirects, ParseRedirect());
+                // Every operator of the one table, with or without its `N` prefix (`<<<`, `3<<<`, `<<EOF`, `3<<EOF`,
+                // `> f`, `1<> f`). A here-document or here-string on stdin is the command's input (HereDocs, the last
+                // one wins); on any other descriptor it is a redirection that opens that descriptor (`read -u 3 l 3<<< x`).
+                var redirect = ParseRedirect();
+                if (redirect is { Here: { } stdinText, Fd: 0, FdVar: null })
+                {
+                    hereDocs.Add(stdinText);
+                    stdinHereText = redirect;
+                }
+                else
+                    AddRedirect(redirects, redirect);
             }
             else
             {
@@ -386,16 +354,20 @@ public sealed partial class BashParser
             }
         }
 
+        // `exec <<< w` / `exec <<EOF` with no command: the here-text becomes the SHELL's stdin, a redirection of exec as
+        // `exec < f` is, not a command's input (piped into an exec with nothing to run, it emitted `… | $x = 0`).
+        if (stdinHereText is not null && words.Count == 1 && words[0].Parts is [WordPart.Literal { Value: "exec" }])
+        {
+            hereDocs.Clear();
+            AddRedirect(redirects, stdinHereText);
+        }
+
         // If only assignments and no command words, it's a bare assignment.
         // `x=$(cmd) 2>/dev/null` / `y=1 >f` too: with no command word the assignments are the shell's own, and the
         // redirects are the statement's (a value's `$( )` is expanded before them). As a temp binding the value was lost.
         if (assignmentPairs.Count > 0 && words.Count == 0
-            && pendingHeredocs.Count == 0 && hereDocs.Count == 0)
+            && hereDocs.Count == 0 && !redirects.Any(r => r.Here is not null))
             return new Command.ShAssignment(assignmentPairs.ToImmutable(), Redirects: redirects.Count == 0 ? default : redirects.ToImmutable());
-
-        // Collect heredoc bodies in order for all pending heredoc redirects.
-        if (pendingHeredocs.Count > 0)
-            CollectHereDocBodies(pendingHeredocs, hereDocs);
 
         // `\break` / `'return'`: quoting only escapes alias expansion, so it is still the control builtin.
         if (words.Count > 0 && EscapedControlBuiltin(words[0]) is { } controlName)
@@ -482,12 +454,12 @@ public sealed partial class BashParser
     }
 
     /// <summary>
-    /// Build the bodies of all pending here-documents, in order, from the raw
-    /// source span the LEXER recorded on each delimiter token.
+    /// The here-document whose delimiter is <paramref name="delimToken"/>, its body read from the raw source span the
+    /// LEXER recorded on that token (<see cref="BashLexer"/>'s body skip).
     /// </summary>
     /// <remarks>
     /// A heredoc body is raw, line-oriented text — bash matches the delimiter
-    /// against whole physical lines with no quote/comment interpretation. The lexer
+    /// against whole lines with no quote/comment interpretation. The lexer
     /// already walked those bodies to skip them (it emits NO body tokens) and
     /// stamped each body's exact <c>[BodyStart, BodyEnd)</c> span on its delimiter
     /// token. We read the text straight from that span. This is deliberately NOT
@@ -495,39 +467,42 @@ public sealed partial class BashParser
     /// after the heredoc put the next TOKEN on the command line, so a cursor-derived
     /// start landed mid-line and swallowed the operator tail into the body (while
     /// still parsing it as code). The body text already includes each line's
-    /// trailing newline, so no join is needed; an empty span is an empty body.
+    /// trailing newline; an empty span is an empty body.
+    ///
+    /// With an unquoted delimiter a backslash-newline is a line continuation, removed as bash reads each line, before
+    /// the <c>&lt;&lt;-</c> tab strip (which then strips only the joined line's start) and before expansion
+    /// (<c>a$x\</c> + <c>b</c> is <c>$xb</c>): <see cref="BashLexer.JoinHereDocContinuations"/>, the rule the lexer's
+    /// delimiter match uses too.
     ///
     /// The token cursor is intentionally not advanced: the command-line newline
     /// remains for <c>ParseList</c> to see the separator and parse what follows.
     /// </remarks>
-    private void CollectHereDocBodies(
-        List<(string Delimiter, bool Expand, bool StripTabs, string? FdVar, int BodyStart, int BodyEnd, int Fd)> pending,
-        ImmutableArray<HereDoc>.Builder hereDocs)
+    private HereDoc HereDocument(BashToken delimToken, bool stripTabs, int fd, string? fdVar)
     {
-        foreach (var (delimiter, expand, stripTabs, fdVar, bodyStart, bodyEnd, hereFd) in pending)
+        var (_, expand) = BashLexer.ParseHeredocDelimiter(delimToken.Value);
+        int bodyStart = delimToken.BodyStart, bodyEnd = delimToken.BodyEnd;
+        string body;
+        if (bodyStart < 0 || bodyEnd <= bodyStart)
         {
-            string body;
-            if (bodyStart < 0 || bodyEnd <= bodyStart)
-            {
-                body = string.Empty;
-            }
-            else
-            {
-                // The span is raw source, so a folded CRLF line ending arrives as
-                // "\r\n"; bash bodies are LF-only, so normalize before storing.
-                body = _input.Substring(bodyStart, bodyEnd - bodyStart).Replace("\r\n", "\n");
-                // A body that runs to end of input with no delimiter line and no
-                // final newline ("here-document delimited by end-of-file") still
-                // ends its last line with "\n" in bash, like every other line.
-                if (!body.EndsWith('\n'))
-                    body += "\n";
-                if (stripTabs)
-                    body = StripHereDocTabs(body);
-            }
-            hereDocs.Add(new HereDoc(body, expand, stripTabs, fdVar, hereFd));
+            body = string.Empty;
         }
+        else
+        {
+            // The span is raw source, so a folded CRLF line ending arrives as
+            // "\r\n"; bash bodies are LF-only, so normalize before storing.
+            body = _input.Substring(bodyStart, bodyEnd - bodyStart).Replace("\r\n", "\n");
+            if (expand)
+                body = BashLexer.JoinHereDocContinuations(body);
+            // A body that runs to end of input with no delimiter line and no
+            // final newline ("here-document delimited by end-of-file") still
+            // ends its last line with "\n" in bash, like every other line.
+            if (!body.EndsWith('\n'))
+                body += "\n";
+            if (stripTabs)
+                body = StripHereDocTabs(body);
+        }
+        return new HereDoc(body, expand, stripTabs, fdVar, fd);
     }
-
     // For <<- bash strips leading TABS (and only tabs) from every body line before
     // storing it. The raw span already carries each line's trailing newline; strip
     // the leading tabs of each line without disturbing any other whitespace.
@@ -682,7 +657,7 @@ public sealed partial class BashParser
         var pairs = ImmutableArray.CreateBuilder<Assignment>();
 
         while (Peek().Kind is BashTokenKind.AssignmentWord or BashTokenKind.Word
-            || Peek().Kind == BashTokenKind.IoNumber || IsCompoundRedirectOp(Peek().Kind))
+            || Peek().Kind == BashTokenKind.IoNumber || IsFileRedirectOp(Peek().Kind))
         {
             // A redirect on a declaration builtin (`export PATH 2>/dev/null`,
             // `local x=1 >/dev/null`) is valid bash. It covers only the builtin's own
@@ -692,7 +667,7 @@ public sealed partial class BashParser
             // leaving it unconsumed made the statement end early. The declaration keeps
             // them (_declRedirects): a `> file` target is created, a refused kind change
             // reports there. Gap: not applied when a value has a `$( )`.
-            if (Peek().Kind == BashTokenKind.IoNumber || IsCompoundRedirectOp(Peek().Kind))
+            if (Peek().Kind == BashTokenKind.IoNumber || IsFileRedirectOp(Peek().Kind))
             {
                 AddRedirect(_declRedirects, ParseRedirect());
                 continue;
@@ -1058,6 +1033,12 @@ public sealed partial class BashParser
         redirects.Add(redirect);
     }
 
+    /// <summary>
+    /// One redirection, any operator of the one table (<see cref="RedirectOperators"/>), with its optional <c>N</c>
+    /// prefix (an <see cref="BashTokenKind.IoNumber"/> token; the caller consumed a <c>{name}</c> prefix and passes it as
+    /// <paramref name="fdVar"/>). A here-document (<c>&lt;&lt;</c> / <c>&lt;&lt;-</c>, Op <c>&lt;&lt;</c>) or here-string
+    /// (Op <c>&lt;&lt;&lt;</c>) carries its text in <see cref="Redirect.Here"/>, the same on every kind of command.
+    /// </summary>
     private Redirect ParseRedirect(string? fdVar = null)
     {
         int fd = -1;
@@ -1072,6 +1053,23 @@ public sealed partial class BashParser
                 throw MakeError($"file descriptor '{fdToken.Value}' out of range", fdToken.Position, "redirect");
         }
 
+        var empty = new CompoundWord(ImmutableArray<WordPart>.Empty);
+        if (Peek().Kind == BashTokenKind.TLess)
+        {
+            int textFd = fd < 0 ? 0 : fd;
+            return new Redirect("<<<", textFd, empty, fdVar, Here: ParseHereString() with { Fd = textFd, FdVar = fdVar });
+        }
+        if (RedirectOperators.IsHereDocument(Peek().Kind))
+        {
+            bool stripTabs = Advance().Kind == BashTokenKind.DLessDash;
+            if (Peek().Kind != BashTokenKind.Word)
+                throw MakeError($"syntax error near unexpected token `{Peek().Value}'", Peek().Position, "redirect");
+            int docFd = fd < 0 ? 0 : fd;
+            // Quoted (`'EOF'` / `"EOF"`) or backslashed (`\EOF`) delimiters suppress expansion; the shared helper is the
+            // single source the lexer's body-skip also uses, so the two can't disagree on the terminator.
+            return new Redirect("<<", docFd, empty, fdVar, Here: HereDocument(Advance(), stripTabs, docFd, fdVar));
+        }
+
         var opToken = Advance();
         string op = opToken.Kind switch
         {
@@ -1082,8 +1080,6 @@ public sealed partial class BashParser
             BashTokenKind.LessAnd => "<&",
             BashTokenKind.AmpGreat => "&>",
             BashTokenKind.AmpDGreat => "&>>",
-            BashTokenKind.DLess => "<<",
-            BashTokenKind.DLessDash => "<<-",
             _ => opToken.Value,
         };
 
@@ -1110,7 +1106,6 @@ public sealed partial class BashParser
 
         return new Redirect(op, fd, target, fdVar, Force: opToken.Value == ">|", ReadWrite: opToken.Value == "<>");
     }
-
     /// <summary>True for a <c>{varname}</c> named-fd prefix token (the lexer only
     /// emits this Word shape when a redirect immediately follows).</summary>
     private static bool IsNamedFdToken(string s)
@@ -1193,55 +1188,25 @@ public sealed partial class BashParser
             Word: new CompoundWord(DecomposeWord(wordToken.Value, braceExpansion: false)));
     }
 
+    /// <summary>
+    /// The redirections after a COMPOUND command's closing keyword (<c>done &lt; in</c>, <c>} 3&lt;&lt;&lt; x</c>,
+    /// <c>fi &gt; out</c>, <c>) {v}&lt;&lt;EOF</c>): the same productions as a simple command's (<see cref="ParseRedirect"/>),
+    /// every operator, with or without an <c>N</c> / <c>{name}</c> prefix. Bash attaches them to the whole compound.
+    /// </summary>
     private ImmutableArray<Redirect> ParseTrailingRedirects()
     {
-        if (!IsNamedCompoundRedirect() && Peek().Kind != BashTokenKind.IoNumber
-            && Peek().Kind != BashTokenKind.TLess
-            && Peek().Kind is not (BashTokenKind.DLess or BashTokenKind.DLessDash)
-            && !IsCompoundRedirectOp(Peek().Kind))
+        if (!IsNamedFdRedirect() && !IsRedirectStart(Peek().Kind))
             return ImmutableArray<Redirect>.Empty;
 
         var redirects = ImmutableArray.CreateBuilder<Redirect>();
         while (true)
         {
-            if (IsNamedCompoundRedirect())
+            if (IsNamedFdRedirect())
             {
                 var fdVar = Advance().Value[1..^1];
-                // `{ ...; } {abc}<<< walrus`: a here-string on a descriptor of its own, its number stored in abc.
-                if (Peek().Kind == BashTokenKind.TLess)
-                    redirects.Add(new Redirect("<<<", 0, new CompoundWord(ImmutableArray<WordPart>.Empty), FdVar: fdVar, Here: ParseHereString()));
-                else
-                    AddRedirect(redirects, ParseRedirect(fdVar));
+                AddRedirect(redirects, ParseRedirect(fdVar));
             }
-            else if (Peek().Kind == BashTokenKind.TLess)
-            {
-                // `done <<< "$output"` — a here-string feeding a whole loop. Before
-                // this, `<<<` was not a compound redirect op at all, so the operator
-                // and its word were left unconsumed: the here-string was DROPPED and
-                // the loop silently read nothing (and in some surroundings the stray
-                // tokens emitted an empty PowerShell pipe element, breaking the parse
-                // of the entire file).
-                var here = ParseHereString();
-                redirects.Add(new Redirect("<<<", 0, new CompoundWord(
-                    ImmutableArray<WordPart>.Empty), FdVar: null, Here: here));
-            }
-            else if (Peek().Kind is BashTokenKind.DLess or BashTokenKind.DLessDash)
-            {
-                // `{ sort; } <<EOF` / `( cat ) <<EOF`: a here-document feeding a whole compound.
-                // Same body capture as a simple command (the lexer stamped the span on the
-                // delimiter token); the AST carries it like a here-string: Op "<<", Here = the body.
-                bool stripTabs = Peek().Kind == BashTokenKind.DLessDash;
-                Advance(); // << or <<-
-                var delimToken = Advance();
-                var (delimiter, expand) = BashLexer.ParseHeredocDelimiter(delimToken.Value);
-                var docs = ImmutableArray.CreateBuilder<HereDoc>(1);
-                CollectHereDocBodies(
-                    new() { (delimiter, expand, stripTabs, null, delimToken.BodyStart, delimToken.BodyEnd, 0) },
-                    docs);
-                redirects.Add(new Redirect("<<", 0, new CompoundWord(
-                    ImmutableArray<WordPart>.Empty), FdVar: null, Here: docs[0]));
-            }
-            else if (Peek().Kind == BashTokenKind.IoNumber || IsCompoundRedirectOp(Peek().Kind))
+            else if (IsRedirectStart(Peek().Kind))
             {
                 AddRedirect(redirects, ParseRedirect());
             }
@@ -1253,24 +1218,23 @@ public sealed partial class BashParser
         return redirects.ToImmutable();
     }
 
-    private bool IsNamedCompoundRedirect() =>
+    /// <summary>A <c>{name}</c> word right before a redirection operator: the descriptor bash allocates into <c>name</c>.</summary>
+    private bool IsNamedFdRedirect() =>
         Peek().Kind == BashTokenKind.Word
         && IsNamedFdToken(Peek().Value)
         && _pos + 1 < _tokens.Count
-        && (IsCompoundRedirectOp(_tokens[_pos + 1].Kind) || _tokens[_pos + 1].Kind == BashTokenKind.TLess);
+        && IsRedirectOp(_tokens[_pos + 1].Kind);
 
-    private static bool IsCompoundRedirectOp(BashTokenKind kind) =>
-        IsRedirectOp(kind)
-            && kind is not BashTokenKind.DLess
-            && kind is not BashTokenKind.DLessDash;
+    /// <summary>A redirection starts here: a descriptor number (the lexer makes one only right before an operator) or an operator.</summary>
+    private static bool IsRedirectStart(BashTokenKind kind) => kind == BashTokenKind.IoNumber || IsRedirectOp(kind);
 
-    private static bool IsRedirectOp(BashTokenKind kind) =>
-        kind is BashTokenKind.Great or BashTokenKind.DGreat
-            or BashTokenKind.Less or BashTokenKind.GreatAnd
-            or BashTokenKind.LessAnd or BashTokenKind.AmpGreat
-            or BashTokenKind.AmpDGreat or BashTokenKind.DLess
-            or BashTokenKind.DLessDash;
+    /// <summary>A redirection that names a file or descriptor (not a here-document or here-string): what a declaration
+    /// builtin's operands take (<see cref="ParseDeclarationPairs"/>).</summary>
+    private static bool IsFileRedirectOp(BashTokenKind kind) =>
+        IsRedirectOp(kind) && !RedirectOperators.SuppliesText(kind);
 
+    /// <summary>Every operator of the one table (<see cref="RedirectOperators.IsRedirect"/>).</summary>
+    private static bool IsRedirectOp(BashTokenKind kind) => RedirectOperators.IsRedirect(kind);
     private static bool IsCompoundDelimiter(string word) =>
         word is "then" or "elif" or "else" or "fi"
             or "do" or "done" or "esac";

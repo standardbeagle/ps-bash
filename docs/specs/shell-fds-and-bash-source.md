@@ -37,6 +37,8 @@ raw slice, so `${BASH_SOURCE[0]:-$0}` printed a literal `$0`. (`BashParser.Words
 | `exec 0/1/2…` with nothing after it (an interactive line), or `exec 1>&-` | **not supported**: message `exec: N: redirecting the shell's own stdin/stdout/stderr with exec is not supported`, status 1 |
 | `exec N>&1`, `exec N>&2` | N becomes a name for the shell's stdout / stderr (`exec 3>&1` + `cmd >&3`, as dotnet-install.sh does) |
 | `exec N<&0`, `exec N</dev/stdin` | N becomes a name for the shell's stdin. INVARIANT: it always succeeds (bash's dup(0) cannot fail while fd 0 is open; it failed `0: Bad file descriptor` here, with or without a console). Its readers read that stdin: `read -u N` is `read`, `cmd <&N` gets the shared stdin's records (`BashFdTable.ReadsShellStdin`; none to forward when no scope or launcher stdin is shared). Guard: `ExecFdTests.ExecDupOfStdin_Succeeds_AndReadsTheShellsStdin`. |
+| `exec N<<< word`, `exec N<<EOF`, `{v}<<< word`, `{v}<<EOF` | opens N (or the lowest free from 10, stored in `v`) on the here-text (`PsEmitter.FdOpenStep` -> `Invoke-BashExecFd N '<<<' (text)`); also on one command (`read -u 3 l 3<<< x`) and after a compound (`done 3<<EOF`) |
+| `exec N>&M-`, `N<&M-` | moves M to N: N becomes a name for M, then M is closed (`PsEmitter.MovedFd`). On one command (`cmd 4>&3-`) N is opened for the command but M is not closed for it (gap) |
 | `exec N<>file`, `{v}<>file` | opens N for reading AND writing, the file created when missing, one position for both (`Redirect.ReadWrite` -> `Invoke-BashExecFd N '<>'` -> `BashFdTable`); a device name is refused |
 
 Failure to open (`exec 3<missing`) writes `exec: missing: No such file or directory`, status 1, and the script goes on
@@ -44,7 +46,9 @@ Failure to open (`exec 3<missing`) writes `exec: missing: No such file or direct
 
 A numbered descriptor on one command (`cmd 9>&1`, `cmd 9>f`, `read -u 7 l 7<f`, `( … ) 3>log`) is opened before the command
 and closed after it, as `exec` would (`PsEmitter.ScopedHighFdRedirects` / `WithScopedHighFds`); an earlier `exec` of the same
-descriptor is not restored. `cmd 3<&0` is ignored (the table has no stdin to name). `1<&2` / `2<&1` are `1>&2` / `2>&1`.
+descriptor is not restored. `cmd 3<&0` is ignored (the table has no stdin to name). `1<&2` / `2<&1` are `1>&2` / `2>&1`. `cmd 1<> f` writes into `f`
+from its start without truncating it (`Invoke-BashRedirect -ReadWrite`, `FileMode.OpenOrCreate`); `cmd 0<> f` reads `f`,
+creating it when missing, and a later `>&0` on the same command writes into it. `2<>` is not modelled.
 
 ### Using a descriptor
 - `read -u N [names]` reads one line from N (`InvokeBashReadCommand`); status 1 at end of file or on a closed N.

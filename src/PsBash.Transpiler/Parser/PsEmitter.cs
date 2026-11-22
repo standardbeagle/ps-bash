@@ -1288,9 +1288,28 @@ public static partial class PsEmitter
         return PsBuild.RedirectFailureChecked(text, PsBuild.ErrexitCheck(ErrexitExitStatement()));
     }
 
+    /// <summary>
+    /// A simple command whose failure set -e acts on: any but the status-neutral builtins - and those too, and a command
+    /// that is only redirections, when a redirection opens a file (<c>: &gt; /nodir/f</c>, <c>&gt; /nodir/f</c>): a file that
+    /// cannot be opened fails the command (status 1). The redirect stage only sets that status (InvokeBashRedirectCommand
+    /// .FailOpen); this check is what ends the shell. REGRESSION: <c>( set -e; : &gt; /nodir/f; echo x )</c> printed x.
+    /// </summary>
     private static bool IsErrexitCheckedSimple(Command.Simple simple) =>
-        !simple.Words.IsDefaultOrEmpty
-        && !(GetLiteralValue(simple.Words[0]) is { } name && ErrexitNeutralBuiltins.Contains(name));
+        simple.Words.IsDefaultOrEmpty
+            ? OpensFile(simple.Redirects)
+            : !(GetLiteralValue(simple.Words[0]) is { } name && ErrexitNeutralBuiltins.Contains(name)) || OpensFile(simple.Redirects);
+
+    /// <summary>A redirection that opens a file by name (not <c>/dev/null</c>, a descriptor, a here-document or <c>{name}</c>).</summary>
+    private static bool OpensFile(ImmutableArray<Redirect> redirects)
+    {
+        if (redirects.IsDefaultOrEmpty) return false;
+        foreach (var r in redirects)
+        {
+            if (r.Here is not null || r.FdVar is not null || r.Op is not (">" or ">>" or ">|" or "&>" or "&>>" or "<")) continue;
+            if (GetLiteralValue(r.Target) != DevicePath.Null) return true;
+        }
+        return false;
+    }
 
     private static bool ContainsCommandSub(Command.ShAssignment assign)
     {
@@ -3372,11 +3391,46 @@ public static partial class PsEmitter
     private static string WithScopedHighFds(string command, List<Redirect> highFds)
     {
         if (highFds.Count == 0) return command;
-        var open = string.Join("; ", highFds.Select(r => $"Invoke-BashExecFd {r.Fd} {PsBuild.SingleQuote(r.OpenOperator)} {EmitArgWord(r.Target)}"));
-        var close = string.Join("; ", highFds.Select(r => r.Fd).Distinct().Select(fd => $"Invoke-BashExecFd {fd} '>&' '-'"));
+        var open = string.Join("; ", highFds.Select(r => FdOpenStep(r, exec: false)));
+        var close = string.Join("; ", highFds.Select(r => r.Fd).Distinct().Select(PsBuild.ExecFdClose));
         return "& { " + open + "; try { " + command + " } finally { $__psbash_fdRc = $global:LASTEXITCODE; " + close
              + "; $global:LASTEXITCODE = $__psbash_fdRc } }";
     }
+
+    /// <summary>
+    /// THE <c>Invoke-BashExecFd</c> call that opens one redirection's descriptor (its number, or a <c>{name}</c> one the
+    /// runtime allocates), for <c>exec</c> (<see cref="TryEmitExec"/>), a simple command (<see cref="WithScopedHighFds"/>,
+    /// the <c>{name}</c> path) and a compound command alike: a file (<c>&lt;</c>, <c>&gt;</c>, <c>&gt;&gt;</c>,
+    /// <c>&lt;&gt;</c>), a dup or close (<c>&gt;&amp;M</c>, <c>&gt;&amp;-</c>), a move (<c>N&gt;&amp;M-</c>: the dup, then, for
+    /// <paramref name="exec"/>, M closed; for one command M stays open, as it is again after it), or a here-document's /
+    /// here-string's text (<see cref="Redirect.Here"/>, opened as text: operator <c>&lt;&lt;&lt;</c>).
+    /// REGRESSION: <c>exec {hd}&lt;&lt;EOF</c> opened a file named by the delimiter, and <c>exec 4&gt;&amp;3-</c> a file named <c>3-</c>.
+    /// </summary>
+    private static string FdOpenStep(Redirect r, bool exec)
+    {
+        string op = r.Here is null ? r.OpenOperator : "<<<";
+        string target = r.Here is { } here ? "(" + EmitHereDocLiteral(here) + ")" : EmitArgWord(r.Target);
+        if (r.FdVar is { } fdVar)
+            return PsBuild.ExecFdNamed(fdVar, op, target);
+        if (r.Here is null && MovedFd(r) is { } from)
+        {
+            string dup = PsBuild.ExecFd(r.Fd, r.Op, PsBuild.SingleQuote(from.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            return exec ? dup + "; " + PsBuild.ExecFdClose(from) : dup;
+        }
+        return PsBuild.ExecFd(r.Fd, op, target);
+    }
+
+    /// <summary>The descriptor M of a move, <c>N&gt;&amp;M-</c> / <c>N&lt;&amp;M-</c> (bash: dup M onto N, then close M); null otherwise.</summary>
+    private static int? MovedFd(Redirect r) =>
+        r.Op is ">&" or "<&" && GetLiteralValue(r.Target) is { Length: > 1 } t && t[^1] == '-' && IsAllDigits(t[..^1])
+        && int.TryParse(t.AsSpan(0, t.Length - 1), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int m)
+            ? m : null;
+
+    /// <summary>A move on stdout / stderr (<c>&gt;&amp;3-</c>) as the dup it is for this command's output (the close of 3 is not modelled).</summary>
+    private static Redirect AsDupWhenMove(Redirect r) =>
+        r.Here is null && r.Fd is 1 or 2 && MovedFd(r) is { } m
+            ? r with { Target = LiteralWord(m.ToString(System.Globalization.CultureInfo.InvariantCulture)) }
+            : r;
 
     private static string EmitBraceGroup(Command.BraceGroup braceGroup)
     {
@@ -3420,22 +3474,21 @@ public static partial class PsEmitter
             || text.StartsWith("& {", StringComparison.Ordinal))
             return text;
 
-        // `command cat` / `command -p sort`: the command it runs is the reader, and Invoke-BashCommand hands it the pipeline.
-        if (name == "command")
-            return StdinReaders.CommandTarget(args) is { } target && StdinReaders.ShouldFeed(target.Name, target.Args)
-                ? PsBuild.StdinFeed + " | " + text
-                : text;
-        if (!StdinReaders.ShouldFeed(name, args))
+        // The one decision (StdinReaders.Plan; a run-time name gets it in the psm1 BashDynamicCommandBody). `command cat` /
+        // `command -p sort` are planned as the command they run, which Invoke-BashCommand hands the pipeline.
+        var plan = StdinReaders.Plan(name, args);
+        if (plan == StdinPlan.None)
             return text;
-
-        if (StdinReaders.Classify(name) != StdinReaders.Kind.Native)
+        if (plan == StdinPlan.Pipe)
             return PsBuild.StdinFeed + " | " + text;
 
         // Not `feed | prog`: probing the shared stdin before the program starts BLOCKED until a record
         // arrived or the stdin ended, so under a launcher whose stdin is an open, silent pipe (an agent's
         // shell tool) every native command hung — `git --version` included. The program gets the stdin as
         // its real process stdin instead, and the command ends when the program does.
-        return PsBuild.NativeStdinScope(name, text);
+        // REGRESSION: `command prog` and `command nosuch` were piped the feed, and hung as any program did.
+        string program = name == "command" && StdinReaders.CommandTarget(args) is { } target ? target.Name : name;
+        return PsBuild.NativeStdinScope(program, text);
     }
 
     private static bool IsNohup(Command.Simple s) =>
@@ -5959,9 +6012,7 @@ public static partial class PsEmitter
             var opens = new List<string>();
             foreach (var r in cmd.Redirects)
             {
-                if (r.FdVar is not { } fdVar) continue;
-                string target = r.Here is { } fdHere ? "(" + EmitHereDocLiteral(fdHere) + ")" : EmitArgWord(r.Target);
-                opens.Add($"Invoke-BashExecFd -Variable {PsBuild.SingleQuote(fdVar)} -Operator {PsBuild.SingleQuote(r.OpenOperator)} -Target {target}");
+                if (r.FdVar is not null) opens.Add(FdOpenStep(r, exec: false));
             }
             var rest = cmd with { Redirects = [.. cmd.Redirects.Where(r => r.FdVar is null)] };
             return RedirectGroup(EmitSimple(rest), body => ". { " + string.Join("; ", opens) + "; " + body + " }");
@@ -6088,34 +6139,8 @@ public static partial class PsEmitter
             return false;
         }
 
-        // `cmd 3<<EOF` / `exec 3<<EOF`: the body is descriptor 3's input (`read -u 3`), not stdin.
-        if (cmd.HereDocs.Any(h => h.Fd >= 3))
-        {
-            var fdDocs = cmd.HereDocs.Where(h => h.Fd >= 3).ToList();
-            var opens = string.Join("; ", fdDocs.Select(h =>
-                $"Invoke-BashExecFd {h.Fd} '<' (Invoke-ProcessSub {{ {EmitHereDocLiteral(h)} | Emit-BashLine }})"));
-            bool isExec = cmd.Words.Length == 1 && GetLiteralValue(cmd.Words[0]) == "exec";
-            if (isExec && cmd.HereDocs.Length == fdDocs.Count)
-            {
-                result = opens;
-                return true;
-            }
-            var others = cmd.HereDocs.RemoveRange(fdDocs);
-            string inner = EmitSimple(new Command.Simple(cmd.Words, cmd.EnvPairs, cmd.Redirects, others));
-            var closes = string.Join("; ", fdDocs.Select(h => $"Invoke-BashExecFd {h.Fd} '<&' '-'"));
-            // Closing resets the status, so keep the command's own.
-            result = RedirectGroup(inner, body => $". {{ {opens}; {body}; $__psbashFdRc = $global:LASTEXITCODE; {closes}; $global:LASTEXITCODE = $__psbashFdRc }}");
-            return true;
-        }
-
-        // `exec 4<<<"text"`: the parser leaves the fd as a lone numeric word beside the here-document.
-        if (cmd.Words.Length == 2 && cmd.HereDocs.Length == 1 && cmd.Redirects.IsDefaultOrEmpty && cmd.EnvPairs.IsEmpty
-            && GetLiteralValue(cmd.Words[0]) == "exec"
-            && GetLiteralValue(cmd.Words[1]) is { Length: > 0 } fdText && fdText.All(char.IsAsciiDigit))
-        {
-            result = $"Invoke-BashExecFd {fdText} '<' (Invoke-ProcessSub {{ {EmitHereDocLiteral(cmd.HereDocs[0])} | Emit-BashLine }})";
-            return true;
-        }
+        // Only stdin's here-documents are here: `cmd 3<<EOF`, `exec 4<<< x`, `{v}<<EOF` are redirections of their own
+        // descriptor (Redirect.Here), opened by FdOpenStep like any other.
 
         // When multiple heredocs exist, use the last one for stdin (bash behavior).
         var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, cmd.Redirects);
@@ -6242,6 +6267,21 @@ public static partial class PsEmitter
             return false;
         }
 
+        // `cat 0<> f` / `echo XY 0<> f >&0`: `<>` opens f for reading and writing, creating it and never truncating it;
+        // a later `>&0` / `2>&0` writes into that file (from its start). Read as `< f` once f exists.
+        if (inputRedirect.ReadWrite)
+        {
+            int at = cmd.Redirects.IndexOf(inputRedirect);
+            var plain = cmd.Redirects.Select((r, i) =>
+                i == at ? r with { ReadWrite = false }
+                : i > at && r.Op == ">&" && r.Fd is 1 or 2 && r.FdVar is null && GetLiteralValue(r.Target) == "0"
+                    ? new Redirect("<", r.Fd, inputRedirect.Target, ReadWrite: true)
+                    : r);
+            TryEmitInputRedirect(cmd with { Redirects = [.. plain] }, out var fed);
+            string touch = PsBuild.TouchRedirectTarget(EmitFileRedirectTarget(inputRedirect.Target), append: true);
+            result = RedirectGroup(fed, body => ". { " + touch + "; " + body + " }");
+            return true;
+        }
         var remaining = cmd.Redirects.Remove(inputRedirect);
         var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, remaining);
         var target = EmitInputRedirectTarget(inputRedirect.Target);
@@ -7069,11 +7109,9 @@ public static partial class PsEmitter
         var steps = new List<string>();
         foreach (var r in cmd.Redirects)
         {
-            // `exec N<&-` / `exec N>&-` close; `exec N>&M` duplicates; the rest open a file.
-            // `exec {fd}>f`: the runtime picks the descriptor (10 up) and stores it in fd; `exec {fd}>&-` closes $fd.
-            steps.Add(r.FdVar is { } fdVar
-                ? $"Invoke-BashExecFd -Variable {PsBuild.SingleQuote(fdVar)} -Operator {PsBuild.SingleQuote(r.OpenOperator)} -Target {EmitArgWord(r.Target)}"
-                : $"Invoke-BashExecFd {r.Fd} {PsBuild.SingleQuote(r.OpenOperator)} {EmitArgWord(r.Target)}");
+            // `exec N<&-` / `exec N>&-` close; `exec N>&M` duplicates; `exec N>&M-` moves; `exec 3<<< w` / `exec {v}<<EOF`
+            // open text; the rest open a file. `exec {fd}>f`: the runtime picks the descriptor (10 up) and stores it in fd.
+            steps.Add(FdOpenStep(r, exec: true));
         }
         result = string.Join("; ", steps);
         return true;
@@ -8324,6 +8362,8 @@ public static partial class PsEmitter
             // Not a PowerShell stream: `9>f.txt` / `9>$null` were literal ARGUMENTS ("hi 9>f.txt"), and `9>&1` ended in
             // PowerShell's background `&`. (A simple command opens it around itself: ScopedHighFdRedirects.)
             _ when r.Fd > 6 => $"<# ps-bash: fd {r.Fd} {r.Op} redirect ignored #>",
+            // `cmd 1<<EOF`, `cmd 2<<< w`, `cmd 2<> f`: input on an output descriptor has no PowerShell stream.
+            _ when r.Here is not null || (r.Op == "<" && r.Fd is 1 or 2) => $"<# ps-bash: fd {r.Fd} input redirect ignored #>",
             ">&" or "<&" when r.Fd > 2 && target == "0" => $"<# ps-bash: fd {r.Fd} {r.Op} redirect ignored #>",
             ">" => r.Fd == 1 ? $">{target}" : $"{r.Fd}>{target}",
             ">>" => r.Fd == 1 ? $">>{target}" : $"{r.Fd}>>{target}",
@@ -13521,7 +13561,7 @@ public static partial class PsEmitter
     /// </summary>
     private static void AppendRedirectTail(StringBuilder sb, IEnumerable<Redirect> redirects)
     {
-        var list = redirects as IReadOnlyList<Redirect> ?? redirects.ToList();
+        var list = redirects.Select(AsDupWhenMove).ToList();
         if (TryAppendModelledRedirectTail(sb, list))
             return;
         AppendLegacyRedirectTail(sb, list);
@@ -13544,16 +13584,16 @@ public static partial class PsEmitter
         if (redirects.Count == 0)
             return true;
 
-        var opened = new List<(string Target, bool Append, bool Force)>();
+        var opened = new List<(string Target, bool Append, bool Force, bool ReadWrite)>();
         // Where fd 2 pointed as each target was opened: that open's error is reported there (bash opens left to right,
         // so `2>/dev/null >nodir/f` is silent and `2>e >nodir/f` writes the report into e).
         var openDiag = new List<FdDest>();
         var fd1 = new FdDest(FdDestKind.Default);
         var fd2 = new FdDest(FdDestKind.Default);
-        FdDest Open(string target, bool append, bool force = false)
+        FdDest Open(string target, bool append, bool force = false, bool readWrite = false)
         {
             if (target == "$null") return new FdDest(FdDestKind.Null);
-            opened.Add((target, append, force));
+            opened.Add((target, append, force, readWrite));
             openDiag.Add(fd2);
             return new FdDest(FdDestKind.File, opened.Count - 1);
         }
@@ -13573,6 +13613,11 @@ public static partial class PsEmitter
                 }
                 case "&>" or "&>>":
                     fd1 = fd2 = Open(target, r.Op == "&>>");
+                    break;
+                case "<" when r.ReadWrite && r.Fd == 1:
+                    // `echo XY 1<> f`: f opened for reading and writing - created if missing, never truncated, written
+                    // from its start (bash: `abcdef` becomes `XY\ndef`).
+                    fd1 = Open(target, append: false, readWrite: true);
                     break;
                 case ">&" when target == "-":
                     if (r.Fd == 1) fd1 = new FdDest(FdDestKind.Null); else fd2 = new FdDest(FdDestKind.Null);
@@ -13615,7 +13660,7 @@ public static partial class PsEmitter
         {
             if ((fd1.Kind == FdDestKind.File && fd1.File == i) || (fd2.Kind == FdDestKind.File && fd2.File == i))
                 continue;
-            (opened[i].Append ? touch : truncate).Add(opened[i].Target);
+            (opened[i].Append || opened[i].ReadWrite ? touch : truncate).Add(opened[i].Target);
         }
 
         bool needsStage = fd1.Kind == FdDestKind.File || fd2.Kind == FdDestKind.File
@@ -13658,6 +13703,7 @@ public static partial class PsEmitter
             truncate, touch,
             force: fd1.Kind == FdDestKind.File && opened[fd1.File].Force,
             errorForce: errorPath is not null && opened[fd2.File].Force,
+            readWrite: fd1.Kind == FdDestKind.File && opened[fd1.File].ReadWrite,
             openPlan: RedirectOpenPlan(opened, openDiag, fd1, fd2)));
         // `>f >&2`, `2>f >&2`-style lists: the stage (no -Path) passes stdout on to stderr.
         if (fd1.Kind == FdDestKind.StderrDefault) sb.Append(PsBuild.StdoutToStderrStage);
@@ -13672,7 +13718,7 @@ public static partial class PsEmitter
     /// <c>tN</c> / <c>aN</c> (-Truncate / -Touch element N); a report target after <c>:</c> is <c>null</c>, <c>out</c>
     /// (the original stdout, after <c>2&gt;&amp;1</c>) or the role of a target opened earlier.
     /// </summary>
-    private static string? RedirectOpenPlan(List<(string Target, bool Append, bool Force)> opened, List<FdDest> openDiag,
+    private static string? RedirectOpenPlan(List<(string Target, bool Append, bool Force, bool ReadWrite)> opened, List<FdDest> openDiag,
         FdDest fd1, FdDest fd2)
     {
         if (opened.Count == 0) return null;
@@ -13684,7 +13730,7 @@ public static partial class PsEmitter
         {
             if (fd1.Kind == FdDestKind.File && fd1.File == i) { roles[i] = "p"; ranks[i] = 2 * opened.Count; }
             else if (fd2.Kind == FdDestKind.File && fd2.File == i) { roles[i] = "e"; ranks[i] = 2 * opened.Count + 1; }
-            else if (opened[i].Append) { roles[i] = "a" + touches; ranks[i] = opened.Count + touches++; }
+            else if (opened[i].Append || opened[i].ReadWrite) { roles[i] = "a" + touches; ranks[i] = opened.Count + touches++; }
             else { roles[i] = "t" + truncates; ranks[i] = truncates++; }
         }
         bool needed = false;
@@ -13794,10 +13840,9 @@ public static partial class PsEmitter
         {
             // `{ ...; } {abc}<<< w` / `{abc}>f`: bash opens a descriptor of its own (10 up), stores its number in abc and
             // leaves it open after the command; the body's stdin/stdout are not touched.
-            if (redirect.FdVar is { } fdVar)
+            if (redirect.FdVar is not null)
             {
-                string target = redirect.Here is { } fdHere ? "(" + EmitHereDocLiteral(fdHere) + ")" : EmitArgWord(redirect.Target);
-                namedFds.Add($"Invoke-BashExecFd -Variable {PsBuild.SingleQuote(fdVar)} -Operator {PsBuild.SingleQuote(redirect.OpenOperator)} -Target {target}");
+                namedFds.Add(FdOpenStep(redirect, exec: false));
                 continue;
             }
             // `<` file and `<<<` here-string both supply the group's stdin; the last

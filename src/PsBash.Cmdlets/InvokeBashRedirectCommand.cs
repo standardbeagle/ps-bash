@@ -51,6 +51,11 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
     [Parameter]
     public SwitchParameter Force { get; set; }
 
+    /// <summary><c>1&lt;&gt; f</c>: -Path is opened for reading and writing - created if missing, never truncated, written
+    /// from its start (bash turns <c>abcdef</c> into <c>XY\ndef</c> with <c>echo XY 1&lt;&gt; f</c>).</summary>
+    [Parameter]
+    public SwitchParameter ReadWrite { get; set; }
+
     /// <summary><c>2&gt;|</c>: the stderr target's noclobber override.</summary>
     [Parameter]
     public SwitchParameter ErrorForce { get; set; }
@@ -157,7 +162,7 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
             if (!TryOpen(t, append: true, force: false, out var s)) return; else s?.Dispose();
         if (Path is not null)
         {
-            if (!TryOpen(Path, Append, Force, out var s)) return;
+            if (!TryOpen(Path, Append, Force, out var s, readWrite: ReadWrite)) return;
             _stream = s;
         }
         if (ErrorPath is not null)
@@ -191,7 +196,7 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
             foreach (var step in plan)
             {
                 var (raw, append, force) = RoleTarget(step.Role);
-                if (!TryOpen(raw, append, force, out var s, message => ReportTo(step.Report, message, held))) return;
+                if (!TryOpen(raw, append, force, out var s, message => ReportTo(step.Report, message, held), readWrite: step.Role == "p" && ReadWrite)) return;
                 held[step.Role] = (raw, s);
             }
             if (held.Remove("p", out var p)) _stream = p.Stream;
@@ -241,13 +246,13 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
     /// diagnostic (<c>s.sh: line 3: nodir/f: No such file or directory</c>, <see cref="ShellDiagnostic"/>), written on
     /// stderr unless <paramref name="report"/> sends it elsewhere.
     /// </summary>
-    private bool TryOpen(string raw, bool append, bool force, out RedirectFileWriter? stream, Action<string>? report = null)
+    private bool TryOpen(string raw, bool append, bool force, out RedirectFileWriter? stream, Action<string>? report = null, bool readWrite = false)
     {
         stream = null;
         // `> $x` that expanded to several words or none: bash's "$x: ambiguous redirect", a failed open like any other.
-        if (RedirectTarget.IsAmbiguous(raw, out string shown)) return FailOpen(shown, "ambiguous redirect", raw, report);
+        if (RedirectTarget.IsAmbiguous(raw, out string shown)) return FailOpen(shown, "ambiguous redirect", report);
         // `> ''`: no file is named (bash: ": No such file or directory"; .NET's own text named its parameter).
-        if (raw.Length == 0) return FailOpen(raw, "No such file or directory", raw, report);
+        if (raw.Length == 0) return FailOpen(raw, "No such file or directory", report);
         // Opening a stream device, /dev/null or /dev/full always succeeds and creates nothing (null stream: written
         // elsewhere, or discarded).
         var device = DevicePath.Classify(raw);
@@ -263,11 +268,11 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
                 return true;
             }
             // `set -C`: a truncating `>` never overwrites an existing regular file (`>|` and `>>` do).
-            if (!append && !force && File.Exists(target)
+            if (!append && !force && !readWrite && File.Exists(target)
                 && SessionState.PSVariable.GetValue("__BashNoclobber") is true)
                 throw new IOException("cannot overwrite existing file");
             FileSystemHelpers.ThrowIfNotWritableName(target);   // `> twenty/`: "Is a directory"
-            stream = new RedirectFileWriter(new FileStream(target, append ? FileMode.Append : FileMode.Create,
+            stream = new RedirectFileWriter(new FileStream(target, append ? FileMode.Append : readWrite ? FileMode.OpenOrCreate : FileMode.Create,
                 FileAccess.Write, FileShare.ReadWrite, bufferSize: 64 * 1024));
             return true;
         }
@@ -280,37 +285,27 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
             // a terminating error: inside an emitted `try { }` (stdin scope, env prefix, …) one
             // aborts every later statement in the block. UpstreamStop ends the upstream stages the
             // way `Select-Object -First` does — not an error, so the statement just ends with
-            // status 1. Under `set -e` stopping the script IS the bash behavior, so terminate then.
+            // status 1. `set -e` is the emitted statement check's (FailOpen).
             string reason = Directory.Exists(target) ? "Is a directory"
                 : ex is UnauthorizedAccessException ? "Permission denied"
                 : FileSystemHelpers.ReadErrorMessage(ex);
-            return FailOpen(raw, reason, raw, report);
+            return FailOpen(raw, reason, report);
         }
     }
 
     /// <summary>
     /// A redirect that cannot be opened: bash's <c>s.sh: line 3: SHOWN: REASON</c>, status 1, and the command does not
-    /// run; under <c>set -e</c> (no ERR trap) the script ends. Always false (the open failed).
+    /// run. Always false (the open failed). Only a STATUS: whether <c>set -e</c> ends the shell is the one emitted
+    /// errexit check's to decide, which knows what this cmdlet cannot - that the command is an <c>||</c> / <c>if</c>
+    /// operand (<c>__BashErrexitSuppress</c>), or runs in a subshell whose own status is what the parent checks.
+    /// REGRESSION: a terminating error here ended the whole script from <c>echo hi &gt; /nodir/x || echo caught</c> and
+    /// from <c>( set -e; { echo x; } &gt; /nodir/f )</c>, and its text escaped the subshell's <c>2&gt;/dev/null</c>.
     /// </summary>
-    private bool FailOpen(string shown, string reason, string raw, Action<string>? report)
+    private bool FailOpen(string shown, string reason, Action<string>? report)
     {
         string message = ShellDiagnostic.Prefix(SessionState) + $"{shown}: {reason}";
         if (report is null) FileSystemHelpers.WriteBashError(this, message);
         else report(message);
-        // With an ERR trap the emitted statement check runs it first and then exits (the trap makes the
-        // script errexit-checked), so the failure stays a status here.
-        if (SessionState.PSVariable.GetValue("__BashErrexit") is true
-            && SessionState.PSVariable.GetValue("__BashTrapERR") is null)
-        {
-            FileSystemHelpers.SetLastExitCode(this, 1);
-            // Already reported above, where fd 2 pointed (`2>/dev/null >nodir/f` ends the script silently): the
-            // host must not print it again (SdkWorker reads the mark; the script's status is 1).
-            var reported = new IOException(message);
-            reported.Data["psbash.reported"] = true;
-            reported.Data["psbash.exitcode"] = 1;
-            Close();
-            ThrowTerminatingError(new ErrorRecord(reported, "BashRedirectError", ErrorCategory.WriteError, raw));
-        }
         MarkOpenFailed();
         Close();
         UpstreamStop.Throw(this);

@@ -161,6 +161,23 @@ public static class StdinReaders
     }
 
     /// <summary>
+    /// THE decision how a command in a stdin scope gets the scope's stdin, for a literal name (PsEmitter.EmitSimpleFed)
+    /// and a run-time one (the psm1 <c>BashDynamicCommandBody</c>) alike: not at all, piped as records (a ps-bash command
+    /// that reads it, <see cref="ShouldFeed"/>), or as the real process stdin (<see cref="StdinPlan.ProcessStdin"/>:
+    /// anything else - a program, a function, a name that is not found - through <c>Enter-BashNativeStdin</c>, which
+    /// installs the pipe only for a program). <c>command NAME …</c> is planned as NAME.
+    /// Never a pipe into a program or an unknown name: the feed that pipe needs waits for the first record, so under a
+    /// launcher whose stdin is open and silent (an agent's shell tool) <c>$PY -c 'print(2)'</c> and
+    /// <c>command nosuch 2&gt;/dev/null</c> hung until the stdin closed.
+    /// </summary>
+    public static StdinPlan Plan(string name, IReadOnlyList<string?> args)
+    {
+        if (name == "command")
+            return CommandTarget(args) is { } target ? Plan(target.Name, target.Args) : StdinPlan.None;
+        if (!ShouldFeed(name, args)) return StdinPlan.None;
+        return Classify(name) == Kind.Native ? StdinPlan.ProcessStdin : StdinPlan.Pipe;
+    }
+    /// <summary>
     /// <paramref name="args"/> are the words after the command name; a null entry is a non-literal word
     /// (variable, command substitution, glob …), which counts as a positional operand. The runtime asks the same
     /// question of a run-time command name (<c>$c</c>, <c>"$tool"</c>) once its name and operands are known.
@@ -224,4 +241,15 @@ public static class StdinReaders
     // `head 5` / `tail +5`: the legacy ps-bash count shorthand is not a file operand.
     private static bool IsObsoleteCount(string word) =>
         word.Length > 1 && word[0] == '+' && word.AsSpan(1).IndexOfAnyExceptInRange('0', '9') < 0;
+}
+
+/// <summary>How a command in a stdin scope is handed that stdin (<see cref="StdinReaders.Plan"/>).</summary>
+public enum StdinPlan
+{
+    /// <summary>It does not read it: run as is.</summary>
+    None,
+    /// <summary>A ps-bash command that reads it: the scope's records piped in.</summary>
+    Pipe,
+    /// <summary>A program (or a function / unknown name, which the bridge leaves alone): the stdin as its real process stdin.</summary>
+    ProcessStdin,
 }

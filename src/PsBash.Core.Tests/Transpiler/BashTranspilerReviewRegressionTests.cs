@@ -214,7 +214,7 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_ExecFdHereString_OpensTheDescriptorOnTheText()
     {
         var ps = BashTranspiler.Transpile("exec 4<<<\"fdline\"; read -r -u 4 v");
-        Assert.StartsWith("Invoke-BashExecFd 4 '<' (Invoke-ProcessSub", ps);
+        Assert.StartsWith("Invoke-BashExecFd 4 '<<<' (", ps);   // the text itself (PsEmitter.FdOpenStep), no temp file
         Assert.Contains("fdline", ps);
     }
 
