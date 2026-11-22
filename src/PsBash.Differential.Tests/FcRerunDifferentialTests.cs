@@ -34,6 +34,14 @@ public class FcRerunDifferentialTests
         + "history -c; fc -s; echo \"empty=$?\"\n"
         + "c=fc; history -s 'echo dyn'; $c -s 2>/dev/null; echo \"dyn=$?\"\n");
 
+    // `fc -s > out`: the redirect is the whole command's, so the re-run's output goes to out (the echoed command line to
+    // stderr). Emitted form: PsBuildTests.Transpile_FcWithARedirect_TakesAndRunsTheRerunInsideTheRedirectedBlock.
+    [SkippableFact]
+    public Task FcRerun_WithARedirect_SendsTheRerunsOutputToTheFile() => Same(
+        "history -s 'echo hello'; fc -s > out 2>/dev/null; echo \"rc=$?\"; cat out\n"
+        + "history -s 'echo two; echo lines'; fc -s >> out 2>/dev/null; cat out\n"
+        + "f() { history -s 'echo inf'; fc -s > fo 2>/dev/null; }; f; cat fo\n");
+
     // REGRESSION (review of the port): the re-run had its own copy of eval's call site, without the return check, the loop
     // mode or the function's locals.
     [SkippableFact]

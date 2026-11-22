@@ -1293,8 +1293,10 @@ public static partial class PsEmitter
         if (WithErrexitExempt(() => TryEmitAndOrEndingInStatementKeyword(andOr)) is { } keywordForm)
             return PsBuild.ErrexitSuppressed(keywordForm);
 
-        var chain = EmitAndOrList(andOr, errexitFinalOperand: true);
-        return PsBuild.ErrexitAndOrList(chain, ErrexitExitStatement());
+        var chain = EmitAndOrList(andOr, errexitFinalOperand: true, out bool passesReturn);
+        var list = PsBuild.ErrexitAndOrList(chain, ErrexitExitStatement());
+        // The final operand's block holds a return that leaves the caller: the check follows the whole list (RedirectGroup).
+        return passesReturn ? PsBuild.GroupPassingReturn(list) : list;
     }
 
     /// <summary>
@@ -1379,10 +1381,10 @@ public static partial class PsEmitter
         var savedCaptureBody = _captureBody;
         _captureBody = body;
         // A refused assignment in `$( ... )` / `<( ... )` drops the rest of the substitution's line, not the line the
-        // substitution is on (`u=$(r=2; echo x); echo "$?"` prints 1). REGRESSION: the outer `echo` was dropped too.
-        bool savedReadonlyViolation = _readonlyViolation;
+        // substitution is on (`u=$(r=2; echo x); echo "$?"` prints 1): EmitCapturedCore's EmitterScope. REGRESSION: the
+        // outer `echo` was dropped too.
         try { return EmitCapturedCore(body, scoped); }
-        finally { _captureBody = savedCaptureBody; _readonlyViolation = savedReadonlyViolation; }
+        finally { _captureBody = savedCaptureBody; }
     }
 
     /// <param name="body">The command substitution\'s body.</param>
@@ -1419,16 +1421,15 @@ public static partial class PsEmitter
         else _errexitExemptDepth++;
         // A substitution body is a SUBSHELL: `exit N` inside `$( … )` / `<( … )` leaves only it
         // (`v=$(exit 3); echo $?` prints 3). Raise the depth so `exit` emits the scoped `return`;
-        // PipelineHead / Invoke-ProcessSub supply the script block it returns from.
+        // PipelineHead / Invoke-ProcessSub supply the script block it returns from. A nested emission scope (EmitterScope).
+        var scope = EmitterScope.Enter();
         _subshellDepth++; var subRoOuter = EnterSubshellTables();
         // A body that is sure to get the subshell scope (PipelineHead) has the ERR trap put aside at run time
         // (ErrTrapInheritance), so `x=$(trap 'echo E' ERR; false)` fires its own trap; one that may run unscoped keeps
         // the static errtrace test.
-        bool savedErrTrapSub = PsBuild.ErrTrapNeedsErrtrace;
         PsBuild.ErrTrapNeedsErrtrace = !(scoped && !CannotChangeShellState(body));
         // No lexical loop reaches into the substitution: with one around it a `break` ends the substitution, without one
         // it warns as it would here (LoopBarrierKind).
-        var capOuterLabels = _loopLabels; var capOuterBarrier = _loopBarrier;
         _loopBarrier = LoopControlWarnsHere ? LoopBarrierKind.Warn : LoopBarrierKind.EndsSubshell;
         _loopLabels = null;
         try
@@ -1445,9 +1446,8 @@ public static partial class PsEmitter
         }
         finally
         {
-            _captureDepth--; _pipeStageFeedsInput = savedFeed; _subshellDepth--; LeaveSubshellTables(subRoOuter); PsBuild.ErrTrapNeedsErrtrace = savedErrTrapSub;
+            scope.Restore(); _captureDepth--; _pipeStageFeedsInput = savedFeed; LeaveSubshellTables(subRoOuter);
             _errexitMode = savedMode; _errexitExemptDepth = savedExempt; _lineBase = savedLineBase; _redirectLine = savedRedirectLine;
-            _loopLabels = capOuterLabels; _loopBarrier = capOuterBarrier;
         }
     }
 
@@ -1492,7 +1492,7 @@ public static partial class PsEmitter
     }
 
     /// <summary>
-    /// One command: its frame records <see cref="_leavingReturns"/> as it begins, so <see cref="RedirectGroup"/> can tell
+    /// One command: its frame records <see cref="_leavingReturns"/> as it begins, so <see cref="RedirectGroup(string, Func{string, string})"/> can tell
     /// whether the command's own text (its body) has a <c>return</c> in it.
     /// </summary>
     private static string EmitCommand(Command cmd)
@@ -1547,6 +1547,12 @@ public static partial class PsEmitter
     /// </summary>
     public static string? Transpile(string bash, TranspileContext context)
     {
+        // A top-level unit starts from nothing a previous transpile on this thread left (ResetUnitState): the same text
+        // always gives the same PowerShell.
+        if (_transpileNesting == 0) ResetUnitState(bash);
+        // The unit's root is its own frame for RedirectGroup (nested text too: static eval text emitted inline).
+        int priorGroupMark = _groupReturnMark;
+        _groupReturnMark = _leavingReturns;
         var prior = _context;
         var priorErrexit = _errexitMode; var priorErrtrace = _errtraceMode; var priorErrexitSet = _errexitSetMode;
         var priorExempt = _errexitExemptDepth;
@@ -1694,6 +1700,7 @@ public static partial class PsEmitter
         finally
         {
             _transpileNesting--; _scriptRoot = priorScriptRoot; _readerMode = priorReaderMode; _redirectLine = priorRedirectLine;
+            _groupReturnMark = priorGroupMark;
             _context = prior;
             _intVars = priorIntVars;
             _assocVars = priorAssocVars;
@@ -1730,6 +1737,64 @@ public static partial class PsEmitter
             PsBuild.InTrapAction = priorInTrapAction;
             _bashLinenoMode = priorBashLineno;
         }
+    }
+
+    /// <summary>
+    /// THE start of a top-level transpile (<see cref="Transpile(string, TranspileContext)"/> at nesting 0): every
+    /// <c>[ThreadStatic]</c> field of the emitter and of <see cref="PsBuild"/> that a transpile changes goes back to its
+    /// first value, so nothing an earlier unit on this thread left (a return count, a depth, a name sequence, a function
+    /// table) changes the text emitted for this one. REGRESSION: <see cref="_leavingReturns"/> was never reset, so the same
+    /// script emitted different PowerShell depending on what had been transpiled before it. Not reset (the caller's
+    /// inputs to this transpile): <see cref="InheritedPipefail"/>, <see cref="InheritedNounset"/>,
+    /// <see cref="TrapActionSignal"/>, <see cref="FusionEnabledOverride"/>, <see cref="EvalLocalNames"/>,
+    /// <see cref="_inStdinScope"/>, <see cref="_launcherStdin"/>, and <see cref="_transpileNesting"/> (0 here by
+    /// definition). Guards: <c>EmitterStateGuardTests</c> (every field is here or exempt; the same text gives the same
+    /// PowerShell whatever was transpiled before it). The state of one nested emission scope is <see cref="EmitterScope"/>.
+    /// </summary>
+    private static void ResetUnitState(string bash)
+    {
+        _unitNameSalt = UnitNameSalt(bash);
+        _aliasDefs = null; _expandAliasesLine = 0; _aliasStaticOnly = false;
+        _lexicalLocals = null; _storeLoopVars = null; _jobCapture = null; _jobCaptureUsed = null; _envPrefixShadow = null;
+        _dynLocals = null; _functionLocalNames = null; _collectScalarLocals = null; _splitLoopVars = null;
+        _pipefailMode = false; _lineAbandonMode = false; _rootCommand = null; _execRestRoot = null; _discardInteractive = false;
+        _pipeStatusMode = false; _xtraceMode = false; _trapMode = false; _debugTrapMode = false; _declarePrintMode = false;
+        _nounsetMode = false; _loopDepth = 0; _stderrMergeDepth = 0;
+        _intVars = null; _assocVars = null; _arrayVars = null; _caseVars = null; _localAttrNames = null; _globalAttrsInFunctions = null;
+        _readonlyVars = null; _readonlyViolation = false; _runtimeReadonly = false;
+        _scriptReadsStatus = false; _scriptReadsLastArg = false; _scriptPosix = false; _posixSplitNode = null;
+        _inheritErrexitMode = false; _scriptLastpipe = false;
+        _namerefs = null; _litAssigned = null; _pendingNamerefs = null; _runtimeNamerefs = null; _subshellFunctionDepth = 0;
+        _emptyStdinDepth = 0; _context = default; _captureDepth = 0; _subshellDepth = 0; _andOrChainDepth = 0;
+        _errexitMode = false; _errexitSetMode = false; _errexitExemptDepth = 0; _negatedDepth = 0; _negationGuardedAtRuntime = false;
+        _errtraceMode = false; _lineBase = 0; _priorTrapLine = 0; _redirectLine = 0; _scriptRoot = false;
+        _loopReachesPastLine1 = false; _statementLine = 0; _bashLinenoMode = false; _debugSuppress = 0; _dqNestDepth = 0;
+        _captureBody = null; _pipeStageFeedsInput = false; _loopLabels = null; _loopBarrier = default;
+        _evalAtScriptTop = false; _runsDynamicCode = false; _canSetTrap = false; _functionDepth = 0;
+        _evalStdinSeq = 0; _lastpipeStageDepth = 0; _unitFunctions = null; t_testGroupDepth = 0;
+        _inArrayKindGuard = false; _finalAssignment = null; _keyOnlyGuardedPair = null; _outputProcSubCounter = 0;
+        _timeDepth = 0; _stageSeedUsed = false; _pipelineAtArmedStatement = false; _armedStages = false;
+        _armedBase = null; _armedBaseUsed = false; _armedBaseDepth = 0;
+        _leavingReturns = 0; _groupReturnMark = 0; _operandsAreText = false;
+        _liveJobs = null; _callSites = null; _definedFunctions = null; _readerMode = default;
+        _inRunTimeExecBranch = false; _namesLoopControl = false;
+        _stdinOpaque = false; _stdinProbeDepth = 0; _stdinSealed = null;
+        PsBuild.InTrapAction = false; PsBuild.TrapLine = 0; PsBuild.ErrTrapNeedsErrtrace = false;
+    }
+
+    /// <summary>
+    /// Part of the names a unit gives its own save variables (<see cref="_evalStdinSeq"/>, <see cref="_outputProcSubCounter"/>):
+    /// fixed by the unit's text, so the text emitted is the same every time, yet eval text transpiled at run time (a unit of
+    /// its own, whose sequences start at 1 again) does not reuse the names of the code it runs inside.
+    /// </summary>
+    [ThreadStatic] private static string? _unitNameSalt;
+
+    /// <summary>Six digits from an FNV-1a hash of <paramref name="bash"/> (<see cref="_unitNameSalt"/>).</summary>
+    private static string UnitNameSalt(string bash)
+    {
+        uint h = 2166136261;
+        foreach (char c in bash) { h ^= c; h *= 16777619; }
+        return (h % 1000000).ToString("D6", System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <summary>
@@ -2943,7 +3008,7 @@ public static partial class PsEmitter
 
     /// <summary>A body run in this shell with the block's pipe as its stdin scope (eval / source text fed a file).</summary>
     private static string DotStdinBlock(string body) =>
-        ". { " + PsBuild.StdinScope(body, "__psbash_evin_prev" + (++_evalStdinSeq)) + " }";
+        ". { " + PsBuild.StdinScope(body, "__psbash_evin_prev" + _unitNameSalt + (++_evalStdinSeq)) + " }";
 
     /// <summary>
     /// <paramref name="target"/>, or for an <see cref="PsBuild.ArraySlot"/> the slot bound once (<see cref="PsBuild.BindArraySlot"/>,
@@ -3016,10 +3081,10 @@ public static partial class PsEmitter
         var added = new List<string>();
         foreach (var v in localVars)
             if (vars.Add(v)) added.Add(v);
-        // A function body starts with no lexical loop: its `break` stays bare (dynamic, as bash).
-        var outerLabels = _loopLabels;
+        // A function body is a nested emission scope (EmitterScope): its returns leave the function, not a group around
+        // it, and it starts with no lexical loop: its `break` stays bare (dynamic, as bash).
+        var scope = EmitterScope.Enter();
         _loopLabels = null;
-        var outerBarrier = _loopBarrier;
         _loopBarrier = LoopBarrierKind.None;
 
         try
@@ -3027,10 +3092,9 @@ public static partial class PsEmitter
             // A function is typically a FILTER (`echo x | f`): its stdin is whatever it is called with, not the
             // launcher's. Under the launcher-stdin scope its body therefore reads `$input`/the pipe as before.
             _functionDepth++;
-            int fnLeavingReturns = _leavingReturns;   // the body's returns leave the function, not a group around it
             // The body starts without the caller's ERR trap unless errtrace is on: the runtime puts it aside on entry
             // (PsBuild.FunctionPrologue -> ErrTrapInheritance), so a trap the body sets itself fires there.
-            bool savedErrTrap = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = false;
+            PsBuild.ErrTrapNeedsErrtrace = false;
             string body;
             // The body is emitted as inside a stdin scope; one PROVEN to read no stdin (ProbeStdinScope) comes out
             // unchanged. Any other (`indent() { sed 's/^/  /'; }`, `f() { read -r x; }`, but also `f() { g; }` or
@@ -3058,7 +3122,7 @@ public static partial class PsEmitter
                     ? EmitNamerefVariants(func.Name, dynamicNameref, ComputeBody)
                     : ComputeBody();
             }
-            finally { _functionDepth--; PsBuild.ErrTrapNeedsErrtrace = savedErrTrap; _leavingReturns = fnLeavingReturns; }
+            finally { _functionDepth--; scope.Restore(); }
             // `trap '...' RETURN` inside the function runs when the function returns (then is spent, so a
             // later call does not re-fire it). Only a body that calls `trap` pays for the wrapper.
             if (body.Contains("Invoke-BashTrap", StringComparison.Ordinal))
@@ -3141,8 +3205,6 @@ public static partial class PsEmitter
                 _runtimeNamerefs.Clear();
                 if (priorRuntimeNamerefs is not null) _runtimeNamerefs.UnionWith(priorRuntimeNamerefs);
             }
-            _loopLabels = outerLabels;
-            _loopBarrier = outerBarrier;
             foreach (var v in added) vars.Remove(v);
         }
     }
@@ -3251,16 +3313,17 @@ public static partial class PsEmitter
         // stopped and the `echo $?` never ran. Emit the body with the subshell
         // depth raised so `exit N` becomes a SCOPED `$LASTEXITCODE = N; return`,
         // and give that `return` a script block to return from.
-        _subshellDepth++; var subRoOuter = EnterSubshellTables(); bool subRoViolation = _readonlyViolation; // `( r=2 ); echo` goes on
-        int subLeavingReturns = _leavingReturns;   // the body's exits leave the subshell's own block, not a group around it
-        var outerLabels = _loopLabels; var outerBarrier = _loopBarrier;
-        _loopLabels = null; _loopBarrier = subshell.KeepsLoopLevel ? outerBarrier : LoopBarrierKind.Warn;
+        // A nested emission scope (EmitterScope): the body's exits leave the subshell's own block, not a group around it,
+        // and a refused assignment in it drops nothing outside (`( r=2 ); echo` goes on).
+        var scope = EmitterScope.Enter();
+        _subshellDepth++; var subRoOuter = EnterSubshellTables();
+        _loopLabels = null; _loopBarrier = subshell.KeepsLoopLevel ? _loopBarrier : LoopBarrierKind.Warn;
         // The ERR trap is put aside at run time (BashShellState.Save -> ErrTrapInheritance): `( trap 'echo err' ERR; false )`
         // fires the subshell's own trap, which a static errtrace test here kept from running.
-        string body; bool savedErrTrapSh = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = false;
+        string body; PsBuild.ErrTrapNeedsErrtrace = false;
         // `( … ) < file` gives the body its own stdin (a scope); otherwise it inherits the enclosing one.
         try { body = EmitCompoundBody(subshell.Redirects, () => EmitBody(subshell.Body)); }
-        finally { _subshellDepth--; LeaveSubshellTables(subRoOuter); _readonlyViolation = subRoViolation; PsBuild.ErrTrapNeedsErrtrace = savedErrTrapSh; _loopLabels = outerLabels; _loopBarrier = outerBarrier; _leavingReturns = subLeavingReturns; }
+        finally { scope.Restore(); LeaveSubshellTables(subRoOuter); }
 
         // One subshell scope (PsBuild.ShellStateScope): a child PS scope plus save/restore of the
         // shell state a scope does not isolate, so nothing the body changes — `set -e`, variables,
@@ -3440,10 +3503,11 @@ public static partial class PsEmitter
     {
         // The job is a subshell (as EmitSubshell): `exit` and an errexit failure leave only the job, and the ERR trap
         // fires in it only under errtrace. `{ false; echo x; } &` under set -e printed x and the job's status was 0.
+        // A nested emission scope (EmitterScope): a return or exit in the job leaves the job's own block.
+        var scope = EmitterScope.Enter();
         _subshellDepth++; var subRoOuter = EnterSubshellTables();
-        var outerLabels = _loopLabels; var outerBarrier = _loopBarrier;
         _loopLabels = null; _loopBarrier = LoopBarrierKind.Warn;
-        bool savedErrTrap = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = true;
+        PsBuild.ErrTrapNeedsErrtrace = true;
         // A function's lexical local the body reads is handed over at launch (the job's runspace has no such PowerShell
         // variable). A shell scalar, a loop variable included, is in the job's own store copied at the `&`.
         var outerCapture = _jobCapture; var outerCaptureUsed = _jobCaptureUsed;
@@ -3453,7 +3517,7 @@ public static partial class PsEmitter
         string inner;
         HashSet<string> captured;
         try { inner = Emit(bg.Inner); captured = _jobCaptureUsed; }
-        finally { _subshellDepth--; LeaveSubshellTables(subRoOuter); PsBuild.ErrTrapNeedsErrtrace = savedErrTrap; _loopLabels = outerLabels; _loopBarrier = outerBarrier; _jobCapture = outerCapture; _jobCaptureUsed = outerCaptureUsed; }
+        finally { scope.Restore(); LeaveSubshellTables(subRoOuter); _jobCapture = outerCapture; _jobCaptureUsed = outerCaptureUsed; }
         // A job inside a job passes on the copy the outer job holds, which the outer job must then be handed too.
         if (outerCapture is not null)
             foreach (var v in captured)
@@ -5804,7 +5868,7 @@ public static partial class PsEmitter
         foreach (var p in w.Parts)
         {
             if (p is not WordPart.ProcessSub { IsInput: false } ps) { parts.Add(p); continue; }
-            var name = "__psbash_pso" + (++_outputProcSubCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var name = "__psbash_pso" + _unitNameSalt + (++_outputProcSubCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
             bodies.Add((name, (Command)ps.Body));
             parts.Add(new WordPart.DoubleQuoted([new WordPart.SimpleVarSub(name)]));
         }
@@ -5814,7 +5878,7 @@ public static partial class PsEmitter
     /// <summary>Creates each temp file, runs <paramref name="command"/>, then feeds each file to its body; the command's status is kept.</summary>
     private static string WrapOutputProcessSubs(List<(string Var, Command Body)> bodies, string command)
     {
-        var rc = "$__psbash_psoRc" + _outputProcSubCounter.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var rc = "$__psbash_psoRc" + _unitNameSalt + _outputProcSubCounter.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var sb = new StringBuilder();
         foreach (var (v, _) in bodies)
             sb.Append("$env:").Append(v).Append(" = New-BashProcessSubPath; ");
@@ -6223,7 +6287,7 @@ public static partial class PsEmitter
 
     /// <summary>
     /// A simple command fed <c>&lt; file</c> (<paramref name="feed"/> builds the feed around its emitted
-    /// <paramref name="body"/>) behind the guard that reports a file it cannot open, through <see cref="RedirectGroup"/>:
+    /// <paramref name="body"/>) behind the guard that reports a file it cannot open, through <see cref="RedirectGroup(string, Func{string, string})"/>:
     /// a return in the body leaves the function (when the file cannot be opened the body never runs, nor returns).
     /// </summary>
     private static string InputRedirectGuarded(string target, string body, Func<string, string> feed, string? failTail)
@@ -12817,13 +12881,18 @@ public static partial class PsEmitter
         return $"{PsBuild.HoistedCondition(condition)}if ({PsBuild.LastStatusTest(negate)}) {{ {Emit(last)} }}";
     }
 
+    private static string EmitAndOrList(Command.AndOrList andOr) => EmitAndOrList(andOr, errexitFinalOperand: false, out _);
+
     /// <param name="andOr">The <c>&amp;&amp;</c>/<c>||</c> chain to emit.</param>
     /// <param name="errexitFinalOperand">
     /// At statement position under errexit (<see cref="EmitAndOrStatement"/>): the final operand is
     /// emitted as errexit-active and records its status (<see cref="PsBuild.ErrexitFinalOperand"/>).
     /// </param>
-    private static string EmitAndOrList(Command.AndOrList andOr, bool errexitFinalOperand = false)
+    /// <param name="finalPassesReturn">Set when that final operand's block holds a return that must leave the caller: the
+    /// statement then ends with the check (<see cref="PsBuild.GroupPassingReturn"/>, <see cref="EmitAndOrStatement"/>).</param>
+    private static string EmitAndOrList(Command.AndOrList andOr, bool errexitFinalOperand, out bool finalPassesReturn)
     {
+        finalPassesReturn = false;
         andOr = andOr with { Commands = ResolveLastArgRefs(andOr.Commands) };
         if (TryEmitAndOrEndingInStatementKeyword(andOr) is { } keywordForm)
             return keywordForm;
@@ -12835,6 +12904,10 @@ public static partial class PsEmitter
             // bash exempts every operand but the last from errexit.
             if (!isFinal) _errexitExemptDepth++;
             int operandStart = sb.Length;
+            // Each operand is its own frame for RedirectGroup (as EmitCommand is for a command): a return in an earlier
+            // operand, or earlier in the function, never makes this operand's block pass one on.
+            int operandMark = _leavingReturns, priorMark = _groupReturnMark;
+            _groupReturnMark = operandMark;
             _andOrChainDepth++;
             try
             {
@@ -12937,6 +13010,7 @@ public static partial class PsEmitter
             {
                 _andOrChainDepth--;
                 if (!isFinal) _errexitExemptDepth--;
+                _groupReturnMark = priorMark;
             }
 
             if (isFinal && errexitFinalOperand)
@@ -12945,11 +13019,13 @@ public static partial class PsEmitter
                 int textStart = i > 0 ? operandStart + andOr.Ops[i - 1].Length + 2 : operandStart;
                 var operand = sb.ToString(textStart, sb.Length - textStart);
                 sb.Length = textStart;
-                // Its block holds the operand: a return in it leaves the function too (RedirectGroup; the passing form is
-                // a statement list, so one `$( )` makes it a chain operand). REGRESSION: under set -e or an ERR trap
-                // `f() { [[ 1 ]] && { return 6; }; echo no; }` printed no.
-                string finalOperand = RedirectGroup(operand, PsBuild.ErrexitFinalOperand);
-                sb.Append(finalOperand.StartsWith(PsBuild.GroupReturnVar, StringComparison.Ordinal) ? PsBuild.Subexpr(finalOperand) : finalOperand);
+                // Its block holds the operand, the last thing the list runs: a return in it leaves the function too, by the
+                // check EmitAndOrStatement puts after the whole list (RedirectGroup against this operand's own mark), so the
+                // operand stays a dot-sourced block whose output streams. REGRESSION: under set -e or an ERR trap
+                // `f() { [[ 1 ]] && { return 6; }; echo no; }` printed no; then the passing form was put in `$( )`, which
+                // held back all output of `cond && tail -f log` until it ended, and it compared against the enclosing
+                // statement's mark, so one earlier `x || return 1` in a function made every later final operand "pass".
+                sb.Append(RedirectGroup(operand, PsBuild.ErrexitFinalOperand, operandMark, out finalPassesReturn));
             }
 
             // failglob / bad substitution abandons the whole list: `echo *.ZZ || echo alt` must not fall back.
@@ -13178,9 +13254,16 @@ public static partial class PsEmitter
             // (SubshellStageBuiltins), which gives it the scope to end. REGRESSION: `echo q | break` in a loop warned.
             bool lastpipeHere = _scriptLastpipe && i > 0 && i == pipeline.Commands.Length - 1;
             string? wholePipelineText = null;
+            // Each stage of a real pipeline is a nested emission scope (EmitterScope): a return it emits leaves the stage.
             WithLoopBarrier(pipeline.Commands.Length > 1 && !lastpipeHere,
                 pipeline.Commands[i] is Command.Simple && !LoopControlWarnsHere ? LoopBarrierKind.EndsSubshell : LoopBarrierKind.Warn,
-                () => { EmitStage(); return 0; });
+                () =>
+                {
+                    if (pipeline.Commands.Length == 1) { EmitStage(); return 0; }
+                    var stageScope = EmitterScope.Enter();
+                    try { EmitStage(); } finally { stageScope.Restore(); }
+                    return 0;
+                });
             if (mergeStage) _stderrMergeDepth--;
             // A read loop that ran its lazily read producer itself is the whole pipeline (set inside EmitStage).
             if (wholePipelineText is not null) return wholePipelineText;
@@ -13512,6 +13595,7 @@ public static partial class PsEmitter
                 finally { _lastpipeStageDepth--; _armedStages = lastArmed; _errexitExemptDepth = lastExempt; }
             }
             if (!ownsExit) return emit();
+            var scope = EmitterScope.Enter();
             _subshellDepth++; var subRoOuter = EnterSubshellTables();
             // `{ echo one; false; echo two; } | cat` under set -e: the stage is a subshell that inherits -e, so it ends
             // at `false` (its status 1); the pipeline's status is still the last stage's. The stage's statements get
@@ -13520,7 +13604,6 @@ public static partial class PsEmitter
             bool armed = _armedStages;
             string? armedBase = _armedBase;
             int savedExempt = _errexitExemptDepth;
-            bool savedErrTrap = PsBuild.ErrTrapNeedsErrtrace;
             if (armed) { _errexitExemptDepth = 0; PsBuild.ErrTrapNeedsErrtrace = true; }
             // A stage that turns -e on itself (`! { set -e; false; echo x; } | cat`) gets its checks even where the
             // pipeline is exempt: the subshell's own -e applies inside it.
@@ -13530,7 +13613,6 @@ public static partial class PsEmitter
             // carries on in bash, and a `break 2` in a stage's own loop leaves that loop only. A labelled break here
             // unwound the stage's pipeline into the enclosing loop and ended it. A simple stage run as a subshell keeps the
             // stage's barrier (Command.Subshell.KeepsLoopLevel): `echo q | break` in a loop ends only the stage.
-            var outerLabels = _loopLabels; var outerBarrier = _loopBarrier;
             _loopLabels = null;
             if (cmd is not Command.Subshell { KeepsLoopLevel: true }) _loopBarrier = LoopBarrierKind.Warn;
             try
@@ -13542,12 +13624,10 @@ public static partial class PsEmitter
             }
             finally
             {
-                _subshellDepth--;
+                scope.Restore();
                 LeaveSubshellTables(subRoOuter);
                 _armedStages = armed;
                 _errexitExemptDepth = savedExempt;
-                PsBuild.ErrTrapNeedsErrtrace = savedErrTrap;
-                _loopLabels = outerLabels; _loopBarrier = outerBarrier;
             }
         }
 
@@ -15125,7 +15205,7 @@ public static partial class PsEmitter
     [ThreadStatic] private static int _groupReturnMark;
 
     /// <summary><paramref name="text"/>, which ends with a PowerShell <c>return</c> that leaves a function, eval text or a
-    /// subshell: counted for <see cref="RedirectGroup"/>.</summary>
+    /// subshell: counted for <see cref="RedirectGroup(string, Func{string, string})"/>.</summary>
     private static string LeavingReturn(string text)
     {
         _leavingReturns++;
@@ -15143,9 +15223,66 @@ public static partial class PsEmitter
     /// </summary>
     private static string RedirectGroup(string body, Func<string, string> build)
     {
-        if (_leavingReturns == _groupReturnMark) return build(body);
-        _leavingReturns++;   // the check after the block is one more, for an enclosing block
+        if (!BodyLeftByReturn(_groupReturnMark)) return build(body);
         return PsBuild.GroupPassingReturn(build(PsBuild.GroupBody(body)));
+    }
+
+    /// <summary>
+    /// <see cref="RedirectGroup(string, Func{string, string})"/> for a block that is the LAST thing its statement runs
+    /// (errexit's final and-or operand): <paramref name="mark"/> is <see cref="_leavingReturns"/> as the body began, and
+    /// <paramref name="passesReturn"/> tells the statement to end with the check (<see cref="PsBuild.GroupPassingReturn"/>
+    /// around the whole statement), so the block itself stays a chain operand whose output streams.
+    /// </summary>
+    private static string RedirectGroup(string body, Func<string, string> build, int mark, out bool passesReturn)
+    {
+        passesReturn = BodyLeftByReturn(mark);
+        return build(passesReturn ? PsBuild.GroupBody(body) : body);
+    }
+
+    /// <summary>
+    /// True when a return that leaves a function, eval text or a subshell was emitted since <paramref name="mark"/>; the
+    /// check that then follows the block counts as one more, for an enclosing block.
+    /// </summary>
+    private static bool BodyLeftByReturn(int mark)
+    {
+        if (_leavingReturns == mark) return false;
+        _leavingReturns++;
+        return true;
+    }
+
+    /// <summary>
+    /// THE save and restore of the emitter state that belongs to one nested emission scope: a command or process
+    /// substitution, a stage of a pipeline, a <c>&amp;</c> job, a subshell, a function body. Each enters it first
+    /// (<see cref="Enter"/>), sets what its body starts with, and calls <see cref="Restore"/> in its <c>finally</c>. What
+    /// the body leaves stays inside: a return it emits leaves the body's own block (so a block around the scope must not
+    /// pass one on), and its loop labels and barrier, ERR-trap test, subshell depth and refused assignment. REGRESSION:
+    /// each site saved its own subset, so <see cref="_leavingReturns"/> leaked out of <c>$( )</c>, pipe stages and jobs.
+    /// The state of a whole unit is <see cref="ResetUnitState"/>'s.
+    /// </summary>
+    private readonly struct EmitterScope
+    {
+        private readonly int _subshell, _returns, _mark;
+        private readonly List<(string Break, string Continue)>? _labels;
+        private readonly LoopBarrierKind _barrier;
+        private readonly bool _violation, _errTrapNeedsErrtrace;
+
+        private EmitterScope(int subshell, int returns, int mark, List<(string Break, string Continue)>? labels,
+            LoopBarrierKind barrier, bool violation, bool errTrapNeedsErrtrace)
+        {
+            _subshell = subshell; _returns = returns; _mark = mark; _labels = labels; _barrier = barrier;
+            _violation = violation; _errTrapNeedsErrtrace = errTrapNeedsErrtrace;
+        }
+
+        /// <summary>The state as the nested scope starts.</summary>
+        public static EmitterScope Enter() => new(_subshellDepth, _leavingReturns, _groupReturnMark, _loopLabels, _loopBarrier,
+            _readonlyViolation, PsBuild.ErrTrapNeedsErrtrace);
+
+        /// <summary>The nested scope has ended: the enclosing scope's state is back.</summary>
+        public void Restore()
+        {
+            _subshellDepth = _subshell; _leavingReturns = _returns; _groupReturnMark = _mark; _loopLabels = _labels;
+            _loopBarrier = _barrier; _readonlyViolation = _violation; PsBuild.ErrTrapNeedsErrtrace = _errTrapNeedsErrtrace;
+        }
     }
 
     /// <summary>
