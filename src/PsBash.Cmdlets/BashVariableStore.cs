@@ -62,19 +62,22 @@ public static class BashVariableStore
 
     /// <summary>Every bash variable currently set, for <c>env</c> / <c>printenv</c>, under its STORE name (callers key
     /// case-insensitive tables by it, where <c>path</c> and <c>PATH</c> would collide). Whatever PRINTS the name
-    /// demangles it with <see cref="BashNameCase.ToBash"/>.</summary>
+    /// demangles it with <see cref="BashNameCase.ToBash"/>. A native spelling Windows created a variable under
+    /// (<c>windir</c>, <c>Path</c>) comes back UPPER-cased (<see cref="BashNameCase.FromEnvironment"/>): that IS the
+    /// variable, the native spelling being a separate (diverted) bash name.</summary>
     public static IEnumerable<KeyValuePair<string, string>> Enumerate()
     {
         if (ScalarOverlay.Current is { } job)
         {
-            foreach (var kv in job.Entries()) yield return kv;
+            foreach (var kv in job.Entries())
+                yield return new KeyValuePair<string, string>(BashNameCase.FromEnvironment(kv.Key), kv.Value);
             yield break;
         }
         foreach (DictionaryEntry e in Environment.GetEnvironmentVariables())
         {
             var key = e.Key as string;
             if (key is null) continue;
-            yield return new KeyValuePair<string, string>(key, e.Value as string ?? string.Empty);
+            yield return new KeyValuePair<string, string>(BashNameCase.FromEnvironment(key), e.Value as string ?? string.Empty);
         }
     }
 
@@ -105,8 +108,13 @@ public static class BashVariableStore
     public static string? GetExported(string name) => PsBash.Core.ShellExports.Get(name);
 
     /// <summary>The exported variables that are set: a child's environment, for <c>env</c> / <c>printenv</c> / <c>compgen -e</c>.
-    /// Store names, as <see cref="Enumerate"/>.</summary>
-    public static IEnumerable<KeyValuePair<string, string>> EnumerateExported() => PsBash.Core.ShellExports.Enumerate();
+    /// Store names, as <see cref="Enumerate"/> (a native <c>windir</c> is <c>WINDIR</c>). A child's environment block is
+    /// built from <see cref="PsBash.Core.ShellExports"/> directly and keeps Windows' own spelling.</summary>
+    public static IEnumerable<KeyValuePair<string, string>> EnumerateExported()
+    {
+        foreach (var kv in PsBash.Core.ShellExports.Enumerate())
+            yield return new KeyValuePair<string, string>(BashNameCase.FromEnvironment(kv.Key), kv.Value);
+    }
 
     /// <summary>Whether <paramref name="name"/> has the export attribute.</summary>
     public static bool IsExported(string name) => PsBash.Core.ShellExports.IsExported(name);

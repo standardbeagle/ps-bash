@@ -78,4 +78,30 @@ public class ReservedNameCaseTests
     [Fact]
     public Task Getopts_IntoReservedSpelling() => AssertOracle.EqualAsync(
         "getopts a: os -a x; echo $os $OPTARG");
+
+    // The emitter's name-keyed tables hold store names; these look a word up in them (BashNameCase.StoreNameComparer).
+
+    [Fact]
+    public Task RuntimeExportAppend_ReservedSpelling_LeavesPathAlone() => AssertOracle.EqualAsync(
+        "path=a; n=path; export \"$n+=:b\"; echo \"$path\"; [ \"$PATH\" = a:b ] && echo PATH-CHANGED || echo ok");
+
+    [Fact]
+    public Task UnsetNameref_ReservedSpelling_UnsetsTheTarget() => AssertOracle.EqualAsync(
+        "x=1; declare -n tmp=x; unset tmp; echo \"[${x-unset}]\"");
+
+    [Fact]
+    public Task UnsetN_ReservedSpelling_DropsTheReference() => AssertOracle.EqualAsync(
+        "y=1; declare -n lines=y; unset -n lines; lines=5; echo \"y=$y lines=$lines\"");
+
+    [Fact]
+    public Task Xtrace_ReservedSpelling_TracesTheBashName() => AssertOracle.EqualAsync(
+        "set -x; path=abc; set +x");
+
+    [Fact]
+    public Task LocalP_ReservedSpelling_ListsTheLocal() => AssertOracle.EqualAsync(
+        "f() { local path=q; local -p path; }; f");
+
+    [Fact]
+    public Task NamerefToItself_ReservedSpelling_IsRefused() => AssertOracle.EqualAsync(
+        "declare -n path=path 2>/dev/null; echo $?; declare -p path 2>/dev/null || echo none");
 }

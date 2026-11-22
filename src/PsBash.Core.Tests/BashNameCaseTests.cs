@@ -1,7 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text;
+using System.Text.RegularExpressions;
 using PsBash.Core.Parser;
 using PsBash.Core.Parser.Ast;
 using PsBash.Core.Transpiler;
@@ -31,6 +35,9 @@ public class BashNameCaseTests
     [InlineData("bash_version", "__psbash_cv_0_BASH_VERSION")]
     [InlineData("path[0]", "__psbash_cv_0_PATH[0]")]
     [InlineData("path[$i+1]", "__psbash_cv_0_PATH[$i+1]")]
+    [InlineData("windir", "__psbash_cv_0_WINDIR")]          // Windows' own spelling: Git Bash leaves $windir unset too
+    [InlineData("programdata", "__psbash_cv_0_PROGRAMDATA")] // only the exact native spelling is exempt
+    [InlineData("PsModulePath", "__psbash_cv_105_PSMODULEPATH")]
     public void ToStore_ReservedSpelling_IsMangled(string bash, string store)
     {
         Assert.Equal(store, BashNameCase.ToStore(bash, windows: true));
@@ -56,6 +63,8 @@ public class BashNameCaseTests
     [InlineData("pa-th")]
     [InlineData("__psbash_cv_0_PATH")]   // idempotent: a store name maps to itself
     [InlineData("__psbash_cv_0_PATH[2]")]
+    [InlineData("ProgramData")]          // exempt: Git Bash keeps these native spellings set (the system value)
+    [InlineData("PSModulePath")]
     public void ToStore_NotAReservedSpelling_IsUnchanged(string name)
         => Assert.Equal(name, BashNameCase.ToStore(name, windows: true));
 
@@ -85,6 +94,53 @@ public class BashNameCaseTests
     public void ToBash_StoreNameInAnyCase_Demangles()
         // The environment block may hand a name back in another case; the mask, not the stored case, decides.
         => Assert.Equal("Path", BashNameCase.ToBash("__PSBASH_CV_1_path"));
+
+    [Theory]
+    [InlineData("windir", "WINDIR")]                 // Windows' native entry IS the upper-case variable (Git Bash lists WINDIR=)
+    [InlineData("Path", "PATH")]
+    [InlineData("SystemRoot", "SystemRoot")]         // not on the reserved list: unchanged
+    [InlineData("ProgramData", "ProgramData")]       // exempt spelling: listed as is, as Git Bash does
+    [InlineData("PSModulePath", "PSModulePath")]
+    [InlineData("PATH", "PATH")]
+    [InlineData("__psbash_cv_0_PATH", "__psbash_cv_0_PATH")]
+    [InlineData("http_proxy", "http_proxy")]
+    public void FromEnvironment_NativeSpelling_IsTheUpperCaseVariable(string envKey, string store)
+    {
+        using var _ = BashNameCase.Override(windows: true);
+        Assert.Equal(store, BashNameCase.FromEnvironment(envKey));
+    }
+
+    [Theory]
+    [InlineData("__psbash_cv_0_PATH", "path")]
+    [InlineData("windir", "WINDIR")]
+    [InlineData("TEMP", "TEMP")]
+    public void ToListed_EnvironmentKey_IsWhatBashLists(string envKey, string listed)
+    {
+        using var _ = BashNameCase.Override(windows: true);
+        Assert.Equal(listed, BashNameCase.ToListed(envKey));
+    }
+
+    [Fact]
+    public void FromEnvironment_NotWindows_IsUnchanged()
+    {
+        using var _ = BashNameCase.Override(windows: false);
+        Assert.Equal("windir", BashNameCase.FromEnvironment("windir"));
+    }
+
+    [Fact]
+    public void StoreNameComparer_BashNameAndStoreName_AreOneKey()
+    {
+        using var _ = BashNameCase.Override(windows: true);
+        var cmp = BashNameCase.StoreNameComparer;
+        Assert.True(cmp.Equals("path", "__psbash_cv_0_PATH"));
+        Assert.Equal(cmp.GetHashCode("path"), cmp.GetHashCode("__psbash_cv_0_PATH"));
+        Assert.False(cmp.Equals("path", "PATH"));
+        Assert.False(cmp.Equals("path", "Path"));
+        Assert.False(cmp.Equals("x", "X"));
+        var set = new HashSet<string>(cmp) { "__psbash_cv_0_TMP" };
+        Assert.Contains("tmp", set);
+        Assert.DoesNotContain("TMP", set);
+    }
 
     [Fact]
     public void Override_IsScopedToTheFlow()
@@ -149,6 +205,114 @@ public class BashNameCaseTests
             .Select(t => t.FullName)
             .ToList();
         Assert.True(missing.Count == 0, "AST records with a variable name not covered by BashNameCase: " + string.Join(", ", missing));
+    }
+
+    // ── The emitter's name-keyed tables compare by store name ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Every emitter table keyed by variable name holds names from AST records (store names) AND from word text
+    /// (<c>unset tmp</c>, <c>local -p path</c>, a nameref target): one built with an ordinal comparer misses the
+    /// other kind (<c>declare -n tmp=x; unset tmp</c> unset <c>tmp</c>, not <c>x</c>). Each must be built with
+    /// <c>PsEmitter.VarNameKeys</c> (<see cref="BashNameCase.StoreNameComparer"/>). A source scan: a table built, or
+    /// copied, with any other comparer fails here. A NEW name-keyed table joins <see cref="EmitterNameTables"/>.
+    /// </summary>
+    private static readonly string[] EmitterNameTables =
+    [
+        "_readonlyVars", "_namerefs", "_litAssigned", "_pendingNamerefs", "_functionLocalNames", "_intVars", "_caseVars",
+        "_localAttrNames", "_envPrefixShadow", "_lexicalLocals", "_dynLocals",
+        // Locals that become one of the tables.
+        "var dynLocals", "var set = prior",
+    ];
+
+    [Fact]
+    public void EmitterVariableNameTables_CompareByStoreName()
+    {
+        string src = File.ReadAllText(Path.Combine(RepoRoot(), "src", "PsBash.Transpiler", "Parser", "PsEmitter.cs"), Encoding.Latin1);
+        Assert.Contains("IEqualityComparer<string> VarNameKeys = BashNameCase.StoreNameComparer;", src);
+        foreach (var field in EmitterNameTables.Where(n => n.StartsWith('_')))
+            Assert.True(Regex.IsMatch(src, @"private static [\w<>, ]+\? " + field + ";"), field + " is no longer declared: update EmitterNameTables");
+
+        var bad = new List<string>();
+        int built = 0;
+        foreach (var stmt in src.Split(';'))
+        {
+            if (!Regex.IsMatch(stmt, @"new (HashSet<string>|Dictionary<string, \w+>)\(")) continue;
+            if (!EmitterNameTables.Any(n => n.StartsWith('_') ? Regex.IsMatch(stmt, @"\b" + n + @"\b") : stmt.Contains(n))) continue;
+            built++;
+            foreach (Match m in Regex.Matches(stmt, @"new (HashSet<string>|Dictionary<string, \w+>)\(([^()]*(\([^()]*\))?[^()]*)\)"))
+                if (!m.Groups[2].Value.Contains("VarNameKeys")) bad.Add(m.Value.Trim());
+        }
+        Assert.True(built >= 15, $"only {built} name-table constructions found: the scan no longer matches the source");
+        Assert.True(bad.Count == 0, "name-keyed emitter tables built without VarNameKeys: " + string.Join(" | ", bad));
+    }
+
+    private static string RepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        for (var i = 0; i < 12 && dir is not null; i++)
+        {
+            if (File.Exists(Path.Combine(dir.FullName, "CLAUDE.md"))) return dir.FullName;
+            dir = dir.Parent;
+        }
+        throw new InvalidOperationException("repo root not found from " + AppContext.BaseDirectory);
+    }
+
+    [Fact]
+    public void Transpile_UnsetOfNamerefWithReservedSpelling_UnsetsTheTarget()
+    {
+        // The nameref table holds the store name (__psbash_cv_0_TMP); `unset tmp` looked up the word `tmp` and missed.
+        using var _ = BashNameCase.Override(windows: true);
+        Assert.EndsWith("Invoke-BashUnset x", BashTranspiler.Transpile("x=1; declare -n tmp=x; unset tmp").TrimEnd());
+    }
+
+    [Fact]
+    public void Transpile_UnsetNOfReservedSpelling_DropsTheReference()
+    {
+        // bash: y=1 lines=5. The reference stayed, so `lines=5` wrote y.
+        using var _ = BashNameCase.Override(windows: true);
+        var ps = BashTranspiler.Transpile("y=1; declare -n lines=y; unset -n lines; lines=5");
+        Assert.Contains("$env:__psbash_cv_0_LINES = \"5\"", ps);
+        Assert.DoesNotContain("$env:y = \"5\"", ps);
+    }
+
+    [Fact]
+    public void Transpile_LocalPOfReservedSpelling_ListsTheLocal()
+    {
+        // The function's locals are store names; `local -p path` compared the word and said "not found".
+        using var _ = BashNameCase.Override(windows: true);
+        var ps = BashTranspiler.Transpile("f(){ local path=q; local -p path; }; f");
+        Assert.Contains("Invoke-BashDeclare '-p' path", ps);
+        Assert.DoesNotContain("not found", ps);
+    }
+
+    [Fact]
+    public void Transpile_NamerefToItselfWithReservedSpelling_IsRefused()
+    {
+        // The name was mapped, the target was not: they never compared equal.
+        using var _ = BashNameCase.Override(windows: true);
+        var ps = BashTranspiler.Transpile("declare -n path=path");
+        Assert.Contains("'declare: path: nameref variable self references not allowed'", ps);
+        Assert.DoesNotContain("SetNameref", ps);
+    }
+
+    [Fact]
+    public void Transpile_RuntimeExportAppend_MapsTheNameAfterTheOperator()
+    {
+        // `export "path+=:b"` mapped `path+` (no reserved spelling) and stripped the `+` after: Env:path is PATH.
+        using var _ = BashNameCase.Override(windows: true);
+        var ps = BashTranspiler.Transpile("n=path; export \"$n+=:b\"");
+        int strip = ps.IndexOf("EndsWith('+')", StringComparison.Ordinal);
+        int map = ps.IndexOf("$__psbN = [PsBash.Core.BashNameCase]::ToStore($__psbN); Set-Item", StringComparison.Ordinal);
+        Assert.True(strip > 0 && map > strip, ps);
+        Assert.DoesNotContain("ToStore($__psbD", ps);
+    }
+
+    [Fact]
+    public void Transpile_NamePrefixListing_ListsEnvironmentKeysAsBashDoes()
+    {
+        // ${!wi*}: Windows' own `windir` lists as WINDIR (Git Bash), a store name as its bash name.
+        using var _ = BashNameCase.Override(windows: true);
+        Assert.Contains("[PsBash.Core.BashNameCase]::ToListed($_.Name)", BashTranspiler.Transpile("echo ${!wi*}"));
     }
 
     // ── Transpiler: the emitted text uses the store name ─────────────────────────────────────────────────
@@ -220,6 +384,7 @@ public class BashNameCaseTests
     [InlineData("x__psbash_cv_0_PATH: y", "x__psbash_cv_0_PATH: y")]           // part of a longer identifier
     [InlineData("__psbash_cv_0_NOTRESERVED: z", "__psbash_cv_0_NOTRESERVED: z")] // not a store name
     [InlineData("PATH: unbound variable", "PATH: unbound variable")]
+    [InlineData("+ __psbash_cv_0_PATH=abc", "+ path=abc")]                      // a set -x line (psm1 Write-BashXtrace)
     [InlineData("", "")]
     public void ToBashText_StoreNamesInAMessage_ReadAsBashNames(string text, string expected)
         => Assert.Equal(expected, BashNameCase.ToBashText(text));
@@ -234,25 +399,9 @@ public class BashNameCaseTests
 
     // ── The by-name primitives map a bash name themselves (environment-model.md section 12) ─────────────
 
-    [Fact]
-    public void ShellExports_ByName_UsesTheStoreName()
-    {
-        using var _ = BashNameCase.Override(windows: true);
-        bool pathWasExported = ShellExports.IsExported("PATH");
-        ShellExports.Export("path");
-        try
-        {
-            Assert.True(ShellExports.IsExported("path"));
-            Assert.True(ShellExports.IsExported("__psbash_cv_0_PATH"));
-        }
-        finally
-        {
-            ShellExports.Forget("path");
-        }
-        Assert.False(ShellExports.IsExported("__psbash_cv_0_PATH"));
-        // `unset path` / `export -n path` never touch PATH's attribute (the table compares names case-insensitively on Windows).
-        Assert.Equal(pathWasExported, ShellExports.IsExported("PATH"));
-    }
+    // ShellExports by name: ChildEnvironmentGuardTests.ReservedSpelling_ExportedByItsBashName_IsTheStoreName (it needs the
+    // shell start, ShellExports.Reset, that class's tests share and run one at a time).
+
 
     [Fact]
     public void ScalarOverlayForCommand_BashNames_AreStoreNames()

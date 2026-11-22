@@ -53,6 +53,20 @@ public class InvokeBashEnvCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Contains(lines, l => l == "PSB_ENV_MARK=xyzzy-9001");
     }
 
+    [SkippableFact]
+    public void Env_WindowsOwnSpelling_ListsAsTheUpperCaseVariable()
+    {
+        // Windows-only fact, reference Git Bash (MSYS2), not the Linux oracle: it imports Windows' `windir` / `Path` as
+        // WINDIR / PATH and lists them so, `$windir` being unset (BashNameCase.FromEnvironment, environment-model.md
+        // section 12). Listed under the native spelling, `env` disagreed with `printenv windir`.
+        Skip.IfNot(OperatingSystem.IsWindows(), "Windows' own variable spellings");
+        var lines = RunLines("(Invoke-BashEnv | ForEach-Object { $_.BashText })");
+        Assert.Contains(lines, l => l.StartsWith("WINDIR=", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.StartsWith("windir=", StringComparison.Ordinal));
+        Assert.Contains(lines, l => l.StartsWith("PATH=", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.StartsWith("Path=", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Env_NameValueCommand_RunsCommandWithVarSet()
     {

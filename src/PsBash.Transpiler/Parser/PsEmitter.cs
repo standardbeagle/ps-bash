@@ -131,7 +131,7 @@ public static partial class PsEmitter
     private static T WithEnvShadow<T>(ImmutableArray<EnvPair> pairs, Func<T> emit)
     {
         var prior = _envPrefixShadow;
-        var set = prior is null ? new HashSet<string>(StringComparer.Ordinal) : new HashSet<string>(prior, StringComparer.Ordinal);
+        var set = prior is null ? new HashSet<string>(VarNameKeys) : new HashSet<string>(prior, VarNameKeys);
         foreach (var p in pairs) set.Add(p.Name);
         _envPrefixShadow = set;
         try { return emit(); }
@@ -199,7 +199,7 @@ public static partial class PsEmitter
     /// </summary>
     private static void ScopeLocalAttributes(string name, string? attrs)
     {
-        bool first = (_localAttrNames ??= new HashSet<string>(StringComparer.Ordinal)).Add(name);
+        bool first = (_localAttrNames ??= new HashSet<string>(VarNameKeys)).Add(name);
         if (_intVars is not null)
         {
             if (attrs?.Contains('i') == true) _intVars.Add(name);
@@ -237,7 +237,7 @@ public static partial class PsEmitter
     private static HashSet<string>? EnterSubshellReadonly()
     {
         var outer = _readonlyVars;
-        if (outer is not null) _readonlyVars = new HashSet<string>(outer, StringComparer.Ordinal);
+        if (outer is not null) _readonlyVars = new HashSet<string>(outer, VarNameKeys);
         return outer;
     }
     /// <summary>True when the script text reads `$?` somewhere: only then does a bare assignment need to reset the status to 0.</summary>
@@ -262,6 +262,14 @@ public static partial class PsEmitter
     /// Static only (a literal target, resolved at emit time); a nameref set at run time is not modelled.</summary>
     [ThreadStatic]
     private static Dictionary<string, string>? _namerefs;
+
+    /// <summary>
+    /// The comparer of EVERY table keyed by variable name (<see cref="_readonlyVars"/>, <see cref="_namerefs"/>, a
+    /// function's locals, attributes, ...): equal by store name (<see cref="BashNameCase.StoreNameComparer"/>). A name from
+    /// an AST record is already a store name (<c>__psbash_cv_0_TMP</c>), one from word text (<c>unset tmp</c>,
+    /// <c>local -p path</c>, a nameref target) is not; both find the same entry. Guard: <c>BashNameCaseTests</c>.
+    /// </summary>
+    private static readonly IEqualityComparer<string> VarNameKeys = BashNameCase.StoreNameComparer;
 
     /// <summary>Names assigned a literal string so far (`ref=x`): `typeset -n ref` later turns that string into the target.</summary>
     [ThreadStatic]
@@ -1486,8 +1494,8 @@ public static partial class PsEmitter
         // BASH_REMATCH is an array `=~` fills: a bare `$BASH_REMATCH` is its element 0.
         _arrayVars = new HashSet<string>(StringComparer.Ordinal) { "BASH_REMATCH" };
         var priorCaseVars = _caseVars;
-        _caseVars = new Dictionary<string, bool>(StringComparer.Ordinal);
-        _intVars = new HashSet<string>(StringComparer.Ordinal);
+        _caseVars = new Dictionary<string, bool>(VarNameKeys);
+        _intVars = new HashSet<string>(VarNameKeys);
         _globalAttrsInFunctions = null;
         var priorReadsStatus = _scriptReadsStatus;
         var priorFinalAssignment = _finalAssignment;
@@ -1502,12 +1510,12 @@ public static partial class PsEmitter
         _scriptReadsStatus = priorReadsStatus || bash.Contains("$?") || bash.Contains("${?");
         var priorReadonly = _readonlyVars;
         var priorRuntimeReadonly = _runtimeReadonly;
-        _readonlyVars = new HashSet<string>(StringComparer.Ordinal);
+        _readonlyVars = new HashSet<string>(VarNameKeys);
         _readonlyVars.Add("SHELLOPTS"); _readonlyVars.Add("BASHOPTS");
         var priorNamerefs = _namerefs;
-        _namerefs = new Dictionary<string, string>(StringComparer.Ordinal);
+        _namerefs = new Dictionary<string, string>(VarNameKeys);
         var priorLitAssigned = _litAssigned; var priorPendingNamerefs = _pendingNamerefs;
-        _litAssigned = new Dictionary<string, string>(StringComparer.Ordinal); _pendingNamerefs = new HashSet<string>(StringComparer.Ordinal);
+        _litAssigned = new Dictionary<string, string>(VarNameKeys); _pendingNamerefs = new HashSet<string>(VarNameKeys);
         _context = context;
         // Only a script that itself turns errexit on gets the checks (a sourced file running under
         // its caller's `set -e` does not — see intentional-differences.md).
@@ -2894,7 +2902,7 @@ public static partial class PsEmitter
         // A scalar `local` is dynamically scoped (bash): a function this one calls sees the local value.
         // So it lives in the shell variable itself (`$env:x`), saved on first `local` and restored when the
         // function exits — not in a lexical PowerShell variable the callee could never read.
-        var dynLocals = new HashSet<string>(StringComparer.Ordinal);
+        var dynLocals = new HashSet<string>(VarNameKeys);
         var priorCollect = _collectScalarLocals;
         _collectScalarLocals = dynLocals;
         List<string> localVars;
@@ -2903,15 +2911,15 @@ public static partial class PsEmitter
         var priorDyn = _dynLocals;
         _dynLocals = dynLocals;
         var priorFunctionLocals = _functionLocalNames;
-        var priorFunctionReadonly = _readonlyVars is null ? null : new HashSet<string>(_readonlyVars, StringComparer.Ordinal);
+        var priorFunctionReadonly = _readonlyVars is null ? null : new HashSet<string>(_readonlyVars, VarNameKeys);
         // A local's attributes (`local -i n`, or a plain `local n` hiding the caller's -i) hold in this body only.
-        var priorIntVars = _intVars is null ? null : new HashSet<string>(_intVars, StringComparer.Ordinal);
-        var priorCaseVars = _caseVars is null ? null : new Dictionary<string, bool>(_caseVars, StringComparer.Ordinal);
+        var priorIntVars = _intVars is null ? null : new HashSet<string>(_intVars, VarNameKeys);
+        var priorCaseVars = _caseVars is null ? null : new Dictionary<string, bool>(_caseVars, VarNameKeys);
         var priorLocalAttrNames = _localAttrNames;
         _localAttrNames = null;
-        var priorNamerefs = _namerefs is null ? null : new Dictionary<string, string>(_namerefs, StringComparer.Ordinal);
-        _functionLocalNames = new HashSet<string>(localVars.Concat(dynLocals), StringComparer.Ordinal);
-        var vars = _lexicalLocals ??= new HashSet<string>();
+        var priorNamerefs = _namerefs is null ? null : new Dictionary<string, string>(_namerefs, VarNameKeys);
+        _functionLocalNames = new HashSet<string>(localVars.Concat(dynLocals), VarNameKeys);
+        var vars = _lexicalLocals ??= new HashSet<string>(VarNameKeys);
         var added = new List<string>();
         foreach (var v in localVars)
             if (vars.Add(v)) added.Add(v);
@@ -2947,7 +2955,7 @@ public static partial class PsEmitter
             // earlier `local x` / `x=1` (`f() { local x=1; readonly -p x; }` refused the local on the second emission).
             string EmitFunctionBodyOnce()
             {
-                if (priorFunctionReadonly is not null) _readonlyVars = new HashSet<string>(priorFunctionReadonly, StringComparer.Ordinal);
+                if (priorFunctionReadonly is not null) _readonlyVars = new HashSet<string>(priorFunctionReadonly, VarNameKeys);
                 return EmitBody(func.Body);
             }
             try
@@ -5421,8 +5429,10 @@ public static partial class PsEmitter
             if (name == "readonly") _runtimeReadonly = true;
             // `export 'NAME+=VALUE'` (the run-time eval of `export NAME${x}+=v` quotes each field) appends.
             sbOut.Append($"$__psbD = {expr}; $__psbI = $__psbD.IndexOf('='); ")
-                 .Append("if ($__psbI -gt 0) { $__psbN = [PsBash.Core.BashNameCase]::ToStore($__psbD.Substring(0, $__psbI)); $__psbV = $__psbD.Substring($__psbI + 1); ")
+                 .Append("if ($__psbI -gt 0) { $__psbN = $__psbD.Substring(0, $__psbI); $__psbV = $__psbD.Substring($__psbI + 1); ")
                  .Append("if ($__psbN.EndsWith('+')) { $__psbN = $__psbN.Substring(0, $__psbN.Length - 1); $__psbV = [string][PsBash.Cmdlets.BashVariableStore]::Get($__psbN) + $__psbV }; ")
+                 // The bare name, operator stripped, is what maps (`path+` is no reserved spelling): `path` is not PATH (BashNameCase).
+                 .Append("$__psbN = [PsBash.Core.BashNameCase]::ToStore($__psbN); ")
                  .Append("Set-Item -LiteralPath ('Env:' + $__psbN) -Value $__psbV" + markReadonly)
                  // `export "$k=$v"`: `declare -p` shows the x attribute, as for a literal `export X=1`.
                  .Append(name == "export" ? "; " + PsBuild.MarkExportedAtRunTime("$__psbN") : "")
@@ -6130,7 +6140,7 @@ public static partial class PsEmitter
             && (exprName is not null && exprValue is not null ? (exprName, ExtractSingleQuotedOrLiteralValue(exprValue))
                 : varName is not null && varName.IndexOf('=') is var selfEq and > 0 ? (varName[..selfEq], varName[(selfEq + 1)..]) : (null, null))
                is (string selfName, string selfTarget)
-            && selfName == selfTarget && IsValidVarName(selfName))
+            && VarNameKeys.Equals(selfName, selfTarget) && IsValidVarName(selfName))
         {
             result = PsBuild.ShellDiagnosticLine(PsBuild.SingleQuote($"{name}: {selfName}: nameref variable self references not allowed")) + "; " + PsBuild.SetStatus(1);
             return true;
@@ -6185,7 +6195,7 @@ public static partial class PsEmitter
         if (isNameref && !isPrint && varName is not null && IsValidVarName(varName) && _namerefs is not null && !_namerefs.ContainsKey(varName))
         {
             string nrMark = "";
-            if (_litAssigned is not null && _litAssigned.TryGetValue(varName, out var known) && IsValidVarName(known) && known != varName)
+            if (_litAssigned is not null && _litAssigned.TryGetValue(varName, out var known) && IsValidVarName(known) && !VarNameKeys.Equals(known, varName))
             { _namerefs[varName] = known; nrMark = NamerefMark(varName, known) + "; "; }
             else if (_litAssigned is null || !_litAssigned.ContainsKey(varName)) _pendingNamerefs?.Add(varName);
             result = nrMark + PsBuild.SetStatus(0);
@@ -11468,7 +11478,7 @@ public static partial class PsEmitter
             // Listed and matched under the BASH name: a diverted `path` (stored __psbash_cv_0_PATH, BashNameCase) matches
             // ${!pa*} and prints as path.
             string prefix = BashNameCase.ToBash(bvs.Name);
-            string expr = $"@(@(Get-ChildItem env: | ForEach-Object {{ [PsBash.Core.BashNameCase]::ToBash($_.Name) }} | Where-Object {{ $_ -clike '{prefix}*' }}) + @(Get-Variable -Name '{prefix}*', '{BashNameCase.Prefix}*' -ErrorAction SilentlyContinue | Where-Object {{ $_.Options -eq 'None' -and ($_.Value -is [array] -or $_.Value -is [System.Collections.IDictionary]) -and $_.Name -cnotin 'args','input','Error','Matches','PSBoundParameters' }} | ForEach-Object {{ [PsBash.Core.BashNameCase]::ToBash($_.Name) }} | Where-Object {{ $_ -clike '{prefix}*' }}) | Sort-Object -Unique -CaseSensitive)";
+            string expr = $"@(@(Get-ChildItem env: | ForEach-Object {{ [PsBash.Core.BashNameCase]::ToListed($_.Name) }} | Where-Object {{ $_ -clike '{prefix}*' }}) + @(Get-Variable -Name '{prefix}*', '{BashNameCase.Prefix}*' -ErrorAction SilentlyContinue | Where-Object {{ $_.Options -eq 'None' -and ($_.Value -is [array] -or $_.Value -is [System.Collections.IDictionary]) -and $_.Name -cnotin 'args','input','Error','Matches','PSBoundParameters' }} | ForEach-Object {{ [PsBash.Core.BashNameCase]::ToBash($_.Name) }} | Where-Object {{ $_ -clike '{prefix}*' }}) | Sort-Object -Unique -CaseSensitive)";
             return inDoubleQuote ? $"$({expr})" : expr;
         }
 

@@ -187,6 +187,29 @@ public class ChildEnvironmentGuardTests
     }
 
     [Fact]
+    public void ReservedSpelling_ExportedByItsBashName_IsTheStoreName()
+    {
+        // `export path` on Windows: the attribute belongs to the diverted variable (BashNameCase, environment-model.md
+        // section 12), never to PATH. Needs the shell start (Reset): without it every call re-reads the environment
+        // and counts exactly the variables that are set as exported, so an unset name's attribute is lost at once.
+        const string store = "__psbash_cv_0_PATH";
+        using var _ = BashNameCase.Override(windows: true);
+        ShellExports.Reset();
+        bool pathWasExported = ShellExports.IsExported("PATH");
+        try
+        {
+            Environment.SetEnvironmentVariable(store, "v");    // what `path=v` does
+            ShellExports.Export("path");
+            Assert.True(ShellExports.IsExported("path"));
+            Assert.True(ShellExports.IsExported(store));
+            Assert.Equal("v", ShellExports.Get("path"));
+            ShellExports.Forget("path");
+            Assert.False(ShellExports.IsExported(store));
+            Assert.Equal(pathWasExported, ShellExports.IsExported("PATH"));
+        }
+        finally { Clean(store); }
+    }
+    [Fact]
     public void AVariableNobodyExported_IsNotInTheChildEnvironment()
     {
         const string plain = "PSB_GUARD_PLAIN", exported = "PSB_GUARD_EXPORTED";

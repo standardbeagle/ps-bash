@@ -349,7 +349,8 @@ function Write-BashXtrace {
     }
     $words = @($words)
     if ($words.Count -eq 0) { return }
-    Write-BashHostStderr ('+ ' + ($words -join ' '))
+    # A diverted reserved-name variable traces under its bash name (`+ path=abc`, not its store name; BashNameCase).
+    Write-BashHostStderr ([PsBash.Core.BashNameCase]::ToBashText('+ ' + ($words -join ' ')))
 }
 
 # A command word that is only known at run time (`"$@"`, `$cmd`, `"$tool"`) is looked up as bash does: a shell

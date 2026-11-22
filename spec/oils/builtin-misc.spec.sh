@@ -118,6 +118,5 @@ pf  spam
 @Q  'spam'
 ## END
 ## status: 0
-## XFAIL ps-bash platform-windows-env-vars Windows sets the lowercase variable windir, which set lists right after foo, so grep -A1 foo prints it too (intentional-differences.md, Platform)
 ## timeout: 10
 ## real-launcher

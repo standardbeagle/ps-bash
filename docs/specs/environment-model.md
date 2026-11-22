@@ -295,13 +295,41 @@ Where the mapping happens:
 | Builtin operand text in the emitter (`declare`/`typeset` names, `readonly NAME=v`, `export NAME=v`, a nameref target) | `PsEmitter.StoreNameWord` / `BashNameCase.ToStore` at those sites; `export "$n=v"` maps at run time |
 | A name handed to the runtime (`read`, `printf -v`, `getopts`, `unset`, `mapfile`, `${!ref}`, `[[ -v ]]`, arithmetic text, `env NAME=v`) | The by-name primitives themselves: `BashVariableStore`, `BashVariableLookup`, `ShellExports`, `ScalarOverlay.ForCommand`, `BashShellState` (readonly, attribute and nameref tables). Each takes a bash name or a store name; callers never map |
 
-Printing: listings (`declare -p`, `set`, `env`, `printenv`, `compgen -v`/`-e`, `${!prefix*}`, jq's `$ENV`) show
-`ToBash(name)`; diagnostics are demangled at the writers (`BashParamErrorException`, `FileSystemHelpers.WriteStderr`,
-`PsBuild.ShellDiagnosticLine` for a literal message, psm1 `Write-BashShellDiagnostic`) with `ToBashText`.
+The emitter's own tables keyed by variable name (readonly names, namerefs, a function's locals, `-i`/`-l`/`-u`
+attributes, env-prefix shadows) hold names from both sources: a record's store name (`__psbash_cv_0_TMP`) and word
+text (`unset tmp`, `local -p path`, the target in `declare -n path=path`). They compare by store name
+(`BashNameCase.StoreNameComparer`, the `PsEmitter.VarNameKeys` comparer every such table is built with), so neither
+side has to remember to map. Text with an operator glued on (`path+=` in a run-time `export "path+=:b"`) maps only
+after the operator is stripped.
+
+Printing: listings (`declare -p`, `export -p`, `set`, `env`, `printenv`, `compgen -v`/`-e`, `${!prefix*}`, jq's
+`$ENV`) show `ToBash(name)`; diagnostics are demangled at the writers (`BashParamErrorException`,
+`FileSystemHelpers.WriteStderr`, `PsBuild.ShellDiagnosticLine` for a literal message, psm1 `Write-BashShellDiagnostic`)
+with `ToBashText`, and so is every `set -x` line (psm1 `Write-BashXtrace`: `+ path=abc`). `ToBashText` rewrites any
+whole-word store name in the text, so a store name the user typed into a message (`echo __psbash_cv_0_PATH >&2` through
+a cmdlet's stderr) also prints as `path`: accepted, the prefix is ps-bash's own.
+
+**Windows' own spellings (reference: Git Bash, MSYS2).** Windows creates some variables in a non-upper spelling
+(`windir`, `Path`, `SystemRoot`, `ComSpec`, `ProgramFiles`, `SystemDrive`, `ProgramData`, `PSModulePath`). Git Bash
+imports most of them UPPER-cased and leaves the native spelling unset (`$windir` is empty, `$WINDIR` is
+`C:\Windows`; `env` lists `WINDIR=`, `PATH=`), which is what diverting the native spelling gives here. Two follow:
+
+- Exempt spellings: Git Bash keeps `ProgramData` and `PSModulePath` under their native spelling (`$ProgramData` is set,
+  `$PROGRAMDATA` is not). Those exact spellings are not diverted (`BashNameCase.IsExemptSpelling`) and read the system
+  value; any other spelling of them (`programdata`) still is.
+- Listing a native entry: an environment key that is a divertible spelling (`windir`, `Path`) IS the upper-case
+  variable (the environment ignores case), so `BashVariableStore.Enumerate` / `EnumerateExported` return it
+  UPPER-cased (`BashNameCase.FromEnvironment`; raw `Env:` listings use `ToListed`). `env`, `printenv`, `set`,
+  `declare -p`/`-x`, `export -p`, `compgen -v`/`-e` and `${!prefix*}` show `WINDIR=...`, agreeing with `printenv windir`
+  (unset). It also keeps a subshell's restore on the real variable: `( WINDIR=x )` restored through the raw key
+  `windir`, which maps to the diverted name, and the change leaked out. A child's environment block
+  (`ShellExports.Enumerate`) keeps Windows' own spelling.
 
 A child: an EXPORTED mangled variable reaches a child under its store name (Windows cannot hand a child both `PATH`
 and `path`); a nested ps-bash reads it back as `path`, another program does not see `path`. Not exported, it never
 reaches a child (§1).
 
 Guards: `Core.Tests/BashNameCaseTests` (`EveryAstRecordWithAVariableName_IsCovered`: a new AST record with a variable
-name must map it; the primitive and message tests); `Differential.Tests/ReservedNameCaseTests` (bash oracle).
+name must map it; `EmitterVariableNameTables_CompareByStoreName`: every name-keyed emitter table is built with
+`VarNameKeys`; the primitive and message tests); `Differential.Tests/ReservedNameCaseTests` (bash oracle; the
+native-spelling cases are Windows-only facts checked against Git Bash).

@@ -54,6 +54,13 @@ public static class BashNameCase
     private static readonly FrozenSet<string> Reserved =
         ReservedNames.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
+    // Exact spellings that are NOT diverted: Windows' own spelling of a variable Git Bash (MSYS2, the Windows reference
+    // for bash) keeps under that spelling, so `$ProgramData` / `$PSModulePath` read the system value there too. Every
+    // other native spelling (`windir`, `Path`, `SystemRoot`, `ComSpec`) is one MSYS2 imports UPPER-cased, leaving the
+    // native spelling unset, which is what diverting it gives.
+    private static bool IsExemptSpelling(ReadOnlySpan<char> name)
+        => name.SequenceEqual("ProgramData") || name.SequenceEqual("PSModulePath");
+
 #if NET9_0_OR_GREATER
     private static readonly FrozenSet<string>.AlternateLookup<ReadOnlySpan<char>> ReservedSpan =
         Reserved.GetAlternateLookup<ReadOnlySpan<char>>();
@@ -120,10 +127,43 @@ public static class BashNameCase
         }
         if (!anyLower) return bashName;
         var span = bashName.AsSpan(0, nameLen);
-        if (!IsReserved(span)) return bashName;
+        if (!IsReserved(span) || IsExemptSpelling(span)) return bashName;
 
         string mangled = Prefix + mask.ToString("x") + "_" + span.ToString().ToUpperInvariant();
         return bracket > 0 ? mangled + bashName[bracket..] : mangled;
+    }
+
+    /// <summary>
+    /// The store name of a key read from the PROCESS ENVIRONMENT (an enumeration, not a bash name). Windows keeps a
+    /// variable under the spelling it was created with (<c>windir</c>, <c>Path</c>), which is a reserved spelling that
+    /// <see cref="ToStore(string)"/> would divert; the environment entry itself is the upper-case variable
+    /// (<c>WINDIR</c>, <c>PATH</c>: the environment ignores case). So such a key is returned UPPER-cased, as Git Bash
+    /// (MSYS2) imports it: listings show <c>WINDIR=...</c>, and a subshell's restore writes the real variable, never a
+    /// diverted one. Any other key (a mangled name, an ordinary name, an exempt spelling) is returned as is.
+    /// </summary>
+    public static string FromEnvironment(string envKey)
+        => envKey is not null && !string.Equals(ToStore(envKey), envKey, StringComparison.Ordinal)
+            ? envKey.ToUpperInvariant() : envKey!;
+
+    /// <summary>The name a listing prints for process-environment key <paramref name="envKey"/>:
+    /// <see cref="ToBash"/> of <see cref="FromEnvironment"/> (<c>__psbash_cv_0_PATH</c> → <c>path</c>,
+    /// <c>windir</c> → <c>WINDIR</c>).</summary>
+    public static string ToListed(string envKey) => ToBash(FromEnvironment(envKey));
+
+    /// <summary>
+    /// Equality on variable names by STORE name: <c>path</c> and <c>__psbash_cv_0_PATH</c> are one key; <c>path</c> and
+    /// <c>PATH</c> are two. For every table the emitter keys by variable name (readonly names, namerefs, a function's
+    /// locals, attributes): a name from an AST record is already a store name, one from word text (<c>unset tmp</c>,
+    /// <c>local -p path</c>) is not, and both must find the same entry. Ordinal when names are not diverted.
+    /// </summary>
+    public static IEqualityComparer<string> StoreNameComparer { get; } = new StoreNameEquality();
+
+    private sealed class StoreNameEquality : IEqualityComparer<string>
+    {
+        public bool Equals(string? x, string? y)
+            => ReferenceEquals(x, y) || (x is not null && y is not null && string.Equals(ToStore(x), ToStore(y), StringComparison.Ordinal));
+
+        public int GetHashCode(string obj) => StringComparer.Ordinal.GetHashCode(ToStore(obj));
     }
 
     /// <summary>True when <paramref name="storeName"/> is a mangled name (a diverted reserved-name variable).</summary>
