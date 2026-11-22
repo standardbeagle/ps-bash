@@ -15,8 +15,9 @@ namespace PsBash.Cmdlets;
 /// <c>fc</c> command and is skipped, as bash skips it.
 /// <para>Re-running: the command is echoed to stderr, replaces the LAST history entry (bash's <c>fc_replhist</c>, also
 /// with history recording off), and is left in <c>$global:__BashFcRerun</c> (<c>PsBuild.FcRerunVariable</c>) for the
-/// emitted call (<c>PsBuild.FcCall</c>) to run through the one run-time runner of bash text, in the caller's scope. The
-/// cmdlet never runs script itself. Opening an editor (<c>fc</c>, <c>fc -e ename</c>) is refused with status 1.</para>
+/// emitted code (<c>PsBuild.FcTakeRerun</c>) to run through the one run-time call of bash text
+/// (<c>PsBuild.RunBashTextCall</c>, as eval), in the caller's scope. The cmdlet never runs script itself. Opening an
+/// editor (<c>fc</c>, <c>fc -e ename</c>) is refused with status 1.</para>
 /// Without this, PowerShell's <c>fc</c> alias (<c>Format-Custom</c>) ran.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashFc")]
@@ -111,22 +112,25 @@ public sealed class InvokeBashFcCommand : BashCmdlet
             return Done(1);
         }
 
-        if (last == 0) return Done(0);
+        if (count == 0) return Done(0);
         int from, end;
         if (operands.Count == 0)
         {
+            if (last == 0) return Done(0);
             end = last;
             from = Math.Max(1, last - 15);
         }
         else
         {
             if (Resolve(operands[0], history, last, first: true, listing: true) is not int f) return Fail(1, "no command found");
-            int? l = operands.Count > 1 ? Resolve(operands[1], history, last, first: false, listing: true) : last;
+            // One operand: up to the last entry, or the current line itself when that is what it named (`fc -l -0`).
+            int? l = operands.Count > 1 ? Resolve(operands[1], history, last, first: false, listing: true) : f == count ? count : last;
             if (l is null) return Fail(1, "no command found");
             from = f;
             end = l.Value;
         }
         if (from > end) { (from, end) = (end, from); reverse = true; }   // -r never un-reverses
+        if (from < 1) return Done(0);   // only this fc line is recorded, and the range does not name it
         for (int k = 0; k <= end - from; k++)
         {
             int n = reverse ? end - k : from + k;
@@ -136,18 +140,19 @@ public sealed class InvokeBashFcCommand : BashCmdlet
     }
 
     /// <summary>
-    /// bash's <c>fc_gethnum</c>: the history number (1-based, at most <paramref name="last"/>) an operand names. -N counts
-    /// back from the current command (never before 1); 0 is the last entry and -0 too when listing (else nothing); a
-    /// number at or past the last entry is the first entry when it is a range's <paramref name="first"/> end, else the
-    /// last (so <c>fc -l 5</c> over five entries lists all five); any other text is the most recent entry starting with
-    /// it. Null when nothing matches.
+    /// bash's <c>fc_gethnum</c>: the history number (1-based) an operand names. -N counts back from the current command
+    /// (never before 1); 0 is the last entry before this command; -0 is the very last entry when listing (bash's
+    /// <c>real_last</c>: under <c>set -o history</c> this <c>fc</c> line itself, <c>fc -l -0</c>), else nothing; a number
+    /// at or past the last entry is the first entry when it is a range's <paramref name="first"/> end, else the last (so
+    /// <c>fc -l 5</c> over five entries lists all five); any other text is the most recent entry starting with it. Null
+    /// when nothing matches.
     /// </summary>
     private static int? Resolve(string spec, IReadOnlyList<string> history, int last, bool first, bool listing)
     {
         if (int.TryParse(spec, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var n))
         {
             if (n < 0) return Math.Max(1, last + 1 + n);
-            if (n == 0) return spec.StartsWith('-') && !listing ? null : last;
+            if (n == 0) return !spec.StartsWith('-') ? last : listing ? history.Count : null;
             if (n >= last) return first ? 1 : last;
             return n;
         }

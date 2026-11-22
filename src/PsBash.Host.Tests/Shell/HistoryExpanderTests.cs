@@ -140,6 +140,50 @@ public class HistoryExpanderTests
         Assert.Equal("missing: substitution failed", error);
     }
 
+    /// <summary>Substitution modifiers, bash 5.2 over the one entry <c>echo three tee</c> (each row checked against
+    /// <c>history -s 'echo three tee'; history -p ROW</c>).</summary>
+    [Theory]
+    [InlineData("!e:s/e/E/:s/c/C/", "ECho three tee")]        // chained
+    [InlineData("!!:gs/e/E/", "Echo thrEE tEE")]              // every match
+    [InlineData("!!:as/e/E/", "Echo thrEE tEE")]
+    [InlineData("!!:gs/e/E/:s/c/C/", "ECho thrEE tEE")]
+    [InlineData("!!:gs/ee/E/", "echo thrE tE")]
+    [InlineData("!!:s/e/[&]/", "[e]cho three tee")]           // & is the matched text
+    [InlineData("!!:s/ee/[&&]/", "echo thr[eeee] tee")]
+    [InlineData("!!:s/e/\\&x/", "&xcho three tee")]           // \& is a plain &
+    [InlineData("!!:s/e/a\\/b/", "a/bcho three tee")]         // \ quotes the delimiter
+    [InlineData("!!:s|e|\\||", "|cho three tee")]
+    [InlineData("!!:s/e/E", "Echo three tee")]                // last delimiter optional
+    [InlineData("!!:s/e/E/ rest", "Echo three tee rest")]
+    [InlineData("!!:$:s/e/E/", "tEe")]                        // after a word designator
+    [InlineData("!!:s/three/&!/", "echo three! tee")]
+    [InlineData("!!:s/e/E/:&", "Echo thrEe tee")]             // :& repeats the last substitution
+    [InlineData("!!:s/e/E/:g&", "Echo thrEE tEE")]
+    [InlineData("!!:s", "echo three tee")]                    // :s with no delimiter does nothing
+    public void Expand_SubstitutionModifiers_MatchBash(string line, string expected)
+        => Assert.Equal(expected, ExpandOk(line, "echo three tee"));
+
+    [Theory]
+    [InlineData("!!:&")]                // nothing to repeat
+    [InlineData("!!:s//X/")]            // empty old with no previous one
+    [InlineData("!!:s/x\\/y/z/")]       // no x/y in the text
+    [InlineData("x!!:s/q/Q/y")]
+    [InlineData("!!:gs/t/T/:&")]        // the repeat finds no t left
+    public void Expand_SubstitutionModifier_Fails(string line)
+    {
+        Assert.Null(HistoryExpander.Expand(line, ["echo three tee"], out var error));
+        Assert.NotNull(error);
+    }
+
+    [Fact]
+    public void Expand_SharedSubstitution_IsRepeatedOnALaterLine()
+    {
+        var last = new HistorySubstitution();
+        Assert.Equal("echo Three tee", HistoryExpander.Expand("!!:s/t/T/", ["echo three tee"], out _, last));
+        Assert.Equal("echo Three Tee", HistoryExpander.Expand("!!:g&", ["echo three tee"], out _, last));
+        Assert.Equal("echo XXhree tee", HistoryExpander.Expand("!!:s//XX/", ["echo three tee"], out _, last));
+    }
+
     [Theory]
     [InlineData("!!", true)]              // bang anywhere
     [InlineData("sudo !$", true)]

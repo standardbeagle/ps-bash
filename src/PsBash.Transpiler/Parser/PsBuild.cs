@@ -1509,18 +1509,18 @@ public static class PsBuild
         "Invoke-BashPipeStage -Slot " + PipeStatusSlots + " -Index " + index.ToString(System.Globalization.CultureInfo.InvariantCulture)
         + " -Script { " + (index == 0 ? "& { " + stageBlock + " }" : stageBlock) + " }";
 
-    /// <summary>The global <c>Invoke-BashFc</c> leaves a re-run command in (<c>fc -s</c>, <c>fc -e -</c>), for <see cref="FcCall"/>.</summary>
+    /// <summary>The global <c>Invoke-BashFc</c> leaves a re-run command in (<c>fc -s</c>, <c>fc -e -</c>), for <see cref="FcTakeRerun"/>.</summary>
     public const string FcRerunVariable = "__BashFcRerun";
 
     /// <summary>
-    /// <c>fc</c>: <paramref name="fcCommand"/> (the <c>Invoke-BashFc</c> call) and then the command it chose to re-run, as
-    /// <see cref="RunBashTextAtRunTime"/> runs eval text: in the caller's scope (dot-sourced, one pipeline element, so
-    /// <c>fc -s | tr</c> pipes the re-run's output), a syntax error status 2. A cmdlet must not run script itself.
+    /// <c>fc</c>, up to its re-run: <paramref name="fcCommand"/> (the <c>Invoke-BashFc</c> call) with the re-run slot
+    /// cleared first, then the command it chose moved into <c>$__psbash_eval_src</c> (null when it chose none, which
+    /// <see cref="RunBashTextCall"/> skips). The emitter follows it with that call, as eval does: a cmdlet must not run
+    /// script itself.
     /// </summary>
-    public static string FcCall(string fcCommand) =>
-        ". { $global:" + FcRerunVariable + " = $null; " + fcCommand + "; if ($null -ne $global:" + FcRerunVariable + ") { "
-        + "$__psbash_eval_src = $global:" + FcRerunVariable + "; $global:" + FcRerunVariable + " = $null; "
-        + RunBashTextAtRunTime(", $null", "fc") + " } }";
+    public static string FcTakeRerun(string fcCommand) =>
+        "$global:" + FcRerunVariable + " = $null; " + fcCommand + "; $__psbash_eval_src = $global:" + FcRerunVariable
+        + "; $global:" + FcRerunVariable + " = $null; ";
 
     /// <summary>
     /// The call head of a builtin the emitter implements, run at run time as its own static form with the words it gets
@@ -1540,14 +1540,35 @@ public static class PsBuild
     // ─────────────────────── bash text run at run time ────────────────────────
 
     /// <summary>
+    /// The ONE emitted call of bash text run at run time (<c>eval</c>, <c>fc -s</c>: PsEmitter.RunTimeBashTextCall): the
+    /// text in <c>$__psbash_eval_src</c>, unless blank, run by <see cref="RunBashTextAtRunTime"/> under the nesting bound
+    /// (5: <c>history -s 'fc -s'; fc -s</c> or a self-evaluating eval fails instead of taking the host down), with the call
+    /// site's loop mode (<paramref name="loopModeSet"/>, <see cref="LoopModeSet"/> or empty: what a <c>break</c> in the
+    /// text leaves), its function's locals (<paramref name="localsArg"/>) and <paramref name="returnCheck"/>
+    /// (<see cref="EvalReturnCheck"/> or empty: a <c>return</c> in the text leaves the function it ran in). A call site
+    /// that called the runner itself missed some of these (fc's <c>return 7</c> did not return;
+    /// guard <c>RunBashTextCallGuardTests</c>).
+    /// </summary>
+    public static string RunBashTextCall(string label, string loopModeSet, string localsArg, string returnCheck) =>
+        // Get-Variable -ErrorAction SilentlyContinue: the depth probe is safe under Set-StrictMode -Version Latest
+        // (set -u), where a plain $global:X throws on its first read.
+        "if (-not [string]::IsNullOrWhiteSpace($__psbash_eval_src)) { "
+        + "$__psbash_eval_depth = [int](Get-Variable -Name '__BashEvalDepth' -Scope Global -ValueOnly -ErrorAction SilentlyContinue); "
+        + "if ($__psbash_eval_depth -ge 5) { throw '" + label + ": nesting depth limit (5) exceeded; possible infinite recursion' }; "
+        + "$global:__BashEvalDepth = $__psbash_eval_depth + 1; "
+        + "try { " + loopModeSet + RunBashTextAtRunTime(localsArg, label) + " } finally { $global:__BashEvalDepth = $__psbash_eval_depth } "
+        + (returnCheck.Length > 0 ? returnCheck + " " : "") + "}";
+
+    /// <summary>
     /// Transpile the bash text in <c>$__psbash_eval_src</c> as eval text and run it here (Invoke-Expression: the
     /// caller's scope), its lines counted from the call's own line. A syntax error in it is the command's own failure
-    /// (<c>ps-bash: LABEL: …</c>, status 2), not an exception out of the script. The ONE run-time runner of bash text:
-    /// a run-time <c>eval</c> (PsEmitter.EmitEval) and a builtin named at run time (<see cref="BuiltinAsSourceScript"/>).
+    /// (<c>ps-bash: LABEL: …</c>, status 2), not an exception out of the script. Private: an emitted call goes through
+    /// <see cref="RunBashTextCall"/>; the one other caller, <see cref="BuiltinAsSourceScript"/>, runs a static builtin
+    /// command (<c>eval '…'</c>, <c>fc -s</c>) whose own emitted form makes that call.
     /// </summary>
     /// <param name="localsArg"><c>, [string[]]@(…)</c>: the calling function's <c>local</c> names, or <c>, $null</c>.</param>
     /// <param name="label">The command named in a syntax-error diagnostic.</param>
-    public static string RunBashTextAtRunTime(string localsArg, string label) =>
+    private static string RunBashTextAtRunTime(string localsArg, string label) =>
         "$__psbash_eval_pwsh = $null; try { $__psbash_eval_pwsh = [PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]::Transpile("
         + "$__psbash_eval_src, [PsBash.Core.Transpiler.TranspileContext, PsBash.Transpiler]::Eval" + localsArg
         + ", ($null -ne (Get-Variable -Name __BashStdIn -Scope Global -ValueOnly -ErrorAction SilentlyContinue))) } "
@@ -2081,6 +2102,17 @@ public static class PsBuild
         appendTail(sb);
         return sb.ToString();
     }
+
+    /// <summary>
+    /// <see cref="WithRedirectTail"/> for eval text (<c>eval</c>, <c>fc -s</c>) where a <c>return</c> leaves the caller:
+    /// a PowerShell <c>return</c> leaves only the <c>. { }</c> group, so the group clears a flag when it runs to its end
+    /// and the caller returns when it did not (bash: <c>f() { eval 'return 7' 2&gt;/dev/null; echo no; }</c> returns 7).
+    /// A <c>break</c> leaves past the check, as it should. Not for <c>source</c>, whose <c>return</c> ends only the file.
+    /// </summary>
+    public static string WithRedirectTailPassingReturn(string statements, Action<System.Text.StringBuilder> appendTail) =>
+        "$__psbash_grp_ret = $true; "
+        + WithRedirectTail(statements.TrimEnd(' ', ';') + "; $__psbash_grp_ret = $false", appendTail)
+        + "; if ($__psbash_grp_ret) { return }";
 
     /// <summary>
     /// A native program run with the surrounding shared stdin (<c>$global:__BashStdIn</c>) as its REAL

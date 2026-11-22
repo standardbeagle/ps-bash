@@ -1295,7 +1295,7 @@ public static partial class PsEmitter
     private static bool BodyMayRunSetE(BashNode? command) => command switch
     {
         Command.Simple { Words.Length: > 0 } s => GetLiteralValue(s.Words[0]) is { } n
-            && (n is "eval" or "source" or "." || _definedFunctions?.Contains(n) == true || _unitFunctions?.Contains(n) == true),
+            && (n is "eval" or "fc" or "source" or "." || _definedFunctions?.Contains(n) == true || _unitFunctions?.Contains(n) == true),
         Command.Pipeline p => p.Commands.Any(BodyMayRunSetE),
         Command.AndOrList a => a.Commands.Any(BodyMayRunSetE),
         Command.CommandList l => l.Commands.Any(BodyMayRunSetE),
@@ -3422,7 +3422,7 @@ public static partial class PsEmitter
     {
         "cd", "pushd", "popd", "export", "unset", "declare", "typeset", "local", "readonly", "set", "shopt",
         "read", "source", ".", "eval", "exec", "alias", "unalias", "trap", "umask", "mapfile", "readarray",
-        "getopts", "let", "shift", "enable", "hash", "builtin", "command", "ulimit", "wait", "fg", "bg",
+        "getopts", "let", "shift", "enable", "hash", "builtin", "command", "ulimit", "wait", "fg", "bg", "history", "fc",
     };
 
     // Function names defined so far in the unit being emitted: calling one can do anything.
@@ -5421,7 +5421,7 @@ public static partial class PsEmitter
         while (wrap < cmd.Words.Length - 1 && TryGetStaticArgValue(cmd.Words[wrap]) is "builtin" or "command") wrap++;
         if (wrap > 0 && TryGetStaticArgValue(cmd.Words[wrap]) is { } wrapped && wrapped is "declare" or "typeset" or "local" or "export" or "readonly")
         {
-            var inner = cmd with { Words = [new CompoundWord([new WordPart.Literal(wrapped)]), .. cmd.Words.Skip(wrap + 1)] };
+            var inner = cmd with { Words = [NoAliasWord(wrapped), .. cmd.Words.Skip(wrap + 1)] };
             if (!TryEmitRuntimeNamedDeclaration(wrapped, inner, out result, operandsAreOrdinaryWords: true))
                 result = EmitSimple(inner);
             return true;
@@ -6945,6 +6945,9 @@ public static partial class PsEmitter
         else if (cmd0 == "eval")
             specialResult = EmitEval(cmd.Words.RemoveAt(0));
 
+        else if (cmd0 == "fc")
+            specialResult = EmitFc(cmd.Words.RemoveAt(0));
+
         else if (cmd0 == "readonly")
             specialResult = EmitReadonly(cmd);
 
@@ -6994,9 +6997,12 @@ public static partial class PsEmitter
             // cd / read / eval / readonly / set / source emit their own statement text, so the redirect
             // tail (`eval '…' >f`, `source rc 2>/dev/null`, `cd d >/dev/null`) was silently dropped.
             // Dot-source keeps their side effects (variables, functions, cwd) in the caller's scope.
-            result = (reportOnly || cmd0 is "cd" or "read" or "eval" or "readonly" or "set" or "source" or "." or "local")
+            result = (reportOnly || cmd0 is "cd" or "read" or "eval" or "fc" or "readonly" or "set" or "source" or "." or "local")
                 && !cmd.Redirects.IsDefaultOrEmpty
-                    ? WithRedirectTailOn(specialResult, cmd.Redirects)
+                    ? cmd0 is "eval" or "fc" && _subshellDepth == 0 && (_functionDepth > 0 || _context == TranspileContext.Eval)
+                        // A `return` in the text leaves the caller, not just the redirect's group.
+                        ? PsBuild.WithRedirectTailPassingReturn(specialResult, tail => AppendRedirectTail(tail, cmd.Redirects))
+                        : WithRedirectTailOn(specialResult, cmd.Redirects)
                     : specialResult;
             return true;
         }
@@ -9688,7 +9694,7 @@ public static partial class PsEmitter
         "set", "shopt", "trap", "alias", "unalias", "export", "unset", "declare", "typeset", "local",
         "readonly", "cd", "pushd", "popd", "source", ".", "eval", "shift", "getopts", "read", "mapfile",
         "readarray", "let", "exec", "umask", "hash", "builtin", "command", "enable", "exit",
-        "return", "wait", "break", "continue",
+        "return", "wait", "break", "continue", "history", "fc",
     };
 
     /// <summary>
@@ -12943,7 +12949,7 @@ public static partial class PsEmitter
                 // there (`f | cat`), which the emitter cannot tell from a program. Without the scope the run-time exit
                 // (PsBuild.DynamicExit) ended the whole script.
                 bool runTimeExitStage = i == 0 && cmd is Command.Simple { Words.IsDefaultOrEmpty: false } rs
-                    && (GetLiteralValue(rs.Words[0]) is "eval" or "source" or "."
+                    && (GetLiteralValue(rs.Words[0]) is "eval" or "fc" or "source" or "."
                         || _runsDynamicCode && GetLiteralValue(rs.Words[0]) is { } rsName && !IsMappedCommandName(rsName) && !StateChangingBuiltins.Contains(rsName)
                         || rawStage.Contains("throw [PsBash.Cmdlets.BashSubshellExitException]", StringComparison.Ordinal)
                            && !rawStage.Contains("catch [PsBash.Cmdlets.BashSubshellExitException]", StringComparison.Ordinal));
@@ -14289,8 +14295,7 @@ public static partial class PsEmitter
                 result = EmitPassthrough("Invoke-BashHistory", args);
                 return true;
             case "fc":
-                // fc -s / fc -e - re-run a history entry: the cmdlet picks it, PsBuild.FcCall runs it here.
-                result = PsBuild.FcCall(EmitPassthrough("Invoke-BashFc", args));
+                result = EmitFc(args);
                 return true;
             case "hash":
                 result = EmitPassthrough("Invoke-BashHash", args);
@@ -14409,17 +14414,21 @@ public static partial class PsEmitter
     /// bare words only), it makes the name of a bash builtin (<see cref="BashBuiltins.Names"/>) a plain word for
     /// everything after. REGRESSION: every builtin the emitter implements (<c>local</c>, <c>export</c>, <c>set</c>,
     /// <c>eval</c>, <c>read</c>, <c>declare</c>, <c>return</c>, <c>break</c>) was looked up as a program,
-    /// <c>command not found</c> (127). Other names keep their quotes (a function or program runs either way). A name an
-    /// alias also has stays quoted: EmitSimple re-enters itself (and so ExpandAliases) for parts of one command, and the
-    /// bare word would expand there (<c>alias echo=...; 'echo' x</c>). The declaration builtins (<c>'local' v=3</c>) are
-    /// read by the parser (<c>BashParser.CommandWordName</c>).
+    /// <c>command not found</c> (127). Other names keep their quotes (a function or program runs either way). The bare
+    /// word is one alias expansion passes over (<see cref="NoAliasWord"/>): EmitSimple re-enters itself (and so
+    /// ExpandAliases) for parts of one command, and bash never expands a quoted word (<c>alias eval='echo no';
+    /// 'eval' 'echo x'</c> prints x).
+    /// <para>A declaration builtin's operands are then ORDINARY words, as behind <c>builtin</c> (bash 5.2: with
+    /// x='a b', <c>'export' v=$x</c> exports v=a and b; <c>'declare' -a A=(x y)</c> is a syntax error): it becomes
+    /// <c>builtin NAME ...</c>, the wrapper path (<see cref="TryEmitDynamicAssignmentBuiltin"/>). The parser makes the
+    /// static spelling (<c>'local' v=3</c>, no expansion) the declaration, as it does behind a wrapper.</para>
     /// </summary>
     private static Command.Simple UnquoteBuiltinName(Command.Simple cmd)
     {
         if (cmd.Words.IsDefaultOrEmpty || GetLiteralValue(cmd.Words[0]) is not null) return cmd;
         if (TryGetStaticArgValue(cmd.Words[0]) is not { } name || !BashBuiltins.Names.Contains(name)) return cmd;
-        if (_aliasDefs is not null && AliasLookup(name, cmd.Line) is not null) return cmd;
-        return cmd with { Words = cmd.Words.SetItem(0, new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal(name)))) };
+        var words = cmd.Words.SetItem(0, NoAliasWord(name));
+        return cmd with { Words = name is "declare" or "typeset" or "local" or "export" or "readonly" ? words.Insert(0, NoAliasWord("builtin")) : words };
     }
 
     public static string? GetLiteralValue(CompoundWord word)
@@ -14736,15 +14745,7 @@ public static partial class PsEmitter
                 ? EmitWord(new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.DoubleQuoted(a.Parts))))
                 : FormatForItem(EmitWord(a))));
         return
-            // Use Get-Variable -ErrorAction SilentlyContinue so the depth probe is
-            // safe under Set-StrictMode -Version Latest (set -u). Plain $global:X
-            // throws on first read when the variable has never been initialized.
             "$__psbash_eval_src = @(" + emittedArgs + ") -join ' '; " +
-            "if (-not [string]::IsNullOrWhiteSpace($__psbash_eval_src)) { " +
-            "$__psbash_eval_depth = [int](Get-Variable -Name '__BashEvalDepth' -Scope Global -ValueOnly -ErrorAction SilentlyContinue); " +
-            "if ($__psbash_eval_depth -ge 5) { throw 'eval: nesting depth limit (5) exceeded; possible infinite recursion' }; " +
-            "$global:__BashEvalDepth = $__psbash_eval_depth + 1; " +
-            "try { " + LoopModeForCallSite() +
             // Assembly-qualified type names: BashTranspiler/TranspileContext live
             // in PsBash.Transpiler.dll (assembly name differs from the namespace
             // since REFACTOR-5a's project split, commit 1f23039). This runtime
@@ -14755,13 +14756,7 @@ public static partial class PsEmitter
             // on demand. A bare [PsBash.Core.Transpiler.BashTranspiler] silently
             // failed to resolve there, so eval emitted empty output.
             // A syntax error in the eval text is eval's own failure (status 2), not an exception out of the surrounding script.
-            PsBuild.RunBashTextAtRunTime(EvalLocalNamesArg() is { Length: > 0 } evalLocals ? evalLocals : ", $null", "eval") + " " +
-            "} finally { $global:__BashEvalDepth = $__psbash_eval_depth } " +
-            // A `return` in the text left only the Invoke-Expression: in a function (or in eval text, passing it on)
-            // it leaves here too. At the top of a script there is nothing to return from.
-            (_functionDepth > 0 && _subshellDepth == 0 ? PsBuild.EvalReturnCheck(inFunction: true) + " "
-                : _context == TranspileContext.Eval && _subshellDepth == 0 ? PsBuild.EvalReturnCheck(inFunction: false) + " " : "") +
-            "}";
+            RunTimeBashTextCall("eval");
     }
 
     /// <summary>`, [string[]]@('a','b')`: the locals of the function this eval runs in (empty at top level).</summary>
@@ -14769,6 +14764,28 @@ public static partial class PsEmitter
         _functionDepth > 0 && _functionLocalNames is { Count: > 0 } locals
             ? ", [string[]]@(" + string.Join(",", locals.Where(IsValidVarName).Select(PsBuild.SingleQuote)) + ")"
             : "";
+
+    /// <summary>
+    /// The ONE emitted call of bash text run at run time (<see cref="PsBuild.RunBashTextCall"/>) with what this call site
+    /// hands it: the loop a <c>break</c> in the text leaves, the calling function's locals, and the check that makes a
+    /// <c>return</c> in the text (which leaves only the Invoke-Expression) leave the function, or the eval text, it ran
+    /// in; at the top of a script, or in a subshell, there is nothing to return from. <c>eval</c> and <c>fc -s</c> run
+    /// their text through it (guard <c>RunBashTextCallGuardTests</c>).
+    /// </summary>
+    private static string RunTimeBashTextCall(string label) =>
+        PsBuild.RunBashTextCall(label, LoopModeForCallSite(),
+            EvalLocalNamesArg() is { Length: > 0 } locals ? locals : ", $null",
+            _subshellDepth > 0 ? ""
+                : _functionDepth > 0 ? PsBuild.EvalReturnCheck(inFunction: true)
+                : _context == TranspileContext.Eval ? PsBuild.EvalReturnCheck(inFunction: false) : "");
+
+    /// <summary>
+    /// <c>fc</c>: Invoke-BashFc lists, refuses an editor, or picks a re-run (<c>fc -s</c>, <c>fc -e -</c>) that it leaves
+    /// for <see cref="PsBuild.FcTakeRerun"/>; the re-run then runs here as eval text, through the same call as eval, so a
+    /// <c>return</c>, <c>break</c> or <c>local</c> in it acts in the caller.
+    /// </summary>
+    private static string EmitFc(ImmutableArray<CompoundWord> args) =>
+        PsBuild.FcTakeRerun(EmitPassthrough("Invoke-BashFc", args)) + RunTimeBashTextCall("fc");
 
     /// <summary>
     /// Recover the post-quote-removal string value of a <see cref="CompoundWord"/>

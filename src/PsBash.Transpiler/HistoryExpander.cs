@@ -16,7 +16,9 @@ namespace PsBash.Core;
 ///   <item><c>!?str?</c> — the most recent command containing <c>str</c>.</item>
 ///   <item><c>!$</c> / <c>!^</c> / <c>!*</c> — last / first / all argument words of the previous command.</item>
 ///   <item>A <c>:</c> word designator (<c>:$</c>, <c>:^</c>, <c>:*</c>, <c>:n</c>) after any event.</item>
-///   <item>A <c>:s/old/new/</c> modifier after an event or designator (first match; any delimiter, the last one optional).</item>
+///   <item>Substitution modifiers after an event or designator, chained (<c>:s/old/new/:s/a/b/</c>): <c>:s</c> (first
+///   match; any delimiter, the last one optional; <c>&amp;</c> in <c>new</c> is <c>old</c>), <c>:&amp;</c> (repeat the last),
+///   <c>g</c>/<c>a</c> in front (every match). See <see cref="HistorySubstitution"/>.</item>
 ///   <item><c>^old^new</c> — quick substitution on the previous command (first match only).</item>
 /// </list>
 ///
@@ -25,7 +27,7 @@ namespace PsBash.Core;
 /// pipeline-negation operator (<c>! cmd</c>) is untouched.
 ///
 /// Scope is the common 80/20 of bash history expansion; ranged word designators
-/// (<c>!!:2-4</c>), <c>:gs</c>, <c>&amp;</c> in a replacement and the other modifiers (<c>:h</c>, <c>:t</c>) are out of scope.
+/// (<c>!!:2-4</c>), <c>:G</c> and the other modifiers (<c>:h</c>, <c>:t</c>, <c>:p</c>) are out of scope.
 /// </summary>
 public static class HistoryExpander
 {
@@ -47,13 +49,19 @@ public static class HistoryExpander
     /// event / substitution failed) returns <c>null</c> and sets <paramref name="error"/> to a
     /// bash-style message; the caller should print it and not execute.
     /// </summary>
-    public static string? Expand(string line, IReadOnlyList<string> history, out string? error)
+    /// <param name="line">The typed line (or one <c>history -p</c> word).</param>
+    /// <param name="history">The command list, oldest first.</param>
+    /// <param name="error">The bash-style message of a failed reference, else null.</param>
+    /// <param name="lastSubstitution">The last substitution made (bash keeps one per session, for <c>:&amp;</c> and an
+    /// empty <c>old</c>); updated here. Null: a fresh one for this line.</param>
+    public static string? Expand(string line, IReadOnlyList<string> history, out string? error, HistorySubstitution? lastSubstitution = null)
     {
         error = null;
+        var last = lastSubstitution ?? new HistorySubstitution();
 
         // Quick substitution: ^old^new[^]  — operates on the previous command only.
         if (line.Length > 0 && line[0] == '^')
-            return ExpandQuickSubstitution(line, history, out error);
+            return ExpandQuickSubstitution(line, history, last, out error);
 
         if (!line.Contains('!'))
             return line;
@@ -99,7 +107,7 @@ public static class HistoryExpander
                 continue;
             }
 
-            var replacement = ExpandBang(line, ref i, history, out error);
+            var replacement = ExpandBang(line, ref i, history, last, out error);
             if (error != null)
                 return null;
             sb.Append(replacement);
@@ -112,7 +120,7 @@ public static class HistoryExpander
     /// Parse one bang reference starting at <paramref name="i"/> (which points at the '!') and
     /// return its expansion. On return, <paramref name="i"/> points at the last consumed char.
     /// </summary>
-    private static string ExpandBang(string line, ref int i, IReadOnlyList<string> history, out string? error)
+    private static string ExpandBang(string line, ref int i, IReadOnlyList<string> history, HistorySubstitution last, out string? error)
     {
         error = null;
         var start = i;       // the '!'
@@ -124,7 +132,8 @@ public static class HistoryExpander
             var desig = line[i];
             var prevCmd = ResolveEvent("!", history, out error);
             if (error != null) { Reset(ref i, start); return ""; }
-            return ApplyWordDesignator(prevCmd, desig.ToString(), line, start, ref error, ref i);
+            var word = ApplyWordDesignator(prevCmd, desig.ToString(), line, start, ref error, ref i);
+            return error != null ? "" : ApplyModifiers(word, line, start, ref i, last, out error);
         }
 
         // Event selector.
@@ -168,7 +177,7 @@ public static class HistoryExpander
         if (error != null) { Reset(ref i, start); return ""; }
 
         // Optional word designator suffix: :$ :^ :* :n
-        if (i + 1 < line.Length && line[i + 1] == ':' && !IsSubstModifierAt(line, i + 2))
+        if (i + 1 < line.Length && line[i + 1] == ':' && i + 2 < line.Length && !IsModifierAt(line, i + 2))
         {
             var ds = i + 2;
             if (ds < line.Length)
@@ -183,39 +192,101 @@ public static class HistoryExpander
             }
         }
 
-        return ApplySubstModifier(eventCmd, line, start, ref i, out error);
+        return ApplyModifiers(eventCmd, line, start, ref i, last, out error);
     }
 
-    /// <summary>Does <c>s</c> + a delimiter (not a letter, digit or blank) start at <paramref name="at"/>?</summary>
-    private static bool IsSubstModifierAt(string line, int at) =>
-        at + 1 < line.Length && line[at] == 's' && !char.IsLetterOrDigit(line[at + 1]) && !char.IsWhiteSpace(line[at + 1]);
+    /// <summary>Does a substitution modifier start at <paramref name="at"/> (after a <c>:</c>): <c>s</c>, <c>&amp;</c>, or
+    /// either behind <c>g</c> / <c>a</c>?</summary>
+    private static bool IsModifierAt(string line, int at) =>
+        line[at] is 's' or '&'
+        || line[at] is 'g' or 'a' && at + 1 < line.Length && line[at + 1] is 's' or '&';
 
     /// <summary>
-    /// A <c>:s/old/new/</c> modifier right after the event (<paramref name="i"/> = its last char): the first
-    /// <c>old</c> in <paramref name="text"/> becomes <c>new</c>. Text is returned unchanged when no modifier follows.
+    /// bash's substitution modifiers right after the event (<paramref name="i"/> = its last char), applied in turn
+    /// (<c>!e:s/e/E/:s/c/C/</c>): <c>:s/old/new/</c> replaces the first <c>old</c>, <c>:&amp;</c> repeats the last
+    /// substitution, a <c>g</c> (or <c>a</c>) in front replaces every one (<c>:gs/e/E/</c>, <c>:g&amp;</c>). The delimiter
+    /// is any character, the last one optional; a backslash quotes it. In <c>new</c> a <c>&amp;</c> is <c>old</c>
+    /// (<c>\&amp;</c> a plain &amp;). An empty <c>old</c> is the last one. <c>:s</c> with no delimiter does nothing (bash).
+    /// No <c>old</c> in the text, or nothing to repeat, fails the expansion. Other modifiers are left as text.
     /// </summary>
-    private static string ApplySubstModifier(string text, string line, int start, ref int i, out string? error)
+    private static string ApplyModifiers(string text, string line, int start, ref int i, HistorySubstitution last, out string? error)
     {
         error = null;
-        if (!(i + 1 < line.Length && line[i + 1] == ':' && IsSubstModifierAt(line, i + 2))) return text;
-        char delim = line[i + 3];
-        int p = i + 4;
-        int oldEnd = line.IndexOf(delim, p);
-        if (oldEnd < 0) oldEnd = line.Length;
-        var oldText = line[p..oldEnd];
-        int newStart = Math.Min(oldEnd + 1, line.Length);
-        int newEnd = newStart < line.Length ? line.IndexOf(delim, newStart) : -1;
-        var newText = line[newStart..(newEnd < 0 ? line.Length : newEnd)];
-        int last = newEnd < 0 ? line.Length - 1 : newEnd;
-        var idx = oldText.Length == 0 ? -1 : text.IndexOf(oldText, StringComparison.Ordinal);
-        if (idx < 0)
+        while (i + 2 < line.Length && line[i + 1] == ':' && IsModifierAt(line, i + 2))
         {
-            error = $"{line[start..(last + 1)]}: substitution failed";
-            i = start;
-            return "";
+            int m = i + 2;
+            bool global = line[m] is 'g' or 'a';
+            if (global) m++;
+            string? lhs, rhs;
+            int end;
+            if (line[m] == '&')
+            {
+                (lhs, rhs, end) = (last.Lhs, last.Rhs, m);
+            }
+            else if (m + 1 >= line.Length)
+            {
+                i = m;   // `!!:s` with no delimiter: bash ignores it
+                continue;
+            }
+            else
+            {
+                char delim = line[m + 1];
+                int p = m + 2;
+                lhs = ReadSubstPart(line, ref p, delim);
+                rhs = "";
+                if (p < line.Length) { p++; rhs = ReadSubstPart(line, ref p, delim); }
+                end = p < line.Length ? p : line.Length - 1;   // the closing delimiter, or the end of the line
+                if (lhs.Length == 0) lhs = last.Lhs;
+                if (lhs is not null) rhs = ReplaceAmpersands(rhs, lhs);
+            }
+            if (lhs is null || rhs is null)
+            {
+                error = $"{line[start..(end + 1)]}: no previous substitution";
+                i = start;
+                return "";
+            }
+            last.Lhs = lhs;
+            last.Rhs = rhs;
+            int idx = text.IndexOf(lhs, StringComparison.Ordinal);
+            if (idx < 0)
+            {
+                error = $"{line[start..(end + 1)]}: substitution failed";
+                i = start;
+                return "";
+            }
+            text = global
+                ? text.Replace(lhs, rhs, StringComparison.Ordinal)
+                : string.Concat(text.AsSpan(0, idx), rhs, text.AsSpan(idx + lhs.Length));
+            i = end;
         }
-        i = last;
-        return string.Concat(text.AsSpan(0, idx), newText, text.AsSpan(idx + oldText.Length));
+        return text;
+    }
+
+    /// <summary>One side of <c>:s/old/new/</c> from <paramref name="p"/> up to <paramref name="delim"/> (or the end), a
+    /// backslash before the delimiter removed; <paramref name="p"/> ends at the delimiter.</summary>
+    private static string ReadSubstPart(string line, ref int p, char delim)
+    {
+        var sb = new StringBuilder();
+        for (; p < line.Length && line[p] != delim; p++)
+        {
+            if (line[p] == '\\' && p + 1 < line.Length && line[p + 1] == delim) p++;
+            sb.Append(line[p]);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>A replacement's <c>&amp;</c> is the matched text; <c>\&amp;</c> is a plain <c>&amp;</c>.</summary>
+    private static string ReplaceAmpersands(string rhs, string lhs)
+    {
+        if (!rhs.Contains('&')) return rhs;
+        var sb = new StringBuilder(rhs.Length + lhs.Length);
+        for (int k = 0; k < rhs.Length; k++)
+        {
+            if (rhs[k] == '\\' && k + 1 < rhs.Length && rhs[k + 1] == '&') { sb.Append('&'); k++; }
+            else if (rhs[k] == '&') sb.Append(lhs);
+            else sb.Append(rhs[k]);
+        }
+        return sb.ToString();
     }
 
     private static void Reset(ref int i, int start) => i = start;
@@ -294,7 +365,7 @@ public static class HistoryExpander
     }
 
     /// <summary>Quick substitution: <c>^old^new[^]</c> on the previous command.</summary>
-    private static string? ExpandQuickSubstitution(string line, IReadOnlyList<string> history, out string? error)
+    private static string? ExpandQuickSubstitution(string line, IReadOnlyList<string> history, HistorySubstitution last, out string? error)
     {
         error = null;
         if (history.Count == 0) { error = ":s: event not found"; return null; }
@@ -317,10 +388,25 @@ public static class HistoryExpander
             return null;
         }
 
+        (last.Lhs, last.Rhs) = (oldText, newText);
         return string.Concat(prev[..idx], newText, prev[(idx + oldText.Length)..], trailing);
     }
 
     /// <summary>Whitespace-split a command into words (the unit a word designator indexes).</summary>
     private static List<string> SplitWords(string command) =>
         command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).ToList();
+}
+
+/// <summary>
+/// The last substitution a history expansion made (<c>:s/old/new/</c>, <c>^old^new</c>), which <c>:&amp;</c> and an empty
+/// <c>old</c> reuse. bash keeps one for the whole session, so a caller keeps one across its lines (<c>history -p</c>:
+/// <c>'!!:s/e/E/' '!!:&amp;'</c>).
+/// </summary>
+public sealed class HistorySubstitution
+{
+    /// <summary>The text replaced.</summary>
+    public string? Lhs { get; set; }
+
+    /// <summary>The replacement, its <c>&amp;</c> already the replaced text.</summary>
+    public string? Rhs { get; set; }
 }

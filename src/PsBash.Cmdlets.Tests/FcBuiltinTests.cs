@@ -72,6 +72,19 @@ public class FcBuiltinTests
         Assert.Empty(List(["fc -l"], true, "-l"));
     }
 
+    // bash 5.2 (fc_gethnum's real_last): a listing's -0 is the very last entry, which with history recording on is this fc
+    // line itself; 0 and the default end stay before it. REGRESSION (review of the port): -0 stopped short of it.
+    [Fact]
+    public void List_MinusZero_IsTheCurrentLine()
+    {
+        string[] history = ["echo one", "echo two", "fc -l -0"];
+        Assert.Equal(["3\t fc -l -0"], List(history, true, "-l", "-0"));
+        Assert.Equal([2], Numbers(List(history, true, "-l", "0")));
+        Assert.Equal([2, 3], Numbers(List(history, true, "-l", "-1", "-0")));
+        Assert.Equal([3, 2, 1], Numbers(List(history, true, "-l", "-0", "1")));
+        Assert.Equal(["1\t fc -l -0"], List(["fc -l -0"], true, "-l", "-0"));
+    }
+
     [Fact]
     public void List_EmptyHistory_PrintsNothing()
     {
@@ -162,7 +175,7 @@ public class FcBuiltinTests
             => CmdResult.Run(fixture.AcquireFresh(), "Invoke-BashHistory -s one; Invoke-BashFc -e vi")
                 .AssertFailed(1, InvokeBashFcCommand.EditorRefused);
 
-        // A direct call cannot run the command (only the emitted PsBuild.FcCall does): it is left in the global.
+        // A direct call cannot run the command (only the emitted PsBuild.FcTakeRerun + RunBashTextCall does): it is left in the global.
         [Fact]
         public void BareE_Dash_LeavesTheRerunForTheEmittedCall()
         {

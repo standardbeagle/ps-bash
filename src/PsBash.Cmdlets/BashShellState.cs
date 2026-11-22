@@ -224,6 +224,9 @@ public static class BashShellState
         "BashFlags", "BashPositional", "BashPositional0", "BASH_REMATCH", "BASH_SOURCE",
         "BashTrapHandlers", "__BashTrapERR", "__BashTrapEXIT", "__BashTrapRETURN", "BashBgLastPid",
         "BashUserAliases", "BashLastArg", "BashDirStack", "__BashShellUnset", FunctionSources.TableVariable,
+        // The session history list (InvokeBashHistoryCommand.StateVariable): `( history -s x )`, `fc -s | cat` change only the
+        // subshell's copy (bash 5.2).
+        "__BashHistoryList",
     ];
 
     /// <summary>Every shell-state global, for the inventory guard (<see cref="BashStateSnapshot"/>).</summary>
@@ -493,6 +496,7 @@ public static class BashShellState
             Hashtable h => h.Clone(),   // shallow, keeps the table's key comparer (and BashAssoc's type)
             Dictionary<string, string> sd => new Dictionary<string, string>(sd, sd.Comparer),   // the alias table
             IDictionary d => new Hashtable(d),
+            List<string> ls => new List<string>(ls),   // the history list keeps its type (InvokeBashHistoryCommand.Entries)
             ArrayList l => new ArrayList(l),
             IList l => new ArrayList(l),
             _ => value,
