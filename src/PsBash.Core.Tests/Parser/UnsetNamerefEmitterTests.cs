@@ -24,4 +24,32 @@ public class UnsetNamerefEmitterTests
 
     [Fact] public void Transpile_UnsetPlainVariable_Unchanged()
         => Assert.Matches(@"Invoke-BashUnset\s+['""]?z", T("typeset -n ref=x; unset z"));
+
+    // The options as Invoke-BashUnset reads them (bash 5.2): -n holds for every name after it whatever -v says; -f overrides
+    // it. REGRESSION: only `unset -n` as the first word dropped the static reference, so after `unset -v -n r` `r=2` wrote y.
+    [Fact] public void Transpile_UnsetDashVDashN_DropsTheReference()
+    {
+        var ps = T("y=Y; typeset -n r=y; unset -v -n r; r=2");
+        Assert.Contains("$env:r = \"2\"", ps);
+        Assert.DoesNotContain("$env:y = \"2\"", ps);
+    }
+
+    [Fact] public void Transpile_UnsetDashNDashF_KeepsTheReference()
+        => Assert.Contains("$env:y = \"2\"", T("y=Y; typeset -n p=y; unset -n -f p; p=2"));
+
+    // What a subshell declares ends with it (EnterSubshellTables), in the emitter's compile-time tables as in the run-time
+    // ones. REGRESSION: `( declare -n r=y ); r=3` wrote y, and `declare -p r` after it was folded to the subshell's reference.
+    [Theory]
+    [InlineData("( declare -n r=y ); r=3", "$env:r = \"3\"")]
+    [InlineData("( declare -i x ); x=1+1", "$env:x = \"1+1\"")]
+    [InlineData("( declare -u z ); z=abc", "$env:z = \"abc\"")]
+    [InlineData("( declare -A m ); m=(k v)", "$m = @(\"k\",\"v\")")]
+    [InlineData("( typeset -n r ); r=3", "$env:r = \"3\"")]
+    [InlineData("v=$(declare -n r=y); r=3", "$env:r = \"3\"")]
+    [InlineData("{ declare -n r=y; } | cat; r=3", "$env:r = \"3\"")]
+    public void Transpile_AttributeDeclaredInASubshell_EndsWithIt(string bash, string afterwards)
+        => Assert.Contains(afterwards, T(bash));
+
+    [Fact] public void Transpile_AttributeDeclaredOutsideASubshell_HoldsAfterIt()
+        => Assert.Contains("Invoke-BashArith", T("declare -i x; ( : ); x=1+1"));
 }

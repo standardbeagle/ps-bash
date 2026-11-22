@@ -190,6 +190,18 @@ back what the local hid.**
   `local -n s=s` warns `circular name reference` with status 0, and an invalid target is refused with status 1.
   The name itself is the frame's, as for a plain local, so after `local +n r` the plain r (holding the target name)
   ends with the function.
+- **`unset -n NAME`** removes NAME's reference with its attributes, never the variable it names. On a name that is
+  no nameref it changes nothing (bash 5.2: no variable, no function), except that a readonly NAME is still refused.
+  The emitter's static table and `Invoke-BashUnset` read the options one way: `-n` holds for every name after it,
+  whatever `-v` says, and `-f` overrides it (`unset -n -f r` keeps the reference).
+- **The per-shell tables** (readonly names, declare attributes, namerefs) are process-wide statics in
+  `BashShellState`, not runspace state, so no PowerShell scope ends them. They are listed in one place,
+  `BashShellState.ShellTables`. A subshell's `Save` copies each one and `Restore` puts it back, so
+  `( declare -n r=y ); declare -p r` finds nothing. A new invocation empties each one (`ClearReadonly`). A new table
+  goes into that list (guard `BashShellStateTests.EveryPerShellTable_IsSavedByTheSubshellSnapshot`). The emitter's
+  compile-time copies (readonly names, namerefs, `-i`, `-l`/`-u`, `-A`) follow the same rule at every subshell form
+  (`( )`, `$( )`, `<( )`, `cmd &`, a pipe stage): `PsEmitter.EnterSubshellTables` copies them and
+  `LeaveSubshellTables` puts them back, so `( declare -i x ); x=1+1` stores `1+1`.
 
 Known gaps:
 
@@ -200,9 +212,11 @@ Known gaps:
   refuses it with status 1 and keeps the indexed array; only the no-value form is guarded.
 - Arrays live as PowerShell variables, which are case-insensitive on every OS, so `ta` and `tA` are one array
   (`intentional-differences.md`).
+- A nameref declared with no target (`typeset -n r`) is known only to the emitter until a literal names its target,
+  so `declare -p r` reports `not found` where bash prints `declare -n r`.
 
 Behavior: `ShellLanguageGapDifferentialTests.FunctionLocal*`, `FunctionDeclare_*`, `FunctionNameref_*`,
-`Declare_NoValueIsDeclaredButUnset`, `UnsetLocals_ExistAndUnsetArraysAreUnbound`.
+`Declare_NoValueIsDeclaredButUnset`, `UnsetLocals_ExistAndUnsetArraysAreUnbound`, `UnsetNamerefTests`.
 
 ## 9. Shell-owned variables
 

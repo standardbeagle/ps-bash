@@ -52,8 +52,9 @@ public static class BashShellState
             else Namerefs[Key(name)] = target;
     }
 
-    /// <summary>A new, independent invocation starts with nothing readonly (the daemon outlives the scripts it runs).</summary>
-    public static void ClearReadonly() { lock (ReadonlyNames) ReadonlyNames.Clear(); lock (Attributes) Attributes.Clear(); lock (Namerefs) Namerefs.Clear(); }
+    /// <summary>A new, independent invocation starts with nothing readonly, declared or referring (the daemon outlives the
+    /// scripts it runs): every per-shell table is emptied.</summary>
+    public static void ClearReadonly() { foreach (var table in ShellTables) PutTable(table, null); }
 
     private static readonly Dictionary<string, string> Namerefs = new(StringComparer.Ordinal);
 
@@ -152,6 +153,52 @@ public static class BashShellState
 
     internal static bool IsReadonly(string name) { lock (ReadonlyNames) return ReadonlyNames.Contains(Key(name)); }
 
+    /// <summary>
+    /// The per-shell name tables: readonly names, declare attributes, namerefs. They are process-wide statics, not runspace
+    /// state, so nothing scopes them for free: a subshell copies every one at <see cref="Save"/> and puts it back at
+    /// <see cref="Restore"/> (<c>( declare -n r=y ); declare -p r</c> finds nothing, as in bash), and a new invocation
+    /// empties every one (<see cref="ClearReadonly"/>). A new table is added HERE, which gives it both (guard
+    /// <c>BashShellStateTests.EveryPerShellTable_IsSavedByTheSubshellSnapshot</c>). Declared after the tables: static fields
+    /// initialize in text order.
+    /// </summary>
+    private static readonly object[] ShellTables = [ReadonlyNames, Attributes, Namerefs];
+
+    /// <summary>A copy of each table in <see cref="ShellTables"/>, taken under its lock.</summary>
+    private static object[] SaveTables()
+    {
+        var copies = new object[ShellTables.Length];
+        for (int i = 0; i < ShellTables.Length; i++)
+            lock (ShellTables[i])
+                copies[i] = ShellTables[i] switch
+                {
+                    HashSet<string> set => new HashSet<string>(set, set.Comparer),
+                    Dictionary<string, string> map => new Dictionary<string, string>(map, map.Comparer),
+                    var other => throw new InvalidOperationException("no copy for per-shell table " + other.GetType()),
+                };
+        return copies;
+    }
+
+    /// <summary>Makes <paramref name="table"/> hold what <paramref name="saved"/> (a <see cref="SaveTables"/> copy) holds;
+    /// null empties it.</summary>
+    private static void PutTable(object table, object? saved)
+    {
+        lock (table)
+            switch (table)
+            {
+                case HashSet<string> set:
+                    set.Clear();
+                    if (saved is HashSet<string> names) set.UnionWith(names);
+                    break;
+                case Dictionary<string, string> map:
+                    map.Clear();
+                    if (saved is Dictionary<string, string> entries)
+                        foreach (var (name, value) in entries) map[name] = value;
+                    break;
+                default:
+                    throw new InvalidOperationException("no restore for per-shell table " + table.GetType());
+            }
+    }
+
     /// <summary>The first of <paramref name="names"/> that is read-only, by its bash name (for the message), or null (the
     /// emitter's run-time assignment guard).</summary>
     public static string? FirstReadonly(params string[] names)
@@ -185,19 +232,21 @@ public static class BashShellState
     public sealed class Snapshot
     {
         internal Snapshot(Dictionary<string, string> env, (bool Exists, object? Value)[] globals,
-            Dictionary<string, bool> shopt, bool xtrace, HashSet<string> readonlyNames,
+            Dictionary<string, bool> shopt, bool xtrace, object[] tables,
             Dictionary<string, ScriptBlock?> aliasFunctions, VarFrameStack.Saved varFrames, PsBash.Core.ShellExports.Saved exports,
             WorkingDirectory cwd)
         {
             Exports = exports; Cwd = cwd;
-            Env = env; Globals = globals; Shopt = shopt; Xtrace = xtrace; Readonly = readonlyNames; AliasFunctions = aliasFunctions;
+            Env = env; Globals = globals; Shopt = shopt; Xtrace = xtrace; Tables = tables; AliasFunctions = aliasFunctions;
             VarFrames = varFrames;
         }
 
         /// <summary>The local/temp-binding frames: an <c>unset</c> in the body pops them for the body only.</summary>
         internal VarFrameStack.Saved VarFrames { get; }
 
-        internal HashSet<string> Readonly { get; }
+        /// <summary>The per-shell tables (<see cref="ShellTables"/>, same order): a <c>readonly</c>, <c>declare -i</c> or
+        /// <c>declare -n</c> made in the body ends with it.</summary>
+        internal object[] Tables { get; }
 
         /// <summary>The export table: an <c>export</c> made in the body ends with it.</summary>
         internal PsBash.Core.ShellExports.Saved Exports { get; }
@@ -310,10 +359,8 @@ public static class BashShellState
         // it back with the rest of the globals.
         ErrTrapInheritance.Hide(session);
 
-        HashSet<string> readonlyNow;
-        lock (ReadonlyNames) readonlyNow = new HashSet<string>(ReadonlyNames, StringComparer.Ordinal);
         return new Snapshot(env, globals, InvokeBashShoptCommand.SnapshotOptions(),
-            IsTrue(session.PSVariable.GetValue("global:__BashXtrace")), readonlyNow, SaveAliasFunctions(session),
+            IsTrue(session.PSVariable.GetValue("global:__BashXtrace")), SaveTables(), SaveAliasFunctions(session),
             VarFrameStack.Current.Save(), PsBash.Core.ShellExports.Save(), SaveWorkingDirectory(session))
         { Umask = InvokeBashUmaskCommand.ShellMask };
     }
@@ -350,8 +397,8 @@ public static class BashShellState
         PsBash.Core.ShellExports.Restore(saved.Exports);
         if (inJob) return RestoreRunspaceGlobals(session, saved);
         InvokeBashShoptCommand.RestoreOptions(saved.Shopt);
-        // `readonly` made inside the body ends with it, like the variable it protects.
-        lock (ReadonlyNames) { ReadonlyNames.Clear(); ReadonlyNames.UnionWith(saved.Readonly); }
+        // A `readonly`, an attribute or a nameref made inside the body ends with it, like the variable it describes.
+        for (int i = 0; i < ShellTables.Length; i++) PutTable(ShellTables[i], saved.Tables[i]);
         return RestoreRunspaceGlobals(session, saved);
     }
 

@@ -168,17 +168,20 @@ public sealed class InvokeBashUnsetCommand : BashCmdlet
         if (FileSystemHelpers.TryRejectBuiltinOptions(this, "unset", args, "fvn")) return;
 
         bool functionMode = false;
+        bool namerefMode = false;
         var names = new List<string>();
         bool explicitVar = V.IsPresent;
 
         // If -V was bound by the binder it acts as a no-op mode hint (variable
         // is already the default). The manual scan then walks the remaining
         // tokens; -f / -v inside the list change the mode for subsequent names
-        // (oracle parity — the mode is per-iteration, not global).
+        // (oracle parity — the mode is per-iteration, not global). -n stays on whatever follows it; -f overrides it.
         foreach (var arg in args)
         {
             if (arg == "-f") { functionMode = true; explicitVar = false; continue; }
             if (arg == "-v") { functionMode = false; explicitVar = true; continue; }
+            // REGRESSION: `-n` was skipped like an unknown option, so `declare -n q=y; unset -n q` left q a nameref.
+            if (arg == "-n") { namerefMode = true; continue; }
             if (arg.StartsWith('-')) continue;
             names.Add(arg);
         }
@@ -192,6 +195,13 @@ public sealed class InvokeBashUnsetCommand : BashCmdlet
             {
                 FileSystemHelpers.WriteStderr(this, $"unset: {name}: cannot unset: readonly variable");
                 FileSystemHelpers.SetLastExitCode(this, 1);
+                continue;
+            }
+            if (!functionMode && namerefMode)
+            {
+                // `unset -n ref` removes the reference itself, never the variable it names; on a name that is no nameref it
+                // does nothing (bash 5.2: `v=3; unset -n v` leaves v=3, and unsets no function of that name either).
+                UnsetReference(store);
                 continue;
             }
             if (!functionMode && TryUnsetElement(store)) continue;
@@ -240,5 +250,18 @@ public sealed class InvokeBashUnsetCommand : BashCmdlet
                 BashShellState.TakeAttributes(store);
             }
         }
+    }
+
+    /// <summary>
+    /// <c>unset -n NAME</c>: when NAME is a nameref, the reference goes with its attributes, so NAME is a plain, unset
+    /// name again (<c>declare -p</c> and <c>set</c> no longer list it; a later <c>NAME=v</c> assigns NAME itself). Not a
+    /// nameref: nothing changes.
+    /// </summary>
+    private static void UnsetReference(string store)
+    {
+        if (BashShellState.TakeNameref(store) is null) return;
+        BashVariableStore.Set(store, null);
+        PsBash.Core.ShellExports.Forget(store);
+        BashShellState.TakeAttributes(store);
     }
 }

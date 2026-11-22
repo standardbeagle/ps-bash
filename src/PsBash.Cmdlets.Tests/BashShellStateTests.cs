@@ -51,6 +51,81 @@ public class BashShellStateTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void EveryPerShellTable_IsSavedByTheSubshellSnapshot()
+    {
+        // GUARD: a process-wide name table in BashShellState is no runspace state, so a subshell leaks it unless it is in
+        // ShellTables (Save copies, Restore puts back, ClearReadonly empties). REGRESSION: the nameref and attribute
+        // tables were missing, so `( declare -n r=y ); declare -p r` printed the subshell's reference.
+        const System.Reflection.BindingFlags statics = System.Reflection.BindingFlags.Static
+            | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public;
+        var listed = (object[])typeof(BashShellState).GetField("ShellTables", statics)!.GetValue(null)!;
+        var tables = typeof(BashShellState).GetFields(statics)
+            .Where(f => !f.FieldType.IsArray && f.FieldType != typeof(string)
+                && typeof(System.Collections.IEnumerable).IsAssignableFrom(f.FieldType))
+            .ToList();
+
+        Assert.True(tables.Count >= 3, "found " + tables.Count + " tables: the scan no longer sees them");
+        foreach (var field in tables)
+            Assert.True(listed.Any(t => ReferenceEquals(t, field.GetValue(null))),
+                $"BashShellState.{field.Name} is not in ShellTables: a subshell would leak it to its parent");
+    }
+
+    [Fact]
+    public void Restore_EndsNamerefsAndAttributesMadeInsideTheBody_AndBringsBackOneItRemoved()
+    {
+        // `( declare -n r=y; declare -i n; unset -n keep )`: the parent has no r, no -i on n, and keep still refers.
+        var r = Run(
+            "[PsBash.Cmdlets.BashShellState]::SetNameref('psbt_ss_keep', 'psbt_ss_t'); "
+            + "$s = [PsBash.Cmdlets.BashShellState]::Save($ExecutionContext.SessionState); "
+            + "[PsBash.Cmdlets.BashShellState]::SetNameref('psbt_ss_r', 'psbt_ss_t'); "
+            + "[PsBash.Cmdlets.BashShellState]::MarkAttribute('psbt_ss_n', 'i'); "
+            + "Invoke-BashUnset -n psbt_ss_keep; "
+            + "$inside = [PsBash.Cmdlets.BashShellState]::ResolveNameref('psbt_ss_keep'); "
+            + "[void][PsBash.Cmdlets.BashShellState]::Restore($ExecutionContext.SessionState, $s); "
+            + "\"inside=$inside r=$([PsBash.Cmdlets.BashShellState]::ResolveNameref('psbt_ss_r')) "
+            + "keep=$([PsBash.Cmdlets.BashShellState]::ResolveNameref('psbt_ss_keep'))\"; "
+            + "Invoke-BashDeclare -p psbt_ss_n 2>&1 | ForEach-Object { \"n: $_\" }; "
+            + "[void][PsBash.Cmdlets.BashShellState]::ClearNameref('psbt_ss_keep', $null); $global:LASTEXITCODE = 0").AssertSuccess();
+
+        Assert.Contains("inside=psbt_ss_keep r=psbt_ss_r keep=psbt_ss_t", r.Stdout);
+        Assert.DoesNotContain("declare -i", r.Stdout);
+    }
+
+    [Fact]
+    public void UnsetN_DropsTheReference_NotTheVariableItNames()
+    {
+        // `y=1; declare -n q=y; unset -n q`: y=1 stays, q is no reference any more. REGRESSION: -n was skipped, q stayed.
+        var r = Run(
+            "$env:psbt_un_y = '1'; [PsBash.Cmdlets.BashShellState]::SetNameref('psbt_un_q', 'psbt_un_y'); "
+            + "Invoke-BashUnset -n psbt_un_q; $rc = $global:LASTEXITCODE; "
+            + "\"rc=$rc y=$env:psbt_un_y q=$([PsBash.Cmdlets.BashShellState]::ResolveNameref('psbt_un_q'))\"; "
+            + "Remove-Item Env:psbt_un_y").AssertSuccess();
+
+        Assert.Contains("rc=0 y=1 q=psbt_un_q", r.Stdout);
+    }
+
+    [Fact]
+    public void UnsetN_OnAPlainVariable_LeavesIt_AndOnAReadonlyOneFails()
+    {
+        // bash 5.2: `v=3; unset -n v` leaves v=3; `readonly w=1; unset -n w` is the readonly error, status 1.
+        BashShellState.MarkReadonly("psbt_un_w");
+        CmdResult r;
+        try
+        {
+            r = Run(
+                "$env:psbt_un_v = '3'; Invoke-BashUnset -n psbt_un_v; $rc = $global:LASTEXITCODE; \"rc=$rc v=[$env:psbt_un_v]\"; "
+                + "$env:psbt_un_w = '1'; "
+                + "Invoke-BashUnset -n psbt_un_w 2>&1 | ForEach-Object { \"err: $_\" }; \"rc2=$global:LASTEXITCODE w=[$env:psbt_un_w]\"; "
+                + "Remove-Item Env:psbt_un_v, Env:psbt_un_w; $global:LASTEXITCODE = 0").AssertSuccess();
+        }
+        finally { BashShellState.UnmarkReadonly("psbt_un_w"); }
+
+        Assert.Contains("rc=0 v=[3]", r.Stdout);
+        Assert.Contains("unset: psbt_un_w: cannot unset: readonly variable", r.Stdout);
+        Assert.Contains("rc2=1 w=[1]", r.Stdout);
+    }
+
+    [Fact]
     public void ClearReadonly_LetsTheNextInvocationUnset()
     {
         // A daemon runs many scripts; `readonly v` in one must not block `unset v` in the next.

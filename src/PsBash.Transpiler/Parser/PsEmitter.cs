@@ -228,17 +228,37 @@ public static partial class PsEmitter
     [ThreadStatic]
     private static HashSet<string>? _readonlyVars;
 
+    /// <summary>The emitter's per-shell attribute tables as a subshell body found them (<see cref="EnterSubshellTables"/>).</summary>
+    private readonly record struct SubshellTables(HashSet<string>? Readonly, Dictionary<string, string>? Namerefs,
+        HashSet<string>? PendingNamerefs, Dictionary<string, string>? LitAssigned, HashSet<string>? IntVars,
+        Dictionary<string, bool>? CaseVars, HashSet<string>? AssocVars);
+
     /// <summary>
     /// A subshell body starts (<c>( )</c>, <c>$( )</c>, <c>&lt;( )</c>, <c>cmd &amp;</c>, a pipe stage): it gets a copy of
-    /// <see cref="_readonlyVars"/>, and the set returned here is put back when it ends, because a <c>readonly</c> made in a
-    /// subshell ends with it (bash forks; at run time BashShellState restores the readonly table). REGRESSION:
-    /// <c>( readonly ro=1 ); ro=2</c> refused the assignment.
+    /// every compile-time per-shell table (readonly names, namerefs and pending ones, literal values a <c>typeset -n</c>
+    /// reads, <c>-i</c>, <c>-l</c>/<c>-u</c>, <c>-A</c>), and <see cref="LeaveSubshellTables"/> puts back what this returns
+    /// when it ends: what a subshell declares ends with it (bash forks; at run time BashShellState.ShellTables does the
+    /// same). A new such table goes here. REGRESSION: <c>( readonly ro=1 ); ro=2</c> refused the assignment, and
+    /// <c>( declare -n r=y ); r=3</c> wrote y.
     /// </summary>
-    private static HashSet<string>? EnterSubshellReadonly()
+    private static SubshellTables EnterSubshellTables()
     {
-        var outer = _readonlyVars;
-        if (outer is not null) _readonlyVars = new HashSet<string>(outer, VarNameKeys);
+        var outer = new SubshellTables(_readonlyVars, _namerefs, _pendingNamerefs, _litAssigned, _intVars, _caseVars, _assocVars);
+        if (_readonlyVars is { } ro) _readonlyVars = new HashSet<string>(ro, ro.Comparer);
+        if (_namerefs is { } refs) _namerefs = new Dictionary<string, string>(refs, refs.Comparer);
+        if (_pendingNamerefs is { } pending) _pendingNamerefs = new HashSet<string>(pending, pending.Comparer);
+        if (_litAssigned is { } lit) _litAssigned = new Dictionary<string, string>(lit, lit.Comparer);
+        if (_intVars is { } ints) _intVars = new HashSet<string>(ints, ints.Comparer);
+        if (_caseVars is { } cases) _caseVars = new Dictionary<string, bool>(cases, cases.Comparer);
+        if (_assocVars is { } assoc) _assocVars = new HashSet<string>(assoc, assoc.Comparer);
         return outer;
+    }
+
+    /// <summary>The subshell body ended: the tables are the ones <see cref="EnterSubshellTables"/> found.</summary>
+    private static void LeaveSubshellTables(SubshellTables outer)
+    {
+        _readonlyVars = outer.Readonly; _namerefs = outer.Namerefs; _pendingNamerefs = outer.PendingNamerefs;
+        _litAssigned = outer.LitAssigned; _intVars = outer.IntVars; _caseVars = outer.CaseVars; _assocVars = outer.AssocVars;
     }
     /// <summary>True when the script text reads `$?` somewhere: only then does a bare assignment need to reset the status to 0.</summary>
     [ThreadStatic] private static bool _scriptReadsStatus;
@@ -1369,7 +1389,7 @@ public static partial class PsEmitter
         // A substitution body is a SUBSHELL: `exit N` inside `$( … )` / `<( … )` leaves only it
         // (`v=$(exit 3); echo $?` prints 3). Raise the depth so `exit` emits the scoped `return`;
         // PipelineHead / Invoke-ProcessSub supply the script block it returns from.
-        _subshellDepth++; var subRoOuter = EnterSubshellReadonly();
+        _subshellDepth++; var subRoOuter = EnterSubshellTables();
         // A body that is sure to get the subshell scope (PipelineHead) has the ERR trap put aside at run time
         // (ErrTrapInheritance), so `x=$(trap 'echo E' ERR; false)` fires its own trap; one that may run unscoped keeps
         // the static errtrace test.
@@ -1394,7 +1414,7 @@ public static partial class PsEmitter
         }
         finally
         {
-            _captureDepth--; _pipeStageFeedsInput = savedFeed; _subshellDepth--; _readonlyVars = subRoOuter; PsBuild.ErrTrapNeedsErrtrace = savedErrTrapSub;
+            _captureDepth--; _pipeStageFeedsInput = savedFeed; _subshellDepth--; LeaveSubshellTables(subRoOuter); PsBuild.ErrTrapNeedsErrtrace = savedErrTrapSub;
             _errexitMode = savedMode; _errexitExemptDepth = savedExempt; _lineBase = savedLineBase; _redirectLine = savedRedirectLine;
             _loopLabels = capOuterLabels; _loopBarrier = capOuterBarrier;
         }
@@ -3146,7 +3166,7 @@ public static partial class PsEmitter
         // stopped and the `echo $?` never ran. Emit the body with the subshell
         // depth raised so `exit N` becomes a SCOPED `$LASTEXITCODE = N; return`,
         // and give that `return` a script block to return from.
-        _subshellDepth++; var subRoOuter = EnterSubshellReadonly(); bool subRoViolation = _readonlyViolation; // `( r=2 ); echo` goes on
+        _subshellDepth++; var subRoOuter = EnterSubshellTables(); bool subRoViolation = _readonlyViolation; // `( r=2 ); echo` goes on
         var outerLabels = _loopLabels; var outerBarrier = _loopBarrier;
         _loopLabels = null; _loopBarrier = subshell.KeepsLoopLevel ? outerBarrier : LoopBarrierKind.Warn;
         // The ERR trap is put aside at run time (BashShellState.Save -> ErrTrapInheritance): `( trap 'echo err' ERR; false )`
@@ -3154,7 +3174,7 @@ public static partial class PsEmitter
         string body; bool savedErrTrapSh = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = false;
         // `( … ) < file` gives the body its own stdin (a scope); otherwise it inherits the enclosing one.
         try { body = EmitCompoundBody(subshell.Redirects, () => EmitBody(subshell.Body)); }
-        finally { _subshellDepth--; _readonlyVars = subRoOuter; _readonlyViolation = subRoViolation; PsBuild.ErrTrapNeedsErrtrace = savedErrTrapSh; _loopLabels = outerLabels; _loopBarrier = outerBarrier; }
+        finally { _subshellDepth--; LeaveSubshellTables(subRoOuter); _readonlyViolation = subRoViolation; PsBuild.ErrTrapNeedsErrtrace = savedErrTrapSh; _loopLabels = outerLabels; _loopBarrier = outerBarrier; }
 
         // One subshell scope (PsBuild.ShellStateScope): a child PS scope plus save/restore of the
         // shell state a scope does not isolate, so nothing the body changes — `set -e`, variables,
@@ -3334,7 +3354,7 @@ public static partial class PsEmitter
     {
         // The job is a subshell (as EmitSubshell): `exit` and an errexit failure leave only the job, and the ERR trap
         // fires in it only under errtrace. `{ false; echo x; } &` under set -e printed x and the job's status was 0.
-        _subshellDepth++; var subRoOuter = EnterSubshellReadonly();
+        _subshellDepth++; var subRoOuter = EnterSubshellTables();
         var outerLabels = _loopLabels; var outerBarrier = _loopBarrier;
         _loopLabels = null; _loopBarrier = LoopBarrierKind.Warn;
         bool savedErrTrap = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = true;
@@ -3347,7 +3367,7 @@ public static partial class PsEmitter
         string inner;
         HashSet<string> captured;
         try { inner = Emit(bg.Inner); captured = _jobCaptureUsed; }
-        finally { _subshellDepth--; _readonlyVars = subRoOuter; PsBuild.ErrTrapNeedsErrtrace = savedErrTrap; _loopLabels = outerLabels; _loopBarrier = outerBarrier; _jobCapture = outerCapture; _jobCaptureUsed = outerCaptureUsed; }
+        finally { _subshellDepth--; LeaveSubshellTables(subRoOuter); PsBuild.ErrTrapNeedsErrtrace = savedErrTrap; _loopLabels = outerLabels; _loopBarrier = outerBarrier; _jobCapture = outerCapture; _jobCaptureUsed = outerCaptureUsed; }
         // A job inside a job passes on the copy the outer job holds, which the outer job must then be handed too.
         if (outerCapture is not null)
             foreach (var v in captured)
@@ -6688,20 +6708,24 @@ public static partial class PsEmitter
             return true;
         }
 
-        // `unset -n ref` removes the reference itself, so later reads of `ref` are plain again.
-        if (cmd0 == "unset" && _namerefs is { Count: > 0 } && cmd.Words.Length >= 3
-            && GetLiteralValue(cmd.Words[1]) == "-n")
-            foreach (var w in cmd.Words.Skip(2))
-                if (GetLiteralValue(w) is { } dropped) { _namerefs.Remove(dropped); _pendingNamerefs?.Remove(dropped); }
-
-        // `unset ref` on a nameref unsets the variable it names (bash); `unset -n ref` removes the reference itself.
-        if (cmd0 == "unset" && _namerefs is { Count: > 0 } && cmd.Words.Length >= 2
-            && !cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { } fl && fl.StartsWith('-') && fl.Contains('n'))
-            && cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { } nm && _namerefs.ContainsKey(nm)))
+        // `unset -n ref` removes the reference itself, so later reads of `ref` are plain again; `unset ref` on a nameref
+        // unsets the variable it names (bash). The options as Invoke-BashUnset reads them: -f / -v set the mode for the
+        // names after them, -n holds for the rest, and -f overrides it (`unset -n -f ref` keeps the reference).
+        if (cmd0 == "unset" && _namerefs is { Count: > 0 } && cmd.Words.Length >= 2)
         {
-            var words = cmd.Words.Select((w, i) => i > 0 && GetLiteralValue(w) is { } nm && _namerefs.ContainsKey(nm)
-                ? new CompoundWord([new WordPart.Literal(ResolveNameref(nm))]) : w).ToImmutableArray();
-            cmd = new Command.Simple(words, cmd.EnvPairs, cmd.Redirects);
+            bool functions = false, byReference = false, rewrote = false;
+            var words = cmd.Words.ToBuilder();
+            for (int i = 1; i < words.Count; i++)
+            {
+                var lit = GetLiteralValue(words[i]);
+                if (lit == "-f") { functions = true; continue; }
+                if (lit == "-v") { functions = false; continue; }
+                if (lit == "-n") { byReference = true; continue; }
+                if (lit is null || lit.StartsWith('-') || functions) continue;
+                if (byReference) { _namerefs.Remove(lit); _pendingNamerefs?.Remove(lit); }
+                else if (_namerefs.ContainsKey(lit)) { words[i] = new CompoundWord([new WordPart.Literal(ResolveNameref(lit))]); rewrote = true; }
+            }
+            if (rewrote) cmd = new Command.Simple(words.ToImmutable(), cmd.EnvPairs, cmd.Redirects);
         }
 
         // unset PROMPT_COMMAND -> Unregister-BashPromptHook -Name 'prompt-command'
@@ -13125,7 +13149,7 @@ public static partial class PsEmitter
                 finally { _lastpipeStageDepth--; _armedStages = lastArmed; _errexitExemptDepth = lastExempt; }
             }
             if (!ownsExit) return emit();
-            _subshellDepth++; var subRoOuter = EnterSubshellReadonly();
+            _subshellDepth++; var subRoOuter = EnterSubshellTables();
             // `{ echo one; false; echo two; } | cat` under set -e: the stage is a subshell that inherits -e, so it ends
             // at `false` (its status 1); the pipeline's status is still the last stage's. The stage's statements get
             // their errexit checks, which leave the stage's `& { }` (the scoped `return`), and the pipeline's suppression
@@ -13156,7 +13180,7 @@ public static partial class PsEmitter
             finally
             {
                 _subshellDepth--;
-                _readonlyVars = subRoOuter;
+                LeaveSubshellTables(subRoOuter);
                 _armedStages = armed;
                 _errexitExemptDepth = savedExempt;
                 PsBuild.ErrTrapNeedsErrtrace = savedErrTrap;
