@@ -1018,11 +1018,12 @@ public static class PsBuild
     /// <summary>
     /// A redirected compound command at statement position under an ERR trap / errexit: its status is the body's
     /// (whose own statements were checked), so only a redirect that could not be opened (the body never ran) runs
-    /// <paramref name="check"/> — Invoke-BashRedirect sets <c>$global:__BashRedirectFailed</c>.
+    /// <paramref name="check"/> — Invoke-BashRedirect (an output file) and <see cref="InputRedirectGuard"/> (an input
+    /// file) set <see cref="RedirectFailedVariable"/>.
     /// </summary>
     public static string RedirectFailureChecked(string compound, string check) =>
-        "$global:__BashRedirectFailed = $false; " + compound
-        + "; if ($global:__BashRedirectFailed) { $global:__BashRedirectFailed = $false; $global:LASTEXITCODE = 1; " + check + " }";
+        RedirectFailedVariable + " = $false; " + compound
+        + "; if (" + RedirectFailedVariable + ") { " + RedirectFailedVariable + " = $false; $global:LASTEXITCODE = 1; " + check + " }";
 
     public static string ErrTrapCheck(string status = "$global:LASTEXITCODE") =>
         "if (" + status + " -ne 0 -and -not " + ErrexitSuppressVar + (ErrTrapNeedsErrtrace ? " -and $global:__BashErrtrace" : "") + " -and -not $global:__BashInErr -and (Test-Path variable:global:__BashTrapERR) -and $global:__BashTrapERR) { "
@@ -2108,11 +2109,21 @@ public static class PsBuild
         + " } else { " + InputRedirectFailure(failTail, onFail) + " }";
     /// <summary>
     /// A compound command's <c>&lt; file</c> that cannot be opened fails the command: bash reports
-    /// <c>file: No such file or directory</c>, sets status 1 and never runs the body.
+    /// <c>file: No such file or directory</c>, sets status 1 and never runs the body. The failure raises
+    /// <see cref="RedirectFailedVariable"/>, as a failed output open does, for the ERR trap / errexit check that
+    /// <see cref="RedirectFailureChecked"/> puts after the statement (a check inside this <c>&amp; { }</c> block could
+    /// not leave a function or subshell). <paramref name="clearsNested"/>: no output redirect of this command reports
+    /// on the flag after the body (Invoke-BashRedirect clears it when its own open worked), so a nested failure the body
+    /// already handled (<c>{ { cat; } &lt; missing || :; } &lt; in</c>) is cleared here, not taken for this command's.
     /// </summary>
-    public static string InputRedirectGuard(string target, string ok, string? onFail = null, string? failTail = null) =>
+    public static string InputRedirectGuard(string target, string ok, string? failTail = null, bool clearsNested = true) =>
         "& { $__psbash_ir = [string](Write-Output " + target + "); Invoke-BashTest -e $__psbash_ir; if ($global:LASTEXITCODE -eq 0) { " + ok
-        + " } else { " + InputRedirectFailure(failTail) + " } }";
+        + (clearsNested ? "; " + RedirectFailedVariable + " = $false" : "")
+        + " } else { " + InputRedirectFailure(failTail, RedirectFailedVariable + " = $true") + " } }";
+
+    /// <summary>The global a redirect that could not be opened raises (Invoke-BashRedirect's
+    /// <c>RedirectFailedVariable</c>, <see cref="InputRedirectGuard"/>), read by <see cref="RedirectFailureChecked"/>.</summary>
+    public const string RedirectFailedVariable = "$global:__BashRedirectFailed";
 
     /// <summary>
     /// The failure branch of every input-redirect guard (<see cref="InputRedirectGuard"/>, <see cref="InputRedirectGuardInline"/>,
@@ -2177,9 +2188,11 @@ public static class PsBuild
     /// assigns (<c>read x &lt; f</c> in a function, whose locals are PowerShell variables) stays in the caller's scope,
     /// and still one pipeline element for a following <c>| …</c> or <c>|| …</c>.
     /// </summary>
+    /// <para>The failure raises <see cref="RedirectFailedVariable"/>: a builtin whose own status errexit ignores
+    /// (<c>true &lt; missing</c>) is checked on it (<see cref="RedirectFailureChecked"/>).</para>
     public static string SimpleInputRedirectGuard(string target, string ok, string? failTail = null) =>
         ". { $__psbash_ir = [string](Write-Output " + target + "); Invoke-BashTest -e $__psbash_ir; if ($global:LASTEXITCODE -eq 0) { " + ok
-        + " } else { " + InputRedirectFailure(failTail) + " } }";
+        + " } else { " + InputRedirectFailure(failTail, RedirectFailedVariable + " = $true") + " } }";
 
     /// <summary>
     /// A function body that reads stdin: when the function is called with a pipe (<c>echo x | f</c>,

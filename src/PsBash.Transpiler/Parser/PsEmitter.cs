@@ -1224,37 +1224,62 @@ public static partial class PsEmitter
             case Command.ArithCommand:
             case Command.Subshell:
                 return EmitRecordingStatus(cmd) + "; " + PsBuild.ErrexitCheck(ErrexitExitStatement());
-            case Command.BraceGroup g when OpensOutputFile(g.Redirects):
-            case Command.If i when OpensOutputFile(i.Redirects):
-            case Command.While w when OpensOutputFile(w.Redirects):
-            case Command.ForIn f when OpensOutputFile(f.Redirects):
-            case Command.ForArith a when OpensOutputFile(a.Redirects):
-            case Command.Case c when OpensOutputFile(c.Redirects):
+            case Command.BraceGroup g when OpensFile(g.Redirects):
+            case Command.If i when OpensFile(i.Redirects):
+            case Command.While w when OpensFile(w.Redirects):
+            case Command.ForIn f when OpensFile(f.Redirects):
+            case Command.ForArith a when OpensFile(a.Redirects):
+            case Command.Case c when OpensFile(c.Redirects):
                 return EmitRedirectedCompound(cmd);
+            // `: > /nodir/x`, `true < missing`, `export Y=1 2> /nodir/e`: the builtin's status is not checked, but a
+            // redirect that cannot open fails the command (status 1), which errexit and the ERR trap act on (bash 5.2).
+            case Command.Simple neutral when OpensFile(neutral.Redirects):
+            case Command.ShAssignment declaration when OpensFile(declaration.Redirects):
+                return PsBuild.RedirectFailureChecked(EmitRecordingStatus(cmd), PsBuild.ErrexitCheck(ErrexitExitStatement()));
             default:
                 return EmitRecordingStatus(cmd);
         }
     }
 
-    /// <summary>
-    /// A compound command with redirects, under an ERR trap / errexit: a redirect that cannot be opened fails it
-    /// (status 1, the body never runs) and runs the trap and errexit; the body's own status does not. bash leaves
-    /// $LINENO at the command before it, which is the last one that ran.
-    /// </summary>
-    /// <summary>A stdout file redirect (<c>&gt; f</c>, <c>&gt;&gt; f</c>, <c>&gt;| f</c>, <c>&amp;&gt; f</c>) that
-    /// Invoke-BashRedirect opens; <c>/dev/null</c> is emitted without it.</summary>
+    /// <summary>A redirect that opens a file, which can fail: checked after a compound command (<see cref="EmitRedirectedCompound"/>)
+    /// and after a builtin whose own status errexit ignores (<c>: &gt; /nodir/x</c>).</summary>
+    private static bool OpensFile(ImmutableArray<Redirect> redirects) => OpensOutputFile(redirects) || OpensInputFile(redirects);
+
+    /// <summary>A stdin file redirect (<c>&lt; f</c>) that <see cref="PsBuild.InputRedirectGuard"/> opens; <c>/dev/null</c> always opens.</summary>
+    private static bool OpensInputFile(ImmutableArray<Redirect> redirects)
+    {
+        if (redirects.IsDefaultOrEmpty) return false;
+        foreach (var r in redirects)
+            if (r.Here is null && r.FdVar is null && r.Fd == 0 && r.Op == "<" && GetLiteralValue(r.Target) != DevicePath.Null)
+                return true;
+        return false;
+    }
+
+    /// <summary>A stdout or stderr file redirect (<c>&gt; f</c>, <c>&gt;&gt; f</c>, <c>&gt;| f</c>, <c>2&gt; f</c>,
+    /// <c>2&gt;&gt; f</c>, <c>&amp;&gt; f</c>, <c>&gt;&amp;f</c>) that Invoke-BashRedirect opens; <c>/dev/null</c> is emitted
+    /// without it.</summary>
     private static bool OpensOutputFile(ImmutableArray<Redirect> redirects)
     {
         if (redirects.IsDefaultOrEmpty) return false;
         foreach (var r in redirects)
         {
             if (r.Here is not null || r.FdVar is not null) continue;
-            bool stdout = r.Op is "&>" or "&>>" || (r.Op is ">" or ">>" or ">|" && r.Fd == 1);
-            if (stdout && GetLiteralValue(r.Target) != DevicePath.Null) return true;
+            string? literal = GetLiteralValue(r.Target);
+            bool file = r.Op is "&>" or "&>>" || (r.Op is ">" or ">>" or ">|" && r.Fd is 1 or 2)
+                || (r.Op == ">&" && r.Fd == 1 && literal is { } dup && dup != "-" && !IsAllDigits(dup));
+            if (file && literal != DevicePath.Null) return true;
         }
         return false;
     }
 
+    /// <summary>
+    /// A compound command with a redirect that opens a file (<see cref="OpensFile"/>), under an ERR trap / errexit, at
+    /// statement position: a redirect that cannot be opened fails it (status 1, the body never runs) and runs the trap
+    /// and errexit, nested or not (<c>{ { cat; } &lt; missing; } 2&gt;/dev/null</c> ends the script); the body's own
+    /// status does not. The check is a statement after the command (<see cref="PsBuild.RedirectFailureChecked"/>), so
+    /// its exit/return is never inside the redirect's block. bash leaves $LINENO at the command before it, which is the
+    /// last one that ran. REGRESSION: the input guard lost its errexit exit, and nothing checked after the compound.
+    /// </summary>
     private static string EmitRedirectedCompound(Command cmd)
     {
         int prior = _priorTrapLine;
@@ -3369,7 +3394,7 @@ public static partial class PsEmitter
             // /dev/null maps to $null; `Get-Content $null` errors. Its stdin is EMPTY (EOF), so feed
             // the scope nothing explicitly (it must not see an outer pipe's or queue's data).
             result = inTarget != "$null"
-                ? PsBuild.InputRedirectGuard(inTarget, $"Invoke-BashCat {inTarget} -RawStdinBytes | & {{ {PsBuild.StdinScope(result)} }}", RedirectFailExit(),
+                ? PsBuild.InputRedirectGuard(inTarget, $"Invoke-BashCat {inTarget} -RawStdinBytes | & {{ {PsBuild.StdinScope(result)} }}",
                     InputFailTail(subshell.Redirects, inputRedirect))
                 : $"@() | & {{ {PsBuild.StdinScope(result)} }}";
         }
@@ -14030,8 +14055,11 @@ public static partial class PsEmitter
         var sb = new StringBuilder(". { ");
         sb.Append(inputRedirect is not null && stdinScope ? PsBuild.StdinScope(body) : body);
         sb.Append(" }");
+        int tailStart = sb.Length;
         AppendRedirectTail(sb, tailRedirects);
         string result = sb.ToString();
+        // Invoke-BashRedirect in the tail sets or clears the open-failure flag itself when the body ends.
+        bool tailReports = result.AsSpan(tailStart).Contains("Invoke-BashRedirect", StringComparison.Ordinal);
 
         if (inputRedirect is { Here: { } here })
         {
@@ -14043,8 +14071,8 @@ public static partial class PsEmitter
             // /dev/null maps to $null; `Get-Content $null` errors. Its stdin is EMPTY (EOF), which
             // for a stdin scope must still replace any outer pipe, so feed it nothing explicitly.
             if (inTarget != "$null")
-                result = PsBuild.InputRedirectGuard(inTarget, $"Invoke-BashCat {inTarget} -RawStdinBytes | {result}", RedirectFailExit(),
-                    InputFailTail(redirects, inputRedirect));
+                result = PsBuild.InputRedirectGuard(inTarget, $"Invoke-BashCat {inTarget} -RawStdinBytes | {result}",
+                    InputFailTail(redirects, inputRedirect), clearsNested: !tailReports);
             else if (stdinScope)
                 result = $"@() | {result}";
         }
