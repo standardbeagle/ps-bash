@@ -53,8 +53,9 @@ public sealed class InvokeBashGetoptsCommand : BashCmdlet
         Assign("OPTIND", optind.ToString());
         BashVariableStore.Set(PosVar, charPos == 0 ? null : optind + ":" + charPos);
         bool validName = System.Text.RegularExpressions.Regex.IsMatch(name, "^[A-Za-z_][A-Za-z0-9_]*$");
-        if (validName) Assign(name, result.Name);
-        else FileSystemHelpers.WriteStderr(this, $"getopts: `{name}': not a valid identifier");
+        // Through a nameref like read and printf -v (`declare -n r; getopts ab r -a` makes r refer to a).
+        if (!validName) FileSystemHelpers.WriteStderr(this, $"getopts: `{name}': not a valid identifier");
+        else if (!BashArrayElement.Assign(this, name, result.Name, "getopts")) validName = false;
         if (result.OptArg is null) Unassign("OPTARG");
         else Assign("OPTARG", result.OptArg);
         if (result.Error is not null) FileSystemHelpers.WriteStderr(this, result.Error);

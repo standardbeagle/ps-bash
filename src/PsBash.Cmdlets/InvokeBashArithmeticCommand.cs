@@ -264,7 +264,14 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
     private void WriteVar(string name, long value)
     {
         var s = value.ToString(CultureInfo.InvariantCulture);
-        name = BashShellState.ResolveNameref(name);   // a nameref writes its target
+        // A nameref writes its target. One with no target would take the value as its target, and a number names no
+        // variable: bash reports it and writes nothing (`declare -n r; (( r = 5 ))`).
+        if (BashShellState.WriteTarget(name, s, out bool invalid) is not { } target)
+        {
+            if (invalid) ReportError("`" + s + "': not a valid identifier");
+            return;
+        }
+        name = target;
         if (TrySplitElement(name, out var elemBase, out var elemSub)) { WriteElement(elemBase, elemSub, s); return; }
         if (BashVariableLookup.ArrayHolder(SessionState, name) is not null) { WriteElement(name, "0", s); return; }
         BashVariableStore.Set(name, s);

@@ -95,6 +95,42 @@ public static class BashVariableLookup
     }
 
     /// <summary>
+    /// <c>NAME=value</c> / <c>NAME+=value</c> the emitter writes when NAME is a nameref whose target is known only at run
+    /// time: one declared with no target (<c>declare -n r; r=$v</c>), or a <c>for</c> variable that is a nameref. The
+    /// first write to one with no target names the target (<see cref="BashShellState.WriteTarget"/>); a later one writes
+    /// the target (a scalar, or the element <c>a[2]</c>). Returns bash's diagnostic when nothing was written, else null.
+    /// </summary>
+    public static string? AssignThroughNameref(SessionState state, string name, string? value, bool append)
+    {
+        value ??= "";
+        if (BashShellState.WriteTarget(name, value, out bool invalid) is not { } target)
+            return invalid ? "`" + value + "': not a valid identifier" : null;
+        int br = target.IndexOf('[');
+        if (br > 0 && target[^1] == ']')
+        {
+            string baseName = target[..br], subscript = target[(br + 1)..^1];
+            var vars = BashArrayElement.ReadOnly(state);
+            string old = append ? BashArrayElement.Read(state, baseName, subscript, vars) ?? "" : "";
+            return BashArrayElement.Write(state, baseName, subscript, false, old + value, vars) ? null : target + ": bad array subscript";
+        }
+        SetScalar(state, target, append ? Scalar(state, target) + value : value);
+        return null;
+    }
+
+    /// <summary>
+    /// <c>$NAME</c> where NAME is a nameref whose target is known only at run time (see <see cref="AssignThroughNameref"/>):
+    /// the target's value (an element's, for <c>a[2]</c>); NAME's own (unset) while it has no target.
+    /// </summary>
+    public static string? ReadThroughNameref(SessionState state, string name)
+    {
+        string target = BashShellState.ResolveNameref(name);
+        int br = target.IndexOf('[');
+        if (br > 0 && target[^1] == ']')
+            return BashArrayElement.Read(state, target[..br], target[(br + 1)..^1], BashArrayElement.ReadOnly(state));
+        return Scalar(state, target);
+    }
+
+    /// <summary>
     /// Assign an array the way bash scopes it: the existing variable (in whichever scope owns it: a function writing
     /// a caller's array reaches the caller), else a new GLOBAL. A bare <c>PSVariable.Set</c> from a cmdlet creates the
     /// variable in the calling function's own scope, so <c>mapfile arr</c> / <c>read -a arr</c> inside a function

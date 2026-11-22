@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Core.Parser;
 
 namespace PsBash.Cmdlets;
 
@@ -16,9 +17,8 @@ namespace PsBash.Cmdlets;
 /// <c>Function:\NAME</c>. Missing names are silently ignored (the oracle
 /// used <c>-ErrorAction SilentlyContinue</c>).
 ///
-/// Flag dispatch: a mid-list <c>-f</c> / <c>-v</c> changes the mode for
-/// subsequent names (oracle parity — the mode is a per-iteration state).
-/// Other <c>-</c>-prefixed tokens are silently dropped (oracle parity).
+/// Flag dispatch: <see cref="PsBash.Core.Parser.UnsetOptions"/>, the one reading the emitter shares (bash's
+/// <c>internal_getopt "fnv"</c>: leading words, clusters, <c>--</c>; a later <c>-f</c> is a name, which unsets nothing).
 ///
 /// <para><b>Colliding flag:</b> bare <c>-v</c> prefix-matches the PowerShell
 /// common parameter <c>-Verbose</c> under <see cref="PSCmdlet"/> parameter
@@ -165,32 +165,37 @@ public sealed class InvokeBashUnsetCommand : BashCmdlet
 
         // bash's unset options are -f, -v, -n; any other is its usage error, status 2 (REGRESSION: `unset --bogus`
         // was skipped silently, status 0).
-        if (FileSystemHelpers.TryRejectBuiltinOptions(this, "unset", args, "fvn")) return;
+        // The binder took a bare `-v` (the V decoy): it is an option word again, and options lead, so it goes first.
+        if (V.IsPresent) args = ["-v", .. args];
+        if (FileSystemHelpers.TryRejectBuiltinOptions(this, "unset", args, UnsetOptions.Letters)) return;
 
-        bool functionMode = false;
-        bool namerefMode = false;
-        var names = new List<string>();
-        bool explicitVar = V.IsPresent;
-
-        // If -V was bound by the binder it acts as a no-op mode hint (variable
-        // is already the default). The manual scan then walks the remaining
-        // tokens; -f / -v inside the list change the mode for subsequent names
-        // (oracle parity — the mode is per-iteration, not global). -n stays on whatever follows it; -f overrides it.
-        foreach (var arg in args)
+        // The options as the emitter reads them (UnsetOptions: clusters, `--`, the first name ends them).
+        var options = UnsetOptions.Parse(args);
+        if (options.Conflict)
         {
-            if (arg == "-f") { functionMode = true; explicitVar = false; continue; }
-            if (arg == "-v") { functionMode = false; explicitVar = true; continue; }
-            // REGRESSION: `-n` was skipped like an unknown option, so `declare -n q=y; unset -n q` left q a nameref.
-            if (arg == "-n") { namerefMode = true; continue; }
-            if (arg.StartsWith('-')) continue;
-            names.Add(arg);
+            FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + UnsetOptions.ConflictMessage);
+            FileSystemHelpers.SetLastExitCode(this, 1);
+            return;
         }
+        bool functionMode = options.Functions;
+        bool namerefMode = options.ByReference;
+        bool explicitVar = options.Variables;
 
-        foreach (var name in names)
+        for (int i = options.FirstOperand; i < args.Length; i++)
         {
+            string name = args[i];
+            // A name bash cannot hold (`unset x -f`: -f is an operand here) unsets nothing, silently (bash 5.2).
+            if (name.StartsWith('-')) continue;
             // A variable by its store name (`unset path` removes the bash variable path, never PATH: BashNameCase); a
             // function, and every message, by the name as written.
             string store = functionMode ? name : PsBash.Core.BashNameCase.ToStore(name);
+            // `unset r` of a nameref whose target is known only at run time (`declare -n r; r=$v`) unsets the target; one
+            // the emitter knew it already rewrote to the target. A nameref with no target yet is handled below.
+            if (!functionMode && !namerefMode && BashShellState.NamerefTarget(store) is { Length: > 0 })
+            {
+                string target = BashShellState.ResolveNameref(store);
+                if (BashShellState.NamerefTarget(target) is null) { name = PsBash.Core.BashNameCase.ToBash(target); store = PsBash.Core.BashNameCase.ToStore(target); }
+            }
             if (!functionMode && BashShellState.IsReadonly(store))
             {
                 FileSystemHelpers.WriteStderr(this, $"unset: {name}: cannot unset: readonly variable");

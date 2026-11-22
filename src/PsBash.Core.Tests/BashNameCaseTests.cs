@@ -98,7 +98,7 @@ public class BashNameCaseTests
     [Theory]
     [InlineData("windir", "WINDIR")]                 // Windows' native entry IS the upper-case variable (Git Bash lists WINDIR=)
     [InlineData("Path", "PATH")]
-    [InlineData("SystemRoot", "SystemRoot")]         // not on the reserved list: unchanged
+    [InlineData("SystemRoot", "SYSTEMROOT")]         // reserved: Git Bash imports it upper-cased (env lists SYSTEMROOT=, $SystemRoot is empty)
     [InlineData("ProgramData", "ProgramData")]       // exempt spelling: listed as is, as Git Bash does
     [InlineData("PSModulePath", "PSModulePath")]
     [InlineData("PATH", "PATH")]
@@ -218,7 +218,7 @@ public class BashNameCaseTests
     /// </summary>
     private static readonly string[] EmitterNameTables =
     [
-        "_readonlyVars", "_namerefs", "_litAssigned", "_pendingNamerefs", "_functionLocalNames", "_intVars", "_caseVars",
+        "_readonlyVars", "_namerefs", "_litAssigned", "_pendingNamerefs", "_runtimeNamerefs", "_functionLocalNames", "_intVars", "_caseVars",
         "_localAttrNames", "_envPrefixShadow", "_lexicalLocals", "_dynLocals",
         // Locals that become one of the tables.
         "var dynLocals", "var set = prior",

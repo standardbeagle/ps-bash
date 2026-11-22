@@ -1742,6 +1742,29 @@ public static class PsBuild
     public static string SetShellScalar(string name, string valueExpr)
         => "[PsBash.Cmdlets.BashVariableStore]::Set(" + SingleQuote(name) + ", [string](" + valueExpr + "))";
 
+    /// <summary>
+    /// <c>name=value</c> / <c>name+=value</c> where <paramref name="name"/> is a nameref whose target is known only at run
+    /// time (declared with no target, or a <c>for</c> variable): <c>BashVariableLookup.AssignThroughNameref</c> names the
+    /// target on the first write and writes it after. A value that names no variable is an assignment error
+    /// (<c>`5': not a valid identifier</c>, status 1, the rest of the line dropped, as bash does).
+    /// </summary>
+    public static string AssignThroughNameref(string name, string valueExpr, bool append)
+        => "if ($__psbNr = [PsBash.Cmdlets.BashVariableLookup]::AssignThroughNameref($ExecutionContext.SessionState, " + SingleQuote(name)
+           + ", [string](" + valueExpr + "), " + (append ? "$true" : "$false") + ")) { "
+           + ShellDiagnosticLine("$__psbNr") + "; " + SetStatus(1) + "; " + AssignmentDiscardMark + " }";
+
+    /// <summary><c>$name</c> where <paramref name="name"/> is a nameref whose target is known only at run time: the target's value.</summary>
+    public static string ReadThroughNameref(string name)
+        => "$([PsBash.Cmdlets.BashVariableLookup]::ReadThroughNameref($ExecutionContext.SessionState, " + SingleQuote(name) + "))";
+
+    /// <summary>
+    /// One pass of <c>for name in ...</c> where <paramref name="name"/> is a nameref: the word (<paramref name="valueExpr"/>)
+    /// becomes its target. A word that names no variable ends the loop with bash's diagnostic, status 1.
+    /// </summary>
+    public static string BindLoopNameref(string name, string valueExpr)
+        => "if (-not [PsBash.Cmdlets.BashShellState]::BindLoopNameref(" + SingleQuote(name) + ", [string](" + valueExpr + "))) { "
+           + ShellDiagnosticLine("('`' + " + valueExpr + " + ''': not a valid identifier')") + "; " + SetStatus(1) + "; break }; ";
+
     /// <summary><c>typeset +n name</c>: no longer a nameref; the variable takes the reference's target name as its value.</summary>
     public static string ClearNameref(string name)
         => "$env:" + name + " = [PsBash.Cmdlets.BashShellState]::ClearNameref(" + SingleQuote(name) + ", $env:" + name + ")";

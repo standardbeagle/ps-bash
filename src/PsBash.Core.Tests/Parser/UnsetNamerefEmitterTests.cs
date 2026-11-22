@@ -37,6 +37,40 @@ public class UnsetNamerefEmitterTests
     [Fact] public void Transpile_UnsetDashNDashF_KeepsTheReference()
         => Assert.Contains("$env:y = \"2\"", T("y=Y; typeset -n p=y; unset -n -f p; p=2"));
 
+    // The options through UnsetOptions, as Invoke-BashUnset reads them. REGRESSION (abe9d17b): only the exact words
+    // -f/-v/-n counted, so `unset -vn r` rewrote to `unset y` (y unset, r still a nameref). Oracle in UnsetOptionsTests.
+    [Theory]
+    [InlineData("-vn")]
+    [InlineData("-nv")]
+    [InlineData("-nn")]
+    [InlineData("-n -n")]
+    [InlineData("-n --")]
+    public void Transpile_UnsetClusterWithN_DropsTheReference(string options)
+    {
+        var ps = T($"y=Y; typeset -n r=y; unset {options} r; r=2");
+        Assert.Contains("$env:r = \"2\"", ps);
+        Assert.DoesNotMatch(@"Invoke-BashUnset[^;]*\by\b", ps);
+    }
+
+    // -f overrides -n (the function r goes, the reference stays); -f with -v unsets nothing.
+    [Theory]
+    [InlineData("-fn")]
+    [InlineData("-nf")]
+    [InlineData("-fv")]
+    [InlineData("-vf")]
+    [InlineData("-fvn")]
+    public void Transpile_UnsetClusterWithF_KeepsTheReference(string options)
+        => Assert.Contains("$env:y = \"2\"", T($"y=Y; typeset -n r=y; unset {options} r; r=2"));
+
+    // `--` ends the options: the name after it is unset through the reference (its target). unset is on
+    // OrderedArgCommands, so `--` reaches the cmdlet quoted: bare, the PowerShell binder ate it (`unset -- -f g` unset
+    // the FUNCTION g) and a bare `-v` bound the V decoy out of place.
+    [Fact] public void Transpile_UnsetDoubleDash_UnsetsTheTarget()
+        => Assert.Matches(@"Invoke-BashUnset\s+'--'\s+['""]?y['""]?", T("y=Y; typeset -n r=y; unset -- r"));
+
+    [Fact] public void Transpile_UnsetOptionWords_ReachTheCmdletQuotedAndInPlace()
+        => Assert.Contains("Invoke-BashUnset '-v' x '-f' '--' g", T("unset -v x -f -- g"));
+
     // What a subshell declares ends with it (EnterSubshellTables), in the emitter's compile-time tables as in the run-time
     // ones. REGRESSION: `( declare -n r=y ); r=3` wrote y, and `declare -p r` after it was folded to the subshell's reference.
     [Theory]

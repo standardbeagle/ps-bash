@@ -230,8 +230,8 @@ public static partial class PsEmitter
 
     /// <summary>The emitter's per-shell attribute tables as a subshell body found them (<see cref="EnterSubshellTables"/>).</summary>
     private readonly record struct SubshellTables(HashSet<string>? Readonly, Dictionary<string, string>? Namerefs,
-        HashSet<string>? PendingNamerefs, Dictionary<string, string>? LitAssigned, HashSet<string>? IntVars,
-        Dictionary<string, bool>? CaseVars, HashSet<string>? AssocVars);
+        HashSet<string>? PendingNamerefs, HashSet<string>? RuntimeNamerefs, Dictionary<string, string>? LitAssigned,
+        HashSet<string>? IntVars, Dictionary<string, bool>? CaseVars, HashSet<string>? AssocVars);
 
     /// <summary>
     /// A subshell body starts (<c>( )</c>, <c>$( )</c>, <c>&lt;( )</c>, <c>cmd &amp;</c>, a pipe stage): it gets a copy of
@@ -243,21 +243,22 @@ public static partial class PsEmitter
     /// </summary>
     private static SubshellTables EnterSubshellTables()
     {
-        var outer = new SubshellTables(_readonlyVars, _namerefs, _pendingNamerefs, _litAssigned, _intVars, _caseVars, _assocVars);
-        if (_readonlyVars is { } ro) _readonlyVars = new HashSet<string>(ro, ro.Comparer);
-        if (_namerefs is { } refs) _namerefs = new Dictionary<string, string>(refs, refs.Comparer);
-        if (_pendingNamerefs is { } pending) _pendingNamerefs = new HashSet<string>(pending, pending.Comparer);
-        if (_litAssigned is { } lit) _litAssigned = new Dictionary<string, string>(lit, lit.Comparer);
-        if (_intVars is { } ints) _intVars = new HashSet<string>(ints, ints.Comparer);
-        if (_caseVars is { } cases) _caseVars = new Dictionary<string, bool>(cases, cases.Comparer);
-        if (_assocVars is { } assoc) _assocVars = new HashSet<string>(assoc, assoc.Comparer);
+        var outer = new SubshellTables(_readonlyVars, _namerefs, _pendingNamerefs, _runtimeNamerefs, _litAssigned, _intVars, _caseVars, _assocVars);
+        if (_readonlyVars is { } ro) _readonlyVars = new HashSet<string>(ro, VarNameKeys);
+        if (_namerefs is { } refs) _namerefs = new Dictionary<string, string>(refs, VarNameKeys);
+        if (_pendingNamerefs is { } pending) _pendingNamerefs = new HashSet<string>(pending, VarNameKeys);
+        if (_runtimeNamerefs is { } runtimeRefs) _runtimeNamerefs = new HashSet<string>(runtimeRefs, VarNameKeys);
+        if (_litAssigned is { } lit) _litAssigned = new Dictionary<string, string>(lit, VarNameKeys);
+        if (_intVars is { } ints) _intVars = new HashSet<string>(ints, VarNameKeys);
+        if (_caseVars is { } cases) _caseVars = new Dictionary<string, bool>(cases, VarNameKeys);
+        if (_assocVars is { } assoc) _assocVars = new HashSet<string>(assoc, VarNameKeys);
         return outer;
     }
 
     /// <summary>The subshell body ended: the tables are the ones <see cref="EnterSubshellTables"/> found.</summary>
     private static void LeaveSubshellTables(SubshellTables outer)
     {
-        _readonlyVars = outer.Readonly; _namerefs = outer.Namerefs; _pendingNamerefs = outer.PendingNamerefs;
+        _readonlyVars = outer.Readonly; _namerefs = outer.Namerefs; _pendingNamerefs = outer.PendingNamerefs; _runtimeNamerefs = outer.RuntimeNamerefs;
         _litAssigned = outer.LitAssigned; _intVars = outer.IntVars; _caseVars = outer.CaseVars; _assocVars = outer.AssocVars;
     }
     /// <summary>True when the script text reads `$?` somewhere: only then does a bare assignment need to reset the status to 0.</summary>
@@ -298,6 +299,23 @@ public static partial class PsEmitter
     /// <summary>Namerefs declared without a target (`typeset -n ref`): the next literal assignment names it.</summary>
     [ThreadStatic]
     private static HashSet<string>? _pendingNamerefs;
+
+    /// <summary>
+    /// Namerefs whose target is known only at run time: one declared with no target, then written with a value the
+    /// transpiler cannot see (`r=$1`, `r=$(cmd)`), or a `for` variable that is a nameref (each word re-targets it). Their
+    /// reads and writes go through the run-time table (PsBuild.ReadThroughNameref / AssignThroughNameref), where
+    /// BashShellState.WriteTarget names the target on the first write, for every writer alike.
+    /// </summary>
+    [ThreadStatic]
+    private static HashSet<string>? _runtimeNamerefs;
+
+    /// <summary>A nameref the run time resolves: target known only then, or none yet (pending).</summary>
+    private static bool IsRuntimeNameref(string name) =>
+        (_runtimeNamerefs?.Contains(name) == true || _pendingNamerefs?.Contains(name) == true) && _namerefs?.ContainsKey(name) != true;
+
+    /// <summary>A nameref of any kind: target known now, known only at run time, or none yet.</summary>
+    private static bool IsAnyNameref(string name) =>
+        _namerefs?.ContainsKey(name) == true || _pendingNamerefs?.Contains(name) == true || _runtimeNamerefs?.Contains(name) == true;
 
     /// <summary>`a[2]` / `a[i+1]`: a nameref target that names one array element.</summary>
     private static bool IsNamerefElementTarget(string target) =>
@@ -1534,8 +1552,9 @@ public static partial class PsEmitter
         _readonlyVars.Add("SHELLOPTS"); _readonlyVars.Add("BASHOPTS");
         var priorNamerefs = _namerefs;
         _namerefs = new Dictionary<string, string>(VarNameKeys);
-        var priorLitAssigned = _litAssigned; var priorPendingNamerefs = _pendingNamerefs;
+        var priorLitAssigned = _litAssigned; var priorPendingNamerefs = _pendingNamerefs; var priorRuntimeNamerefs = _runtimeNamerefs;
         _litAssigned = new Dictionary<string, string>(VarNameKeys); _pendingNamerefs = new HashSet<string>(VarNameKeys);
+        _runtimeNamerefs = new HashSet<string>(VarNameKeys);
         _context = context;
         // Only a script that itself turns errexit on gets the checks (a sourced file running under
         // its caller's `set -e` does not — see intentional-differences.md).
@@ -1663,7 +1682,7 @@ public static partial class PsEmitter
             _readonlyVars = priorReadonly;
             _runtimeReadonly = priorRuntimeReadonly;
             _namerefs = priorNamerefs;
-            _litAssigned = priorLitAssigned; _pendingNamerefs = priorPendingNamerefs;
+            _litAssigned = priorLitAssigned; _pendingNamerefs = priorPendingNamerefs; _runtimeNamerefs = priorRuntimeNamerefs;
             _errexitMode = priorErrexit; _errtraceMode = priorErrtrace; _errexitSetMode = priorErrexitSet;
             _errexitExemptDepth = priorExempt;
             _pipefailMode = priorPipefail;
@@ -2091,7 +2110,15 @@ public static partial class PsEmitter
             sb.Append(IterGuardCheck(depth));
             sb.Append(DebugAt(forIn.Line)); // trap DEBUG: before each iteration, with the `for` line
             // The loop variable is an ordinary shell variable: the body's functions see it and it keeps its last value after the loop.
-            sb.Append(BindLoopVariable(forIn.Var, "$" + psVar));
+            // `for r in a b` where r is a nameref: each word becomes its target (bash), so from here on the body and what
+            // follows read and write r through the run-time table. REGRESSION: the loop stored each word in r.
+            if (IsAnyNameref(forIn.Var))
+            {
+                _namerefs?.Remove(forIn.Var); _pendingNamerefs?.Remove(forIn.Var);
+                (_runtimeNamerefs ??= new HashSet<string>(VarNameKeys)).Add(forIn.Var);
+                sb.Append(PsBuild.BindLoopNameref(forIn.Var, "$" + psVar));
+            }
+            else sb.Append(BindLoopVariable(forIn.Var, "$" + psVar));
 
             var entered = EnterLoopVariable(forIn.Var);
             // `for i; do` (no list) iterates "$@": arbitrary strings.
@@ -2939,6 +2966,7 @@ public static partial class PsEmitter
         _localAttrNames = null;
         var priorNamerefs = _namerefs is null ? null : new Dictionary<string, string>(_namerefs, VarNameKeys);
         var priorPendingNamerefs = _pendingNamerefs is null ? null : new HashSet<string>(_pendingNamerefs, VarNameKeys);
+        var priorRuntimeNamerefs = _runtimeNamerefs is null ? null : new HashSet<string>(_runtimeNamerefs, VarNameKeys);
         _functionLocalNames = new HashSet<string>(localVars.Concat(dynLocals), VarNameKeys);
         var vars = _lexicalLocals ??= new HashSet<string>(VarNameKeys);
         var added = new List<string>();
@@ -3062,6 +3090,11 @@ public static partial class PsEmitter
             {
                 _pendingNamerefs.Clear();
                 if (priorPendingNamerefs is not null) _pendingNamerefs.UnionWith(priorPendingNamerefs);
+            }
+            if (_runtimeNamerefs is not null)
+            {
+                _runtimeNamerefs.Clear();
+                if (priorRuntimeNamerefs is not null) _runtimeNamerefs.UnionWith(priorRuntimeNamerefs);
             }
             _loopLabels = outerLabels;
             _loopBarrier = outerBarrier;
@@ -4816,6 +4849,18 @@ public static partial class PsEmitter
                 sb.Append(NamerefMark(pair.Name, refTarget)).Append("; ").Append(PsBuild.SetStatus(0));
                 continue;
             }
+            // Any other write to a nameref with no target (`r=$(echo t)`, `r=$1`), or to one whose target is known only at
+            // run time: the run time names the target on the first write and writes it after (BashShellState.WriteTarget,
+            // the rule read, printf -v and getopts share). REGRESSION: only a literal `r=name` named it; `r=$v` stored v in r.
+            if (!cmd.IsLocal && !cmd.IsExport && pair.ArrayValue is null && pair.Value is not null && !pair.Name.Contains('[')
+                && pair.Op is AssignOp.Equal or AssignOp.PlusEqual && IsRuntimeNameref(pair.Name))
+            {
+                _pendingNamerefs?.Remove(pair.Name);
+                (_runtimeNamerefs ??= new HashSet<string>(VarNameKeys)).Add(pair.Name);
+                _litAssigned?.Remove(pair.Name);
+                sb.Append(PsBuild.AssignThroughNameref(pair.Name, EmitAssignmentValue(pair.Value), pair.Op == AssignOp.PlusEqual));
+                continue;
+            }
             if (!cmd.IsLocal && !cmd.IsExport && _litAssigned is not null && !pair.Name.Contains('['))
             {
                 if (pair.ArrayValue is null && pair.Op == AssignOp.Equal && pair.Value is not null && ExtractSingleQuotedOrLiteralValue(pair.Value) is { } litVal)
@@ -4867,7 +4912,7 @@ public static partial class PsEmitter
                 }
                 else
                 {
-                    _namerefs[pair.Name] = localTarget;
+                    _namerefs[pair.Name] = localTarget; _runtimeNamerefs?.Remove(pair.Name);
                     // The name is the frame's own, as for a plain local: the return restores the caller's value, also after
                     // `local +n r` turned r into a plain variable holding the target name.
                     // REGRESSION: `f() { local -n r=x; local +n r; }; f` left a global r=x.
@@ -4885,7 +4930,7 @@ public static partial class PsEmitter
             if (cmd.IsLocal && cmd.IsNameref && _functionDepth > 0 && _namerefs is not null
                 && pair.ArrayValue is null && pair.Value is null && IsValidVarName(pair.Name))
             {
-                _namerefs.Remove(pair.Name);
+                _namerefs.Remove(pair.Name); _runtimeNamerefs?.Remove(pair.Name);
                 (_pendingNamerefs ??= new HashSet<string>(VarNameKeys)).Add(pair.Name);
                 if (_dynLocals?.Contains(pair.Name) == true)
                     sb.Append($"if ($null -eq $__lsd_{pair.Name}) {{ $__lsd_{pair.Name} = @{{ v = $env:{pair.Name} }} }}; $env:{pair.Name} = ")
@@ -6229,14 +6274,15 @@ public static partial class PsEmitter
         if (!isPrint && varName is not null && IsValidVarName(varName) && _namerefs is not null
             && cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { Length: > 1 } f && f[0] == '+' && f.Contains('n')))
         {
-            _namerefs.Remove(varName); _pendingNamerefs?.Remove(varName);
+            _namerefs.Remove(varName); _pendingNamerefs?.Remove(varName); _runtimeNamerefs?.Remove(varName);
             result = PsBuild.ClearNameref(varName) + "; " + PsBuild.SetStatus(0);
             return true;
         }
         // `typeset -n ref` with no target: a string assigned earlier (`ref=x`) becomes the target; otherwise the next literal
         // assignment names it, and until then the run-time table holds it with no target (`declare -p ref` prints
         // `declare -n ref`, as bash does; REGRESSION: it was "not found").
-        if (isNameref && !isPrint && varName is not null && IsValidVarName(varName) && _namerefs is not null && !_namerefs.ContainsKey(varName))
+        if (isNameref && !isPrint && varName is not null && IsValidVarName(varName) && _namerefs is not null && !_namerefs.ContainsKey(varName)
+            && _runtimeNamerefs?.Contains(varName) != true)   // `declare -n r` again keeps the target r has (bash)
         {
             string nrMark = "";
             if (_litAssigned is not null && _litAssigned.TryGetValue(varName, out var known) && IsValidVarName(known) && !VarNameKeys.Equals(known, varName))
@@ -6250,14 +6296,14 @@ public static partial class PsEmitter
         if (isNameref && !isPrint && exprName is not null && IsValidVarName(exprName) && exprValue is not null && _namerefs is not null
             && ExtractSingleQuotedOrLiteralValue(exprValue) is { } elemRefTarget && IsNamerefElementTarget(elemRefTarget))
         {
-            _namerefs[exprName] = elemRefTarget;
+            _namerefs[exprName] = elemRefTarget; _runtimeNamerefs?.Remove(exprName); _pendingNamerefs?.Remove(exprName);
             result = NamerefMark(exprName, elemRefTarget) + "; " + PsBuild.SetStatus(0);
             return true;
         }
         if (isNameref && varName is not null && varName.IndexOf('=') is var neq and > 0
             && IsValidVarName(varName[..neq]) && (IsValidVarName(varName[(neq + 1)..]) || IsNamerefElementTarget(varName[(neq + 1)..])) && _namerefs is not null)
         {
-            _namerefs[varName[..neq]] = varName[(neq + 1)..];
+            _namerefs[varName[..neq]] = varName[(neq + 1)..]; _runtimeNamerefs?.Remove(varName[..neq]); _pendingNamerefs?.Remove(varName[..neq]);
             result = NamerefMark(varName[..neq], varName[(neq + 1)..]) + "; " + PsBuild.SetStatus(0);
             return true;
         }
@@ -6734,25 +6780,30 @@ public static partial class PsEmitter
         }
 
         // `unset -n ref` removes the reference itself, so later reads of `ref` are plain again; `unset ref` on a nameref
-        // unsets the variable it names (bash). The options as Invoke-BashUnset reads them: -f / -v set the mode for the
-        // names after them, -n holds for the rest, and -f overrides it (`unset -n -f ref` keeps the reference).
-        // A nameref with no target yet (pending) names no variable: `unset r` removes the reference itself.
-        if (cmd0 == "unset" && (_namerefs is { Count: > 0 } || _pendingNamerefs is { Count: > 0 }) && cmd.Words.Length >= 2)
+        // unsets the variable it names (bash). The options are read exactly as Invoke-BashUnset reads them (UnsetOptions:
+        // clusters such as -vn, `--`, the first name ends them; -f overrides -n; -f with -v unsets nothing). A nameref with
+        // no target yet names no variable: `unset r` removes the reference itself. One whose target is known only at run
+        // time is resolved by the cmdlet. REGRESSION: only the words -f/-v/-n were options, so `unset -vn r` unset r's target.
+        if (cmd0 == "unset" && (_namerefs is { Count: > 0 } || _pendingNamerefs is { Count: > 0 } || _runtimeNamerefs is { Count: > 0 })
+            && cmd.Words.Length >= 2)
         {
-            bool functions = false, byReference = false, rewrote = false;
-            var words = cmd.Words.ToBuilder();
-            for (int i = 1; i < words.Count; i++)
+            var lits = new string?[cmd.Words.Length];
+            for (int i = 1; i < lits.Length; i++) lits[i] = GetLiteralValue(cmd.Words[i]);
+            var unsetOptions = UnsetOptions.Parse(lits, 1);
+            if (unsetOptions.Known && !unsetOptions.Conflict && !unsetOptions.Functions)
             {
-                var lit = GetLiteralValue(words[i]);
-                if (lit == "-f") { functions = true; continue; }
-                if (lit == "-v") { functions = false; continue; }
-                if (lit == "-n") { byReference = true; continue; }
-                if (lit is null || lit.StartsWith('-') || functions) continue;
-                if (byReference) { _namerefs?.Remove(lit); _pendingNamerefs?.Remove(lit); }
-                else if (_namerefs?.ContainsKey(lit) == true) { words[i] = new CompoundWord([new WordPart.Literal(ResolveNameref(lit))]); rewrote = true; }
-                else _pendingNamerefs?.Remove(lit);
+                bool rewrote = false;
+                var words = cmd.Words.ToBuilder();
+                for (int i = unsetOptions.FirstOperand; i < words.Count; i++)
+                {
+                    var lit = lits[i];
+                    if (lit is null || lit.StartsWith('-')) continue;
+                    if (unsetOptions.ByReference) { _namerefs?.Remove(lit); _pendingNamerefs?.Remove(lit); _runtimeNamerefs?.Remove(lit); }
+                    else if (_namerefs?.ContainsKey(lit) == true) { words[i] = new CompoundWord([new WordPart.Literal(ResolveNameref(lit))]); rewrote = true; }
+                    else _pendingNamerefs?.Remove(lit);
+                }
+                if (rewrote) cmd = new Command.Simple(words.ToImmutable(), cmd.EnvPairs, cmd.Redirects);
             }
-            if (rewrote) cmd = new Command.Simple(words.ToImmutable(), cmd.EnvPairs, cmd.Redirects);
         }
 
         // unset PROMPT_COMMAND -> Unregister-BashPromptHook -Name 'prompt-command'
@@ -10051,6 +10102,8 @@ public static partial class PsEmitter
         if (name.Length == 0)
             return "''";
 
+        // A nameref whose target is known only at run time (`declare -n r; r=$v`, a `for` over one): the run time reads it.
+        if (IsRuntimeNameref(name)) return PsBuild.ReadThroughNameref(name);
         name = ResolveNameref(name);
         // `declare -n ref='a[2]'`: the nameref names an array element.
         if (IsNamerefElementTarget(name))
@@ -10157,6 +10210,10 @@ public static partial class PsEmitter
     {
         if (name.Length == 0)
             return false;
+
+        // A nameref the run time resolves (PsBuild.ReadThroughNameref) holds its target's value: any string, which splits.
+        if (IsRuntimeNameref(name))
+            return true;
 
         // A loop variable bound from quoted items holds an arbitrary string: it splits like any variable
         // (EmitSimpleVar renders it bare, `$cfg`, which the split array takes just as well as `$env:cfg`).
@@ -12203,6 +12260,7 @@ public static partial class PsEmitter
     private static string EmitSimpleVarBraced(string name, bool strict = false)
     {
         // Emit ${name} or ${env:name} with braces to prevent PS drive-reference misparse.
+        if (IsRuntimeNameref(name)) return PsBuild.ReadThroughNameref(name);
         name = ResolveNameref(name);
         if (IsJobCaptured(name) || (_lexicalLocals is not null && _lexicalLocals.Contains(name)))
             return $"${{{name}}}";
@@ -14855,7 +14913,7 @@ public static partial class PsEmitter
     /// cmdlet must be prepared to receive every flag as a plain string.
     /// </summary>
     internal static readonly IReadOnlySet<string> OrderedArgCommands =
-        new HashSet<string>(StringComparer.Ordinal) { "source", "getopts", "mapfile", "seq", "flock", "timeout", "times", "help", "history", "hash", "umask", "ulimit", "compgen", "shopt", "complete", "compopt", "tee", "cp", "mv", "rm", "mkdir", "chmod", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "declare", "type", "bash", "sh", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "grep", "sed", "rg", "find", "echo", "printf", "test", "ls", "du", "tree", "column", "gzip", "tar", "md5sum", "sha1sum", "sha256sum", "diff", "jq", "od", "readlink", "realpath", "kill", "ping", "uname", "shuf", "traceroute", "id", "hostname" };
+        new HashSet<string>(StringComparer.Ordinal) { "source", "getopts", "mapfile", "seq", "flock", "timeout", "times", "help", "history", "hash", "umask", "ulimit", "compgen", "shopt", "complete", "compopt", "tee", "cp", "mv", "rm", "mkdir", "chmod", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "declare", "type", "bash", "sh", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "grep", "sed", "rg", "find", "echo", "printf", "test", "ls", "du", "tree", "column", "gzip", "tar", "md5sum", "sha1sum", "sha256sum", "diff", "jq", "od", "readlink", "realpath", "kill", "ping", "uname", "shuf", "traceroute", "id", "hostname", "unset" };
 
     /// <summary><c>Invoke-BashTee</c> -&gt; is <c>tee</c> in <see cref="OrderedArgCommands"/>?</summary>
     private static bool IsOrderedArgCmdlet(string cmdlet) =>

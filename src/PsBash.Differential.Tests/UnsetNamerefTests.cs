@@ -54,4 +54,34 @@ public class UnsetNamerefTests
         + "declare -n r3=x; r3=new; echo \"x=$x\"; declare +n r3; echo \"r3=$r3\"\n"
         + "f() { local -n lr=x; local +n lr; echo \"lr=$lr\"; }; f; echo \"x=$x lr=[${lr-unset}]\"\n"
         + "p=plain; typeset +n p; echo \"p=$p\"");
+
+    /// <summary>
+    /// unset's options cluster (<c>-vn</c>, <c>-nf</c>), <c>--</c> ends them, and so does the first name. REGRESSION
+    /// (abe9d17b): the emitter and the cmdlet each matched only the words -f/-v/-n, so <c>unset -vn r</c> unset r's target
+    /// and left r a nameref.
+    /// </summary>
+    [SkippableFact]
+    public Task UnsetClusters_DashVNAndDashNF() => AssertOracle.EqualAsync(
+        "declare -n a=ya; ya=1; unset -vn a; declare -p a ya\n"
+        + "declare -n b=yb; yb=1; unset -nv b; declare -p b yb\n"
+        + "declare -n c=yc; yc=1; unset -fn c; declare -p c yc\n"
+        + "declare -n d=yd; yd=1; unset -nf d; declare -p d yd\n"
+        + "declare -n e=ye; ye=1; unset -n -n e; declare -p e ye");
+
+    /// <summary><c>-f</c> with <c>-v</c> is an error whichever comes last: status 1, nothing unset (no last-wins).</summary>
+    [SkippableFact]
+    public Task UnsetDashFWithDashV_UnsetsNothing() => AssertOracle.EqualAsync(
+        "g() { echo G; }; g=1\n"
+        + "unset -fv g; echo \"st=$?\"\n"
+        + "unset -vf g; echo \"st=$?\"\n"
+        + "unset -v -f g; echo \"st=$?\"\n"
+        + "unset -fvn g; echo \"st=$?\"; type -t g; echo \"g=$g\"");
+
+    /// <summary>The first name and <c>--</c> end the options: <c>unset v -f g</c> unsets the variables v and g.</summary>
+    [SkippableFact]
+    public Task UnsetOptions_EndAtTheFirstNameOrDoubleDash() => AssertOracle.EqualAsync(
+        "h() { :; }; v=1; h=2; unset v -f h; echo \"st=$? v=[${v-unset}] h=[${h-unset}]\"; type -t h\n"
+        + "w=1; unset -- -v w; echo \"st=$? w=[${w-unset}]\"\n"
+        + "x=1; unset -n -- x; echo \"st=$? x=[${x-unset}]\"\n"
+        + "k() { :; }; k=1; unset -- -f k; echo \"st=$? k=[${k-unset}]\"; type -t k");
 }

@@ -192,13 +192,27 @@ back what the local hid.**
   ends with the function.
 - **A nameref with no target** (`declare -n r`, `local -n r`) is held in the run-time table with an empty target.
   `declare -p r` prints `declare -n r`, `declare -n` and `declare -p` list it, `set` does not, and `$r` reads as
-  unset. The first literal assignment (`r=x`) names the target. A local one hides an outer reference of that name
-  until the function returns. `declare +n r` leaves a declared, unset scalar (`declare -- r`). A plain `unset r`
-  removes the reference itself, because there is no target to unset.
+  unset. The FIRST WRITE names the target, whatever writes it: `r=$v`, `r+=x`, `read r`, `printf -v r`,
+  `getopts o r`, `local -n r; r=$1`. A value that names no variable (`5`, `a b`, empty) is "not a valid identifier":
+  an assignment drops the rest of its line, read/printf -v fail with status 1, and the target stays unset. The rule
+  lives in one place, `BashShellState.WriteTarget`, which every run-time writer goes through
+  (`BashVariableLookup.AssignThroughNameref`, `BashArrayElement.Assign`, the arithmetic cmdlet). A literal `r=x`
+  still names it at transpile time. After any other first write the emitter cannot know the target, so the name
+  joins `_runtimeNamerefs` and its later writes and `$r`/`${r}` reads go through the run time
+  (`PsBuild.AssignThroughNameref`/`ReadThroughNameref`). Known gap: other expansions of such a name (`${r:-x}`,
+  `${#r}`, `${!r}`) still read r's own value. A local one hides an outer reference of that name until the function
+  returns. `declare +n r` leaves a declared, unset scalar (`declare -- r`). A plain `unset r` removes the reference
+  itself, because there is no target to unset.
+- **`for r in WORDS` over a nameref** (with a target or without) makes each word r's target in turn
+  (`BashShellState.BindLoopNameref`); a word that names no variable ends the loop with status 1. The body and what
+  follows read and write r through the run time, as above.
 - **`unset -n NAME`** removes NAME's reference with its attributes, never the variable it names. On a name that is
   no nameref it changes nothing (bash 5.2: no variable, no function), except that a readonly NAME is still refused.
-  The emitter's static table and `Invoke-BashUnset` read the options one way: `-n` holds for every name after it,
-  whatever `-v` says, and `-f` overrides it (`unset -n -f r` keeps the reference).
+  The emitter and `Invoke-BashUnset` read the options through one parser, `UnsetOptions` (bash's `internal_getopt
+  "fnv"`): only leading words, letters cluster (`-vn`), `--` and the first name end them. `-f` overrides `-n`
+  (`unset -nf r` keeps the reference); `-f` with `-v` in any order unsets nothing ("cannot simultaneously unset a
+  function and a variable", status 1). unset is on `OrderedArgCommands`, so `--` and `-v` reach the cmdlet in place.
+  A plain `unset r` of a nameref whose target is known only at run time unsets that target (the cmdlet resolves it).
 - **The per-shell tables** (readonly names, declare attributes, namerefs) are process-wide statics in
   `BashShellState`, not runspace state, so no PowerShell scope ends them. They are listed in one place,
   `BashShellState.ShellTables`. A subshell's `Save` copies each one and `Restore` puts it back, so
@@ -219,7 +233,8 @@ Known gaps:
   (`intentional-differences.md`).
 
 Behavior: `ShellLanguageGapDifferentialTests.FunctionLocal*`, `FunctionDeclare_*`, `FunctionNameref_*`,
-`Declare_NoValueIsDeclaredButUnset`, `UnsetLocals_ExistAndUnsetArraysAreUnbound`, `UnsetNamerefTests`, `NamerefNoTargetTests`.
+`Declare_NoValueIsDeclaredButUnset`, `UnsetLocals_ExistAndUnsetArraysAreUnbound`, `UnsetNamerefTests`, `NamerefNoTargetTests`,
+`NamerefRuntimeTargetTests`; options: `Core.Tests/Parser/UnsetOptionsTests`.
 
 ## 9. Shell-owned variables
 

@@ -150,6 +150,112 @@ public class BashShellStateTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void NamerefWithNoTarget_EveryWriterNamesTheTarget_AndAValueThatIsNoNameFails()
+    {
+        // bash: `declare -n r; read r <<< t` / `printf -v r %s t` / `getopts ab r -a` / `r=$v` make the value r's target;
+        // `printf -v r %s 'a b'` reports "`a b': not a valid identifier", status 1, r keeps no target. REGRESSION (8bd50899):
+        // only a literal `r=name` the emitter saw named it; every other writer stored the value in r.
+        var r = Run(
+            "foreach ($n in 'psbt_wt_a','psbt_wt_b','psbt_wt_c','psbt_wt_d','psbt_wt_e') { [PsBash.Cmdlets.BashShellState]::SetNameref($n, '') }; "
+            + "'psbt_wt_ta' | Invoke-BashRead psbt_wt_a; "
+            + "Invoke-BashPrintf '-v' psbt_wt_b '%s' psbt_wt_tb; "
+            + "Invoke-BashGetopts ab psbt_wt_c -a; "
+            + "\"assign=[$([PsBash.Cmdlets.BashVariableLookup]::AssignThroughNameref($ExecutionContext.SessionState, 'psbt_wt_d', 'psbt_wt_td', $false))]\"; "
+            + "[void][PsBash.Cmdlets.BashVariableLookup]::AssignThroughNameref($ExecutionContext.SessionState, 'psbt_wt_d', 'five', $false); "
+            + "[void][PsBash.Cmdlets.BashVariableLookup]::AssignThroughNameref($ExecutionContext.SessionState, 'psbt_wt_d', '+', $true); "
+            + "\"td=$env:psbt_wt_td read=$([PsBash.Cmdlets.BashVariableLookup]::ReadThroughNameref($ExecutionContext.SessionState, 'psbt_wt_d'))\"; "
+            + "Invoke-BashPrintf '-v' psbt_wt_e '%s' 'a b' 2>&1 | ForEach-Object { \"e: $_\" }; \"est=$global:LASTEXITCODE\"; "
+            + "\"bad=[$([PsBash.Cmdlets.BashVariableLookup]::AssignThroughNameref($ExecutionContext.SessionState, 'psbt_wt_e', '5', $false))]\"; "
+            + "Invoke-BashDeclare -p psbt_wt_a psbt_wt_b psbt_wt_c psbt_wt_d psbt_wt_e | ForEach-Object { \"p: $_\" }; "
+            + "Invoke-BashUnset -n psbt_wt_a psbt_wt_b psbt_wt_c psbt_wt_d psbt_wt_e; Invoke-BashUnset psbt_wt_td; $global:LASTEXITCODE = 0").AssertSuccess();
+
+        Assert.Contains("assign=[]", r.Stdout);
+        Assert.Contains("td=five+ read=five+", r.Stdout);
+        Assert.Contains("p: declare -n psbt_wt_a=\"psbt_wt_ta\"", r.Stdout);
+        Assert.Contains("p: declare -n psbt_wt_b=\"psbt_wt_tb\"", r.Stdout);
+        Assert.Contains("p: declare -n psbt_wt_c=\"a\"", r.Stdout);
+        Assert.Contains("p: declare -n psbt_wt_d=\"psbt_wt_td\"", r.Stdout);
+        Assert.Contains("e: ", r.Stdout);
+        Assert.Contains("printf: `a b': not a valid identifier", r.Stdout);
+        Assert.Contains("est=1", r.Stdout);
+        Assert.Contains("bad=[`5': not a valid identifier]", r.Stdout);
+        Assert.Contains("p: declare -n psbt_wt_e\n", r.Stdout.Replace("\r\n", "\n") + "\n");
+    }
+
+    [Fact]
+    public void NamerefWithATarget_ReadAndPrintfV_WriteTheTarget()
+    {
+        // bash: `declare -n r=x; read r <<< hi` sets x and leaves r a reference. REGRESSION: read and printf -v set r.
+        var r = Run(
+            "[PsBash.Cmdlets.BashShellState]::SetNameref('psbt_rt_r', 'psbt_rt_x'); [PsBash.Cmdlets.BashShellState]::SetNameref('psbt_rt_q', 'psbt_rt_y'); "
+            + "'hi' | Invoke-BashRead psbt_rt_r; Invoke-BashPrintf '-v' psbt_rt_q '%s' yo; "
+            + "\"x=$env:psbt_rt_x y=$env:psbt_rt_y r=[$env:psbt_rt_r] q=[$env:psbt_rt_q]\"; "
+            + "Invoke-BashUnset -n psbt_rt_r psbt_rt_q; Invoke-BashUnset psbt_rt_x psbt_rt_y; $global:LASTEXITCODE = 0").AssertSuccess();
+        Assert.Contains("x=hi y=yo r=[] q=[]", r.Stdout);
+    }
+
+    [Fact]
+    public void BindLoopNameref_RetargetsAnyNameref_AndRefusesAWordThatIsNoName()
+    {
+        var r = Run(
+            "[PsBash.Cmdlets.BashShellState]::SetNameref('psbt_bl_r', 'psbt_bl_x'); "
+            + "\"a=$([PsBash.Cmdlets.BashShellState]::BindLoopNameref('psbt_bl_r', 'psbt_bl_a'))\"; "
+            + "\"b=$([PsBash.Cmdlets.BashShellState]::BindLoopNameref('psbt_bl_r', 'b c'))\"; "
+            + "\"e=$([PsBash.Cmdlets.BashShellState]::BindLoopNameref('psbt_bl_r', 'psbt_bl_e[1]'))\"; "
+            + "\"to=$([PsBash.Cmdlets.BashShellState]::ResolveNameref('psbt_bl_r'))\"; "
+            + "Invoke-BashUnset -n psbt_bl_r; $global:LASTEXITCODE = 0").AssertSuccess();
+        Assert.Contains("a=True", r.Stdout);
+        Assert.Contains("b=False", r.Stdout);
+        Assert.Contains("e=True", r.Stdout);
+        Assert.Contains("to=psbt_bl_e[1]", r.Stdout);
+    }
+
+    [Theory]
+    [InlineData("-vn")]
+    [InlineData("-nv")]
+    [InlineData("-v -n")]   // the binder takes -v (the V decoy): a direct call must still read it as an option
+    [InlineData("-n -n")]
+    public void UnsetClusterWithN_DropsTheReference_NotTheTarget(string options)
+    {
+        // bash: `declare -n r=y; y=1; unset -vn r` leaves y=1 and r "not found". REGRESSION (abe9d17b): `-vn` was skipped.
+        var r = Run(
+            "[PsBash.Cmdlets.BashShellState]::SetNameref('psbt_uc_r', 'psbt_uc_y'); $env:psbt_uc_y = '1'; "
+            + $"Invoke-BashUnset {options} psbt_uc_r; \"st=$global:LASTEXITCODE y=$env:psbt_uc_y\"; "
+            + "Invoke-BashDeclare -p psbt_uc_r 2>&1 | ForEach-Object { \"p: $_\" }; "
+            + "Invoke-BashUnset psbt_uc_y; $global:LASTEXITCODE = 0").AssertSuccess();
+        Assert.Contains("st=0 y=1", r.Stdout);
+        Assert.Contains("psbt_uc_r: not found", r.Stdout);
+    }
+
+    [Theory]
+    [InlineData("-fv")]
+    [InlineData("-vf")]
+    [InlineData("-f -v")]
+    [InlineData("-v -f")]
+    [InlineData("-fvn")]
+    public void UnsetFunctionAndVariable_IsAnError_AndUnsetsNothing(string options)
+    {
+        // bash: "unset: cannot simultaneously unset a function and a variable", status 1, whichever comes last.
+        var r = Run(
+            "$env:psbt_fv_v = '1'; "
+            + $"Invoke-BashUnset {options} psbt_fv_v 2>&1 | ForEach-Object {{ \"e: $_\" }}; \"st=$global:LASTEXITCODE v=$env:psbt_fv_v\"; "
+            + "Invoke-BashUnset psbt_fv_v; $global:LASTEXITCODE = 0").AssertSuccess();
+        Assert.Contains("cannot simultaneously unset a function and a variable", r.Stdout);
+        Assert.Contains("st=1 v=1", r.Stdout);
+    }
+
+    [Fact]
+    public void Unset_ANameAfterTheFirstOperand_IsNoOption()
+    {
+        // bash: `unset hv -f hfn` unsets the variables hv and hfn; the function hfn stays.
+        var r = Run(
+            "function psbt_op_f { 'F' }; $env:psbt_op_v = '1'; $env:psbt_op_f = '2'; "
+            + "Invoke-BashUnset psbt_op_v -f psbt_op_f; "
+            + "\"v=[$env:psbt_op_v] f=[$env:psbt_op_f] fn=$(Test-Path Function:\\psbt_op_f)\"; $global:LASTEXITCODE = 0").AssertSuccess();
+        Assert.Contains("v=[] f=[] fn=True", r.Stdout);
+    }
+
+    [Fact]
     public void ClearReadonly_LetsTheNextInvocationUnset()
     {
         // A daemon runs many scripts; `readonly v` in one must not block `unset v` in the next.

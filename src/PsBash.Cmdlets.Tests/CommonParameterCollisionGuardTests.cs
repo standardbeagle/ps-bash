@@ -52,6 +52,9 @@ public class CommonParameterCollisionGuardTests
             // cmdlets still keep decoys for DIRECT calls (Pester: `Invoke-BashTee -a f`).
             // getopts: its argv is the script's own (`getopts ab: o -a`), so every dash word is single-quoted.
             ["getopts"] = new(CollidingLetters),
+            // unset: its options are read by the shared UnsetOptions (clusters, `--`, the first name ends them), so every
+            // dash word arrives quoted and in place; V stays declared for direct calls (`Invoke-BashUnset -v x`).
+            ["unset"] = new(CollidingLetters),
             // flock: -n/-x/-s/-w/-E/-c are the script's own flags; every dash word is single-quoted.
             ["flock"] = new(CollidingLetters),
             // timeout: -s/-k/-v are its own flags and the inner command's flags follow; every dash word is single-quoted.

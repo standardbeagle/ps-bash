@@ -104,6 +104,49 @@ public static class BashShellState
         }
     }
 
+    /// <summary>
+    /// Where a write of <paramref name="value"/> to NAME goes: <see cref="ResolveNameref"/>, unless the chain ends at a
+    /// nameref with NO target yet. bash then makes the value its target instead of storing it, whichever writer it is
+    /// (<c>declare -n r; r=$v</c>, <c>read r</c>, <c>printf -v r</c>, <c>getopts o r</c>, <c>local -n r; r=$1</c>). That
+    /// returns null, with <paramref name="invalid"/> true when the value names no variable (<c>r=5</c>, <c>r='a b'</c>,
+    /// <c>r=</c>: "`5': not a valid identifier", nothing changes). An element (<c>a[2]</c>) is a target, as in
+    /// <c>declare -n r='a[2]'</c>. THE one place this rule lives (<c>BashVariableLookup.AssignThroughNameref</c>,
+    /// <c>BashArrayElement.Assign</c>). REGRESSION: only a literal <c>r=name</c> the emitter saw named the target; any other
+    /// writer stored the value in r.
+    /// </summary>
+    public static string? WriteTarget(string name, string? value, out bool invalid)
+    {
+        invalid = false;
+        if (name.IndexOf('[') >= 0) return ResolveNameref(name);
+        lock (Namerefs)
+        {
+            string current = name;
+            for (int hop = 0; hop < 16 && Namerefs.TryGetValue(Key(current), out var next) && next != current; hop++)
+            {
+                if (next.Length == 0)
+                {
+                    if (value is null || !BashArrayElement.IsTarget(value)) invalid = true;
+                    else Namerefs[Key(current)] = PsBash.Core.BashNameCase.ToBash(value);
+                    return null;
+                }
+                current = next;
+            }
+            return current;
+        }
+    }
+
+    /// <summary>
+    /// One pass of <c>for NAME in WORDS</c> where NAME is a nameref: the word becomes its target, whatever it referred to
+    /// (bash: <c>declare -n r; for r in a b; do r=1; done</c> sets a and b). False when the word names no variable
+    /// (<c>`b c': not a valid identifier</c>): the loop ends there, status 1.
+    /// </summary>
+    public static bool BindLoopNameref(string name, string word)
+    {
+        if (!BashArrayElement.IsTarget(word)) return false;
+        SetNameref(name, word);
+        return true;
+    }
+
     internal static string[] NamerefNames() { lock (Namerefs) return [.. Namerefs.Keys]; }
 
     private static readonly Dictionary<string, string> Attributes = new(StringComparer.Ordinal);

@@ -514,8 +514,9 @@ public sealed class InvokeBashPrintfCommand : BashCmdlet
         if (assignTo is not null)
         {
             // NAME, or one element (the subscript resolved as bash does at run time: m[$k] is key K, a[i+1] a position).
-            BashArrayElement.Assign(this, assignTo, result);
-            if (badFormat is not null || numErr) FileSystemHelpers.SetLastExitCode(this, 1);
+            // A nameref with no target takes the result as its target (`declare -n r; printf -v r %s hi`).
+            bool assigned = BashArrayElement.Assign(this, assignTo, result, "printf");
+            if (!assigned || badFormat is not null || numErr) FileSystemHelpers.SetLastExitCode(this, 1);
             return;
         }
 

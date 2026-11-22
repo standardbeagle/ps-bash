@@ -137,6 +137,31 @@ public static class BashArrayElement
         return true;
     }
 
+    /// <summary>
+    /// The value of <c>baseName[subscript]</c>, by the rules <see cref="Write"/> writes it (a scalar is its element 0);
+    /// null when unset or when a negative subscript reaches before the start.
+    /// </summary>
+    public static string? Read(SessionState state, string baseName, string subscript, Vars vars)
+    {
+        object? holder = BashVariableLookup.ArrayHolder(state, baseName);
+        if (holder is BashSparseArray sparse)
+        {
+            long at = Index(subscript, sparse.Count == 0 ? 0 : sparse.NextIndex, vars);
+            return at >= 0 && sparse.Contains(at) ? sparse[at]?.ToString() ?? "" : null;
+        }
+        if (holder is System.Collections.IDictionary dict)
+        {
+            string key = AssocKey(subscript, false, vars.ReadRaw);
+            return dict.Contains(key) ? dict[key]?.ToString() ?? "" : null;
+        }
+        if (holder is System.Collections.IList list && holder is not string)
+        {
+            long index = Index(subscript, list.Count, vars);
+            return index >= 0 && index < list.Count ? list[(int)index]?.ToString() ?? "" : null;
+        }
+        return Index(subscript, 1, vars) == 0 ? BashVariableLookup.Scalar(state, baseName) : null;
+    }
+
     // NAME or NAME[subscript]: a run-time assignment target (`read NAME`, `printf -v NAME`).
     private static readonly System.Text.RegularExpressions.Regex s_target =
         new(@"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]+\])?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
@@ -149,8 +174,20 @@ public static class BashArrayElement
     /// name holds), or one element by <see cref="Write"/>. False when nothing was set: a negative or empty subscript is
     /// bash's "bad array subscript" (status 1), and one that is not an expression is <see cref="FailSubscript"/>.
     /// </summary>
-    public static bool Assign(PSCmdlet cmdlet, string target, string value)
+    public static bool Assign(PSCmdlet cmdlet, string target, string value, string builtin)
     {
+        // A nameref writes its target; one with no target yet takes the value as its target (BashShellState.WriteTarget).
+        // REGRESSION: `declare -n r=x; read r` set r, and `declare -n r; printf -v r %s hi` stored hi in r.
+        if (target.IndexOf('[') < 0)
+        {
+            if (BashShellState.WriteTarget(target, value, out bool invalid) is not { } resolved)
+            {
+                if (!invalid) return true;
+                FileSystemHelpers.WriteBashError(cmdlet, ShellDiagnostic.Prefix(cmdlet.SessionState) + $"{builtin}: `{value}': not a valid identifier");
+                return false;
+            }
+            target = resolved;
+        }
         int br = target.IndexOf('[');
         if (br < 0)
         {

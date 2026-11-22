@@ -519,10 +519,9 @@ public sealed class InvokeBashReadCommand : BashCmdlet
     {
         if (value is string scalarValue)
         {
-            // `read 'a[i+1]'` / `read "m[$k]"`: one element, the subscript resolved as printf -v resolves it.
-            if (name.IndexOf('[') >= 0) { if (!BashArrayElement.Assign(this, name, scalarValue)) _assignFailed = true; return; }
-            try { BashVariableLookup.SetScalar(SessionState, name, scalarValue); }
-            catch { /* env-set may fail for restricted names; non-fatal */ }
+            // `read 'a[i+1]'` / `read "m[$k]"`: one element, the subscript resolved as printf -v resolves it. A nameref writes
+            // its target, and one with no target takes the value as its target (`declare -n r; read r <<< tgt`).
+            if (!BashArrayElement.Assign(this, name, scalarValue, "read")) _assignFailed = true;
             return;
         }
         BashVariableLookup.SetArray(SessionState, name, value);

@@ -64,4 +64,61 @@ public class NamerefNoTargetEmitterTests
         Assert.Contains("$env:r = \"v\"", ps);
         Assert.DoesNotContain("SetNameref('r', 'v')", ps);
     }
+
+    private const string AssignThrough = "[PsBash.Cmdlets.BashVariableLookup]::AssignThroughNameref($ExecutionContext.SessionState, 'r', ";
+    private const string ReadThrough = "[PsBash.Cmdlets.BashVariableLookup]::ReadThroughNameref($ExecutionContext.SessionState, 'r')";
+
+    // Any first write names the target, not only a literal one, so a value the transpiler cannot see goes to the run time,
+    // and so does every write and read after it. REGRESSION (8bd50899): `r=$(echo tgt); r=5` stored both values in r.
+    [Theory]
+    [InlineData("declare -n r; r=$(echo tgt); r=5; echo $r")]
+    [InlineData("declare -n r; v=t; r=$v; r=5; echo \"$r\"")]
+    [InlineData("declare -n r; r+=$1; r=5; echo ${r}")]
+    public void Transpile_NamerefWithNoTarget_ANonLiteralFirstWrite_GoesThroughTheRunTime(string bash)
+    {
+        var ps = T(bash);
+        Assert.Equal(2, ps.Split(AssignThrough).Length - 1);
+        Assert.Contains(ReadThrough, ps);
+        Assert.DoesNotContain("$env:r = ", ps);
+    }
+
+    [Fact]
+    public void Transpile_LocalNamerefWithNoTarget_ParameterFirstWrite_GoesThroughTheRunTime()
+    {
+        var ps = T("g() { local -n r; r=$1; r=5; }; g tgt");
+        Assert.Equal(2, ps.Split(AssignThrough).Length - 1);
+        Assert.DoesNotContain("$env:r = \"5\"", ps);
+    }
+
+    // `for r in a b` with r a nameref re-targets r on each pass (bash); the body reads and writes through the run time.
+    [Theory]
+    [InlineData("declare -n r; for r in a b; do r=1; echo $r; done")]
+    [InlineData("declare -n r=x; for r in a b; do r=1; echo $r; done")]
+    public void Transpile_ForOverANameref_RetargetsItEachPass(string bash)
+    {
+        var ps = T(bash);
+        Assert.Contains("[PsBash.Cmdlets.BashShellState]::BindLoopNameref('r', [string]($__psbash_lv0))", ps);
+        Assert.DoesNotContain("BashVariableStore]::Set('r'", ps);
+        Assert.Contains(AssignThrough, ps);
+        Assert.Contains(ReadThrough, ps);
+        Assert.DoesNotContain("$env:x = ", ps);
+    }
+
+    // The literal first write still names the target at transpile time (later writes go straight to it).
+    [Fact]
+    public void Transpile_NamerefWithNoTarget_ALiteralFirstWrite_StaysStatic()
+    {
+        var ps = T("declare -n r; r=x; r=5");
+        Assert.Contains("$env:x = \"5\"", ps);
+        Assert.DoesNotContain(AssignThrough, ps);
+    }
+
+    // `declare -n r` again keeps the target r took at run time (bash), so it must not reset it to none.
+    [Fact]
+    public void Transpile_RedeclaringARuntimeNameref_KeepsItsTarget()
+    {
+        var ps = T("declare -n r; r=$1; declare -n r; r=5");
+        Assert.Equal(1, ps.Split(NoTargetMark).Length - 1);
+        Assert.Equal(2, ps.Split(AssignThrough).Length - 1);
+    }
 }
