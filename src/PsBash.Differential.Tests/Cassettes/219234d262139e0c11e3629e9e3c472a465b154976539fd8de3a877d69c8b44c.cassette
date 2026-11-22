@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 207
+stdout-length: 45
+stderr-length: 0
+==== SCRIPT ====
+f() { 'local' w=3; \local w2=4; "declare" -i n=2+3; echo "w=$w $w2 n=$n"; }; f
+echo "out=${w-unset}${w2-unset}${n-unset}"
+\export QX=1; 'export' QY=2; echo "QX=$QX QY=$QY"
+"declare" -i di=2+3; echo "di=$di"
+
+==== STDOUT ====
+w=3 4 n=5
+out=unsetunsetunset
+QX=1 QY=2
+di=5
+
+==== STDERR ====
+

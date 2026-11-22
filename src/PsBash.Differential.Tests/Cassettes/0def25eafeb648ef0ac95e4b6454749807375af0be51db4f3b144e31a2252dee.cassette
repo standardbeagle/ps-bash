@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 104
+stdout-length: 43
+stderr-length: 0
+==== SCRIPT ====
+x=1; ( declare -i x; declare -u z; declare -A m ); x=1+1; z=abc; m=(k v); echo "x=$x z=$z"; declare -p m
+==== STDOUT ====
+x=1+1 z=abc
+declare -a m=([0]="k" [1]="v")
+
+==== STDERR ====
+

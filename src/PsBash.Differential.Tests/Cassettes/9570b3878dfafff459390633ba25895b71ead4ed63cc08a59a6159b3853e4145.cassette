@@ -1,0 +1,24 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 268
+stdout-length: 35
+stderr-length: 35
+==== SCRIPT ====
+history -s 'v=7'; f() { fc -s 2>/dev/null; echo "v=$v"; }; f
+history -s 'echo pipe'; fc -s 2>/dev/null | tr a-z A-Z
+history -s 'false'; fc -s 2>/dev/null; echo "false=$?"
+history -c; fc -s; echo "empty=$?"
+c=fc; history -s 'echo dyn'; $c -s 2>/dev/null; echo "dyn=$?"
+
+==== STDOUT ====
+v=7
+PIPE
+false=1
+empty=1
+dyn
+dyn=0
+
+==== STDERR ====
+bash: line 4: fc: no command found
+

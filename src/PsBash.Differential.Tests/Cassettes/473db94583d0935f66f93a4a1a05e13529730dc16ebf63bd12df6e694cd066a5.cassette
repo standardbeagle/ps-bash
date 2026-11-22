@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 125
+stdout-length: 22
+stderr-length: 0
+==== SCRIPT ====
+declare -n r; declare +n r; declare -p r; declare -n q; unset q; declare -p q >/dev/null 2>&1; echo "st=$?"; q=v; echo "q=$q"
+==== STDOUT ====
+declare -- r
+st=1
+q=v
+
+==== STDERR ====
+

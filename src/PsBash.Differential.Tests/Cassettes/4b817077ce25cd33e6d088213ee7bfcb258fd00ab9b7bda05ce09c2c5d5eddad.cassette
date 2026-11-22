@@ -1,0 +1,28 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 222
+stdout-length: 60
+stderr-length: 112
+==== SCRIPT ====
+for c in a b c d e; do history -s "$c"; done
+history -d 2-3; echo "r=$?"; history
+history -d 3-1; echo "bad=$?"
+history -a -r; echo "ar=$?"
+history -c; history -s 'echo e'; history -p '!!' '!e:s/e/Q/' '!nope'; echo "p=$?"
+
+==== STDOUT ====
+r=0
+    1  a
+    2  d
+    3  e
+bad=1
+ar=1
+echo e
+Qcho e
+p=1
+
+==== STDERR ====
+bash: line 4: history: cannot use more than one of -anrw
+bash: line 5: history: !nope: history expansion failed
+

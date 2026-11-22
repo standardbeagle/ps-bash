@@ -1,0 +1,28 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 125
+stdout-length: 54
+stderr-length: 24
+==== SCRIPT ====
+history -s 'echo x1'; history -s 'echo x2'
+fc -s 9; echo "s9=$?"
+fc -s x=Q 1; echo "sxq=$?"
+fc -e - Q=R; echo "e=$?"
+history
+
+==== STDOUT ====
+x2
+s9=0
+Q1
+sxq=0
+R1
+e=0
+    1  echo x1
+    2  echo R1
+
+==== STDERR ====
+echo x2
+echo Q1
+echo R1
+

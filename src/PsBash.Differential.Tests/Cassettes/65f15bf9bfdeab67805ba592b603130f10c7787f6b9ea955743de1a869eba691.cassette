@@ -1,0 +1,28 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 268
+stdout-length: 46
+stderr-length: 0
+==== SCRIPT ====
+f() { 'return' 6; }; f; echo "r=$?"
+for i in 1 2; do "break"; done; echo "b=$i"
+for i in 1 2; do \continue; echo no; done; echo "c=$i"
+\set -- p q; echo "set: $*"
+'shift'; echo "shift: $*"
+\eval 'echo ev'
+'read' rv <<< 'rr'; echo "read: $rv"
+( 'exit' 4 ); echo "e=$?"
+
+==== STDOUT ====
+r=6
+b=1
+c=2
+set: p q
+shift: q
+ev
+read: rr
+e=4
+
+==== STDERR ====
+

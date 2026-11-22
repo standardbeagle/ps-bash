@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 116
+stdout-length: 24
+stderr-length: 0
+==== SCRIPT ====
+y=1; ( declare -n r=y; r=2; echo "in y=$y" ); declare -p r >/dev/null 2>&1; echo "st=$? y=$y"; r=3; echo "r=$r y=$y"
+==== STDOUT ====
+in y=2
+st=1 y=1
+r=3 y=1
+
+==== STDERR ====
+

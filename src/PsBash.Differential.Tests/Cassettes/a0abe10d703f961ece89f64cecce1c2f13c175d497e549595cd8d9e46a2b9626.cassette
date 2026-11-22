@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 111
+stdout-length: 18
+stderr-length: 0
+==== SCRIPT ====
+y=1; declare -n q=y; unset -v -n q; echo "y=$y q=[${q-unset}]"; declare -n p=y; unset -n -f p; p=2; echo "y=$y"
+==== STDOUT ====
+y=1 q=[unset]
+y=2
+
+==== STDERR ====
+

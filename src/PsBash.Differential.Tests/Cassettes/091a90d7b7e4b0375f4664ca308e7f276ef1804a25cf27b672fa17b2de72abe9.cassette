@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 244
+stdout-length: 90
+stderr-length: 0
+==== SCRIPT ====
+f() { local -n r; declare -p r; r=x; declare -p r; x=1; echo "r=$r"; }; f; declare -p r >/dev/null 2>&1; echo "st=$?"
+g() { local -n s; }; g; s=v; echo "s=$s"; declare -p s
+y=Y; declare -n t=y; h() { local -n t; declare -p t; }; h; declare -p t
+==== STDOUT ====
+declare -n r
+declare -n r="x"
+r=1
+st=1
+s=v
+declare -- s="v"
+declare -n t
+declare -n t="y"
+
+==== STDERR ====
+

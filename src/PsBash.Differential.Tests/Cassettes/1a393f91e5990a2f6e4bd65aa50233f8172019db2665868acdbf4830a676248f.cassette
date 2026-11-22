@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 75
+stdout-length: 12
+stderr-length: 0
+==== SCRIPT ====
+v=3; unset -n v; echo "[${v-unset}] st=$?"; f() { echo fn; }; unset -n f; f
+==== STDOUT ====
+[3] st=0
+fn
+
+==== STDERR ====
+
