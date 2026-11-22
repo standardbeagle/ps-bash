@@ -258,6 +258,20 @@ return passes through; the one that is a block (`ErrexitFinalOperand`) goes thro
 `RedirectGroupGuardTests.ErrexitWrappersPassAReturnOrAreBlockMakers` (a PsBuild errexit wrapper that makes a block must
 be a listed block maker) and the condition shapes in `Transpile_ReturnInAnErrexitCondition_StaysAStatement`.
 
+**A redirected compound's failed open is checked after the statement.** Under errexit / an ERR trap, a compound
+command (brace group, if, while/until, for, for-arith, case) whose redirect opens a file, stdin, stdout or stderr
+(`PsEmitter.OpensFile`), is followed by `PsBuild.RedirectFailureChecked` (`PsEmitter.EmitRedirectedCompound`). So is a
+builtin or assignment whose own status errexit ignores (`: > /nodir/x`, `true < missing`, `local v=1 2>/nodir/e`); other
+simple commands are checked on their status. The open failure raises `PsBuild.RedirectFailedVariable`:
+Invoke-BashRedirect for an output file, the failure branch of `PsBuild.InputRedirectGuard` /
+`SimpleInputRedirectGuard` for `< file`. Invoke-BashRedirect does not decide errexit itself, so this check is the only
+errexit decision for a failed open. The exit/return is never inside the guard's `& { }` block, where it would leave only the
+block in a function or subshell. A nested failure the body handled (`{ { cat; } < missing || :; } < in`) is cleared by
+the outer command's own guard or Invoke-BashRedirect. REGRESSION: the input guard lost its errexit exit and nothing
+checked after the compound, so `set -e; { { cat; } < missing; } 2>/dev/null; echo no` printed no. Guard:
+`RedirectGroupGuardTests.Transpile_RedirectedCompoundUnderErrexit_IsFollowedByTheOpenFailureCheck`; behavior
+`Differential.Tests/ErrexitInputRedirectTests`.
+
 **errexit's final and-or operand streams.** Each and-or operand marks its own start (as `EmitCommand` does for a
 command), so only a return in THAT operand makes it pass one on. The operand stays the dot-sourced block
 (`ErrexitFinalOperand`) with `GroupBody` inside, and the `GroupPassingReturn` check wraps the whole errexit list

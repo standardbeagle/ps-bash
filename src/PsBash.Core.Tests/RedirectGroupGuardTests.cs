@@ -239,4 +239,82 @@ public class RedirectGroupGuardTests
         Assert.DoesNotContain(FinalOperandBlock + PsBuild.GroupReturnVar, ps);
         Assert.DoesNotContain("$(" + PsBuild.GroupReturnVar, ps);
     }
+
+    /// <summary>The statement check after a redirected compound (PsBuild.RedirectFailureChecked).</summary>
+    private static readonly string RedirectFailedCheck = "; if (" + PsBuild.RedirectFailedVariable + ") { ";
+
+    public static TheoryData<string> RedirectedCompounds()
+    {
+        string[] compounds =
+        [
+            "{ cat; } R", "if true; then cat; fi R", "while false; do :; done R", "until true; do :; done R",
+            "for i in 1; do cat; done R", "for ((i=0; i<1; i++)); do cat; done R", "case x in x) cat ;; esac R",
+            "while read -r l; do echo \"$l\"; done R",
+        ];
+        string[] redirects = ["< /nonexistent/zz", "> /nonexistent/d/o", "2>/dev/null < /nonexistent/zz", ">> /nonexistent/d/o 2>&1",
+            "2> /nonexistent/d/e", "2>> /nonexistent/d/e", "&> /nonexistent/d/o"];
+        string[] around = ["set -e\nX\necho no", "set -e\n{ X; } 2>/dev/null\necho no", "set -e\nf() { X; echo no; }", "set -e\n( X; echo no )",
+            "trap 'echo E' ERR\nX\necho no", "set -e\nf() { { X; } 2>/dev/null; echo no; }; ( f )"];
+        var data = new TheoryData<string>();
+        foreach (var c in compounds)
+            foreach (var r in redirects)
+                foreach (var a in around)
+                    data.Add(a.Replace("X", c.Replace("R", r)));
+        return data;
+    }
+
+    /// <summary>
+    /// Under errexit / an ERR trap every compound command whose redirect opens a file (stdin or stdout), at statement
+    /// position, nested in another redirected compound or not, in a function or a subshell, is followed by the statement
+    /// check of the open-failure flag; a compound's input guard raises it. bash 5.2: <c>set -e; { { cat; } &lt; missing; }
+    /// 2&gt;/dev/null; echo no</c> ends with status 1 (behavior: ErrexitInputRedirectTests). REGRESSION: the input guard lost its errexit exit and nothing checked
+    /// after the compound, so it printed no.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(RedirectedCompounds))]
+    public void Transpile_RedirectedCompoundUnderErrexit_IsFollowedByTheOpenFailureCheck(string script)
+    {
+        var ps = PsEmitter.Transpile(script)!;
+        Assert.Contains(RedirectFailedCheck, ps);
+        if (script.Contains("< /nonexistent", StringComparison.Ordinal) && !script.Contains("while read", StringComparison.Ordinal))
+            Assert.Contains(PsBuild.RedirectFailedVariable + " = $true", ps);
+    }
+
+    /// <summary>
+    /// A builtin whose own status errexit ignores (<c>:</c>, <c>true</c>, <c>export</c>, <c>local</c>) still fails when its
+    /// redirect cannot open (bash 5.2: <c>set -e; : &gt; /nodir/x; echo no</c> ends with status 1): it is followed by the
+    /// open-failure check, and a simple command's input guard raises the flag. A redirect that cannot fail adds nothing.
+    /// </summary>
+    [Theory]
+    [InlineData("set -e\n: > /nonexistent/d/o\necho no", false)]
+    [InlineData("set -e\ntrue < /nonexistent/zz\necho no", true)]
+    [InlineData("set -e\nexport Y=1 2> /nonexistent/d/e\necho no", false)]
+    [InlineData("set -e\nf() { local v=1 > /nonexistent/d/o; echo no; }", false)]
+    [InlineData("trap 'echo E' ERR\n: 2>> /nonexistent/d/e\necho no", false)]
+    [InlineData("set -e\n( : < /nonexistent/zz; echo no )", true)]
+    public void Transpile_NeutralBuiltinWithAFileRedirect_IsFollowedByTheOpenFailureCheck(string script, bool input)
+    {
+        var ps = PsEmitter.Transpile(script)!;
+        Assert.Contains(RedirectFailedCheck, ps);
+        if (input) Assert.Contains(PsBuild.RedirectFailedVariable + " = $true", ps);
+    }
+
+    [Theory]
+    [InlineData("set -e\n: > /dev/null\ntrue < /dev/null\n{ :; } 2>/dev/null\n: 2>&1\necho ok")]
+    [InlineData(": > /nonexistent/d/o\n{ :; } < /nonexistent/zz\necho no")]   // no errexit, no ERR trap
+    public void Transpile_RedirectThatCannotFailOrNoErrexit_HasNoOpenFailureCheck(string script)
+        => Assert.DoesNotContain(RedirectFailedCheck, PsEmitter.Transpile(script)!);
+
+    /// <summary>The failure of a compound's input guard is the flag, never an exit/return inside its <c>&amp; { }</c> block
+    /// (it would leave only the block in a function or subshell): the check is the statement after the command.</summary>
+    [Fact]
+    public void InputRedirectGuard_RaisesTheFlagAndClearsANestedOne()
+    {
+        string guarded = PsBuild.InputRedirectGuard("'f'", "OK");
+        Assert.Contains("OK; " + PsBuild.RedirectFailedVariable + " = $false }", guarded);
+        Assert.Contains("; $global:LASTEXITCODE = 1; " + PsBuild.RedirectFailedVariable + " = $true } }", guarded);
+        Assert.DoesNotContain("exit", guarded);
+        Assert.DoesNotContain("return", guarded);
+        Assert.DoesNotContain("OK; " + PsBuild.RedirectFailedVariable, PsBuild.InputRedirectGuard("'f'", "OK", clearsNested: false));
+    }
 }
