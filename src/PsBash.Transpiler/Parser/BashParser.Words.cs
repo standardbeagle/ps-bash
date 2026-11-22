@@ -202,64 +202,22 @@ public sealed partial class BashParser
                 i += 2;
                 continue;
             }
-            if (c == '\'')
+            // Quoted and substituted spans are atomic, with the lexer's own extents (a nested `"` in
+            // `X="$(grep "a:b" f)"`, the `}` of `${u:-{a:b}`, a `:` in `${x//:/-}` neither end nor split them).
+            int atomEnd = c switch
             {
-                int j = raw.IndexOf('\'', i + 1);
-                j = j < 0 ? len : j + 1;
-                sb.Append(raw, i, j - i);
-                i = j;
-                continue;
-            }
-            if (c == '"')
+                '\'' => BashLexer.ScanSingleQuoted(raw, i),
+                '"' => BashLexer.ScanDoubleQuoted(raw, i),
+                '`' => BashLexer.ScanBacktick(raw, i),
+                '$' when i + 1 < len && raw[i + 1] == '(' => BashLexer.ScanDollarParen(raw, i),
+                '$' when i + 1 < len && raw[i + 1] == '{' => BashLexer.ScanDollarBrace(raw, i),
+                '$' when i + 1 < len && raw[i + 1] == '\'' => BashLexer.ScanAnsiCQuoted(raw, i, out _),
+                _ => -1,
+            };
+            if (atomEnd >= 0)
             {
-                int j = i + 1;
-                while (j < len && raw[j] != '"')
-                {
-                    if (raw[j] == '\\' && j + 1 < len) { j += 2; continue; }
-                    // A nested command substitution may contain its OWN double quotes.
-                    // Scanning naively for the next `"` ended the region at the inner
-                    // quote, so `X="$(grep "a:b" f)"` looked like it had an UNQUOTED
-                    // colon and got split there — tearing `:b f)` out of the command
-                    // and leaving a mangled pattern. ScanBalancedParens is quote-aware,
-                    // so skip the whole substitution.
-                    if (raw[j] == '$' && j + 1 < len && raw[j + 1] == '(')
-                    {
-                        j = BashLexer.ScanBalancedParens(raw, j + 2, 1);
-                        continue;
-                    }
-                    j++;
-                }
-                j = j < len ? j + 1 : len;
-                sb.Append(raw, i, j - i);
-                i = j;
-                continue;
-            }
-            if (c == '`')
-            {
-                int j = i + 1;
-                while (j < len && raw[j] != '`')
-                {
-                    if (raw[j] == '\\' && j + 1 < len) j++;
-                    j++;
-                }
-                j = j < len ? j + 1 : len;
-                sb.Append(raw, i, j - i);
-                i = j;
-                continue;
-            }
-            if (c == '$' && i + 1 < len && (raw[i + 1] == '(' || raw[i + 1] == '{'))
-            {
-                char open = raw[i + 1];
-                char close = open == '(' ? ')' : '}';
-                int depth = 0, j = i + 1;
-                while (j < len)
-                {
-                    if (raw[j] == open) depth++;
-                    else if (raw[j] == close) { depth--; if (depth == 0) { j++; break; } }
-                    j++;
-                }
-                sb.Append(raw, i, System.Math.Min(j, len) - i);
-                i = j;
+                sb.Append(raw, i, atomEnd - i);
+                i = atomEnd;
                 continue;
             }
             if (c == ':')
@@ -278,14 +236,10 @@ public sealed partial class BashParser
 
     private static int ParseSingleQuoted(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
     {
-        pos++; // skip opening '
-        int start = pos;
-        while (pos < raw.Length && raw[pos] != '\'')
-            pos++;
-        parts.Add(new WordPart.SingleQuoted(raw[start..pos]));
-        if (pos < raw.Length)
-            pos++; // skip closing '
-        return pos;
+        // The lexer's scanner decides where the quote ends (one scanner per construct).
+        int end = BashLexer.ScanSingleQuoted(raw, pos, out bool closed);
+        parts.Add(new WordPart.SingleQuoted(raw[(pos + 1)..(closed ? end - 1 : end)]));
+        return end;
     }
 
     /// <summary>
@@ -295,18 +249,9 @@ public sealed partial class BashParser
     /// </summary>
     private static int ParseAnsiCQuoted(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
     {
-        pos += 2; // skip $'
-        int start = pos;
-        while (pos < raw.Length && raw[pos] != '\'')
-        {
-            if (raw[pos] == '\\' && pos + 1 < raw.Length)
-                pos++; // keep the escaped char as part of the inner text
-            pos++;
-        }
-        parts.Add(new WordPart.AnsiCQuoted(raw[start..pos]));
-        if (pos < raw.Length)
-            pos++; // skip closing '
-        return pos;
+        int end = BashLexer.ScanAnsiCQuoted(raw, pos, out bool closed);
+        parts.Add(new WordPart.AnsiCQuoted(raw[(pos + 2)..(closed ? end - 1 : end)]));
+        return end;
     }
 
     private static int ParseDoubleQuoted(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
@@ -440,6 +385,13 @@ public sealed partial class BashParser
                 else sb.Append("\\\\").Append(next);
                 i++;
             }
+            // shopt extquote (on by default): `$'…'` keeps its ANSI-C meaning inside "${u:-…}" ("${u:-$'t\x41'}" is tA).
+            else if (c == '$' && i + 1 < val.Length && val[i + 1] == '\'')
+            {
+                int end = BashLexer.ScanAnsiCQuoted(val, i, out _);
+                sb.Append(val, i, end - i);
+                i = end - 1;
+            }
             // Inside "…" a single quote is an ordinary character: "${u:-'a'}" is the text 'a' with its quotes.
             else if (c == '\'')
                 sb.Append("\\'");
@@ -474,14 +426,7 @@ public sealed partial class BashParser
             }
             if (c == '$' && i + 1 < s.Length && s[i + 1] is '{' or '(')
             {
-                char o = s[i + 1], cl = o == '{' ? '}' : ')';
-                int d = 0, j = i + 1;
-                for (; j < s.Length; j++)
-                {
-                    if (s[j] == o) d++;
-                    else if (s[j] == cl && --d == 0) break;
-                }
-                i = j;
+                i = (s[i + 1] == '{' ? BashLexer.ScanDollarBrace(s, i) : BashLexer.ScanDollarParen(s, i)) - 1;
                 continue;
             }
             if (c == '[') depth++;
@@ -494,8 +439,11 @@ public sealed partial class BashParser
     {
         // ${x:-${x:-…}} recurses through the argument word: bounded (NestingGuard).
         using var nesting = NestingGuard.Enter();
+        // The expansion's extent is the lexer's (ONE scanner, BashLexer.DollarBraceClose): every branch below reads
+        // inside [pos, close] only, so no operand can run past the `}` that bash closes on into the following text.
+        int extentClose = BashLexer.DollarBraceClose(raw, pos);
+        int len = extentClose < 0 ? raw.Length : extentClose + 1;
         pos += 2; // skip ${
-        int len = raw.Length;
 
         // Braced special parameters: ${#} ${@} ${*} ${?} ${$} ${!} ${-}. These collide
         // with the length (${#var}) / keys (${!arr[@]}) branches below, so detect the
@@ -531,7 +479,7 @@ public sealed partial class BashParser
             // keep the keys meaning. The synthetic name carries the subscript, so every operator form below sees `a[1]`.
             if (name.Length > 0 && pos < len && raw[pos] == '[')
             {
-                int close = raw.IndexOf(']', pos + 1);
+                int close = raw.IndexOf(']', pos + 1, len - pos - 1);
                 if (close > pos + 1 && close + 1 < len && raw[pos + 1] is not ('@' or '*' or ']'))
                 {
                     name = raw[nameStart..(close + 1)];
@@ -557,7 +505,7 @@ public sealed partial class BashParser
                 || (raw[pos] == '@' && pos + 1 < len && raw[pos + 1] != '}')))
             {
                 var inner = ImmutableArray.CreateBuilder<WordPart>();
-                string synthetic = "${" + name + raw[pos..];   // `${a[1]:-d}` keeps the element
+                string synthetic = "${" + name + raw[pos..len];   // `${a[1]:-d}` keeps the element
                 int end = ParseBracedVar(synthetic, 0, inner);
                 int elemOpen = name.IndexOf('[');
                 string baseName = elemOpen > 0 ? name[..elemOpen] : name;
@@ -613,7 +561,7 @@ public sealed partial class BashParser
         // the length operator applied to a variable named `#`.
         if (pos + 1 < len && raw[pos] == '#' && raw[pos + 1] == '#')
         {
-            int hashClose = raw.IndexOf('}', pos);
+            int hashClose = extentClose;
             if (hashClose > 0)
             {
                 string rest = raw[(pos + 1)..hashClose];
@@ -642,7 +590,7 @@ public sealed partial class BashParser
             if (pos < len && raw[pos] == '[')
             {
                 int subStart = pos;
-                if (FindSubscriptClose(raw, pos) is var subClose and > 0)
+                if (FindSubscriptClose(raw, pos) is var subClose and > 0 && subClose < len)
                     pos = subClose;
                 else
                 {
@@ -658,8 +606,7 @@ public sealed partial class BashParser
             if (name.Length > 0 && pos < len && raw[pos] != '}')
             {
                 // ${#x-default}: no operator may follow the length operator. bash reports 'bad substitution' when it runs.
-                int close = raw.IndexOf('}', pos);
-                int end = close < 0 ? len : close + 1;
+                int end = len;
                 SawBadSubstitution = true; parts.Add(new WordPart.BracedVarSub(name, "#BAD:" + raw[Math.Max(0, nameStart - 3)..end]));
                 return end;
             }
@@ -691,8 +638,7 @@ public sealed partial class BashParser
         {
             // ${%}, ${}, ${/x}: no name at all. bash reports 'bad substitution' when it runs. So do the bash 5.3
             // command substitutions `${ cmd;}` and `${|cmd;}`, which bash 5.2 does not have.
-            int badClose = raw.IndexOf('}', pos);
-            int badEnd = badClose < 0 ? len : badClose + 1;
+            int badEnd = len;
             SawBadSubstitution = true; parts.Add(new WordPart.BracedVarSub(varName, "#BAD:" + raw[Math.Max(0, varStart - 2)..badEnd]));
             return badEnd;
         }
@@ -733,8 +679,7 @@ public sealed partial class BashParser
             if (subscript == "[]" || (pos < len && raw[pos] != '}' && ":-=+?@%#/^,".IndexOf(raw[pos]) < 0))
             {
                 // ${a[0][0]}, ${a[0]x}: only an operator may follow the subscript. bash reports 'bad substitution' when it runs.
-                int badClose = raw.IndexOf('}', pos);
-                int badEnd = badClose < 0 ? len : badClose + 1;
+                int badEnd = len;
                 SawBadSubstitution = true; parts.Add(new WordPart.BracedVarSub(varName, "#BAD:" + raw[Math.Max(0, varStart - 2)..badEnd]));
                 return badEnd;
             }
@@ -747,13 +692,7 @@ public sealed partial class BashParser
             if (pos < len && raw[pos] != '}')
             {
                 int opStart = pos;
-                int braceDepth = 1;
-                while (pos < len && braceDepth > 0)
-                {
-                    if (raw[pos] == '{') braceDepth++;
-                    else if (raw[pos] == '}') braceDepth--;
-                    if (braceDepth > 0) pos++;
-                }
+                pos = extentClose < 0 ? len : extentClose;
                 string tail = raw[opStart..pos];
                 subscript += tail;
 
@@ -828,43 +767,15 @@ public sealed partial class BashParser
             if (op.Length == 0 && raw[pos] != ':')
             {
                 // ${a&}: no operator can start here. bash reports 'bad substitution' when it runs.
-                int close = raw.IndexOf('}', pos);
-                int end = close < 0 ? len : close + 1;
+                int end = len;
                 SawBadSubstitution = true; parts.Add(new WordPart.BracedVarSub(varName, "#BAD:" + raw[Math.Max(0, varStart - 2)..end]));
                 return end;
             }
 
-            // Read value until closing brace. A brace inside a quoted / escaped
-            // span is literal (`${x:-"}"}` must close at the LAST `}`), so skip
-            // quoted spans instead of counting their braces.
+            // The value runs to the `}` that closes the expansion (DollarBraceClose): `${x:-"}"}` closes at the LAST
+            // `}`, `${u:-{a,b}}` at the FIRST (a bare `{` does not nest).
             int valStart = pos;
-            int braceDepth = 1;
-            while (pos < len && braceDepth > 0)
-            {
-                char vc = raw[pos];
-                if (vc == '\\' && pos + 1 < len) { pos += 2; continue; }
-                if (vc == '\'')
-                {
-                    pos++;
-                    while (pos < len && raw[pos] != '\'') pos++;
-                    if (pos < len) pos++;
-                    continue;
-                }
-                if (vc == '"')
-                {
-                    pos++;
-                    while (pos < len && raw[pos] != '"')
-                    {
-                        if (raw[pos] == '\\' && pos + 1 < len) pos += 2;
-                        else pos++;
-                    }
-                    if (pos < len) pos++;
-                    continue;
-                }
-                if (vc == '{') braceDepth++;
-                else if (vc == '}') braceDepth--;
-                if (braceDepth > 0) pos++;
-            }
+            pos = extentClose < 0 ? len : extentClose;
             string val = raw[valStart..pos];
             suffix = op + val;
 
@@ -954,18 +865,12 @@ public sealed partial class BashParser
 
     private static int ParseBacktickCommandSub(string raw, int pos, ImmutableArray<WordPart>.Builder parts, bool inDoubleQuote = false)
     {
-        pos++; // skip opening `
-        int start = pos;
-        while (pos < raw.Length && raw[pos] != '`')
-        {
-            if (raw[pos] == '\\' && pos + 1 < raw.Length)
-                pos++; // skip escaped char
-            pos++;
-        }
-        string inner = raw[start..pos];
-        if (pos >= raw.Length)
+        int start = pos + 1;
+        int end = BashLexer.ScanBacktick(raw, pos, out bool closed);   // the lexer's extent
+        if (!closed)
             throw new ParseException("unexpected EOF while looking for matching ``'", 1, 1, "BacktickSub");
-        pos++; // skip closing `
+        string inner = raw[start..(end - 1)];
+        pos = end;
 
         // bash strips ONE level of backslash before `\`, `$`, and `\` itself
         // inside backtick command substitution, before re-parsing the body.
@@ -1082,7 +987,14 @@ public sealed partial class BashParser
         }
 
         string? user = pos > start ? raw[start..pos] : null;
-        // ~CURRENTUSER is the home directory (there is no passwd database to ask for any other login name).
+        // ~user (not ~+ / ~- / ~N): the passwd database's home for that login (getpwnam), a quoted text that is
+        // neither split nor globbed, as bash's tilde result is. The `/` after it stays in the following text.
+        if (user is not null && user is not ("+" or "-") && PsBash.Core.Platform.UserHome.Lookup(user) is { } home)
+        {
+            parts.Add(new WordPart.SingleQuoted(home));
+            return pos;
+        }
+        // ~CURRENTUSER with no passwd entry (Windows has no passwd database) is the home directory.
         if (user is not null && string.Equals(user, Environment.UserName, StringComparison.OrdinalIgnoreCase))
             user = null;
         // Consume the '/' separator so it doesn't appear in the following literal;
@@ -1105,7 +1017,8 @@ public sealed partial class BashParser
             char c = raw[pos];
             if (c is '\'' or '"' or '\\' or '`')
                 break;
-            if (c == '$' && pos + 1 < len && (IsVarStart(raw[pos + 1]) || raw[pos + 1] == '{' || raw[pos + 1] == '(' || raw[pos + 1] == '\''))
+            // Every `$` form DecomposeWord reads ends the literal, `$"…"` too: `a$"*"` is `a*` (the `$` is quoting).
+            if (c == '$' && pos + 1 < len && (IsVarStart(raw[pos + 1]) || raw[pos + 1] is '{' or '(' or '\'' or '"'))
                 break;
             // Stop before glob characters so they get parsed separately.
             if (c is '*' or '?')
@@ -1306,141 +1219,76 @@ public sealed partial class BashParser
     }
 
     /// <summary>
-    /// Returns true if position <paramref name="pos"/> starts a brace expansion:
-    /// <c>{</c> followed by content containing <c>,</c> or <c>..</c>, ending with <c>}</c>.
+    /// True when position <paramref name="pos"/> starts a brace expansion: a <c>{</c> whose matching <c>}</c>
+    /// (<see cref="BraceClose"/>) encloses a top-level <c>,</c> or is a sequence expression (<see cref="BraceSequence"/>).
+    /// Any other pair is literal text while the rest of the word expands, as in bash: <c>{1..$n}</c> is <c>{1..3}</c>
+    /// for n=3, <c>{1...3}</c> stays, <c>{x{a,b}y}</c> is <c>{xay} {xby}</c>.
     /// </summary>
     private static bool IsBraceExpansionStart(string raw, int pos)
     {
         if (pos >= raw.Length || raw[pos] != '{')
             return false;
+        int close = BraceClose(raw, pos);
+        if (close < 0)
+            return false;
+        string inner = raw[(pos + 1)..close];
+        return HasTopLevelComma(inner) || BraceSequence.TryParse(inner, out _);
+    }
 
-        int i = pos + 1;
-        int len = raw.Length;
-        bool hasComma = false;
-        bool hasDotDot = false;
-
-        // `{${a},b}`: the braces of an inner `${a}` do not close the outer pair. Nor do those of a nested `{a,b}`: in
-        // `{{a,b}` the first `{` has no closing brace of its own, so it is literal (bash: `{a {b`), and `{{a,b}}` has no
-        // comma at its own level (`{a} {b}`).
+    /// <summary>
+    /// The index of the <c>}</c> matching the brace <c>{</c> at <paramref name="open"/>, or -1. Nested pairs count
+    /// (<c>{{a,b}</c> has none: its first <c>{</c> is literal); quoted text, <c>\x</c>, <c>$( )</c>, <c>$'…'</c> and
+    /// backticks are item text (<c>{a,$(echo },)}</c> is <c>a },</c>). A <c>${…}</c> is NOT taken by its expansion
+    /// extent here: bash's brace scan (braces.c brace_gobbler) counts its braces as nesting, so <c>{a,${u:-{b}}</c> has
+    /// no closing brace and stays literal (then <c>${u:-{b}</c> expands).
+    /// </summary>
+    private static int BraceClose(string raw, int open)
+    {
         int depth = 0;
-        while (i < len)
+        for (int i = open + 1; i < raw.Length;)
         {
+            if (IsBraceAtomStart(raw, i)) { i = SkipBraceAtom(raw, i); continue; }
             char c = raw[i];
-            // A quoted or escaped `}` / `,` is item text (`{a,'}'}` is `a }`).
-            if (c is '\'' or '"' or '\\') { i = SkipBraceItemQuote(raw, i); continue; }
             if (c == '{') depth++;
-            else if (c == '}' && depth > 0) depth--;
-            else if (c == '}')
-                return hasComma || hasDotDot;
-            else if (c == ',' && depth == 0)
-                hasComma = true;
-            else if (c == '.' && depth == 0 && i + 1 < len && raw[i + 1] == '.')
-                hasDotDot = true;
+            else if (c == '}' && depth-- == 0) return i;
             i++;
         }
-        return false;
+        return -1;
     }
 
     private static int ParseBraceExpansion(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
     {
-        pos++; // skip {
-        int len = raw.Length;
+        // IsBraceExpansionStart said yes: the pair closes and holds a top-level comma or a sequence expression.
+        int close = BraceClose(raw, pos);
+        if (close < 0) close = raw.Length;
+        string inner = raw[(pos + 1)..close];
+        int next = Math.Min(close + 1, raw.Length);
 
-        // Find closing brace at depth 0 (depth-aware to handle nested braces).
-        int closePos = pos;
-        int braceDepth = 0;
-        while (closePos < len)
+        // A numeric sequence stays a BracedRange node (assignment values print it back as written); its words are
+        // BraceSequence's, the same expander a nested sequence uses.
+        BraceSequence seq = default;
+        bool isSeq = !HasTopLevelComma(inner) && BraceSequence.TryParse(inner, out seq);
+        if (isSeq && !seq.IsChar
+            && seq.Start is >= int.MinValue and <= int.MaxValue && seq.End is >= int.MinValue and <= int.MaxValue
+            && seq.Increment is > int.MinValue and <= int.MaxValue)
         {
-            if (raw[closePos] is '\'' or '"' or '\\') { closePos = SkipBraceItemQuote(raw, closePos); continue; }
-            if (raw[closePos] == '{') braceDepth++;
-            else if (raw[closePos] == '}')
-            {
-                if (braceDepth == 0) break;
-                braceDepth--;
-            }
-            closePos++;
+            parts.Add(new WordPart.BracedRange((int)seq.Start, (int)seq.End, seq.Width, (int)seq.Increment));
+            return next;
         }
 
-        string inner = raw[pos..closePos];
-
-        // Advance past closing brace
-        if (closePos < len)
-            closePos++;
-
-        // Check for range pattern: N..M or N..M..S (only when no top-level commas).
-        int dotDot = inner.IndexOf("..", StringComparison.Ordinal);
-        if (dotDot >= 0 && !HasTopLevelComma(inner))
+        var expandedItems = ExpandBraceContent(inner);
+        // A generated backtick is re-read as the start of a command substitution: alone at the end of its word it
+        // passes through (`{Z..b..3}` ends in `), but with text after it (`-{z..A}-`) it never closes, a bad
+        // substitution when the command runs (status 1).
+        if (isSeq && seq.IsChar && next < raw.Length && expandedItems.Contains(BraceSequence.GeneratedBacktick))
         {
-            string startStr = inner[..dotDot];
-            string rest = inner[(dotDot + 2)..];
-            int stepVal = 0;
-            string endStr = rest;
-
-            // Check for optional step: N..M..S
-            int dotDot2 = rest.IndexOf("..", StringComparison.Ordinal);
-            if (dotDot2 >= 0)
-            {
-                endStr = rest[..dotDot2];
-                int.TryParse(rest[(dotDot2 + 2)..], out stepVal);
-            }
-
-            if (int.TryParse(startStr, out int startVal) && int.TryParse(endStr, out int endVal))
-            {
-                // Determine zero-padding width from the longer of the two operands
-                int zeroPad = 0;
-                if ((startStr.Length > 1 && startStr[0] == '0') ||
-                    (endStr.Length > 1 && endStr[0] == '0'))
-                {
-                    zeroPad = Math.Max(startStr.Length, endStr.Length);
-                }
-
-                parts.Add(new WordPart.BracedRange(startVal, endVal, zeroPad, stepVal));
-                return closePos;
-            }
-
-            // Letter range: {a..e} or {A..Z} — expand inline as a BracedTuple.
-            if (startStr.Length == 1 && endStr.Length == 1
-                && char.IsLetter(startStr[0]) && char.IsLetter(endStr[0]))
-            {
-                char cStart = startStr[0], cEnd = endStr[0];
-                int vStart = cStart, vEnd = cEnd;
-                int mag = stepVal != 0 ? Math.Abs(stepVal) : 1; // {a..e..2}: the step magnitude; direction comes from the endpoints
-                int step = vStart <= vEnd ? mag : -mag;
-                var letterItems = ImmutableArray.CreateBuilder<string>();
-                for (int v = vStart; step > 0 ? v <= vEnd : v >= vEnd; v += step)
-                    letterItems.Add(((char)v).ToString());
-                // {z..A} runs through `[\]^_` and a backtick: bash expands it, then reads the backtick as an unclosed
-                // command substitution, a bad substitution when the command runs (status 1).
-                if (letterItems.Contains("`"))
-                {
-                    SawBadSubstitution = true;
-                    parts.Add(new WordPart.BracedVarSub("", "#BAD:{" + inner + "}"));
-                    return closePos;
-                }
-                parts.Add(new WordPart.BracedTuple(letterItems.ToImmutable()));
-                return closePos;
-            }
+            SawBadSubstitution = true;
+            parts.Add(new WordPart.BracedVarSub("", "#BAD:{" + inner + "}"));
+            return next;
         }
-
-        // Comma-separated tuple: split on top-level commas only (depth-aware),
-        // then recursively expand any nested brace items (e.g. b{1,2} -> b1, b2).
-        // No top-level comma and not a valid range (`{1...3}`, `{x{a,b}y}`): the braces stay literal around
-        // whatever expands inside, as in bash.
-        if (!HasTopLevelComma(inner))
-        {
-            var wrapped = ImmutableArray.CreateBuilder<string>();
-            foreach (var inside in ExpandNestedBraces(inner))
-                wrapped.Add(RestoreKeptBraces(KeptOpen + inside + KeptClose));
-            parts.Add(new WordPart.BracedTuple(wrapped.ToImmutable()));
-            return closePos;
-        }
-
-        var rawItems = SplitTopLevelCommas(inner);
-        var expandedItems = new List<string>();
-        foreach (var item in rawItems)
-            expandedItems.AddRange(ExpandNestedBraces(item));
-        var finished = expandedItems.ConvertAll(RestoreKeptBraces);
-        // `{"",a}`: quote removal leaves "" as it leaves a bare `{,a}` slot, but bash keeps only the quoted one.
+        // Quote removal on each finished item (`{'a',b}`); `{"",a}`: quote removal leaves "" as it leaves a bare
+        // `{,a}` slot, but bash keeps only the quoted one.
+        var finished = expandedItems.ConvertAll(DequoteBraceItem);
         ImmutableArray<int>.Builder? quotedEmpty = null;
         for (int i = 0; i < finished.Count; i++)
             if (finished[i].Length == 0 && expandedItems[i].Length > 0)
@@ -1449,17 +1297,7 @@ public sealed partial class BashParser
         {
             QuotedEmpty = quotedEmpty?.ToImmutable() ?? default,
         });
-        return closePos;
-    }
-
-    // A brace pair that stays literal (`{1...3}`) is held as private-use characters while the rest expands, so the
-    // expansion scan does not mistake it for syntax again; they turn back into `{` `}` on the finished item.
-    private const char KeptOpen = '', KeptClose = '';
-
-    private static string RestoreKeptBraces(string s)
-    {
-        string d = DequoteBraceItem(s);
-        return d.Replace(KeptOpen, '{').Replace(KeptClose, '}');
+        return next;
     }
 
     /// <summary>Quote removal on a finished brace item (`{'a',b}`, `{a,\{x\}}`): the quotes and backslashes that
@@ -1493,8 +1331,8 @@ public sealed partial class BashParser
         int depth = 0;
         for (int i = 0; i < s.Length; i++)
         {
+            if (IsBraceAtomStart(s, i)) { i = SkipBraceAtom(s, i) - 1; continue; }
             char c = s[i];
-            if (c is '\'' or '"' or '\\') { i = SkipBraceItemQuote(s, i) - 1; continue; }
             if (c == '{') depth++;
             else if (c == '}') depth--;
             else if (c == ',' && depth == 0) return true;
@@ -1502,13 +1340,21 @@ public sealed partial class BashParser
         return false;
     }
 
-    /// <summary>The index just past the quoted span or <c>\x</c> escape at <paramref name="i"/> in brace text.</summary>
-    private static int SkipBraceItemQuote(string s, int i)
+    /// <summary>A quoted span, <c>\x</c> escape, <c>$( )</c>, <c>$'…'</c> or backtick starts at <paramref name="i"/>: brace
+    /// item text whose <c>,</c> / <c>{</c> / <c>}</c> are not brace syntax.</summary>
+    private static bool IsBraceAtomStart(string s, int i) =>
+        s[i] is '\'' or '"' or '\\' or '`' || (s[i] == '$' && i + 1 < s.Length && s[i + 1] is '(' or '\'');
+
+    /// <summary>The index just past the atom <see cref="IsBraceAtomStart"/> found at <paramref name="i"/>, by the lexer's
+    /// own scanners.</summary>
+    private static int SkipBraceAtom(string s, int i) => s[i] switch
     {
-        if (s[i] == '\\') return Math.Min(s.Length, i + 2);
-        int close = s.IndexOf(s[i], i + 1);
-        return close < 0 ? s.Length : close + 1;
-    }
+        '\\' => Math.Min(s.Length, i + 2),
+        '\'' => BashLexer.ScanSingleQuoted(s, i),
+        '"' => BashLexer.ScanDoubleQuoted(s, i),
+        '`' => BashLexer.ScanBacktick(s, i),
+        _ => s[i + 1] == '(' ? BashLexer.ScanDollarParen(s, i) : BashLexer.ScanAnsiCQuoted(s, i, out _),
+    };
 
     /// <summary>
     /// Splits <paramref name="s"/> on commas at brace-depth 0 only.
@@ -1520,7 +1366,7 @@ public sealed partial class BashParser
         int depth = 0, start = 0;
         for (int i = 0; i < s.Length; i++)
         {
-            if (s[i] is '\'' or '"' or '\\') { i = SkipBraceItemQuote(s, i) - 1; continue; }
+            if (IsBraceAtomStart(s, i)) { i = SkipBraceAtom(s, i) - 1; continue; }
             if (s[i] == '{') depth++;
             else if (s[i] == '}') depth--;
             else if (s[i] == ',' && depth == 0)
@@ -1543,6 +1389,9 @@ public sealed partial class BashParser
         int braceStart = -1;
         for (int i = 0; i < item.Length; i++)
         {
+            if (IsBraceAtomStart(item, i)) { i = SkipBraceAtom(item, i) - 1; continue; }
+            // The `{` of a `${` never starts a brace expansion: `{a,${x/ /,}}` is `a` and `${x/ /,}`.
+            if (item[i] == '$' && i + 1 < item.Length && item[i + 1] == '{') { i++; continue; }
             if (item[i] == '{' && IsBraceExpansionStart(item, i))
             {
                 braceStart = i;
@@ -1552,22 +1401,10 @@ public sealed partial class BashParser
         if (braceStart < 0)
             return new List<string> { item };
 
-        // Find the matching closing brace at depth 0.
-        int depth = 0, braceEnd = braceStart + 1;
-        while (braceEnd < item.Length)
-        {
-            if (item[braceEnd] == '{') depth++;
-            else if (item[braceEnd] == '}')
-            {
-                if (depth == 0) break;
-                depth--;
-            }
-            braceEnd++;
-        }
-
+        int braceEnd = BraceClose(item, braceStart);
         string prefix = item[..braceStart];
         string braceContent = item[(braceStart + 1)..braceEnd];
-        string suffix = braceEnd < item.Length ? item[(braceEnd + 1)..] : "";
+        string suffix = item[(braceEnd + 1)..];
 
         var expansions = ExpandBraceContent(braceContent);
         var result = new List<string>();
@@ -1580,57 +1417,31 @@ public sealed partial class BashParser
     }
 
     /// <summary>
-    /// Expands the inner content of a brace (without surrounding braces) into its items.
-    /// Handles numeric ranges, letter ranges, and comma-separated tuples (including nested).
+    /// The items of a brace body that <see cref="IsBraceExpansionStart"/> accepted (without its braces): a sequence
+    /// expression's words (<see cref="BraceSequence"/>, the one expander), else its top-level comma items, each with
+    /// its own nested braces expanded. Items are still bash text (quote removal is the caller's).
     /// </summary>
     private static List<string> ExpandBraceContent(string inner)
     {
-        int dotDot = inner.IndexOf("..", StringComparison.Ordinal);
-        if (dotDot >= 0 && !HasTopLevelComma(inner))
-        {
-            string startStr = inner[..dotDot];
-            string rest = inner[(dotDot + 2)..];
-            string endStr = rest;
-            int dotDot2 = rest.IndexOf("..", StringComparison.Ordinal);
-            if (dotDot2 >= 0) endStr = rest[..dotDot2];
-
-            if (int.TryParse(startStr, out int startVal) && int.TryParse(endStr, out int endVal))
-            {
-                // long counter + size check BEFORE materializing: an int counter wrapped past
-                // int.MaxValue and accumulated billions of strings.
-                long step = startVal <= endVal ? 1 : -1;
-                PsEmitter.CheckBraceWords(Math.Abs((long)endVal - startVal) + 1);
-                var nums = new List<string>();
-                for (long v = startVal; step > 0 ? v <= endVal : v >= endVal; v += step)
-                    nums.Add(v.ToString());
-                return nums;
-            }
-            if (startStr.Length == 1 && endStr.Length == 1
-                && char.IsLetter(startStr[0]) && char.IsLetter(endStr[0]))
-            {
-                int s = startStr[0], e = endStr[0], step = s <= e ? 1 : -1;
-                var letters = new List<string>();
-                for (int v = s; step > 0 ? v <= e : v >= e; v += step)
-                    letters.Add(((char)v).ToString());
-                return letters;
-            }
-        }
-        if (!HasTopLevelComma(inner))
-        {
-            var kept = new List<string>();
-            foreach (var inside in ExpandNestedBraces(inner))
-                kept.Add(KeptOpen + inside + KeptClose);
-            return kept;
-        }
-        var rawItems = SplitTopLevelCommas(inner);
+        if (!HasTopLevelComma(inner) && BraceSequence.TryParse(inner, out var seq))
+            return seq.Words();
         var result = new List<string>();
-        foreach (var item in rawItems)
+        foreach (var item in SplitTopLevelCommas(inner))
         {
             result.AddRange(ExpandNestedBraces(item));
             PsEmitter.CheckBraceWords(result.Count);
         }
         return result;
     }
+
+    /// <summary>Test seam for <c>BraceSequenceGuardTests</c>: the words brace expansion makes of one word's text, after
+    /// quote removal (the parser's own nested-expansion path).</summary>
+    internal static List<string> BraceExpandForTest(string word) => ExpandNestedBraces(word).ConvertAll(DequoteBraceItem);
+
+    /// <summary>Test seam for <c>DollarBraceExtentGuardTests</c>: where the word parser stops reading the <c>${</c> at
+    /// <paramref name="dollar"/> (one past its closing <c>}</c>).</summary>
+    internal static int BracedVarEndForTest(string raw, int dollar, bool inDoubleQuote = false)
+        => ParseBracedVar(raw, dollar, ImmutableArray.CreateBuilder<WordPart>(), inDoubleQuote);
 
     private static bool IsVarStart(char c) =>
         c is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z') or '_'

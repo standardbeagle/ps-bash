@@ -811,15 +811,8 @@ public static class BashLexer
             if (c == '$' && pos + 1 < len && input[pos + 1] == '\'')
             {
                 int open = pos + 1;
-                pos += 2; // skip $'
-                while (pos < len && input[pos] != '\'')
-                {
-                    if (input[pos] == '\\' && pos + 1 < len)
-                        pos++; // skip the escaped character
-                    pos++;
-                }
-                if (pos >= len) throw UnterminatedQuote(input, open, '\'');
-                pos++; // skip closing '
+                pos = ScanAnsiCQuoted(input, pos, out bool ansiClosed);
+                if (!ansiClosed) throw UnterminatedQuote(input, open, '\'');
                 continue;
             }
 
@@ -951,7 +944,10 @@ public static class BashLexer
     }
 
     /// <summary>Advance past a `...` backtick command substitution (no nesting; escapes honored).</summary>
-    private static int ScanBacktick(string input, int pos)
+    internal static int ScanBacktick(string input, int pos) => ScanBacktick(input, pos, out _);
+
+    /// <summary>As <see cref="ScanBacktick(string, int)"/>; <paramref name="closed"/> is false when the input ends first.</summary>
+    internal static int ScanBacktick(string input, int pos, out bool closed)
     {
         int len = input.Length;
         pos++; // opening `
@@ -961,40 +957,97 @@ public static class BashLexer
                 pos++; // skip escaped char
             pos++;
         }
-        if (pos < len)
+        closed = pos < len;
+        if (closed)
             pos++; // closing `
-        return pos;
+        return Math.Min(pos, len);
     }
 
-    /// <summary>Advance past a ${...} parameter expansion. input[pos]=='$', [pos+1]=='{'.</summary>
-    private static int ScanDollarBrace(string input, int pos)
+    /// <summary>Advance past a ${...} parameter expansion (one past its closing <c>}</c>, or the input's end when it
+    /// never closes). input[pos]=='$', [pos+1]=='{'. The extent is <see cref="DollarBraceClose"/>'s.</summary>
+    internal static int ScanDollarBrace(string input, int pos)
     {
+        int close = DollarBraceClose(input, pos);
+        return close < 0 ? input.Length : close + 1;
+    }
+
+    /// <summary>
+    /// THE extent of a <c>${…}</c> parameter expansion: the index of the <c>}</c> closing the <c>${</c> whose <c>$</c>
+    /// is at <paramref name="dollar"/>, or -1 when the input ends first. Every reader of a <c>${…}</c> extent asks this
+    /// (lexer words, the word parser, assignment-value and subscript splitting, brace items, heredoc bodies,
+    /// arithmetic); guard <c>DollarBraceExtentGuardTests</c>, spec <c>parser-grammar.md</c> §Parameter expansion extent.
+    /// <para>
+    /// bash (parse_matched_pair with P_FIRSTCLOSE): the FIRST unquoted, unescaped <c>}</c> closes it. A bare <c>{</c> in
+    /// the operand does not nest (<c>${u:-{a,b}}</c> is <c>${u:-{a,b}</c> then a literal <c>}</c>; <c>${x/ /{1,2\}}</c>
+    /// closes at its last <c>}</c>); only a nested <c>${…}</c> does. Quoted text, <c>\x</c>, <c>$'…'</c>, <c>$( )</c>,
+    /// <c>$(( ))</c> and backticks are taken whole, so their <c>}</c> is text.
+    /// </para>
+    /// <para>REGRESSION: the lexer and the word parser each counted every <c>{</c> as nesting, so <c>${x/ /{1,2\}}</c>
+    /// never closed and swallowed the rest of the script as one word.</para>
+    /// </summary>
+    internal static int DollarBraceClose(string input, int dollar)
+    {
+        // ${x:-${y:-…}} recurses: bounded (NestingGuard).
+        using var nesting = NestingGuard.Enter();
         int len = input.Length;
-        pos += 2; // skip ${
-        int depth = 1;
-        while (pos < len && depth > 0)
+        int pos = dollar + 2; // skip ${
+        while (pos < len)
         {
             char c = input[pos];
-            // A brace inside a quoted span is literal, not a nesting delimiter:
-            // `${x:-"}"}` closes at the LAST `}`, not the one inside the quotes.
-            // Skip quoted / escaped spans so the depth count stays balanced.
-            if (c == '\'') { pos = ScanSingleQuoted(input, pos); continue; }
-            if (c == '"') { pos = ScanDoubleQuoted(input, pos); continue; }
-            if (c == '\\' && pos + 1 < len) { pos += 2; continue; }
-            if (c == '{') depth++;
-            else if (c == '}') depth--;
-            if (depth > 0) pos++;
+            switch (c)
+            {
+                case '}':
+                    return pos;
+                case '\\':
+                    pos += 2;
+                    continue;
+                case '\'':
+                    pos = ScanSingleQuoted(input, pos);
+                    continue;
+                case '"':
+                    pos = ScanDoubleQuoted(input, pos);
+                    continue;
+                case '`':
+                    pos = ScanBacktick(input, pos);
+                    continue;
+                case '$' when pos + 1 < len && input[pos + 1] == '{':
+                    int inner = DollarBraceClose(input, pos);
+                    if (inner < 0) return -1;
+                    pos = inner + 1;
+                    continue;
+                case '$' when pos + 1 < len && input[pos + 1] == '(':
+                    pos = ScanDollarParen(input, pos);
+                    continue;
+                case '$' when pos + 1 < len && input[pos + 1] == '\'':
+                    pos = ScanAnsiCQuoted(input, pos, out _);
+                    continue;
+            }
+            pos++;
         }
-        if (pos < len)
-            pos++; // skip closing }
-        return pos;
+        return -1;
+    }
+
+    /// <summary>Advance past an ANSI-C quoted <c>$'…'</c> (input[pos]=='$', [pos+1]=='\''): one past the first
+    /// unescaped <c>'</c> (<c>$'it\'s'</c> is one string), or the input's end with <paramref name="closed"/> false.</summary>
+    internal static int ScanAnsiCQuoted(string input, int pos, out bool closed)
+    {
+        int len = input.Length;
+        pos += 2; // skip $'
+        while (pos < len && input[pos] != '\'')
+        {
+            if (input[pos] == '\\' && pos + 1 < len)
+                pos++; // skip the escaped character
+            pos++;
+        }
+        closed = pos < len;
+        return closed ? pos + 1 : len;
     }
 
     /// <summary>
     /// Advance past $((...)) arithmetic or $(...) command substitution.
     /// input[pos]=='$', input[pos+1]=='('.
     /// </summary>
-    private static int ScanDollarParen(string input, int pos)
+    internal static int ScanDollarParen(string input, int pos)
     {
         int len = input.Length;
         if (pos + 2 < len && input[pos + 2] == '(' && IsArithSub(input, pos))
@@ -1120,6 +1173,8 @@ public static class BashLexer
             if (c == '"') { pos = ScanDoubleQuoted(input, pos); continue; }
             if (c == '`') { pos = ScanBacktick(input, pos); continue; }
             if (c == '$' && pos + 1 < len && input[pos + 1] == '(') { pos = ScanDollarParen(input, pos); continue; }
+            // A `${…}` is one unit: the `)` of `$(echo ${u:-)})` is operand text (DollarBraceClose).
+            if (c == '$' && pos + 1 < len && input[pos + 1] == '{') { pos = ScanDollarBrace(input, pos); continue; }
             if (c == 'c' && IsWordAt(input, pos, "case")) { caseDepths.Add(depth); pos += 4; continue; }
             if (c == 'e' && IsWordAt(input, pos, "esac")) { if (caseDepths.Count > 0) caseDepths.RemoveAt(caseDepths.Count - 1); pos += 4; continue; }
             if (c == '(') { depth++; pos++; continue; }

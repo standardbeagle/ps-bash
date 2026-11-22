@@ -1027,7 +1027,7 @@ public class PsEmitterTests
     {
         // ~+ -> $PWD (was emitted as the literal ~+): the env value, the shell form C:/x (docs/specs/paths.md).
         var result = PsEmitter.Transpile("echo ~+");
-        Assert.Contains("$env:PWD", result);
+        Assert.Contains("${env:PWD}", result);   // braced: `~+:` must not read as the drive-qualified `$env:PWD:`
         Assert.DoesNotContain("~+", result);
     }
 
@@ -1054,7 +1054,7 @@ public class PsEmitterTests
     public void Transpile_TildeMinus_MapsToOldPwd()
     {
         var result = PsEmitter.Transpile("echo ~-");
-        Assert.Contains("$env:OLDPWD", result);
+        Assert.Contains("${env:OLDPWD}", result);
         Assert.DoesNotContain("~-", result);
     }
 

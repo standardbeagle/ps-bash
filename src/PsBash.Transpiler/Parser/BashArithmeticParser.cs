@@ -355,12 +355,9 @@ public sealed class BashArithmeticParser
                 if (source[i] == '{')
                 {
                     int keyStart = ++i;
-                    // A full parameter expansion (`${a[i]}`, `${m[$k]:-0}`) may nest braces.
-                    for (int depth = 1; i < source.Length; i++)
-                    {
-                        if (source[i] == '{') depth++;
-                        else if (source[i] == '}' && --depth == 0) break;
-                    }
+                    // A full parameter expansion (`${a[i]}`, `${m[$k]:-0}`, `${u:-${v}}`): the lexer's extent.
+                    int braceClose = BashLexer.DollarBraceClose(source, start);
+                    i = braceClose < 0 ? source.Length : braceClose;
                     if (i >= source.Length || i == keyStart)
                         throw new BashArithmeticParseException($"invalid arithmetic parameter near '{source[start..]}'");
                     string key = source[keyStart..i];
