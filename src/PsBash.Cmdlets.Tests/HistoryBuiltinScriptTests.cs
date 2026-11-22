@@ -51,6 +51,94 @@ public class HistoryBuiltinScriptTests
     [Fact]
     public void Print_EchoesEachArg() => Assert.Equal(["a", "b"], Run([], "-p", "a", "b").Out);
 
+    private static List<string> Five() => ["echo a", "echo b", "echo c", "echo d", "echo e"];
+
+    /// <summary><c>history -d START-END</c> and the single-offset forms, bash 5.2 over five entries: the entries left,
+    /// the status, and the text the error names.</summary>
+    [Theory]
+    [InlineData("2-3", 0, "a,d,e", null)]
+    [InlineData(" 2- 3", 0, "a,d,e", null)]                    // legal_number: blanks allowed
+    [InlineData("-2--1", 0, "a,b,c", null)]                    // negative ends count back from the end
+    [InlineData("1--1", 0, "", null)]
+    [InlineData("0-1", 0, "b,c,d,e", null)]                    // 0 stays the first entry inside a range
+    [InlineData("1-0", 0, "b,c,d,e", null)]
+    [InlineData("4-2", 1, "a,b,c,d,e", null)]                  // start past end: quiet failure
+    [InlineData("-1-2", 1, "a,b,c,d,e", null)]
+    [InlineData("2-9", 1, "a,b,c,d,e", "9")]                   // the end out of range names the end
+    [InlineData("-9--1", 1, "a,b,c,d,e", "-9")]
+    [InlineData("x-2", 1, "a,b,c,d,e", "x-2")]                 // not a number: the whole argument
+    [InlineData("2-3x", 1, "a,b,c,d,e", "2-3x")]
+    [InlineData("", 1, "a,b,c,d,e", "")]
+    [InlineData("-", 1, "a,b,c,d,e", "-")]
+    [InlineData("0", 1, "a,b,c,d,e", "0")]
+    [InlineData("-0", 1, "a,b,c,d,e", "-0")]
+    [InlineData(" 1", 0, "b,c,d,e", null)]
+    [InlineData("-1", 0, "a,b,c,d", null)]
+    public void Delete_RangesAndOffsets_MatchBash(string arg, int status, string left, string? named)
+    {
+        var list = Five();
+        var r = Run(list, "-d", arg);
+        Assert.Equal(status, r.Status);
+        Assert.Equal(left, string.Join(',', list.Select(l => l[5..])));
+        Assert.Equal(named is null ? [] : new[] { $"history: {named}: history position out of range" }, r.Err);
+    }
+
+    [Theory]
+    [InlineData("-a", "-r")]
+    [InlineData("-wn")]
+    [InlineData("-c", "-a", "-n")]                             // checked before -c clears anything
+    public void FileOptions_MoreThanOne_IsStatus1(params string[] args)
+    {
+        var list = Five();
+        var r = Run(list, args);
+        Assert.Equal((1, "history: cannot use more than one of -anrw"), (r.Status, r.Err.Single()));
+        Assert.Equal(5, list.Count);
+    }
+
+    [Fact]
+    public void FileOption_Repeated_IsOneOption()
+    {
+        var r = InvokeBashHistoryCommand.Run(["-a", "-a"], Five(), "tmp", _ => null, (_, _, _) => { });
+        Assert.Equal(0, r.Status);
+        Assert.Empty(r.Err);
+    }
+
+    // bash 5.2: -c with no operand does only the clear (`history -c -d 1`, `history -c -w` write nothing); -s wins
+    // over -p and -d.
+    [Fact]
+    public void OptionOrder_MatchesBash()
+    {
+        var list = Five();
+        Assert.Equal(0, Run(list, "-c", "-d", "1").Status);
+        Assert.Empty(list);
+        list = Five();
+        Assert.Equal(0, Run(list, "-d", "1", "-s", "k").Status);
+        Assert.Equal(6, list.Count);
+        Assert.Empty(Run(list, "-ps", "z!!").Out);
+        Assert.Equal("z!!", list[^1]);
+    }
+
+    /// <summary><c>history -p</c> expands each word through the shared <see cref="PsBash.Core.HistoryExpander"/>
+    /// (bash 5.2 over five entries); a failed word is reported and the rest still print, status 1.</summary>
+    [Fact]
+    public void Print_ExpandsHistoryReferences()
+    {
+        var r = Run(Five(), "-p", "!!", "x!e:s/e/Q/", "!nope", "!-2", "'!!'", "!?c?", "!$", "a!", "b!=c");
+        Assert.Equal(1, r.Status);
+        Assert.Equal(["echo e", "xQcho e", "echo d", "'!!'", "echo e", "e", "a!", "b!=c"], r.Out);
+        Assert.Equal(["history: !nope: history expansion failed"], r.Err);
+    }
+
+    // set -o history: the `history -p` line itself is gone before the expansion.
+    [Fact]
+    public void Print_HistoryRecordingOn_DropsItsOwnLine()
+    {
+        var list = new List<string> { "echo pp", "history -p '!!'" };
+        var r = InvokeBashHistoryCommand.Run(["-p", "!!"], list, null, _ => null, (_, _, _) => { }, lastIsCurrent: true);
+        Assert.Equal(["echo pp"], r.Out);
+        Assert.Equal(["echo pp"], list);
+    }
+
     // Pester calls cmdlets directly, where a bare -c / -d / -p / -w would bind common parameters (decoys catch them).
     public class Direct(SharedPwshFixture fixture) : IClassFixture<SharedPwshFixture>
     {

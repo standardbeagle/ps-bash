@@ -585,4 +585,31 @@ public class PsBuildTests
     [Fact]
     public void HereStringValue_IsTheWordPlusOneNewline()
         => Assert.Equal("([string]($x) + \"`n\")", PsBuild.HereStringValue("$x"));
+
+    // ─────────────── FcCall ───────────────
+
+    /// <summary>
+    /// <c>fc -s</c>: one dot-sourced pipeline element (the caller's scope; <c>fc -s | tr</c> pipes the re-run), the stale
+    /// re-run cleared BEFORE the cmdlet runs, and the chosen command run by the one runner of bash text (behavior vs bash:
+    /// FcBuiltinTests, Differential FcRerunDifferentialTests).
+    /// </summary>
+    [Fact]
+    public void FcCall_ClearsThenRunsTheRerunThroughTheBashTextRunner()
+    {
+        var ps = PsBuild.FcCall("Invoke-BashFc '-s'");
+        Assert.StartsWith(". { $global:__BashFcRerun = $null; Invoke-BashFc '-s'; if ($null -ne $global:__BashFcRerun) { ", ps);
+        Assert.EndsWith(" } }", ps);
+        Assert.Contains("$__psbash_eval_src = $global:__BashFcRerun; $global:__BashFcRerun = $null; " + PsBuild.RunBashTextAtRunTime(", $null", "fc"), ps);
+        Assert.Equal("__BashFcRerun", PsBuild.FcRerunVariable);
+    }
+
+    [Theory]
+    [InlineData("fc -s a=b")]
+    [InlineData("fc -l 1 2")]
+    public void Transpile_Fc_IsTheFcCall(string bash)
+    {
+        var ps = PsEmitter.Transpile(bash)!;
+        Assert.Contains(". { $global:__BashFcRerun = $null; Invoke-BashFc ", ps);
+        Assert.Contains(PsBuild.RunBashTextAtRunTime(", $null", "fc"), ps);
+    }
 }

@@ -1,12 +1,12 @@
 using System.Text;
 
-namespace PsBash.Host.Shell;
+namespace PsBash.Core;
 
 /// <summary>
-/// Bash-style history expansion ("bang commands") for the interactive REPL.
-///
-/// Runs on the typed line BEFORE alias expansion and transpilation (the same order bash
-/// uses), against the in-session command list the REPL maintains. Supported forms:
+/// Bash-style history expansion ("bang commands"): the ONE expander, used by the interactive REPL
+/// (<c>Host/Shell/InteractiveShell.cs</c>, on the typed line BEFORE alias expansion and transpilation, the
+/// same order bash uses) and by <c>history -p</c> (<c>Cmdlets/InvokeBashHistoryCommand.cs</c>), each against
+/// its own command list. Supported forms:
 ///
 /// <list type="bullet">
 ///   <item><c>!!</c> — the previous command.</item>
@@ -16,6 +16,7 @@ namespace PsBash.Host.Shell;
 ///   <item><c>!?str?</c> — the most recent command containing <c>str</c>.</item>
 ///   <item><c>!$</c> / <c>!^</c> / <c>!*</c> — last / first / all argument words of the previous command.</item>
 ///   <item>A <c>:</c> word designator (<c>:$</c>, <c>:^</c>, <c>:*</c>, <c>:n</c>) after any event.</item>
+///   <item>A <c>:s/old/new/</c> modifier after an event or designator (first match; any delimiter, the last one optional).</item>
 ///   <item><c>^old^new</c> — quick substitution on the previous command (first match only).</item>
 /// </list>
 ///
@@ -24,9 +25,9 @@ namespace PsBash.Host.Shell;
 /// pipeline-negation operator (<c>! cmd</c>) is untouched.
 ///
 /// Scope is the common 80/20 of bash history expansion; ranged word designators
-/// (<c>!!:2-4</c>) and modifiers (<c>:h</c>, <c>:t</c>, <c>:s</c>) are out of scope.
+/// (<c>!!:2-4</c>), <c>:gs</c>, <c>&amp;</c> in a replacement and the other modifiers (<c>:h</c>, <c>:t</c>) are out of scope.
 /// </summary>
-internal static class HistoryExpander
+public static class HistoryExpander
 {
     /// <summary>
     /// Cheap gate: does the line contain anything that could trigger expansion? Lets the REPL
@@ -167,7 +168,7 @@ internal static class HistoryExpander
         if (error != null) { Reset(ref i, start); return ""; }
 
         // Optional word designator suffix: :$ :^ :* :n
-        if (i + 1 < line.Length && line[i + 1] == ':')
+        if (i + 1 < line.Length && line[i + 1] == ':' && !IsSubstModifierAt(line, i + 2))
         {
             var ds = i + 2;
             if (ds < line.Length)
@@ -177,11 +178,44 @@ internal static class HistoryExpander
                     de++;
                 var designator = line[ds..de];
                 i = de - 1;
-                return ApplyWordDesignator(eventCmd, designator, line, start, ref error, ref i);
+                eventCmd = ApplyWordDesignator(eventCmd, designator, line, start, ref error, ref i);
+                if (error != null) return "";
             }
         }
 
-        return eventCmd;
+        return ApplySubstModifier(eventCmd, line, start, ref i, out error);
+    }
+
+    /// <summary>Does <c>s</c> + a delimiter (not a letter, digit or blank) start at <paramref name="at"/>?</summary>
+    private static bool IsSubstModifierAt(string line, int at) =>
+        at + 1 < line.Length && line[at] == 's' && !char.IsLetterOrDigit(line[at + 1]) && !char.IsWhiteSpace(line[at + 1]);
+
+    /// <summary>
+    /// A <c>:s/old/new/</c> modifier right after the event (<paramref name="i"/> = its last char): the first
+    /// <c>old</c> in <paramref name="text"/> becomes <c>new</c>. Text is returned unchanged when no modifier follows.
+    /// </summary>
+    private static string ApplySubstModifier(string text, string line, int start, ref int i, out string? error)
+    {
+        error = null;
+        if (!(i + 1 < line.Length && line[i + 1] == ':' && IsSubstModifierAt(line, i + 2))) return text;
+        char delim = line[i + 3];
+        int p = i + 4;
+        int oldEnd = line.IndexOf(delim, p);
+        if (oldEnd < 0) oldEnd = line.Length;
+        var oldText = line[p..oldEnd];
+        int newStart = Math.Min(oldEnd + 1, line.Length);
+        int newEnd = newStart < line.Length ? line.IndexOf(delim, newStart) : -1;
+        var newText = line[newStart..(newEnd < 0 ? line.Length : newEnd)];
+        int last = newEnd < 0 ? line.Length - 1 : newEnd;
+        var idx = oldText.Length == 0 ? -1 : text.IndexOf(oldText, StringComparison.Ordinal);
+        if (idx < 0)
+        {
+            error = $"{line[start..(last + 1)]}: substitution failed";
+            i = start;
+            return "";
+        }
+        i = last;
+        return string.Concat(text.AsSpan(0, idx), newText, text.AsSpan(idx + oldText.Length));
     }
 
     private static void Reset(ref int i, int start) => i = start;

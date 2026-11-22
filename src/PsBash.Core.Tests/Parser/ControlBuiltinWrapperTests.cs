@@ -17,6 +17,9 @@ public class ControlBuiltinWrapperTests
     [InlineData("builtin command return 99", "return", 2)]
     [InlineData("command builtin exit 5", "exit", 2)]
     [InlineData("\\builtin return 3", "return", 2)]
+    [InlineData("'return' 3", "return", 2)]                // quoting only escapes alias expansion
+    [InlineData("\"break\"", "break", 1)]
+    [InlineData("b\\reak", "break", 1)]
     public void Parse_WrappedControlBuiltin_IsTheBareBuiltin(string bash, string name, int words)
     {
         var cmd = Assert.IsType<Command.Simple>(BashParser.Parse(bash));

@@ -12,10 +12,18 @@ public sealed partial class BashParser
 {
     private int _functionDepth;
 
+    /// <summary>
+    /// The builtin a command-word token names: `'local'`, `"export"`, `\declare` are the builtin (quoting only escapes
+    /// alias expansion), so the declaration productions read the quote-removed text. A word with an expansion is itself.
+    /// REGRESSION: `'local' v=3` / `\export Q=1` were looked up as programs, `command not found`.
+    /// </summary>
+    private static string CommandWordName(BashToken t)
+        => t.Value.AsSpan().IndexOfAny('$', '`') < 0 ? BashQuoting.RemoveQuotes(t.Value) : t.Value;
+
     /// <summary>`declare`/`typeset` followed directly by a NAME[=VAL] word (no -g/-x/-A… flag) inside a function body.</summary>
     private bool IsFunctionScopedDeclare()
     {
-        if (_functionDepth == 0 || Peek().Value is not ("declare" or "typeset")) return false;
+        if (_functionDepth == 0 || CommandWordName(Peek()) is not ("declare" or "typeset")) return false;
         // `declare -i n=1` / `declare -A m` in a function make a local, as `local` does: attribute flags only. -g (global),
         // the print forms (-p -f -F) and -t stay on the declare path. REGRESSION: any flag sent the declaration there,
         // which writes globals, so `f() { declare -a e; }` left e set after f returned.
@@ -43,14 +51,13 @@ public sealed partial class BashParser
     private void SkipDeclarationWrappers()
     {
         int k = 0;
-        static string Bare(string v) => v.StartsWith('\\') ? v[1..] : v;
         while (_pos + k + 1 < _tokens.Count
-               && _tokens[_pos + k] is { Kind: BashTokenKind.Word } w && Bare(w.Value) is "builtin" or "command"
+               && _tokens[_pos + k] is { Kind: BashTokenKind.Word } w && CommandWordName(w) is "builtin" or "command"
                && _tokens[_pos + k + 1] is { Kind: BashTokenKind.Word or BashTokenKind.AssignmentWord } nx
                && !nx.Value.StartsWith('-'))
             k++;
         if (k == 0) return;
-        if (_tokens[_pos + k] is { Kind: BashTokenKind.Word } d && Bare(d.Value) is "export" or "local" or "declare" or "typeset" or "readonly")
+        if (_tokens[_pos + k] is { Kind: BashTokenKind.Word } d && CommandWordName(d) is "export" or "local" or "declare" or "typeset" or "readonly")
         {
             // `builtin export z=$x`: behind a wrapper the operands are ordinary words (split, globbed), not assignments.
             // An operand with an expansion keeps the wrapper; the emitter runs it through the run-time declaration.
@@ -66,21 +73,22 @@ public sealed partial class BashParser
     /// <summary>`export` / `local` NAME=VAL … (see ParseDeclarationPairs for the shape); null leaves the cursor where it was.</summary>
     private Command.ShAssignment? TryParseLocalOrExport()
     {
-        if (!(Peek().Kind == BashTokenKind.Word && (Peek().Value is "export" or "local" || IsFunctionScopedDeclare())))
+        if (!(Peek().Kind == BashTokenKind.Word && (CommandWordName(Peek()) is "export" or "local" || IsFunctionScopedDeclare())))
             return null;
         // Inside a function a plain `declare NAME=VAL` is function-local, exactly like `local`.
-        bool isLocal = Peek().Value is "local" or "declare" or "typeset";
+        string keyword = CommandWordName(Peek());
+        bool isLocal = keyword is "local" or "declare" or "typeset";
         int saved = _pos;
         Advance(); // consume the keyword
 
         // `local -p [NAME…]` is a listing, not a declaration: leave it to the emitter.
-        if (!(Peek().Kind == BashTokenKind.Word && Peek().Value == "-p" && _tokens[saved].Value == "local")
+        if (!(Peek().Kind == BashTokenKind.Word && Peek().Value == "-p" && keyword == "local")
             && ParseDeclarationPairs() is { } pairs)
             return new Command.ShAssignment(pairs, IsLocal: isLocal, IsExport: !isLocal, IsReadonly: isLocal && _declSawReadonly, IsNameref: isLocal && _declSawNameref,
                 // `local -A m` / `local -a q`: the kind is part of the declaration (REGRESSION: dropped, so `m[x]=1` wrote m[0]).
                 IsAssoc: isLocal && _declSawAssoc, IsIndexed: isLocal && _declSawIndexed && !_declSawAssoc,
                 Attrs: isLocal ? DeclaredValueAttrs() : null,
-                Builtin: isLocal ? _tokens[saved].Value : null,
+                Builtin: isLocal ? keyword : null,
                 Redirects: _declRedirects.Count == 0 ? default : [.. _declRedirects],
                 // `export -n NAME` takes the attribute away (-n is no nameref there); `local -x` / `typeset +x` set / clear it.
                 ExportAttr: isLocal ? _declExport : _declSawNameref ? -1 : 0);
@@ -124,11 +132,11 @@ public sealed partial class BashParser
         // `$global:A = ''`) and the unconsumed `(x y)` desynced the parse, swallowing
         // the command that followed.
         if (Peek().Kind == BashTokenKind.Word
-            && Peek().Value is "declare" or "typeset" or "readonly"
+            && CommandWordName(Peek()) is "declare" or "typeset" or "readonly"
             && DeclarationHasArrayInitializer())
         {
             int saved = _pos;
-            bool isReadonlyKw = Peek().Value == "readonly";
+            bool isReadonlyKw = CommandWordName(Peek()) == "readonly";
             Advance(); // consume the keyword
 
             // `readonly b[7]=8` is an error in bash (`declare -r b[7]=8` is not): leave it to the simple-command
@@ -330,7 +338,7 @@ public sealed partial class BashParser
         if (pendingHeredocs.Count > 0)
             CollectHereDocBodies(pendingHeredocs, hereDocs);
 
-        // `\break` / `\return`: the backslash only escapes the letter, so it is still the control builtin.
+        // `\break` / `'return'`: quoting only escapes alias expansion, so it is still the control builtin.
         if (words.Count > 0 && EscapedControlBuiltin(words[0]) is { } controlName)
             words[0] = new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal(controlName)));
 
@@ -395,14 +403,19 @@ public sealed partial class BashParser
         return sb.ToString();
     }
 
+    /// <summary>`\break`, `'return'`, `"continue"`: a quoted or escaped spelling of a control builtin, as its bare name
+    /// (the AST the loop and function analyses read); else null. Other builtins: PsEmitter.UnquoteBuiltinName.</summary>
     private static string? EscapedControlBuiltin(CompoundWord word)
     {
-        if (!word.Parts.Any(p => p is WordPart.EscapedLiteral)) return null;
+        if (word.Parts.All(p => p is WordPart.Literal)) return null;
         var sb = new System.Text.StringBuilder();
         foreach (var p in word.Parts)
         {
             if (p is WordPart.Literal l) sb.Append(l.Value);
             else if (p is WordPart.EscapedLiteral e) sb.Append(e.Value);
+            else if (p is WordPart.SingleQuoted s) sb.Append(s.Value);
+            else if (p is WordPart.DoubleQuoted d && d.Parts.All(q => q is WordPart.Literal))
+                foreach (var q in d.Parts) sb.Append(((WordPart.Literal)q).Value);
             else return null;
         }
         var name = sb.ToString();

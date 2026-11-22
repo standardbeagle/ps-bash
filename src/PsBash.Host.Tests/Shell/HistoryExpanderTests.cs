@@ -1,4 +1,4 @@
-using PsBash.Host.Shell;
+using PsBash.Core;
 using Xunit;
 
 namespace PsBash.Host.Tests.Shell;
