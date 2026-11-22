@@ -44,6 +44,12 @@ public class TranspileGrammarFuzzTests
             ":-{0}", ":={0}", ":+{0}", ":?{0}", "-{0}", "+{0}", "#{0}", "##{0}", "%{0}", "%%{0}",
             "/{0}/r", "//{0}/r", ":1", ":1:2", "^^", ",,", "@Q", "@U",
         };
+        // Operands bash closes at their FIRST unquoted `}` (a bare `{` does not nest; DollarBraceExtentGuardTests holds
+        // the extent property): `${x/ /{1,2\}}` once swallowed every command after it.
+        private static readonly string[] BraceOperands =
+        {
+            "{a,b\\}", "{1,2\\}", "\\}", "{", "{a}", "{}", "'}'", "\"{}\"", "$(echo })", "`echo }`", "${y:-{}",
+        };
         private static readonly string[] ArithOps = { "+", "-", "*", "/", "%", "**", "<<", "&", "|", "^", "<", ">", "==", "!=" };
         private static readonly string[] TestBin = { "=", "!=", "-eq", "-ne", "-lt", "-gt", "-le", "-ge" };
         private static readonly string[] FileOps = { "-e", "-f", "-d", "-r", "-w", "-x", "-s", "-h", "-L" };
@@ -72,7 +78,9 @@ public class TranspileGrammarFuzzTests
         public string ParamExp(int depth)
         {
             string op = Pick(ScalarOps);
-            string arg = op.Contains("{0}") ? (depth < 3 && Chance(40) ? Word(depth + 1) : Pick(Lits)) : "";
+            string arg = !op.Contains("{0}") ? ""
+                : Chance(20) ? Pick(BraceOperands)
+                : depth < 3 && Chance(40) ? Word(depth + 1) : Pick(Lits);
             string suffix = op.Contains("{0}") ? string.Format(op, arg) : op;
             // Occasionally an array subscript form.
             if (Chance(15)) return "${" + Pick(Vars) + "[" + (Chance(50) ? "@" : _r.Next(3).ToString()) + "]}";

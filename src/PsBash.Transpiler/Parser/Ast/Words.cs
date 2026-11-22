@@ -92,8 +92,9 @@ public abstract record WordPart : BashNode
 
     /// <summary>
     /// A brace expansion with a numeric range, e.g. <c>{1..10}</c>, <c>{01..05}</c>, or <c>{1..10..2}</c>.
-    /// When <paramref name="ZeroPad"/> is greater than zero, values are left-padded with zeros.
-    /// When <paramref name="Step"/> is non-zero, the range increments by that value.
+    /// When <paramref name="ZeroPad"/> is greater than zero, every word is that wide, sign included (zeros after the sign).
+    /// <paramref name="Step"/> is the written increment (0 when none: a step of 1; its sign is ignored). The words are
+    /// <see cref="BraceSequence"/>'s, the one sequence expander.
     /// </summary>
     public sealed record BracedRange(int Start, int End, int ZeroPad, int Step = 0) : WordPart;
 

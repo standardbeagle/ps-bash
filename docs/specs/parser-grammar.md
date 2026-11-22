@@ -352,6 +352,30 @@ word_part     -> tilde_sub         (only at word start)
               | literal            plain text
 ```
 
+A `$"…"` (locale quoting) or `$'…'` anywhere in a word is that quoting, not a literal `$`: `a$"*"` is `a*`,
+`a$'\x41'b` is `aAb`. Inside `"${v:-…}"` a `$'…'` keeps its ANSI-C meaning (bash `extquote`, on by default).
+
+#### Parameter expansion extent
+
+**Invariant: one scanner, `BashLexer.DollarBraceClose`, decides where a `${…}` ends**, for the lexer's words, the word
+parser (`ParseBracedVar` reads only inside that extent), assignment-value `:` splitting, subscripts, heredoc bodies,
+`$( )` bodies and arithmetic. bash's rule (parse_matched_pair, P_FIRSTCLOSE): the FIRST unquoted, unescaped `}` closes
+it; a bare `{` in the operand does not nest, only a nested `${…}` does; quotes, `\x`, `$'…'`, `$( )`, `$(( ))` and
+backticks are taken whole. So `${x/ /{1,2\}}` is one expansion (replacement `{1,2}`), `${u:-{a,b}}` is `${u:-{a,b}`
+then a literal `}`, and `$(echo ${u:-)})` prints `)`. A single quote in the operand quotes even inside double quotes
+or a heredoc (`${u:-it's}` there has no closing `}`; bash fails that heredoc's command with a bad substitution,
+ps-bash still prints the body with the `${` literal: open, the heredoc emitter has no command abandon for it). Brace expansion is different: its scan (bash brace_gobbler)
+counts a `${`'s braces as nesting, so `{a,${u:-{b}}` has no closing brace and stays literal. Guard
+`DollarBraceExtentGuardTests` (lexer extent = parser extent = expected, and the text after the expansion is untouched,
+for generated operands with braces, escapes and quotes).
+
+#### Tilde prefixes
+
+`~`, `~/x`, `~+`, `~-` expand at the start of a word and, in an assignment value, after each unquoted `:`
+(`w=a:~+:~-` is `a:$PWD:$OLDPWD`). `~user` is that login's home directory from the passwd database
+(`Platform/UserHome`, `/etc/passwd`), a quoted text (not split or globbed); with no entry it stays `~user`. Windows has
+no passwd database: there only the current user's name resolves, to `$HOME` (docs/specs/intentional-differences.md).
+
 ---
 
 ## 4. Special Bash Variables
@@ -423,6 +447,18 @@ echo {1..5}    # Word("{1..5}")   -- range expansion
 { cmd; }       # LBrace ... RBrace -- brace group (no comma/dotdot)
 echo '{a,b}'   # Word("'{a,b}'") -- single-quoted, braces are literal
 ```
+
+**Brace sequence expressions.** In the word parser a `{…}` expands only when it holds a top-level `,` or IS a sequence
+expression `{x..y[..incr]}`; any other pair is literal text while the rest of the word expands (`n=3; echo {1..$n}`
+prints `{1..3}`, `{1..3..$n}` prints `{1..3..3}`, `{x{a,b}y}` is `{xay} {xby}`). **Invariant: one expander,
+`Parser/BraceSequence.cs`, decides whether a body is a sequence and makes its words**, for the top-level form
+(`BracedRange`, whose words the emitter takes from it too) and a nested one (`{x,{1..10..3}}`, `{a,b{0001..3}}`). bash
+(braces.c expand_seqterm): both ends integers (optional sign) or both single ASCII letters; the increment is an integer,
+its sign ignored and 0 meaning 1; an end written with a leading zero (`01`, `-05`) pads every word to the widest end,
+sign included (`{-01..2}` is `-01 000 001 002`). A letter sequence runs through the ASCII characters between its ends
+(`{Z..b..3}` is `Z ] ``), a generated `\` leaves an empty word, and a generated backtick with text after it in its word
+(`-{z..A}-`) is a bad substitution. Guard `BraceSequenceGuardTests` (nested = top-level = oracle for a table of
+sequences).
 
 **Empty words.** An item's quotes are removed at parse time, so `{"",a}` and `{,a}` both hold an empty item;
 `BracedTuple.QuotedEmpty` records which empty items were quoted. **Invariant: a word brace expansion produces is

@@ -8498,18 +8498,9 @@ public static partial class PsEmitter
         return sb.ToString();
     }
 
-    /// <summary>Index of the <c>}</c> matching the <c>{</c> at <paramref name="openBrace"/>,
-    /// honoring nesting; -1 if unbalanced.</summary>
-    private static int FindMatchingBrace(string s, int openBrace)
-    {
-        int depth = 0;
-        for (int i = openBrace; i < s.Length; i++)
-        {
-            if (s[i] == '{') depth++;
-            else if (s[i] == '}' && --depth == 0) return i;
-        }
-        return -1;
-    }
+    /// <summary>Index of the <c>}</c> closing the <c>${</c> whose <c>{</c> is at <paramref name="openBrace"/>
+    /// (<see cref="BashLexer.DollarBraceClose"/>: `${u:-{h}}` closes at its first `}`); -1 if unclosed.</summary>
+    private static int FindMatchingBrace(string s, int openBrace) => BashLexer.DollarBraceClose(s, openBrace - 1);
 
     /// <summary>True when the brace content is a bare variable name (no expansion
     /// operator), so <c>${VAR}</c> can take the cheap <c>$env:VAR</c> path.</summary>
@@ -9606,25 +9597,10 @@ public static partial class PsEmitter
         if (part is WordPart.BracedTuple tuple)
             return new List<string>(tuple.Items);
 
+        // The ONE sequence expander (BraceSequence: step, direction, zero padding, the word cap), shared with a
+        // nested `{x,{1..10..3}}`.
         var range = (WordPart.BracedRange)part;
-        // long arithmetic: with an int counter `{2147483600..2147483647}` overflowed `v += step`
-        // past End and looped forever, allocating until the process died. Counted (and bounded,
-        // see MaxBraceWords) BEFORE anything is materialized.
-        long step = range.Step != 0 ? Math.Abs((long)range.Step) * (range.Start <= range.End ? 1 : -1)
-                                    : (range.Start <= range.End ? 1 : -1);
-        long count = (Math.Abs((long)range.End - range.Start) / Math.Abs(step)) + 1;
-        CheckBraceWords(count);
-        var items = new List<string>((int)count);
-        for (long v = range.Start;
-             step > 0 ? v <= range.End : v >= range.End;
-             v += step)
-        {
-            if (range.ZeroPad > 0)
-                items.Add(v.ToString().PadLeft(range.ZeroPad, '0'));
-            else
-                items.Add(v.ToString());
-        }
-        return items;
+        return new BraceSequence(false, range.Start, range.End, range.Step, range.ZeroPad).Words();
     }
 
     /// <summary>
@@ -9728,8 +9704,9 @@ public static partial class PsEmitter
         WordPart.TildeSub ts => ts.User switch
         {
             null => "$HOME",
-            "+" => "$env:PWD",      // ~+  -> $PWD (the shell form, docs/specs/paths.md)
-            "-" => "$env:OLDPWD",   // ~-  -> $OLDPWD
+            // Braced: in a string a following `:` (`w=a:~+:~-`) would fold into `$env:PWD:` (a drive-qualified name).
+            "+" => "${env:PWD}",      // ~+  -> $PWD (the shell form, docs/specs/paths.md)
+            "-" => "${env:OLDPWD}",   // ~-  -> $OLDPWD
             // ~user / ~N (dirstack) have no faithful PowerShell equivalent; keep
             // the literal `~user` (degrade) rather than emitting a bogus var.
             _ => $"~{ts.User}",
@@ -10211,16 +10188,9 @@ public static partial class PsEmitter
     private static string IndirectLineArg() =>
         PsBuild.TrapLine > 0 ? " -Line " + PsBuild.TrapLine.ToString(System.Globalization.CultureInfo.InvariantCulture) : "";
 
-    /// <summary>Index of the `}` closing the `{` at <paramref name="open"/>, counting nested braces; -1 when unclosed.</summary>
-    private static int FindBraceEnd(string s, int open)
-    {
-        for (int depth = 0, i = open; i < s.Length; i++)
-        {
-            if (s[i] == '{') depth++;
-            else if (s[i] == '}' && --depth == 0) return i;
-        }
-        return -1;
-    }
+    /// <summary>Index of the `}` closing the `${` whose `{` is at <paramref name="open"/> (the lexer's extent,
+    /// <see cref="BashLexer.DollarBraceClose"/>); -1 when unclosed.</summary>
+    private static int FindBraceEnd(string s, int open) => BashLexer.DollarBraceClose(s, open - 1);
 
     /// <summary>
     /// Match a positional or special parameter reference (<c>$1</c>, <c>$#</c>,
