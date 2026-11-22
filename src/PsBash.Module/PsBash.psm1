@@ -373,7 +373,9 @@ function Resolve-BashCommand {
         # expand (their substitutions set it after); -KeepStatus: the words came from a substitution that already did.
         if ($w.Count -eq 0 -and -not $KeepStatus) { $global:LASTEXITCODE = 0 }
         if (-not $Fed -and -not $Piped -and $w.Count -eq 1) { return Resolve-BashCommand -Name ([string]$w[0]) -LoopMode $LoopMode }
-        $pre = foreach ($x in $w) { "'" + ([string]$x).Replace("'", "''") + "'" }
+        # The words are bash DATA: each is a PowerShell literal made by PsBuild.SingleQuote, the one quoting primitive (it
+        # doubles U+2018-U+201B too; doubling only ' let `c='a’;Write-Host x;’b'; echo | "$c"` run Write-Host).
+        $pre = foreach ($x in $w) { [PsBash.Core.Parser.PsBuild, PsBash.Transpiler]::SingleQuote([string]$x) }
         return [scriptblock]::Create('$__bw = @(' + ($pre -join ', ') + ') + @($args); $__blm = ' + $LoopMode + '; $__bfed = ' + $(if ($Fed) { '$true' } else { '$false' }) + "`n" + $script:BashDynamicCommandBody)
     }
     if ($Name -eq '') {
@@ -3250,7 +3252,9 @@ function Start-BashBgProcessJob {
     param([Parameter(Mandatory)][scriptblock]$Command, [hashtable]$Vars, $Mux, [string]$Text)
     $__bgMux = $Mux
     if ($Vars -and $Vars.Count) {
-        $__bgPrefix = ($Vars.GetEnumerator() | ForEach-Object { '$' + $_.Key + " = '" + ("$($_.Value)" -replace "'", "''") + "'" }) -join '; '
+        # Names and values are data: both are literals made by PsBuild.SingleQuote (the one quoting primitive), never
+        # spliced as code (`-replace "'", "''"` missed U+2018-U+201B, which also end a PowerShell string).
+        $__bgPrefix = ($Vars.GetEnumerator() | ForEach-Object { 'Set-Variable -Name ' + [PsBash.Core.Parser.PsBuild, PsBash.Transpiler]::SingleQuote([string]$_.Key) + ' -Value ' + [PsBash.Core.Parser.PsBuild, PsBash.Transpiler]::SingleQuote("$($_.Value)") }) -join '; '
         $Command = [scriptblock]::Create($__bgPrefix + "`n" + $Command.ToString())
     }
     $prelude = [PsBash.Cmdlets.BashStateSnapshot]::BuildPrelude($ExecutionContext.SessionState)

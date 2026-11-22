@@ -8090,7 +8090,8 @@ public static partial class PsEmitter
         if (dashName is null && cmd.Words.Length > 0)
         {
             string? numName = GetLiteralValue(cmd.Words[0]);
-            if (numName is not null && System.Text.RegularExpressions.Regex.IsMatch(numName, @"^[0-9][0-9A-Za-z_.]*$")) dashName = numName;
+            // Any name with a number prefix (`1e5=1`, `08=x` parsed as an assignment to a number): PsNumberLiteral owns the rule.
+            if (numName is not null && PsNumberLiteral.MayStartStatementAsNumber(numName)) dashName = numName;
         }
         // A command word that is a PowerShell keyword (`var`, `try`, `class`, `parallel`) would start a PowerShell statement.
         // A bash reserved word or `[[` that the parser left as a command word (after an environment prefix: `FOO=bar for`) is a name too.
@@ -9346,13 +9347,16 @@ public static partial class PsEmitter
 
     /// <summary>
     /// A <c>${.}</c> that must not be emitted inside a PS string's <c>$( )</c>: its argument word holds a command
-    /// substitution, or its operator argument or subscript holds a double-quote mark (<c>"</c>, U+201C-U+201E).
+    /// substitution, or its operator argument or subscript holds a character PowerShell's scan of an in-string
+    /// <c>$( )</c> misreads (<see cref="PsBuild.HostileInStringSubexpression"/>): a paren (<c>"${u:-x)}"</c> nested
+    /// <c>'x)'</c> there; a <c>)</c> or a single-quote mark in it ended the <c>$( )</c> early or left a string open, and
+    /// the whole script failed to parse), a backtick, or a double-quote mark (<c>"</c>, U+201C-U+201E).
     /// PowerShell rewrites those marks even inside a literal nested in the <c>$( )</c> of an expandable string:
     /// <c>"$('a""b')"</c> is <c>a"b</c> (a pair becomes one, a backtick before one is consumed), so
     /// <c>echo "${u:-a\"\"b}"</c> printed <c>a"b</c> and <c>"${m[kU+201C U+201D]}"</c> read another key. Such a word is a join.
     /// </summary>
     private static bool BracedVarLeavesString(WordPart.BracedVarSub b)
-        => (b.ArgWord is { } arg && ContainsCommandSub(arg)) || HasDoubleQuoteMark(b.Suffix) || HasDoubleQuoteMark(b.Name);
+        => (b.ArgWord is { } arg && ContainsCommandSub(arg)) || PsBuild.HostileInStringSubexpression(b.Suffix) || PsBuild.HostileInStringSubexpression(b.Name);
 
     // A ${...} anywhere in the word (also inside "...") that BracedVarLeavesString.
     private static bool HasStringHostileVar(ImmutableArray<WordPart> parts)
@@ -9362,13 +9366,6 @@ public static partial class PsEmitter
             if (p is WordPart.BracedVarSub b && BracedVarLeavesString(b)) return true;
             if (p is WordPart.DoubleQuoted dq && HasStringHostileVar(dq.Parts)) return true;
         }
-        return false;
-    }
-    private static bool HasDoubleQuoteMark(string? text)
-    {
-        if (text is null) return false;
-        foreach (char c in text)
-            if (PsBuild.IsDoubleQuoteMark(c)) return true;
         return false;
     }
 
@@ -9490,6 +9487,11 @@ public static partial class PsEmitter
             // double-quoted string for every x (`` `n `` is a newline, `` `' `` a quote pair).
             else if (part is WordPart.EscapedLiteral esc)
                 sb.Append(EscapeForDoubleQuoteNested(esc.Value));
+            // A glob fragment in a string value is its text (no pathname expansion in a string or an assignment), escaped
+            // like any literal. REGRESSION: its raw pattern went into the "..." (`"${u:-+(<U+201C>) + (cmd) + (<U+201C>)}"`
+            // closed the PowerShell string and ran cmd). Guard BashDataNeverCodeGuardTests.
+            else if (part is WordPart.GlobPart globText)
+                sb.Append(EscapeForDoubleQuoteNested(globText.Pattern));
             // A NESTED expansion (e.g. ${x:-${y:-z}}) must be emitted in double-quote
             // context: its bare form `($env:y ?? "z")` carries raw `"`, which would
             // break out of this surrounding "...". The inDoubleQuote form uses `$(...)`
@@ -9872,7 +9874,8 @@ public static partial class PsEmitter
     {
         WordPart.Literal lit => lit.Value,
         // `\b`, `\e`, `\n`... are plain letters in bash; a backtick before one would be a PowerShell escape (bell, ESC, LF).
-        WordPart.EscapedLiteral el => el.Value.Length == 1 && char.IsAsciiLetterOrDigit(el.Value[0]) ? el.Value : $"`{el.Value}",
+        // An escaped CR is `r: a backtick before a raw CR is PowerShell's line continuation (PsBuild.EscapeBarewordChar).
+        WordPart.EscapedLiteral el => PsBuild.EscapeBarewordLiteral(el.Value),
         WordPart.SingleQuoted sq => PsBuild.SingleQuote(sq.Value),
         WordPart.AnsiCQuoted aq => EmitAnsiCQuoted(aq),
         WordPart.DoubleQuoted dq => EmitDoubleQuoted(dq),
@@ -9896,8 +9899,9 @@ public static partial class PsEmitter
             "+" => "${env:PWD}",      // ~+  -> $PWD (the shell form, docs/specs/paths.md)
             "-" => "${env:OLDPWD}",   // ~-  -> $OLDPWD
             // ~user / ~N (dirstack) have no faithful PowerShell equivalent; keep
-            // the literal `~user` (degrade) rather than emitting a bogus var.
-            _ => $"~{ts.User}",
+            // the literal `~user` (degrade) rather than emitting a bogus var. Bash text: escaped
+            // through PsBuild like any literal (a U+2019 in `~x` + U+2019 opened a PowerShell string).
+            _ => PsBuild.EscapeBareword("~" + ts.User, atWordStart: false),
         },
         WordPart.GlobPart gp => NormalizePosixGlobClasses(gp.Pattern),
         WordPart.BracedTuple bt => FormatBraceArray(new List<string>(bt.Items)),
@@ -12316,6 +12320,8 @@ public static partial class PsEmitter
                 // load-bearing order (backtick first). Mirrors FlattenPartsToDoubleQuotedString.
                 sb.Append(EscapeForDoubleQuoteNested(lit.Value));
             }
+            else if (part is WordPart.GlobPart globText)
+                sb.Append(EscapeForDoubleQuoteNested(globText.Pattern)); // literal text in quotes (AppendFlattenedParts)
             else
                 sb.Append(EmitWordPart(part));
         }
@@ -13947,10 +13953,10 @@ public static partial class PsEmitter
                 targetExpr = "$HOME + " + QuotePsString(emitted["$HOME".Length..]);
             else if (emitted.StartsWith('~'))
                 // Unresolved ~user / ~N (dirstack) has no PowerShell equivalent and degrades
-                // to the literal bareword text (WordPart.TildeSub's `_ => $"~{ts.User}"`
-                // branch) — quote it through PsBuild so the assignment is a valid PS string
-                // literal, not an invalid bareword (`$__psbash_cd_target = ~user`).
-                targetExpr = QuotePsString(emitted);
+                // to the literal bareword text (WordPart.TildeSub's PsBuild.EscapeBareword
+                // branch) — evaluate that escaped bareword as an argument (its backticks are escapes, so
+                // re-quoting the text as a string kept them), not an invalid bareword (`$__psbash_cd_target = ~user`).
+                targetExpr = "$(& { [string]$args[0] } " + emitted + ")";
             else if (args[0].Parts.Length > 1 && !TryGetPureLiteralText(args[0].Parts, out _))
                 // A glued multi-part word is ARGUMENT-mode text (`$env:d/sub`): an assignment RHS is
                 // expression mode, where that `/` DIVIDES — `cd $d/sub` failed outright. Evaluate it

@@ -78,6 +78,16 @@ public static class PsNumberLiteral
         return i == n;
     }
 
+    /// <summary>
+    /// True when <paramref name="text"/>, written bare at the START of a PowerShell statement (a bash command name),
+    /// may begin with a numeric constant: it starts with a digit, or with <c>.</c> and a digit. There PowerShell scans a
+    /// number prefix before deciding on a command, so <c>1e5=1</c> and <c>08=x</c> parsed as an assignment to a number
+    /// ("The assignment expression is not valid"), and <c>127</c> evaluated to itself. Such a command name is called by
+    /// its quoted name (<c>&amp; '1e5=1'</c>), which PowerShell looks up as bash does (<c>1e5=1: command not found</c>).
+    /// </summary>
+    public static bool MayStartStatementAsNumber(ReadOnlySpan<char> text)
+        => text.Length > 0 && (char.IsAsciiDigit(text[0]) || (text.Length > 1 && text[0] == '.' && char.IsAsciiDigit(text[1])));
+
     // y | s | l | n | d | u | uy | us | ul — the longest match, as the tokenizer reads it.
     private static int SkipTypeSuffix(ReadOnlySpan<char> text, int i)
     {

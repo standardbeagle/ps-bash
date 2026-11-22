@@ -122,9 +122,11 @@ public class BashTranspilerTests
     [Fact]
     public void Transpile_DoubleQuotedDefaultOperand_ParenIsNotRawInSubexpression()
     {
+        // An operand holding a paren leaves the string entirely (BracedVarLeavesString -> the -join value), so no
+        // "$( )" exists for PowerShell's naive paren count to end early.
         var result = BashTranspiler.Transpile("echo \"${u-\\(}\"");
-        Assert.Contains("[char]40", result);
-        Assert.DoesNotContain("'\\('", result);
+        Assert.StartsWith("Invoke-BashEcho (-join @(", result);
+        Assert.DoesNotContain("\"$(", result);
     }
 
     // `${@-w}` / `${@:+w}` test the positional LIST: one empty parameter is set (`-`) but null (`:-`); a bare

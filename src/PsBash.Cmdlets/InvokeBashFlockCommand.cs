@@ -73,7 +73,9 @@ public sealed class InvokeBashFlockCommand : BashCmdlet
         using (lockFile)
         {
             if (o.CommandString is not null)
-                RunString(Transpile(o.CommandString));
+            {
+                if (Transpile(o.CommandString) is { } script) RunString(script);
+            }
             // The shared runner: the pipe is the command's stdin, its errors go where flock's do (`2>/dev/null`), a program
             // under `2>&1` gets one pipe for both streams.
             else if (o.Command.Length > 0)
@@ -86,11 +88,22 @@ public sealed class InvokeBashFlockCommand : BashCmdlet
         }
     }
 
-    /// <summary>The <c>-c</c> string is bash text, so it runs transpiled; text that does not parse runs as written.</summary>
-    private static string Transpile(string bash)
+    /// <summary>
+    /// The <c>-c</c> string is bash text, so it runs transpiled. Text that does not parse runs as PowerShell only under
+    /// the launcher's one policy (<see cref="PsBash.Core.Transpiler.PowerShellFallback"/>); otherwise it is the parse error,
+    /// status 2, as <c>sh -c</c> reports it. Null: nothing to run. REGRESSION: any unparseable string ran as PowerShell
+    /// (<c>catch { return bash; }</c>), so bash data handed to <c>flock -c</c> became PowerShell code.
+    /// </summary>
+    private string? Transpile(string bash)
     {
-        try { return PsBash.Core.Transpiler.BashTranspiler.Transpile(bash, PsBash.Core.Transpiler.TranspileContext.Eval) ?? bash; }
-        catch (Exception) { return bash; }
+        try { return PsBash.Core.Transpiler.BashTranspiler.Transpile(bash, PsBash.Core.Transpiler.TranspileContext.Eval); }
+        catch (PsBash.Core.Parser.ParseException ex)
+        {
+            if (PsBash.Core.Transpiler.PowerShellFallback.Allows(bash, ex)) return bash;
+            FileSystemHelpers.WriteStderr(this, "ps-bash: parse error: " + ex.Message);
+            FileSystemHelpers.SetLastExitCode(this, 2);
+            return null;
+        }
     }
 
     /// <summary>util-linux: a command nothing answers to is <c>flock: failed to execute X: No such file or directory</c>, 69

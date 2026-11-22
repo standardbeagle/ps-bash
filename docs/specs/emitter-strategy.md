@@ -1242,6 +1242,39 @@ operand: the callers test `IsGlobWord` / `IsBraceGlobWord` first and emit the pa
 `EmitGlobPatternExpr` instead (§4 "Pathname expansion"); `EmitWord` still renders such a word bare for the
 positions that do not expand (assignment values, `case`, `[[ ]]`, redirect targets).
 
+### Bash data never becomes PowerShell code
+
+**Invariant: bash data never becomes PowerShell code.** A word, a `~user`, an expansion's operand, a run-time
+command word, a variable's value: whatever the script holds as data reaches PowerShell only as a literal, so no
+value can end a string, a word or a statement, and no value can name a PowerShell variable. Three rules carry it:
+
+1. **All emitted text goes through `PsBuild`** (`Parser/PsBuild.cs`): the quoting primitives above, which know
+   PowerShell's whole grammar for their context (every quote mark, every word break, `$`, `{}`, line
+   continuation), and the number rule (`PsNumberLiteral`, including `MayStartStatementAsNumber` for a command
+   name such as `1e5=1`). The emitter never interpolates raw AST text (`.Value`, `.User`, `.Suffix`,
+   `.Pattern`) into PowerShell with C# `$"…{x}…"` or `+`.
+2. **The psm1 never builds code from values.** A run-time value (`Resolve-BashCommand -Words`, a background
+   job's variables) is passed as an argument (`$args`) or written as a `PsBuild.SingleQuote` literal
+   (`[PsBash.Core.Parser.PsBuild, PsBash.Transpiler]::SingleQuote(...)`); never `-replace "'", "''"`, which
+   left U+2018-U+201B live. Every `[scriptblock]::Create` / `Invoke-Expression` site is reviewed.
+3. **Text the bash parser rejects runs as PowerShell only through `PowerShellFallback.Allows`**
+   (`Transpiler/PowerShellFallback.cs`): the launcher's `-c` / script text and `flock -c`, when the text looks
+   unambiguously like PowerShell and `PSBASH_NO_PS_FALLBACK` is unset. Anything else is the bash parse error.
+
+PowerShell's word breaks are not bash's: besides space and tab it splits at VT, FF, NEL (U+0085), NBSP
+(U+00A0) and every Unicode separator (U+1680, U+2000-U+200A, U+2028, U+2029, U+202F, U+205F, U+3000), and a
+backtick before a raw CR is a line continuation. `PsBuild.IsPsWordBreak` is that set exactly, checked against
+the tokenizer over the whole BMP. A `$` before a character that cannot start a bash name (`$^`, `$:`, `$é`) is a
+literal `$` and is escaped (`$^` is a PowerShell automatic variable). Inside a string's `"$( )"` PowerShell
+counts parens without honouring quotes, so a `${…}` operand or subscript holding `(`, `)`, a backtick or a
+quote mark (`PsBuild.HostileInStringSubexpression`) leaves the string (`BracedVarLeavesString`).
+
+Guard: `Host.Tests/Transpiler/BashDataNeverCodeGuardTests` (the primitives against PowerShell's tokenizer for
+every BMP character; a corpus of ~90 syntactic positions × every hostile class, asserting the emission parses
+and a `Write-Output SENTINEL` payload never becomes a `CommandAst`; source scans of the psm1 / .ps1 resources,
+the emitter's interpolations and the C# script builders; one fallback policy). Oracle:
+`Differential.Tests/BashDataNeverCodeDifferentialTests`.
+
 ### Number-shaped words
 
 A bash word is text. PowerShell's tokenizer reads a whole unquoted `1e5`, `33441e77`, `0x10`, `0b101`, `1kb`,
@@ -1268,7 +1301,8 @@ PowerShell literal therefore goes through ONE `PsBuild` primitive that knows the
 | `'…'` | `SingleQuote` / `EscapeForSingleQuote` | every single-quote mark doubled |
 | `"…"` (no live `$`) | `DoubleQuote` / `EscapeForDoubleQuote` | backtick before `` ` ``, `$`, every double-quote mark |
 | `"…"` with live `$` (a heredoc body) | `EscapeDoubleQuoteMarks` | backtick before every double-quote mark |
-| unquoted argument text | `BarewordNeedsEscape` / `EscapeBareword` | `{` `}`, quote marks, a leading dash mark; a whole word becomes one `"…"` |
+| unquoted argument text | `BarewordNeedsEscape` / `EscapeBareword` | `{` `}`, `$`, quote marks, every PowerShell word break (`IsPsWordBreak`), a leading dash mark or `--%`; a whole word becomes one `"…"` |
+| one escaped bash character (`\x`) | `EscapeBarewordLiteral` / `EscapeBarewordChar` | `` `r `` `` `n `` `` `t `` `` `v `` `` `f ``, `` `u{XXXX} `` for non-ASCII whitespace, else a backtick before any non-alphanumeric |
 
 A pasted apostrophe (`echo it’s`) was a parse error that failed the whole script, `echo 'a‘’b'` silently
 printed `a’b`, and `echo –n x` ran `echo -n`. An ad-hoc `.Replace("'", "''")` is forbidden outside `PsBuild`
