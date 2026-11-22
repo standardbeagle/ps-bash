@@ -39,6 +39,7 @@ public static class StderrMerge
             return a.Command.GetValue(processor) switch
             {
                 InvokeBashRedirectCommand redirect => redirect.KeepsStderrWithStdout(),
+                InvokeBashFdRouteCommand route => route.KeepsStderrWithStdout(),
                 InvokeBashKeepStderrCommand => false,
                 _ => true,
             };

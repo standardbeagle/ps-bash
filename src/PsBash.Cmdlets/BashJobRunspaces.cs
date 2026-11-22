@@ -109,6 +109,8 @@ public static class BashJobRunspaces
                 .AddParameter("__bgStatus", status).AddParameter("__bgTurn", turn).AddParameter("__bgBody", block);
             Bind(ps, modulePath, turn);
             scalars.Attach(ps.Runspace);
+            // Its descriptors as of the `&`, too: a copy of the shell's table (BashFdTable).
+            BashFdTable.AttachCopy(ps.Runspace);
             Inherit(ps, ps.Runspace, location, globals);
             // The launch: the job's sleeps count from here (JobClock), as a forked job's do in bash. After the bind: time the
             // launcher spent waiting for a runspace delays the shell as much as the job, so it is not the job's to pay back.
@@ -120,7 +122,7 @@ public static class BashJobRunspaces
         }
         catch
         {
-            if (ps.Runspace is { } bound) PsBash.Core.ScalarOverlay.Detach(bound);
+            if (ps.Runspace is { } bound) { PsBash.Core.ScalarOverlay.Detach(bound); BashFdTable.Detach(bound); }
             ps.Dispose();
             throw;
         }
@@ -286,6 +288,7 @@ public static class BashJobRunspaces
     private static void Release(Runspace rs, bool reusable)
     {
         PsBash.Core.ScalarOverlay.Detach(rs);
+        BashFdTable.Detach(rs);
         reusable = reusable && rs.RunspaceStateInfo.State == RunspaceState.Opened
             && Baselines.TryGetValue(rs, out var baseline) && baseline.Clean;
         if (reusable)

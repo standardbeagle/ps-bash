@@ -1829,6 +1829,7 @@ public static partial class PsEmitter
         _liveJobs = null; _callSites = null; _definedFunctions = null; _readerMode = default;
         _inRunTimeExecBranch = false; _namesLoopControl = false;
         _stdinOpaque = false; _stdinProbeDepth = 0; _stdinSealed = null;
+        _subshellBody = null; _fdPrelude = null; _redirectCommandName = null;
         PsBuild.InTrapAction = false; PsBuild.TrapLine = 0; PsBuild.ErrTrapNeedsErrtrace = false;
     }
 
@@ -3286,7 +3287,7 @@ public static partial class PsEmitter
         // fires the subshell's own trap, which a static errtrace test here kept from running.
         string body; PsBuild.ErrTrapNeedsErrtrace = false;
         // `( … ) < file` gives the body its own stdin (a scope); otherwise it inherits the enclosing one.
-        try { body = EmitCompoundBody(subshell.Redirects, () => EmitBody(subshell.Body)); }
+        try { body = EmitCompoundBody(subshell.Redirects, () => EmitSubshellBody(subshell.Body)); }
         finally { scope.Restore(); LeaveSubshellTables(subRoOuter); }
 
         // One subshell scope (PsBuild.ShellStateScope): a child PS scope plus save/restore of the
@@ -3320,7 +3321,7 @@ public static partial class PsEmitter
         // The scope is `& { … }`, an expression that can head a pipeline, so `( … ) > file` pipes
         // straight into the redirect tail (a bare `try`/`finally` statement could not — "An empty
         // pipe element is not allowed", Go's mkerrors.sh).
-        AppendRedirectTail(sb, tailRedirects);
+        WithFdPrelude(subshell.Redirects, null, () => AppendRedirectTail(sb, tailRedirects));
 
         string result = sb.ToString();
         if (inputRedirect is { Here: { } subshellHere })
@@ -3345,16 +3346,14 @@ public static partial class PsEmitter
     /// <c>( ... ) 7&gt;&amp;1</c>, <c>{ ...; } 3&gt;log</c>: a numbered descriptor opened for one compound command only. Left in
     /// the redirect tail it came out raw (<c>} 7&gt;&amp;1</c>), and PowerShell read the <c>&amp;</c> as its background
     /// operator: the command ran as a job, whose <c>$using:</c> rewrite broke every <c>$global:</c> assignment.
-    /// Opened before the command and closed after it, as <c>exec N...</c> would (an earlier <c>exec</c> of the same
-    /// descriptor is not restored).
+    /// Opened before the command, as <c>exec N...</c> would, and put back after it (an earlier <c>exec</c> of the same
+    /// descriptor names its file again: PsBuild.ScopedDescriptors).
     /// </summary>
     private static string WithScopedHighFds(string command, List<Redirect> highFds)
     {
         if (highFds.Count == 0) return command;
         var open = string.Join("; ", highFds.Select(r => FdOpenStep(r, exec: false)));
-        var close = string.Join("; ", highFds.Select(r => r.Fd).Distinct().Select(PsBuild.ExecFdClose));
-        return "& { " + open + "; try { " + command + " } finally { $__psbash_fdRc = $global:LASTEXITCODE; " + close
-             + "; $global:LASTEXITCODE = $__psbash_fdRc } }";
+        return PsBuild.ScopedDescriptors(highFds.Select(r => r.Fd).Distinct(), open, command);
     }
 
     /// <summary>
@@ -5930,7 +5929,7 @@ public static partial class PsEmitter
         return sb.ToString();
     }
 
-    private static string EmitSimple(Command.Simple cmd)
+    private static string EmitSimpleCore(Command.Simple cmd)
     {
         cmd = ExpandAliases(cmd);
         cmd = UnquoteBuiltinName(cmd);
@@ -5974,8 +5973,12 @@ public static partial class PsEmitter
         }
         // `w9 9>&1`, `echo hi 9>f.txt`, `read -u 7 l 7<f`: a numbered descriptor opened for this command only.
         if (ScopedHighFdRedirects(cmd) is { Count: > 0 } highFds)
-            return RedirectGroup(EmitSimple(cmd with { Redirects = [.. cmd.Redirects.Where(r => !highFds.Contains(r))] }),
-                body => WithScopedHighFds(body, highFds));
+        {
+            // The tail sees the descriptors in order with the rest (3>&1 1>&2 2>&3): WithFdPrelude.
+            string scoped = WithFdPrelude(cmd.Redirects, _redirectCommandName,
+                () => EmitSimple(cmd with { Redirects = [.. cmd.Redirects.Where(r => !highFds.Contains(r))] }));
+            return RedirectGroup(scoped, body => WithScopedHighFds(body, highFds));
+        }
         if (TryEmitOutputProcessSubs(cmd, out var outputProcSubResult))
             return outputProcSubResult;
         if (TryEmitEnvPairsWrap(cmd, out var envWrapResult))
@@ -6943,24 +6946,25 @@ public static partial class PsEmitter
             }
         }
 
-        int? outFd = null, inFd = null;
+        int? inFd = null;
         var rest = ImmutableArray.CreateBuilder<Redirect>();
         foreach (var r in cmd.Redirects)
         {
             var target = GetLiteralValue(r.Target);
             if (target is not null && IsAllDigits(target) && int.TryParse(target, out var n) && n >= 3)
             {
-                if (r.Op == ">&" && r.Fd == 1) { outFd = n; continue; }
+
                 if (r.Op == "<&" && r.Fd == 0) { inFd = n; continue; }
             }
             rest.Add(r);
         }
-        if (outFd is null && inFd is null)
+        // `cmd >&N` is not taken out here: it is applied in order with the command's other redirections
+        // (TryAppendModelledRedirectTail), so `>&3 2>&1` and `2>&1 >&3` differ as in bash.
+        if (inFd is null)
             return false;
 
         string body = EmitSimple(new Command.Simple(cmd.Words, cmd.EnvPairs, rest.ToImmutable()));
-        if (outFd is { } o)
-            body = (PsBuild.IsStatementList(body) ? "& { " + body + " }" : body) + $" | Write-BashFd {o}";
+
         if (inFd is { } i)
             body = $"Read-BashFd {i} | " + body;
         result = body;
@@ -12248,7 +12252,8 @@ public static partial class PsEmitter
                 sb.Append("; ");
             _readonlyViolation = false;
             // `exec >&2; rest`: the rest of the list runs under the shell-wide redirection.
-            if (i + 1 < list.Commands.Length && StdExecRedirects(list.Commands[i]) is { } execRedirects)
+            if (i + 1 < list.Commands.Length && StdExecRedirects(list.Commands[i]) is { } execRedirects
+                && ExecRewriteApplies(root, execRedirects, rootPieces is not null))
             {
                 var rest = list.Commands.RemoveRange(0, i + 1);
                 if (rootPieces is null || rest.Length == 1)
@@ -13249,7 +13254,9 @@ public static partial class PsEmitter
     // device, an opened file (index into the open list), or a copy of the OTHER fd's default
     // taken by a dup before that fd was redirected — fd 2: `2>&1 >f` (StdoutDefault); fd 1:
     // `>&2 2>/dev/null` (StderrDefault — stdout still reaches the terminal's stderr).
-    private enum FdDestKind { Default, Null, File, StdoutDefault, StderrDefault }
+    // Table: what the shell's descriptor table names as fd N (FdDest.File = N) when the command runs (`2>&3`); Closed: a
+    // closed descriptor (`>&-`). Either one sends the streams through the route stage (AppendRoutedRedirectTail).
+    private enum FdDestKind { Default, Null, File, StdoutDefault, StderrDefault, Table, Closed }
 
     private readonly record struct FdDest(FdDestKind Kind, int File = -1);
 
@@ -13276,8 +13283,17 @@ public static partial class PsEmitter
             return new FdDest(FdDestKind.File, opened.Count - 1);
         }
 
-        foreach (var r in redirects)
+        // The command's whole list when a caller applies its numbered descriptors itself (WithScopedHighFds):
+        // `3>&1 1>&2 2>&3` resolves here in bash's left-to-right order, fd 3 included.
+        var applied = FdPreludeFor(redirects);
+        Dictionary<int, FdDest>? high = null;
+        foreach (var r in applied)
         {
+            if (!ReferenceEquals(applied, redirects) && !ContainsRef(redirects, r))
+            {
+                TrackHighFd(r, fd1, fd2, ref high);
+                continue;
+            }
             if (r.Fd is not (1 or 2))
                 return false;
             var target = EmitFileRedirectTarget(r.Target);
@@ -13298,7 +13314,9 @@ public static partial class PsEmitter
                     fd1 = Open(target, append: false, readWrite: true);
                     break;
                 case ">&" when target == "-":
-                    if (r.Fd == 1) fd1 = new FdDest(FdDestKind.Null); else fd2 = new FdDest(FdDestKind.Null);
+                    // A closed stdout fails the command's writes (`echo hi >&-`: write error, status 1); a closed stderr
+                    // only loses the messages.
+                    if (r.Fd == 1) fd1 = new FdDest(FdDestKind.Closed); else fd2 = new FdDest(FdDestKind.Null);
                     break;
                 case ">&" when target == r.Fd.ToString(System.Globalization.CultureInfo.InvariantCulture):
                     break; // `1>&1` / `2>&2`: a dup onto itself changes nothing
@@ -13321,6 +13339,11 @@ public static partial class PsEmitter
                         _ => fd2,
                     };
                     break;
+                case ">&" when IsAllDigits(target) && int.TryParse(target, out int fromFd) && fromFd >= 3:
+                    // `2>&3`, `>&3`: a copy of what descriptor N names at this point (the table's, or what this list set).
+                    if (r.Fd == 1) fd1 = RelativeTo(1, AbsoluteDest(fromFd, fd1, fd2, high));
+                    else fd2 = RelativeTo(2, AbsoluteDest(fromFd, fd1, fd2, high));
+                    break;
                 case ">&" when r.Fd == 1 && !IsAllDigits(target):
                     // `>&file` is bash's synonym for `&>file`.
                     fd1 = fd2 = Open(target, append: false);
@@ -13339,6 +13362,12 @@ public static partial class PsEmitter
             if ((fd1.Kind == FdDestKind.File && fd1.File == i) || (fd2.Kind == FdDestKind.File && fd2.File == i))
                 continue;
             (opened[i].Append || opened[i].ReadWrite ? touch : truncate).Add(opened[i].Target);
+        }
+
+        if (NeedsFdRoute(fd1, fd2))
+        {
+            AppendRoutedRedirectTail(sb, opened, fd1, fd2, truncate, touch, RedirectOpenPlan(opened, openDiag, fd1, fd2));
+            return true;
         }
 
         bool needsStage = fd1.Kind == FdDestKind.File || fd2.Kind == FdDestKind.File
@@ -13542,7 +13571,7 @@ public static partial class PsEmitter
         sb.Append(inputRedirect is not null && stdinScope ? PsBuild.StdinScope(body) : body);
         sb.Append(" }");
         int tailStart = sb.Length;
-        AppendRedirectTail(sb, tailRedirects);
+        WithFdPrelude(redirects, null, () => AppendRedirectTail(sb, tailRedirects));
         string result = sb.ToString();
         // Invoke-BashRedirect in the tail sets or clears the open-failure flag itself when the body ends.
         bool tailReports = result.AsSpan(tailStart).Contains("Invoke-BashRedirect", StringComparison.Ordinal);

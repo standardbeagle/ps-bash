@@ -64,6 +64,15 @@ Lock order: producer → mux lock → the sink's `outputLock` → batcher → `I
 - `IpcOutputQueue` back-pressure is released by its drain task, or by the command's cancellation when the client
   disconnects. So the bottom of the chain always makes progress or fails.
 
+### 2.2a The shell's fd 1 / 2 moved by `exec` (implemented)
+
+The descriptor table (`shell-fds-and-bash-source.md` "The descriptor table") owns the shell's fd 1 / 2. The foreground
+sink offers each write to `ShellStdio.TryDivert(fd, text)` before delivering it (`SdkWorker.RunCommand`): while the
+table's fd 1 or 2 has an entry (`exec >log` in a function), the write goes there instead. A table entry that copies the
+ORIGINAL stdout / stderr (`exec 3>&1`) writes through `ShellStdio.Terminal`, the undiverted sink, under `outputLock`
+(a re-entrant take when a divert writes it). Job output (`JobOutput.Attach`) uses the undiverted sink. No table lock is
+held while a sink is called.
+
 ### 2.3 Compatibility
 
 Stage 1 changes nothing on the wire. Job output is folded into the running command's STDOUT/STDERR frames, and a

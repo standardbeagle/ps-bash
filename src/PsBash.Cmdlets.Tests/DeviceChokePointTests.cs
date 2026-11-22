@@ -14,6 +14,7 @@ namespace PsBash.Cmdlets.Tests;
 /// Oracle note (qa-rubric Directive 1): what each device does is compared with bash by DeviceNameDifferentialTests; the
 /// "no file is touched" half has no bash equivalent (bash has a real /dev).
 /// </summary>
+[Collection(FdTableCollection.Name)]
 public class DeviceChokePointTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
     private readonly SharedPwshFixture _fixture;
@@ -194,14 +195,11 @@ public class DeviceChokePointTests : IClassFixture<SharedPwshFixture>, IDisposab
     public void FdTable_ABurstOfWrites_IsInTheFileWhenTheCommandEnds()
     {
         string file = Path.Combine(_root, "burst");
-        Assert.Null(BashFdTable.Open(41, file, ">"));
-        try
-        {
-            var r = CmdResult.Run(_fixture.AcquireFresh(),
-                $"1..1000 | ForEach-Object {{ \"$_\" }} | Write-BashFd 41; [System.IO.FileInfo]::new('{Q(file)}').Length").AssertSuccess();
-            Assert.Equal("3893", r.Lines[^1]);
-        }
-        finally { BashFdTable.Close(41); }
+        // Opened in the runspace that writes it: the table is that shell's (one per runspace).
+        var r = CmdResult.Run(_fixture.AcquireFresh(),
+            $"Invoke-BashExecFd 41 '>' '{Q(file)}'; 1..1000 | ForEach-Object {{ \"$_\" }} | Write-BashFd 41; "
+            + $"[System.IO.FileInfo]::new('{Q(file)}').Length; Invoke-BashExecFd 41 '>&' '-'").AssertSuccess();
+        Assert.Equal("3893", r.Lines[^1]);
     }
 
     private static string Q(string s) => s.Replace("'", "''");
