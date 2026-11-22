@@ -37,6 +37,9 @@ public static class InteractiveShell
     // Holds the typed (pre-alias-expansion) lines, newest last — what the user sees in history.
     private static readonly List<string> _sessionHistory = new();
 
+    /// <summary>The session's last history substitution (<c>!!:s/a/b/</c>, <c>^a^b</c>), which <c>!!:&amp;</c> repeats.</summary>
+    private static readonly HistorySubstitution _lastHistorySubstitution = new();
+
     /// <summary>
     /// Run once in the REPL's runspace at startup: the same mark the launcher's <c>bash -i -c</c> prelude sets
     /// (<c>shopt -s psbash_interactive</c>, see <c>InvokeBashShoptCommand.InteractiveShell</c>).
@@ -228,7 +231,7 @@ public static class InteractiveShell
                 // alias expansion, exit detection, and transpilation — matching bash's order.
                 if (HistoryExpander.ContainsExpansion(trimmed))
                 {
-                    var expanded = HistoryExpander.Expand(trimmed, _sessionHistory, out var histError);
+                    var expanded = HistoryExpander.Expand(trimmed, _sessionHistory, out var histError, _lastHistorySubstitution);
                     if (histError != null)
                     {
                         Console.Error.WriteLine($"ps-bash: {histError}");

@@ -14,7 +14,8 @@ public sealed partial class BashParser
 
     /// <summary>
     /// The builtin a command-word token names: `'local'`, `"export"`, `\declare` are the builtin (quoting only escapes
-    /// alias expansion), so the declaration productions read the quote-removed text. A word with an expansion is itself.
+    /// alias expansion), so the declaration productions read the quote-removed text, under the wrapper rules
+    /// (<see cref="QuotedDeclarationStaysACommand"/>). A word with an expansion is itself.
     /// REGRESSION: `'local' v=3` / `\export Q=1` were looked up as programs, `command not found`.
     /// </summary>
     private static string CommandWordName(BashToken t)
@@ -70,9 +71,28 @@ public sealed partial class BashParser
         }
     }
 
+    /// <summary>
+    /// A declaration builtin spelled quoted or escaped (<c>'export'</c>, <c>\local</c>, <c>"declare"</c>) that must stay a
+    /// plain command: bash runs the builtin, but its operands are ORDINARY words, as behind a wrapper
+    /// (<see cref="SkipDeclarationWrappers"/>, the same rules). So an operand with an expansion stays a word (with
+    /// x='a b', <c>'export' v=$x</c> exports v=a and b; the emitter makes it <c>builtin export …</c>,
+    /// PsEmitter.UnquoteBuiltinName), and an array initializer is a syntax error (<c>'declare' -a A=(x y)</c>, status 2).
+    /// The static spelling (<c>'local' v=3</c>) is the declaration either way.
+    /// </summary>
+    private bool QuotedDeclarationStaysACommand()
+    {
+        if (Peek() is not { Kind: BashTokenKind.Word } t) return false;
+        string name = CommandWordName(t);
+        if (name == t.Value || name is not ("export" or "local" or "declare" or "typeset" or "readonly")) return false;
+        for (int j = _pos + 1; j < _tokens.Count && _tokens[j].Kind is BashTokenKind.Word or BashTokenKind.AssignmentWord; j++)
+            if (_tokens[j].Value.AsSpan().IndexOfAny('$', '`') >= 0) return true;
+        return DeclarationHasArrayInitializer();
+    }
+
     /// <summary>`export` / `local` NAME=VAL … (see ParseDeclarationPairs for the shape); null leaves the cursor where it was.</summary>
     private Command.ShAssignment? TryParseLocalOrExport()
     {
+        if (QuotedDeclarationStaysACommand()) return null;
         if (!(Peek().Kind == BashTokenKind.Word && (CommandWordName(Peek()) is "export" or "local" || IsFunctionScopedDeclare())))
             return null;
         // Inside a function a plain `declare NAME=VAL` is function-local, exactly like `local`.
@@ -133,6 +153,7 @@ public sealed partial class BashParser
         // the command that followed.
         if (Peek().Kind == BashTokenKind.Word
             && CommandWordName(Peek()) is "declare" or "typeset" or "readonly"
+            && !QuotedDeclarationStaysACommand()
             && DeclarationHasArrayInitializer())
         {
             int saved = _pos;

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using PsBash.Core.Parser.Ast;
 
 namespace PsBash.Core.Parser;
@@ -107,6 +108,22 @@ public static partial class PsEmitter
         return new Command.Simple([new CompoundWord([new WordPart.Literal(w)])], ImmutableArray<EnvPair>.Empty, ImmutableArray<Redirect>.Empty);
     }
 
+    /// <summary>
+    /// Command words alias expansion is done with (reference identity): a quoted builtin name made bare
+    /// (<see cref="UnquoteBuiltinName"/>), the builtin behind a wrapper, and the first word an expansion produced.
+    /// EmitSimple re-enters itself for parts of one command (its prefix, its redirects), and the alias must not apply
+    /// again there: bash never expands a quoted word (<c>alias eval='echo no'; 'eval' 'echo x'</c> prints x).
+    /// </summary>
+    private static readonly ConditionalWeakTable<CompoundWord, string> s_aliasDone = new();
+
+    /// <summary>The bare word <paramref name="name"/>, which alias expansion passes over (<see cref="s_aliasDone"/>).</summary>
+    private static CompoundWord NoAliasWord(string name)
+    {
+        var word = new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal(name)));
+        s_aliasDone.AddOrUpdate(word, name);
+        return word;
+    }
+
     private static Command.Simple ExpandAliases(Command.Simple cmd)
     {
         if (_aliasDefs is null || cmd.Words.IsDefaultOrEmpty || cmd.Line <= _expandAliasesLine) return cmd;
@@ -118,6 +135,7 @@ public static partial class PsEmitter
         bool changed = false;
         for (int guard = 0; guard < 64 && idx < words.Length; guard++)
         {
+            if (s_aliasDone.TryGetValue(words[idx], out _)) break;
             if (GetLiteralValue(words[idx]) is not { } name || visited.Contains(name) || AliasLookup(name, cmd.Line) is not { } text) break;
             visited.Add(name);
             if (text.Trim().Length == 0) break;
@@ -133,7 +151,10 @@ public static partial class PsEmitter
             // A trailing blank makes the NEXT word an alias candidate too.
             if (char.IsWhiteSpace(text[^1])) { idx += parsed.Words.Length; visited.Clear(); }
         }
-        return changed ? cmd with { Words = words, EnvPairs = envPairs, Redirects = redirects } : cmd;
+        if (!changed) return cmd;
+        // The first word came from alias text (a new object): a re-entry for part of this command expands nothing again.
+        s_aliasDone.AddOrUpdate(words[0], "");
+        return cmd with { Words = words, EnvPairs = envPairs, Redirects = redirects };
     }
 
     // ---- Alias text that is not a whole command ----

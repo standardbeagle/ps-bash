@@ -200,15 +200,35 @@ alias loses to a function); behavior `Differential.Tests/CommandLookupDifferenti
 ### 2.5 A quoted builtin name is the builtin
 
 **Invariant: quoting a command name (`'local'`, `"eval"`, `\export`, `b\reak`) only escapes alias expansion; the
-builtin of that name still runs.** The quote-removed static spelling is the name, read in one place per layer:
-`BashParser.CommandWordName` for the declaration productions (`export`/`local`/`declare`/`typeset`/`readonly`, also behind
-`command`/`builtin`), `BashParser.EscapedControlBuiltin` for `break`/`continue`/`return`/`exit` (the AST the loop and
+builtin of that name still runs, exactly as behind `builtin`.** The quote-removed static spelling is the name, read in
+one place per layer: `BashParser.EscapedControlBuiltin` for `break`/`continue`/`return`/`exit` (the AST the loop and
 function analyses read), and `PsEmitter.UnquoteBuiltinName` (right after `ExpandAliases` in `EmitSimple`) for every
-other name in `BashBuiltins.Names`. A name the script also aliases stays quoted, since `EmitSimple` re-enters
-`ExpandAliases` for parts of one command. A program or function name keeps its quotes (it runs either way).
-REGRESSION: every emitter-implemented builtin spelled quoted was `command not found` (127). Guards:
+other name in `BashBuiltins.Names`. The bare word it makes is `PsEmitter.NoAliasWord`: alias expansion passes it over,
+also where `EmitSimple` re-enters itself for part of the command (bash never expands a quoted word:
+`alias eval='echo no'; 'eval' 'echo x'` prints x). A program or function name keeps its quotes (it runs either way).
+
+A declaration builtin (`export`/`local`/`declare`/`typeset`/`readonly`) quoted is the WRAPPER form, not the bare
+declaration: its operands are ordinary words (bash 5.2: with x='a b', `'export' v=$x` exports `v=a` and `b`;
+`'declare' -a A=(x y)` is a syntax error, status 2). The parser applies the wrapper rules
+(`BashParser.QuotedDeclarationStaysACommand`, as `SkipDeclarationWrappers` for `builtin`/`command`): with no
+expansion and no array initializer it is the declaration (`'local' v=3`, same result either way); otherwise it stays a
+plain command, which `UnquoteBuiltinName` turns into `builtin NAME ...` for `TryEmitDynamicAssignmentBuiltin`.
+REGRESSION: every emitter-implemented builtin spelled quoted was `command not found` (127); then the quoted
+declaration took the bare path (`[a b]`) and an aliased quoted name ran as a program. Guards:
 `Core.Tests/Parser/QuotedBuiltinNameTests`, `ControlBuiltinWrapperTests`; behavior
 `Differential.Tests/QuotedBuiltinNameDifferentialTests`.
+
+### 2.6 Bash text run at run time: one call
+
+**Invariant: bash text known only at run time (`eval "$c"`, the command `fc -s` re-runs) runs through ONE emitted
+call, `PsBuild.RunBashTextCall`, made by `PsEmitter.RunTimeBashTextCall`.** It brings the nesting bound (5; `history -s
+'fc -s'; fc -s` fails instead of recursing), the call site's loop mode (a `break` in the text leaves the loop), the
+calling function's locals, and the return check (a `return` in the text leaves the function). The runner
+`PsBuild.RunBashTextAtRunTime` is private; its only other caller, `BuiltinAsSourceScript`, runs a static builtin command
+whose own emitted form makes the call. `fc` is `PsBuild.FcTakeRerun` (the cmdlet leaves its choice in
+`$global:__BashFcRerun`) followed by that call. With a redirect (`eval "$c" 2>/dev/null`, `fc -s >f`) the text sits in the tail's `. { }` group, where a PowerShell `return` leaves only the group: in a function or eval text that group is `PsBuild.WithRedirectTailPassingReturn`, which carries the return to the caller (not `source`, whose `return` ends only the file). REGRESSION: fc's own copy of eval's call site missed all four
+(`history -s 'return 7'; f() { fc -s; echo notreached; }` printed notreached), and a redirected `eval 'return 7' 2>/dev/null` in a function never returned. Guard:
+`Core.Tests/RunBashTextCallGuardTests`; behavior `Differential.Tests/FcRerunDifferentialTests`.
 
 ---
 

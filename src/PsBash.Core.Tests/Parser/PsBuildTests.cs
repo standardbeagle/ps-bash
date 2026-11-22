@@ -586,30 +586,66 @@ public class PsBuildTests
     public void HereStringValue_IsTheWordPlusOneNewline()
         => Assert.Equal("([string]($x) + \"`n\")", PsBuild.HereStringValue("$x"));
 
-    // ─────────────── FcCall ───────────────
+    // ─────────────── fc / RunBashTextCall ───────────────
 
     /// <summary>
-    /// <c>fc -s</c>: one dot-sourced pipeline element (the caller's scope; <c>fc -s | tr</c> pipes the re-run), the stale
-    /// re-run cleared BEFORE the cmdlet runs, and the chosen command run by the one runner of bash text (behavior vs bash:
-    /// FcBuiltinTests, Differential FcRerunDifferentialTests).
+    /// <c>fc</c> up to its re-run: the stale re-run cleared BEFORE the cmdlet runs, then what it chose moved into the
+    /// eval text variable and the slot cleared (behavior vs bash: FcBuiltinTests, Differential FcRerunDifferentialTests).
     /// </summary>
     [Fact]
-    public void FcCall_ClearsThenRunsTheRerunThroughTheBashTextRunner()
+    public void FcTakeRerun_ClearsRunsThenTakesTheRerun()
     {
-        var ps = PsBuild.FcCall("Invoke-BashFc '-s'");
-        Assert.StartsWith(". { $global:__BashFcRerun = $null; Invoke-BashFc '-s'; if ($null -ne $global:__BashFcRerun) { ", ps);
-        Assert.EndsWith(" } }", ps);
-        Assert.Contains("$__psbash_eval_src = $global:__BashFcRerun; $global:__BashFcRerun = $null; " + PsBuild.RunBashTextAtRunTime(", $null", "fc"), ps);
+        Assert.Equal("$global:__BashFcRerun = $null; Invoke-BashFc '-s'; $__psbash_eval_src = $global:__BashFcRerun; $global:__BashFcRerun = $null; ",
+            PsBuild.FcTakeRerun("Invoke-BashFc '-s'"));
         Assert.Equal("__BashFcRerun", PsBuild.FcRerunVariable);
+    }
+
+    // A return inside eval text leaves only the redirect's `. { }` group; the flag carries it to the caller.
+    // REGRESSION: `f() { fc -s 2>/dev/null; echo no; }` with a re-run `return 7` printed no (bash: status 7).
+    [Fact]
+    public void WithRedirectTailPassingReturn_ClearsTheFlagAtTheGroupsEndOnly()
+    {
+        Assert.Equal("$__psbash_grp_ret = $true; . { a; b; $__psbash_grp_ret = $false } 2>$null; if ($__psbash_grp_ret) { return }",
+            PsBuild.WithRedirectTailPassingReturn("a; b; ", sb => sb.Append(" 2>$null")));
+    }
+
+    [Theory]
+    [InlineData("f() { eval 'return 7' 2>/dev/null; }")]
+    [InlineData("f() { fc -s >out; }")]
+    [InlineData("c=x; f() { eval \"$c\" 2>/dev/null; }")]
+    public void Transpile_RedirectedEvalTextInAFunction_PassesAReturnOut(string script)
+        => Assert.Contains("if ($__psbash_grp_ret) { return }", PsEmitter.Transpile(script)!);
+
+    [Theory]
+    [InlineData("eval 'return 7' 2>/dev/null")]                      // top of a script: nothing to return from
+    [InlineData("f() { source ./rc 2>/dev/null; }")]                 // a sourced file's return ends only the file
+    [InlineData("f() { ( eval 'return 7' 2>/dev/null ); }")]        // a subshell's return ends the subshell
+    public void Transpile_RedirectedTextWithNoCallerToLeave_KeepsThePlainGroup(string script)
+        => Assert.DoesNotContain("__psbash_grp_ret", PsEmitter.Transpile(script)!);
+
+    /// <summary>The one run-time call of bash text: skips blank text, bounds the nesting under the label, restores the
+    /// depth, then the return check.</summary>
+    [Fact]
+    public void RunBashTextCall_BoundsTheDepthAndEndsWithTheReturnCheck()
+    {
+        var ps = PsBuild.RunBashTextCall("fc", PsBuild.LoopModeSet(0), ", $null", "CHECK");
+        Assert.StartsWith("if (-not [string]::IsNullOrWhiteSpace($__psbash_eval_src)) { ", ps);
+        Assert.Contains("throw 'fc: nesting depth limit (5) exceeded; possible infinite recursion'", ps);
+        Assert.Contains("try { " + PsBuild.LoopModeSet(0) + "$__psbash_eval_pwsh = $null; ", ps);
+        Assert.Contains("'fc: '", ps);
+        Assert.EndsWith("} finally { $global:__BashEvalDepth = $__psbash_eval_depth } CHECK }", ps);
+        Assert.EndsWith("} finally { $global:__BashEvalDepth = $__psbash_eval_depth } }", PsBuild.RunBashTextCall("eval", "", ", $null", ""));
     }
 
     [Theory]
     [InlineData("fc -s a=b")]
     [InlineData("fc -l 1 2")]
-    public void Transpile_Fc_IsTheFcCall(string bash)
+    [InlineData("fc -s > out")]
+    public void Transpile_Fc_TakesTheRerunThenTheSharedCall(string bash)
     {
         var ps = PsEmitter.Transpile(bash)!;
-        Assert.Contains(". { $global:__BashFcRerun = $null; Invoke-BashFc ", ps);
-        Assert.Contains(PsBuild.RunBashTextAtRunTime(", $null", "fc"), ps);
+        Assert.Contains("$global:__BashFcRerun = $null; Invoke-BashFc ", ps);
+        Assert.Contains("$__psbash_eval_src = $global:__BashFcRerun; $global:__BashFcRerun = $null; if (-not [string]::IsNullOrWhiteSpace($__psbash_eval_src)) { ", ps);
+        Assert.DoesNotContain(". { $global:__BashFcRerun", ps);
     }
 }

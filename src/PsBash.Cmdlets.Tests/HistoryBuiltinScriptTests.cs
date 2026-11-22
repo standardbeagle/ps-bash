@@ -129,6 +129,20 @@ public class HistoryBuiltinScriptTests
         Assert.Equal(["history: !nope: history expansion failed"], r.Err);
     }
 
+    /// <summary>bash 5.2 keeps the last history substitution for the session (the history mark holds it): a later
+    /// <c>history -p</c> repeats it with <c>:&amp;</c> / <c>:g&amp;</c>; with none yet, <c>:&amp;</c> fails.</summary>
+    [Fact]
+    public void Print_RepeatsTheSessionsLastSubstitution()
+    {
+        var list = new List<string> { "echo three" };
+        var mark = new InvokeBashHistoryCommand.HistoryMark();
+        InvokeBashHistoryCommand.Result P(string word) =>
+            InvokeBashHistoryCommand.Run(["-p", word], list, null, _ => null, (_, _, _) => { }, mark);
+        Assert.Equal(1, P("!!:&").Status);
+        Assert.Equal(["[e]cho three"], P("!!:s/e/[&]/").Out);
+        Assert.Equal(["[e]cho thr[e][e]"], P("!!:g&").Out);
+    }
+
     // set -o history: the `history -p` line itself is gone before the expansion.
     [Fact]
     public void Print_HistoryRecordingOn_DropsItsOwnLine()

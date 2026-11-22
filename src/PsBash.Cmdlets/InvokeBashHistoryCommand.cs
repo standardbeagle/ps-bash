@@ -42,7 +42,13 @@ public sealed class InvokeBashHistoryCommand : BashCmdlet
     /// <summary>Index of the first entry not yet in the history file: <c>history -a</c> appends from it, and
     /// <c>-a</c> / <c>-w</c> / <c>-r</c> move it to the end. <c>-c</c> resets it, so lines entered after a clear
     /// are new (bash: <c>history -c; echo 1; history -a</c> appends <c>echo 1</c> and the <c>history -a</c>).</summary>
-    internal sealed class HistoryMark { public int Saved; }
+    internal sealed class HistoryMark
+    {
+        public int Saved;
+
+        /// <summary>The session's last history substitution (<c>history -p '!!:s/a/b/' '!!:&'</c>), as bash keeps one.</summary>
+        public PsBash.Core.HistorySubstitution Substitution { get; } = new();
+    }
 
     /// <summary>Pure: applies <paramref name="args"/> to <paramref name="list"/> (mutated in place). File options go
     /// through <paramref name="readFile"/> / <paramref name="writeFile"/> (append flag) so tests need no disk; an
@@ -118,7 +124,7 @@ public sealed class InvokeBashHistoryCommand : BashCmdlet
             int status = 0;
             foreach (var word in operands)
             {
-                if (PsBash.Core.HistoryExpander.Expand(word, list, out _) is { } expanded) o.Add(expanded);
+                if (PsBash.Core.HistoryExpander.Expand(word, list, out _, mark.Substitution) is { } expanded) o.Add(expanded);
                 else { e.Add($"history: {word}: history expansion failed"); status = 1; }
             }
             return Done(status);
