@@ -28,6 +28,14 @@ public static class ShellVariables
     /// </summary>
     public const string LauncherParentPidVariable = "PSBASH_PPID";
 
+    /// <summary>
+    /// Set ("1") in the environment of everything a ps-bash shell runs (the launcher's block, and every nested
+    /// <c>bash</c>/<c>sh</c> child), so a launcher started from a script knows its text was built at run time
+    /// (<c>bash -c "$x"</c>) and never runs it as PowerShell: only text a user typed to a top-level launcher may take
+    /// the PowerShell fallback. A <c>PSBASH_</c> name, so a stateful session's control block carries it too.
+    /// </summary>
+    public const string ShellChildVariable = "PSBASH_SHELL_CHILD";
+
     /// <summary>When bash binds a seeded variable: always (<c>bind_variable</c>), or only when the environment it
     /// inherited lacks it (<c>set_if_not</c>).</summary>
     public enum Bind { Always, IfUnset }

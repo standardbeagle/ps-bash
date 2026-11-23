@@ -220,6 +220,9 @@ public sealed class InvokeBashBashCommand : BashCmdlet
         // which already covers this child's silence (the child's output is the outer call's output); inherited, it
         // killed a quiet nested `bash script.sh` (a `sleep`, a long compile step) with 124 and no message.
         psi.Environment.Remove("PSBASH_TIMEOUT");
+        // The child's command text was built at run time (`bash -c "$x"`): bash data, which the child launcher must never
+        // run as PowerShell (ShellVariables.ShellChildVariable), even after the script unset the inherited mark.
+        psi.Environment[PsBash.Core.ShellVariables.ShellChildVariable] = "1";
 
         try
         {

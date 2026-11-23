@@ -197,6 +197,7 @@ public sealed class InvokeBashCompgenCommand : BashCmdlet
         string ps;
         try { ps = BashRuntime.TranspileEval(src) ?? ""; }
         catch (Exception ex) when (ex is not PipelineStoppedException) { return null; } // a syntax error fails the word list
+        if (ps.Length == 0) return new List<string>(); // no command (a comment): no words
         try
         {
             var results = InvokeCommand.InvokeScript(

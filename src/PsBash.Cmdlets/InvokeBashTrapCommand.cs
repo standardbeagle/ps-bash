@@ -223,23 +223,23 @@ public sealed class InvokeBashTrapCommand : BashCmdlet
     }
 
     /// <summary>
-    /// The action is bash text (<c>$?</c>, <c>$((..))</c>, ...), so it runs transpiled; text that does not parse runs as
-    /// written. In an ERR / DEBUG / EXIT / RETURN action <c>$LINENO</c> is the line of the command the trap fired for; a real
-    /// signal's action (<paramref name="signal"/> USR1, TERM, ...) counts its own lines, as bash does.
+    /// The action is bash text (<c>$?</c>, <c>$((..))</c>, ...), so it runs transpiled, and ONLY transpiled: an action that
+    /// does not parse as bash is stored, and its syntax error is reported when the trap fires, as bash does. In an ERR /
+    /// DEBUG / EXIT / RETURN action <c>$LINENO</c> is the line of the command the trap fired for; a real signal's action
+    /// (<paramref name="signal"/> USR1, TERM, ...) counts its own lines, as bash does.
+    /// REGRESSION: an action that failed to transpile but parsed as PowerShell ran as written, so bash data in a trap
+    /// (<c>trap "$x" EXIT</c>) became PowerShell code. Guard BashTextNeverRunsAsPowerShellTests.
     /// </summary>
     internal static string TranspileAction(string action, string? signal = null)
     {
         bool realSignal = signal is not null && signal.Length > 0 && !PseudoSignals.Contains(signal);
         if (!realSignal)
             action = action.Replace("${LINENO}", "$__psbLine").Replace("$LINENO", "$__psbLine");
-        try { return PsBash.Core.Transpiler.BashTranspiler.TranspileTrapAction(action, signal ?? "") ?? action; }
-        catch (Exception)
+        try { return PsBash.Core.Transpiler.BashTranspiler.TranspileTrapAction(action, signal ?? "") ?? ""; }
+        catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex))
         {
-            // Text that is neither bash nor PowerShell (`trap 'echo <' EXIT`) is still stored, as bash does: the
-            // syntax error is reported when the trap fires. Raw text here made `[scriptblock]::Create` throw at
-            // `trap` time and stopped the script.
-            System.Management.Automation.Language.Parser.ParseInput(action, out _, out var errors);
-            if (errors.Length == 0) return action;
+            // Stored, and reported when the trap fires. Raw text here made `[scriptblock]::Create` throw at `trap` time
+            // and stopped the script.
             var msg = "trap: syntax error in trap action: `" + action.Replace("\r", "").Replace("\n", " ") + "'";
             return "Write-Error " + PsBash.Core.Parser.PsBuild.SingleQuote(msg) + " -ErrorAction Continue; $global:LASTEXITCODE = 2";
         }
