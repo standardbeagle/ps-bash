@@ -162,11 +162,8 @@ internal static class LegacySedEngine
                         continue;
                     }
 
-                    string firstLine = patternSpace.Contains('\n')
-                        ? patternSpace.Substring(0, patternSpace.IndexOf('\n'))
-                        : patternSpace;
-
-                    bool matched = TestAddress(cmd, firstLine, lineNum, inputLines);
+                    // Edited to match GNU (and SedEngine): a regex address sees the whole pattern space.
+                    bool matched = TestAddress(cmd, patternSpace, lineNum, inputLines);
                     if (cmd.Negate) { matched = !matched; }
                     if (!matched)
                     {
@@ -267,7 +264,7 @@ internal static class LegacySedEngine
                             // at the range's final line (GNU); a per-line `c` prints
                             // it on every matching line. TestAddress matched this
                             // line, so emit unless a LATER line is still in range.
-                            if (!RangeContinuesPast(cmd, firstLine, lineNum, inputLines))
+                            if (!RangeContinuesPast(cmd, patternSpace, lineNum, inputLines))
                             {
                                 appendTexts.Add(cmd.Text!);
                             }

@@ -327,10 +327,9 @@ internal sealed class SedEngine
                 _announced = true;
             }
 
-            int nl = _ps.IndexOf('\n');
-            string firstLine = nl >= 0 ? _ps.Substring(0, nl) : _ps;
-
-            bool matched = TestAddress(_ci, cmd, firstLine);
+            // A regex address matches the WHOLE pattern space (after N/G it holds several lines), as GNU does;
+            // testing only its first line hid `N;/b/p` and made the M flag meaningless.
+            bool matched = TestAddress(_ci, cmd, _ps);
             if (_paused) { _paused = false; return false; }
             if (cmd.Negate) matched = !matched;
             if (!matched)
@@ -642,9 +641,9 @@ internal sealed class SedEngine
             var addr = _cmds[i].Address!;
             if (addr.Type == AddressType.RangeRegex)
             {
-                if (!st.Active && Regex.IsMatch(raw, addr.StartPattern!)) st.Active = true;
+                if (!st.Active && addr.StartRx!.IsMatch(raw)) st.Active = true;
                 bool inRange = st.Active;
-                if (st.Active && (addr.EndPattern is null ? _pulled >= addr.End : Regex.IsMatch(raw, addr.EndPattern))) st.Active = false;
+                if (st.Active && (addr.EndRx is null ? _pulled >= addr.End : addr.EndRx.IsMatch(raw))) st.Active = false;
                 if (cycleStart)
                 {
                     st.CycleInRange = inRange;
@@ -656,7 +655,7 @@ internal sealed class SedEngine
                 int begin = Math.Max(addr.Start, 1);
                 bool canEndOnStart = addr.Start == 0;
                 if (st.ClosedAt == 0 && _pulled >= begin && (_pulled > begin || canEndOnStart)
-                    && Regex.IsMatch(raw, addr.EndPattern!))
+                    && addr.EndRx!.IsMatch(raw))
                 {
                     st.ClosedAt = _pulled;
                 }
@@ -673,7 +672,7 @@ internal sealed class SedEngine
         switch (addr.Type)
         {
             case AddressType.Regex:
-                return Regex.IsMatch(line, addr.Pattern!);
+                return addr.Rx!.IsMatch(line);
             case AddressType.Line:
                 return lineNum == addr.Line;
             case AddressType.Last:
@@ -728,7 +727,7 @@ internal sealed class SedEngine
                 nextMatched = nextNum >= addr.Start && nextNum <= addr.End;
                 break;
             case AddressType.RangeRegex:
-                nextMatched = _range[ci]!.ActiveAfterStart || Regex.IsMatch(next, addr.StartPattern!);
+                nextMatched = _range[ci]!.ActiveAfterStart || addr.StartRx!.IsMatch(next);
                 break;
             default: // RangeNumToRegex
             {

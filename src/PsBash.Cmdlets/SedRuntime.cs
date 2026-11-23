@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using PsBash.Core;
 using static PsBash.Cmdlets.InvokeBashSedCommand;
 
@@ -129,20 +130,29 @@ internal static class SedDebugFormat
     {
         switch (a.Type)
         {
-            case AddressType.Regex: return "/" + EscapeText(RegexSource(a.Pattern!)) + "/";
+            case AddressType.Regex: return Rx(a.Pattern!, a.Rx);
             case AddressType.Line: return a.Line.ToString();
             case AddressType.Last: return "$";
             case AddressType.Step: return a.Start + "~" + a.Step;
             case AddressType.RangeNum:
                 return a.Start + "," + (a.End == int.MaxValue ? "$" : a.End.ToString());
             case AddressType.RangeRegex:
-                return "/" + EscapeText(RegexSource(a.StartPattern!)) + "/," + (a.EndPattern is null
+                return Rx(a.StartPattern!, a.StartRx) + "," + (a.EndPattern is null
                     ? (a.End == int.MaxValue ? "$" : a.End.ToString())
-                    : "/" + EscapeText(RegexSource(a.EndPattern)) + "/");
+                    : Rx(a.EndPattern, a.EndRx));
             case AddressType.RangeNumToRegex:
-                return a.Start + ",/" + EscapeText(RegexSource(a.EndPattern!)) + "/";
+                return a.Start + "," + Rx(a.EndPattern!, a.EndRx);
         }
         return "";
+    }
+
+    /// <summary>A regex address as GNU lists it: <c>/RE/</c> then its flags (<c>/ab/I</c>, <c>/ab/M</c>).</summary>
+    private static string Rx(string pattern, Regex? rx)
+    {
+        var opts = rx?.Options ?? RegexOptions.None;
+        return "/" + EscapeText(RegexSource(pattern)) + "/"
+            + ((opts & RegexOptions.IgnoreCase) != 0 ? "I" : "")
+            + ((opts & RegexOptions.Multiline) != 0 ? "M" : "");
     }
 
     /// <summary>One command as <c>debug_print_command</c> prints it (without indentation and without the final newline).</summary>

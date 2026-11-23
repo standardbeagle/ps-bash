@@ -71,4 +71,59 @@ public class SedDifferentialTests
     [SkippableFact]
     public Task Sed_Bre_PunctClass_Compiles()
         => Eq("printf 'a!b\\n' | sed 's/[[:punct:]]/_/'");
+
+    // ---- delimited regexes: one scanner (SedDelimited) for addresses, s and y --------------------------
+    // An address regex took the first `/` as its end: `/a<\/c>/d` compiled `a<\` and failed as
+    // "sed: can't read f: Invalid pattern ..." (printed twice, status 1); `\,re,` was "unknown command: `\'".
+
+    private const string InFile = @"cd ""$(mktemp -d)"" || exit; printf 'x\na</c>\ny\n' > f; ";
+    private const string Lines = @"printf 'a/b\nc\nd|e\nAB\nab\n' | ";
+
+    [SkippableFact]
+    public Task Sed_Address_EscapedDelimiter_DeletesLine()
+        => Eq(InFile + @"sed '/a<\/c>/d' f; echo ""s=$?""");
+
+    [SkippableFact]
+    public Task Sed_Address_CustomDelimiter_CommaAndBar()
+        => Eq(InFile + @"sed -n '\,a</c>,p' f; sed -n '\|a</c>|p' f; echo ""s=$?""");
+
+    [SkippableFact]
+    public Task Sed_Address_CustomDelimiter_EscapedDelimiterIsTheBareChar()
+        => Eq(Lines + @"sed -n '\|d\|e|p'; " + Lines + @"sed -E -n '\|c\|d|p'; " + Lines + @"sed -n '\.a\.b.p'");
+
+    [SkippableFact]
+    public Task Sed_Address_DelimiterInsideBracket_DoesNotEndRegex()
+        => Eq(Lines + @"sed -n '/[/]/p'; " + Lines + @"sed -n '/[^/]$/p'; " + Lines + @"sed -n '/[]/]/p'");
+
+    [SkippableFact]
+    public Task Sed_AddressRange_EscapedAndCustomDelimiters()
+        => Eq(Lines + @"sed -n '/a\/b/,/c/p'; " + Lines + @"sed -n '\,a/b,,\|c|p'; " + Lines + @"sed -n '2,\,d|e,p'");
+
+    [SkippableFact]
+    public Task Sed_Address_IgnoreCaseAndMultilineFlags()
+        => Eq(Lines + @"sed -n '/ab/Ip'; " + Lines + @"sed -n '\,ab, I p'; " + Lines + @"sed -n '/AB/I,/D/Ip'; "
+            + @"printf 'a\nb\n' | sed -n 'N;/^b/Mp'; printf 'a\nb\n' | sed -n 'N;/^b/p'; printf 'a\nb\n' | sed -n 'N;/b/p'");
+
+    [SkippableFact]
+    public Task Sed_Subst_CustomDelimiters_EscapedDelimiter()
+        => Eq(Lines + @"sed 's|d\|e|X|'; " + Lines + @"sed -E 's|d\|e|X|'; " + Lines + @"sed 's/[/]/X/'; "
+            + Lines + @"sed 's&a&[\&]&'; " + Lines + @"sed 's,a/b,X\,Y,'");
+
+    [SkippableFact]
+    public Task Sed_Transliterate_EscapedDelimiter()
+        => Eq(Lines + @"sed 'y/\//|/'; " + Lines + @"sed 'y,a\,,xy,'");
+
+    [SkippableFact]
+    public Task Sed_BadAddressRegex_IsOneScriptError_NotCantRead()
+        => Eq(InFile + @"sed '/a\(/d' f; echo ""s=$?""; sed -E '/a(/d' f; echo ""s=$?""; sed -n '1,/a\(/p' f; echo ""s=$?""");
+
+    [SkippableFact]
+    public Task Sed_BadRegex_CharPositionCountsTheWholeScript()
+        => Eq(InFile + @"sed '/a/d;/b\(/d' f; echo ""s=$?""; sed 's/a\(/x/;s/b/c/' f; echo ""s=$?""; "
+            + @"sed -e '/a/d' -e '/b\(/d' f; echo ""s=$?""; sed '2{/a\(/d}' f; echo ""s=$?""");
+
+    [SkippableFact]
+    public Task Sed_UnterminatedAndBadCommands_GnuMessages()
+        => Eq(InFile + @"sed -n '/abc' f; echo ""s=$?""; sed -n '\,abc' f; echo ""s=$?""; sed 's/a/b' f; echo ""s=$?""; "
+            + @"sed 'y/ab/x/' f; echo ""s=$?""; sed 's/a/b/gx' f; echo ""s=$?""; sed 's/a/\1/' f; echo ""s=$?""");
 }

@@ -35,7 +35,7 @@ Tests: `*.Tests`, `Differential.Tests` (bash oracle), `Canary.Tests`, `Escalatio
 - **Launcher stdin into `-c`**: `Shell/Program.cs`, `HostProtocol` STDIN frames, `Server/LauncherStdinFeed.cs`, `Transpiler/StdinCursor.cs`.
 - **Fused pipeline**: `FusedLane.cs` → `InvokeBashFusedPipelineCommand.cs` → `LineStreamStages.cs` + `LineStream/*`.
 - **External-tool wrapper** (psav/ffmpeg ref): `InvokeBash{Tool}Command.cs` + `Media/*` (plan first, run second).
-- **diff**: `DiffEngine.cs`, `DiffFormat.cs`, `DiffPlan.cs`. **jq**: `Jq*.cs`. **sort**: `SortEngine.cs`. **cut**: `CutPlan.cs`.
+- **diff**: `DiffEngine.cs`, `DiffFormat.cs`, `DiffPlan.cs`. **jq**: `Jq*.cs`. **sort**: `SortEngine.cs`. **cut**: `CutPlan.cs`. **sed** delimited text (address/`s`/`y`): `SedDelimited.cs` only, regex compile `SedRegex.cs`.
 - **Completion**: `Shell/CompletionEngine.cs` → `TabCompleter`. **Aliases**: `Shell/AliasExpander.cs`. **History `!!`** (REPL + `history -p`): `Transpiler/HistoryExpander.cs`.
 - **AI assist**: `Shell/CommandAssist*.cs`. **z/zi**: `Shell/SqliteFrecencyStore.cs`.
 - **Compact output**: `Runtime/Compaction/OutputCompactor.cs`.

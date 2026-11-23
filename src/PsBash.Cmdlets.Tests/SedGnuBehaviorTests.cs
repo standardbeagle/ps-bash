@@ -74,6 +74,24 @@ public class SedGnuBehaviorTests : IClassFixture<SharedPwshFixture>, IDisposable
     }
 
     [Fact]
+    public void BadAddressRegex_IsOneScriptError_NotCantRead()   // FIX (`sed: can't read a.txt: Invalid pattern ...`, twice)
+    {
+        var r = Run($"Invoke-BashSed '/a\\(/d' {_a}");
+        r.AssertFailed(1, "sed: -e expression #1, char 5: Unmatched ( or \\(");
+        Assert.Single(r.Errors);
+        Assert.DoesNotContain("can't read", r.Stderr);
+        Assert.Empty(r.Lines);
+    }
+
+    [Fact]
+    public void EscapedDelimiterAndCustomDelimiterAddresses_Match()   // FIX (`\/` ended the address; `\,re,` was unknown)
+    {
+        Assert.Equal(new[] { "a1", "c3" }, Run($"Invoke-BashSed '/b\\/*2/d' {_a}").AssertSuccess().Lines);
+        Assert.Equal(new[] { "b2" }, Run($"Invoke-BashSed '-n' '\\,b2,p' {_a}").AssertSuccess().Lines);
+        Assert.Equal(new[] { "B2" }, Run($"Invoke-BashSed '-n' '/B2/I{{s/b/B/;p}}' {_a}").AssertSuccess().Lines);
+    }
+
+    [Fact]
     public void MultipleEAndBundles_AllReachTheCmdlet()
     {
         Assert.Equal(new[] { "b2", "c3" }, Run($"Invoke-BashSed '-n' '-e' '2p' '-e' '3p' {_a}").AssertSuccess().Lines);
