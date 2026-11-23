@@ -290,27 +290,17 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
 
     /// <summary>
     /// A redirect that cannot be opened: bash's <c>s.sh: line 3: SHOWN: REASON</c>, status 1, and the command does not
-    /// run; under <c>set -e</c> (no ERR trap) the script ends. Always false (the open failed).
+    /// run. Always false (the open failed). Only a STATUS: whether <c>set -e</c> ends the shell is the one emitted
+    /// errexit check's to decide, which knows what this cmdlet cannot - that the command is an <c>||</c> / <c>if</c>
+    /// operand (<c>__BashErrexitSuppress</c>), or runs in a subshell whose own status is what the parent checks.
+    /// REGRESSION: a terminating error here ended the whole script from <c>( set -e; : &gt; /nodir/f ) 2&gt;/dev/null</c>
+    /// instead of the subshell alone.
     /// </summary>
     private bool FailOpen(string shown, string reason, string raw, Action<string>? report)
     {
         string message = ShellDiagnostic.Prefix(SessionState) + $"{shown}: {reason}";
         if (report is null) FileSystemHelpers.WriteBashError(this, message);
         else report(message);
-        // With an ERR trap the emitted statement check runs it first and then exits (the trap makes the
-        // script errexit-checked), so the failure stays a status here.
-        if (SessionState.PSVariable.GetValue("__BashErrexit") is true
-            && SessionState.PSVariable.GetValue("__BashTrapERR") is null)
-        {
-            FileSystemHelpers.SetLastExitCode(this, 1);
-            // Already reported above, where fd 2 pointed (`2>/dev/null >nodir/f` ends the script silently): the
-            // host must not print it again (SdkWorker reads the mark; the script's status is 1).
-            var reported = new IOException(message);
-            reported.Data["psbash.reported"] = true;
-            reported.Data["psbash.exitcode"] = 1;
-            Close();
-            ThrowTerminatingError(new ErrorRecord(reported, "BashRedirectError", ErrorCategory.WriteError, raw));
-        }
         MarkOpenFailed();
         Close();
         UpstreamStop.Throw(this);
