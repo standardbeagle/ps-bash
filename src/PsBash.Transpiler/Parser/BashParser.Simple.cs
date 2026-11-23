@@ -356,8 +356,11 @@ public sealed partial class BashParser
         }
 
         // `exec <<< w` / `exec <<EOF` with no command: the here-text becomes the SHELL's stdin, a redirection of exec as
-        // `exec < f` is, not a command's input (piped into an exec with nothing to run, it emitted `… | $x = 0`).
-        if (stdinHereText is not null && words.Count == 1 && words[0].Parts is [WordPart.Literal { Value: "exec" }])
+        // `exec < f` is, not a command's input (piped into an exec with nothing to run, it emitted `… | $x = 0`). So for
+        // `builtin exec <<< w` / `command exec <<EOF`, which are exec itself. REGRESSION: those still piped the text into
+        // the status assignment, and the whole script failed to parse.
+        if (stdinHereText is not null && words.Count >= 1 && words[^1].Parts is [WordPart.Literal { Value: "exec" }]
+            && words.Take(words.Count - 1).All(w => w.Parts is [WordPart.Literal { Value: "builtin" or "command" }]))
         {
             hereDocs.Clear();
             AddRedirect(redirects, stdinHereText);
@@ -677,6 +680,13 @@ public sealed partial class BashParser
             if (Peek().Kind == BashTokenKind.IoNumber || IsFileRedirectOp(Peek().Kind))
             {
                 AddRedirect(_declRedirects, ParseRedirect());
+                continue;
+            }
+            // `export y=1 {v}>f`: a named descriptor, as on any command. REGRESSION: `{v}` was a name to export (127).
+            if (IsNamedFdRedirect() && IsFileRedirectOp(_tokens[_pos + 1].Kind))
+            {
+                var fdVar = Advance().Value[1..^1];
+                AddRedirect(_declRedirects, ParseRedirect(fdVar));
                 continue;
             }
 
@@ -1224,7 +1234,6 @@ public sealed partial class BashParser
         return redirects.ToImmutable();
     }
 
-    /// <summary>A <c>{name}</c> word right before a redirection operator: the descriptor bash allocates into <c>name</c>.</summary>
     /// <summary>
     /// A <c>{name}</c> word is a descriptor variable only when a redirection operator that takes a descriptor prefix
     /// follows it IMMEDIATELY, as a digit word becomes an IO number (<see cref="BashLexer"/> TryReclassifyIoNumber):

@@ -1116,10 +1116,11 @@ public class PsEmitterTests
 
     // bash: `cmd {fd}>file` opens a descriptor of its own (10 up), stores its number in fd and leaves it open after
     // the command; cmd's stdout is not redirected. It degraded to a plain `>file` (oils redirect "Parsing of
-    // x={myvar} and related cases": `echo + {myvar}>/dev/stdout` left myvar unchanged).
+    // x={myvar} and related cases": `echo + {myvar}>/dev/stdout` left myvar unchanged). The command runs only when the
+    // descriptor opened (bash: `cmd {fd}</nofile` never runs cmd).
     [Theory]
-    [InlineData("cmd {fd}>out.txt", ". { Invoke-BashExecFd -Variable 'fd' -Operator '>' -Target out.txt; cmd }")]
-    [InlineData("cmd a {v}<in.txt >o", ". { Invoke-BashExecFd -Variable 'v' -Operator '<' -Target in.txt; cmd a | Invoke-BashRedirect -Path o }")]
+    [InlineData("cmd {fd}>out.txt", ". { Invoke-BashExecFd -Variable 'fd' -Operator '>' -Target out.txt; if ($global:LASTEXITCODE -eq 0) { cmd; $global:__BashRedirectFailed = $false } else { $global:__BashRedirectFailed = $true } }")]
+    [InlineData("cmd a {v}<in.txt >o", ". { Invoke-BashExecFd -Variable 'v' -Operator '<' -Target in.txt; if ($global:LASTEXITCODE -eq 0) { cmd a | Invoke-BashRedirect -Path o } else { $global:__BashRedirectFailed = $true } }")]
     public void Transpile_NamedFdRedirect_OnASimpleCommand_OpensADescriptor(string bash, string expected)
         => Assert.Equal(expected, PsEmitter.Transpile(bash));
 
@@ -1969,7 +1970,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cmd 3> file");
 
-        Assert.StartsWith("& { $__psbash_fdSave = Save-BashFd 3; Invoke-BashExecFd 3 '>' file; try { cmd }", result);
+        Assert.StartsWith("& { $__psbash_fdSave = Save-BashFd 3; try { Invoke-BashExecFd 3 '>' file; if ($global:LASTEXITCODE -eq 0) { cmd; ", result);
     }
 
     [Fact]
@@ -5636,19 +5637,20 @@ public class PsEmitterTests
     public void Transpile_RedirectFdModel_UserFd_IsOpenedAroundTheCommand()
     {
         // fd 3 is outside the model: the descriptor is opened for the command and put back after it (it was PowerShell's
-        // warning stream, `cmd 3>f`).
-        Assert.StartsWith("& { $__psbash_fdSave = Save-BashFd 3; Invoke-BashExecFd 3 '>' f; try { cmd } finally {", PsEmitter.Transpile("cmd 3>f"));
+        // warning stream, `cmd 3>f`). The command runs only when it opened: bash never runs `cmd 3>/nodir/f`. REGRESSION:
+        // the open was outside the try and the command ran after a failed one.
+        Assert.StartsWith("& { $__psbash_fdSave = Save-BashFd 3; try { Invoke-BashExecFd 3 '>' f; if ($global:LASTEXITCODE -eq 0) { cmd; ", PsEmitter.Transpile("cmd 3>f"));
     }
 
     // `echo hi 9>&1` / `9>f.txt` / `9>&-`: fd 7+ is no PowerShell stream. `9>f.txt` was a literal argument ("hi 9>f.txt"),
     // `9>&1` ended in PowerShell's background `&` (the command ran as a job). Opened around the command instead.
     [Theory]
-    [InlineData("echo hi 9>&1", "& { $__psbash_fdSave = Save-BashFd 9; Invoke-BashExecFd 9 '>&' 1; try { Invoke-BashEcho hi } finally {")]
-    [InlineData("echo hi 9>f.txt", "& { $__psbash_fdSave = Save-BashFd 9; Invoke-BashExecFd 9 '>' f.txt; try { Invoke-BashEcho hi } finally {")]
-    [InlineData("echo hi 9>&-", "& { $__psbash_fdSave = Save-BashFd 9; Invoke-BashExecFd 9 '>&' -; try { Invoke-BashEcho hi } finally {")]
-    [InlineData("read -u 7 l 7<in.txt", "& { $__psbash_fdSave = Save-BashFd 7; Invoke-BashExecFd 7 '<' in.txt; try {")]
+    [InlineData("echo hi 9>&1", "& { $__psbash_fdSave = Save-BashFd 9; try { Invoke-BashExecFd 9 '>&' 1; if ($global:LASTEXITCODE -eq 0) { Invoke-BashEcho hi; ")]
+    [InlineData("echo hi 9>f.txt", "& { $__psbash_fdSave = Save-BashFd 9; try { Invoke-BashExecFd 9 '>' f.txt; if ($global:LASTEXITCODE -eq 0) { Invoke-BashEcho hi; ")]
+    [InlineData("echo hi 9>&-", "& { $__psbash_fdSave = Save-BashFd 9; try { Invoke-BashExecFd 9 '>&' -; if ($global:LASTEXITCODE -eq 0) { Invoke-BashEcho hi; ")]
+    [InlineData("read -u 7 l 7<in.txt", "& { $__psbash_fdSave = Save-BashFd 7; try { Invoke-BashExecFd 7 '<' in.txt; if ($global:LASTEXITCODE -eq 0) { ")]
     // `cmd 3<&0`: fd 3 names the shell's stdin for the command (the table's dup of 0). It was dropped as a comment.
-    [InlineData("cmd 3<&0", "& { $__psbash_fdSave = Save-BashFd 3; Invoke-BashExecFd 3 '<&' 0; try {")]
+    [InlineData("cmd 3<&0", "& { $__psbash_fdSave = Save-BashFd 3; try { Invoke-BashExecFd 3 '<&' 0; if ($global:LASTEXITCODE -eq 0) { ")]
     public void Transpile_HighDescriptorOnASimpleCommand_IsOpenedAroundIt(string bash, string prefix)
         => Assert.StartsWith(prefix, PsEmitter.Transpile(bash));
 
@@ -5922,6 +5924,34 @@ public class PsEmitterTests
             PsEmitter.InheritedPipefail = false;
             PsEmitter.InheritedNounset = false;
         }
+    }
+
+    /// <summary>
+    /// REGRESSION (v0.15.2): <c>set -e; eval "echo x &gt;/nodir/f; echo still"</c> printed <c>still</c> - eval text is
+    /// transpiled at run time at nesting 0, so it got none of the caller's errexit checks. bash ends at the redirect.
+    /// </summary>
+    [Fact]
+    public void Transpile_InheritedErrexit_EvalTextGetsTheRedirectFailureCheck()
+    {
+        const string text = "echo x >/nodir/f; echo still";
+        Assert.DoesNotContain("__BashErrexit -and", PsEmitter.Transpile(text, PsBash.Core.Transpiler.TranspileContext.Eval));
+        PsEmitter.InheritedErrexit = true;
+        try
+        {
+            var result = PsEmitter.Transpile(text, PsBash.Core.Transpiler.TranspileContext.Eval)!;
+            Assert.Contains("__BashErrexit -and", result);
+            Assert.True(result.IndexOf("__BashErrexit -and", StringComparison.Ordinal) < result.IndexOf("still", StringComparison.Ordinal),
+                "the check must come between the failing echo and the next command: " + result);
+        }
+        finally { PsEmitter.InheritedErrexit = false; }
+    }
+
+    [Fact]
+    public void Transpile_InheritedErrTrap_EvalTextGetsTheErrTrapCheck()
+    {
+        PsEmitter.InheritedErrTrap = true;
+        try { Assert.Contains("__BashErrexit -and", PsEmitter.Transpile("false; echo x", PsBash.Core.Transpiler.TranspileContext.Eval)); }
+        finally { PsEmitter.InheritedErrTrap = false; }
     }
 
     [Theory]

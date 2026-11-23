@@ -35,6 +35,31 @@ public class PsBuildTests
             + "if ($global:__BashRedirectFailed) { $global:__BashRedirectFailed = $false; $global:LASTEXITCODE = 1; CHECK }",
             PsBuild.RedirectFailureChecked("& { x } | Invoke-BashRedirect -Path f", "CHECK"));
 
+    // `export 1x=2 >f` / `local v=$(x) 2>/nodir/e`: the command's own status counts, so the check runs after it either way,
+    // on status 1 when the open failed. One check, never two (the ERR trap would run twice).
+    [Fact]
+    public void RedirectFailureChecked_StatusCounts_RunsTheCheckOnceAfterTheCommand()
+        => Assert.Equal(
+            "$global:__BashRedirectFailed = $false; CMD; "
+            + "if ($global:__BashRedirectFailed) { $global:__BashRedirectFailed = $false; $global:LASTEXITCODE = 1 }; CHECK",
+            PsBuild.RedirectFailureChecked("CMD", "CHECK", statusCounts: true));
+
+    // ─────────────── FdOpensGated ───────────────
+
+    // `cmd 3>a 4<b`: each open gates the rest; a failed one skips the command and raises the flag (bash runs nothing).
+    [Fact]
+    public void FdOpensGated_EachOpenGatesTheRestAndAFailureRaisesTheFlag()
+        => Assert.Equal(
+            "O3; if ($global:LASTEXITCODE -eq 0) { O4; if ($global:LASTEXITCODE -eq 0) { CMD; $global:__BashRedirectFailed = $false } "
+            + "else { $global:__BashRedirectFailed = $true } } else { $global:__BashRedirectFailed = $true }",
+            PsBuild.FdOpensGated(["O3", "O4"], "CMD", clearsNested: true));
+
+    [Fact]
+    public void FdOpensGated_CommandThatReportsItself_KeepsItsFlag()
+        => Assert.Equal(
+            "O3; if ($global:LASTEXITCODE -eq 0) { CMD } else { $global:__BashRedirectFailed = $true }",
+            PsBuild.FdOpensGated(["O3"], "CMD", clearsNested: false));
+
     // ─────────────── InheritErrexitCapture / PosixElse / SpecialBuiltinRedefined ───────────────
 
     // `shopt -s inherit_errexit`: a substitution keeps set -e only while the option is on; otherwise it runs suppressed,
@@ -188,6 +213,20 @@ public class PsBuildTests
         Assert.Equal("$(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue })",
             PsBuild.SignalFailIfFailed());
     }
+
+    [Theory]
+    [InlineData(false, "$(if ($global:__BashRedirectFailed) { $global:__BashRedirectFailed = $false; Write-Error '' -ErrorAction SilentlyContinue })")]
+    [InlineData(true, "$(if ($global:__BashRedirectFailed -or $global:LASTEXITCODE -ne 0) { $global:__BashRedirectFailed = $false; Write-Error '' -ErrorAction SilentlyContinue })")]
+    public void SignalFailIfOpenFailed_BridgesTheOpenersFlagAndClearsIt(bool orStatus, string expected)
+    {
+        // `x=1 >/nodir/f || echo c`: the assignment's status is the failed open's, raised as a flag; `export y=$(false)`
+        // leaves LASTEXITCODE 1 though the builtin's status is 0, so the status joins only when asked.
+        Assert.Equal(expected, PsBuild.SignalFailIfOpenFailed(orStatus));
+    }
+
+    [Fact]
+    public void StatusZeroUnlessExpansionFailed_LeavesAFailedExpansionsStatus()
+        => Assert.Equal("if (-not $global:__BashExpansionFailed) { $global:LASTEXITCODE = 0 }", PsBuild.StatusZeroUnlessExpansionFailed);
 
     // ─────────────── ExitCodeTest ───────────────
 
@@ -741,7 +780,8 @@ public class PsBuildTests
     public void Transpile_FcWithARedirect_TakesAndRunsTheRerunInsideTheRedirectedBlock()
     {
         var ps = PsEmitter.Transpile("fc -s > out")!;
-        Assert.StartsWith(". { $global:__BashFcRerun = $null; Invoke-BashFc -s; $__psbash_eval_src = $global:__BashFcRerun; ", ps);
+        // fc's re-run may turn set -e on, so its redirect is checked (PsBuild.RedirectFailureChecked): after the flag reset.
+        Assert.StartsWith(PsBuild.RedirectFailedVariable + " = $false; . { $global:__BashFcRerun = $null; Invoke-BashFc -s; $__psbash_eval_src = $global:__BashFcRerun; ", ps);
         int run = ps.IndexOf("Invoke-Expression $__psbash_eval_pwsh", StringComparison.Ordinal);
         int redirect = ps.IndexOf("} | Invoke-BashRedirect -Path out", StringComparison.Ordinal);
         Assert.True(run > 0 && redirect > run, ps);

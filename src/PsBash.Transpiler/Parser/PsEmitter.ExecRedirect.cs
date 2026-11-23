@@ -54,6 +54,15 @@ public static partial class PsEmitter
         return high;
     }
 
+    /// <summary>
+    /// A simple command that opens descriptors of its own around itself: numbered ones (<see cref="ScopedHighFdRedirects"/>)
+    /// or a <c>{name}</c> one. Not <c>exec</c>, whose descriptors stay open.
+    /// </summary>
+    private static bool OpensDescriptorsAroundItself(Command.Simple cmd)
+        => ScopedHighFdRedirects(cmd).Count > 0
+           || (!cmd.Redirects.IsDefaultOrEmpty && cmd.Words.Length > 0 && GetLiteralValue(cmd.Words[0]) != "exec"
+               && cmd.Redirects.Any(r => r.FdVar is not null));
+
     /// <summary>The statements after a standard-descriptor <c>exec</c>, as one brace group under its redirections.</summary>
     private static Command RestUnderExecRedirects(ImmutableArray<Command> rest, ImmutableArray<Redirect> redirects)
         => new Command.BraceGroup(rest.Length == 1 ? rest[0] : new Command.CommandList(rest), redirects);

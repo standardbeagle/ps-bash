@@ -100,7 +100,7 @@ public static partial class PsEmitter
                 case null:
                     // `$t 'echo E' ERR`: a command named at run time may be trap.
                     for (int i = at + 1; i < s.Words.Length && !can; i++)
-                        can = TryGetStaticArgValue(s.Words[i]) is { } v && IsErrSignalWord(v);
+                        can = TryGetStaticArgValue(s.Words[i]) is { } v && NamesErrSignal(v);
                     break;
                 case "trap":
                     // The action is the first operand; every later one is a signal (or one known only at run time).
@@ -110,8 +110,8 @@ public static partial class PsEmitter
                         string? v = TryGetStaticArgValue(s.Words[i]);
                         if (v is "--" && !action) continue;
                         if (v is "-p" or "-l" && !action) return;
-                        if (!action) { action = true; if (v is not null && IsErrSignalWord(v) && s.Words.Length == i + 1) return; continue; }
-                        can = v is null || IsErrSignalWord(v);
+                        if (!action) { action = true; if (v is not null && NamesErrSignal(v) && s.Words.Length == i + 1) return; continue; }
+                        can = v is null || NamesErrSignal(v);
                     }
                     if (!can && StaticTrapAction(s, at) is { } text) can = ParsedTextMatches(text, CanSetErrTrap);
                     break;
@@ -130,7 +130,7 @@ public static partial class PsEmitter
         return can;
     }
 
-    private static bool IsErrSignalWord(string v) => v.Equals("ERR", StringComparison.OrdinalIgnoreCase) || v.Equals("SIGERR", StringComparison.OrdinalIgnoreCase);
+    private static bool NamesErrSignal(string v) => v.Equals("ERR", StringComparison.OrdinalIgnoreCase) || v.Equals("SIGERR", StringComparison.OrdinalIgnoreCase);
 
     private static readonly Func<string, bool> PipefailWord = v => v.Contains("pipefail", StringComparison.Ordinal);
     private static readonly Func<string, bool> XtraceWord = v => v.Contains("xtrace", StringComparison.Ordinal) || IsShortOptionCluster(v, 'x');

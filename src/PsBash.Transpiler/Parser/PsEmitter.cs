@@ -115,6 +115,19 @@ public static partial class PsEmitter
     public static bool InheritedNounset;
 
     /// <summary>
+    /// Set by <c>source</c> / <c>eval</c> from the caller's LIVE errexit state (RuntimeOptionHints): text transpiled at
+    /// run time runs under the <c>set -e</c>, ERR trap and errtrace of the shell that runs it, though it never mentions
+    /// them (bash: <c>set -e; eval "echo x &gt;/nodir/f; echo still"</c> ends at the failed redirect). REGRESSION: the
+    /// text got no checks and ran on.
+    /// </summary>
+    [ThreadStatic]
+    public static bool InheritedErrexit;
+    [ThreadStatic]
+    public static bool InheritedErrTrap;
+    [ThreadStatic]
+    public static bool InheritedErrtrace;
+
+    /// <summary>
     /// Set by <c>trap</c> while it transpiles an action for this signal (ERR, DEBUG). bash runs the action's commands
     /// like any others: a failing one runs the ERR trap and errexit (except inside the ERR action itself), and the DEBUG
     /// trap runs before each of them (except inside the DEBUG action). So the action text gets the statement checks and,
@@ -538,13 +551,22 @@ public static partial class PsEmitter
         finally { _errexitExemptDepth--; }
     }
 
-    /// <summary>How to leave on an errexit failure from here: the script, or only the enclosing subshell.</summary>
     /// <summary>Under an armed set -e, what a failed compound input redirect runs to end the script (null otherwise).</summary>
     private static string? RedirectFailExit() =>
         _errexitMode && _errexitExemptDepth == 0 ? PsBuild.ErrexitCheck(ErrexitExitStatement()) : null;
 
+    /// <summary>How to leave on an errexit failure from here: the script, or only the enclosing subshell.</summary>
     private static string ErrexitExitStatement() =>
-        _subshellDepth > 0 ? LeavingReturn("return") : ShellExit("$global:LASTEXITCODE");
+        InSubshellBody ? LeavingReturn("return") : ShellExit("$global:LASTEXITCODE");
+
+    /// <summary>
+    /// The code being emitted is a subshell's OWN body, whose script block a PowerShell <c>return</c> leaves - not the body
+    /// of a function defined in it (<see cref="_subshellFunctionDepth"/>), where a <c>return</c> leaves only the function.
+    /// The one test for how <c>exit</c>, an errexit failure, a fatal error and a run-time <c>return</c> leave from here.
+    /// REGRESSION: <c>( f(){ exit 3; echo no; }; f; echo after )</c> printed after with status 0, and
+    /// <c>( trap 'echo E' ERR; set -e; f(){ false; }; f )</c> left only f, whose caller then ran the trap bash never runs.
+    /// </summary>
+    private static bool InSubshellBody => _subshellDepth > 0 && _functionDepth == _subshellFunctionDepth;
 
     /// <summary>
     /// Code that may run inside a subshell the emitter cannot see: a function body is emitted once and called from
@@ -553,7 +575,7 @@ public static partial class PsEmitter
     /// <c>eval 'exit 3' | cat</c> and <c>( trap 'exit 3' EXIT; ... )</c> end only their subshell, where a plain
     /// <c>exit</c> in the text ended the whole script.
     /// </summary>
-    private static bool ExitDecidedAtRunTime => _subshellDepth == 0 && (_functionDepth > 0 || _context == TranspileContext.Eval);
+    private static bool ExitDecidedAtRunTime => !InSubshellBody && (_functionDepth > 0 || _context == TranspileContext.Eval);
 
     /// <summary>The statement that ends the shell with <paramref name="status"/> (<see cref="PsBuild.DynamicExit"/> in a function body).</summary>
     private static string ShellExit(string status) =>
@@ -565,7 +587,7 @@ public static partial class PsEmitter
     /// the whole script.
     /// </summary>
     private static string EndShell(string status) =>
-        "$global:LASTEXITCODE = " + status + "; " + (_subshellDepth > 0 ? LeavingReturn("return") : ShellExit("$global:LASTEXITCODE"));
+        "$global:LASTEXITCODE = " + status + "; " + (InSubshellBody ? LeavingReturn("return") : ShellExit("$global:LASTEXITCODE"));
 
     /// <summary>`readonly r=1; r=2`: the assignment is refused with status 1, which errexit acts on.</summary>
     private static bool WritesReadonly(Command.ShAssignment assign)
@@ -611,7 +633,7 @@ public static partial class PsEmitter
             text = trace + "; " + text;
         // `r=return; $r 99`: a command named at run time may turn out to be `return` (Resolve-BashCommand), which can
         // only raise the eval-return flag; the function (or eval text) it ran in returns here, as after an eval.
-        if (cmd is Command.Simple && _subshellDepth == 0 && (_functionDepth > 0 || _context == TranspileContext.Eval)
+        if (cmd is Command.Simple && !InSubshellBody && (_functionDepth > 0 || _context == TranspileContext.Eval)
             && text.Contains("Resolve-BashCommand", StringComparison.Ordinal))
             text += "; " + LeavingReturn(PsBuild.EvalReturnCheck(inFunction: _functionDepth > 0));
         // A script that can set a trap runs a signal sent to the shell (ShellSignals) between statements, as bash runs a
@@ -1226,92 +1248,65 @@ public static partial class PsEmitter
             // The job is a subshell: set -e and (under errtrace) the ERR trap apply inside it (EmitBackground); its own status is 0.
             case Command.Background:
                 return EmitRecordingStatus(cmd);
-            case Command.Simple simple when IsErrexitCheckedSimple(simple):
-            // `x=$(false)` fails with the substitution; `local`/`export x=$(false)` has the builtin's status (0), and a
-            // declaration builtin's own failure (`local x` outside a function, `readonly r=2` again) counts; `x=1 > /nodir/f`
-            // fails with its redirect. (PsBuild.DeclarationSucceeded sets the 0.)
-            case Command.ShAssignment assign when ContainsCommandSub(assign) || WritesReadonly(assign) || !assign.Redirects.IsDefaultOrEmpty
-                                                  || assign.IsLocal || assign.IsExport || assign.IsDeclare || assign.IsReadonly:
-            case Command.BoolExpr:
-            case Command.ArithCommand:
-            case Command.Subshell:
-                return EmitRecordingStatus(cmd) + "; " + PsBuild.ErrexitCheck(ErrexitExitStatement());
-            case Command.BraceGroup g when OpensFile(g.Redirects):
-            case Command.If i when OpensFile(i.Redirects):
-            case Command.While w when OpensFile(w.Redirects):
-            case Command.ForIn f when OpensFile(f.Redirects):
-            case Command.ForArith a when OpensFile(a.Redirects):
-            case Command.Case c when OpensFile(c.Redirects):
-                return EmitRedirectedCompound(cmd);
-            // `: > /nodir/x`, `true < missing`, `export Y=1 2> /nodir/e`: the builtin's status is not checked, but a
-            // redirect that cannot open fails the command (status 1), which errexit and the ERR trap act on (bash 5.2).
-            case Command.Simple neutral when OpensFile(neutral.Redirects):
-            case Command.ShAssignment declaration when OpensFile(declaration.Redirects):
-                return PsBuild.RedirectFailureChecked(EmitRecordingStatus(cmd), PsBuild.ErrexitCheck(ErrexitExitStatement()));
             default:
-                return EmitRecordingStatus(cmd);
+                return EmitCheckedStatement(cmd);
         }
-    }
-
-    /// <summary>A redirect that opens a file, which can fail: checked after a compound command (<see cref="EmitRedirectedCompound"/>)
-    /// and after a builtin whose own status errexit ignores (<c>: &gt; /nodir/x</c>).</summary>
-    private static bool OpensFile(ImmutableArray<Redirect> redirects) => OpensOutputFile(redirects) || OpensInputFile(redirects);
-
-    /// <summary>A stdin file redirect (<c>&lt; f</c>) that <see cref="PsBuild.InputRedirectGuard"/> opens; <c>/dev/null</c> always opens.</summary>
-    private static bool OpensInputFile(ImmutableArray<Redirect> redirects)
-    {
-        if (redirects.IsDefaultOrEmpty) return false;
-        foreach (var r in redirects)
-            if (r.Here is null && r.FdVar is null && r.Fd == 0 && r.Op == "<" && GetLiteralValue(r.Target) != DevicePath.Null)
-                return true;
-        return false;
-    }
-
-    /// <summary>A stdout or stderr file redirect (<c>&gt; f</c>, <c>&gt;&gt; f</c>, <c>&gt;| f</c>, <c>2&gt; f</c>,
-    /// <c>2&gt;&gt; f</c>, <c>&amp;&gt; f</c>, <c>&gt;&amp;f</c>) that Invoke-BashRedirect opens; <c>/dev/null</c> is emitted
-    /// without it.</summary>
-    private static bool OpensOutputFile(ImmutableArray<Redirect> redirects)
-    {
-        if (redirects.IsDefaultOrEmpty) return false;
-        foreach (var r in redirects)
-        {
-            if (r.Here is not null || r.FdVar is not null) continue;
-            string? literal = GetLiteralValue(r.Target);
-            bool file = r.Op is "&>" or "&>>" || (r.Op is ">" or ">>" or ">|" && r.Fd is 1 or 2)
-                || (r.Op == ">&" && r.Fd == 1 && literal is { } dup && dup != "-" && !IsAllDigits(dup));
-            if (file && literal != DevicePath.Null) return true;
-        }
-        return false;
     }
 
     /// <summary>
-    /// A compound command with a redirect that opens a file (<see cref="OpensFile"/>), under an ERR trap / errexit, at
-    /// statement position: a redirect that cannot be opened fails it (status 1, the body never runs) and runs the trap
-    /// and errexit, nested or not (<c>{ { cat; } &lt; missing; } 2&gt;/dev/null</c> ends the script); the body's own
-    /// status does not. The check is a statement after the command (<see cref="PsBuild.RedirectFailureChecked"/>), so
-    /// its exit/return is never inside the redirect's block. bash leaves $LINENO at the command before it, which is the
-    /// last one that ran. REGRESSION: the input guard lost its errexit exit, and nothing checked after the compound.
+    /// THE errexit / ERR-trap check after one command at statement position (not a list, pipeline or job). It decides
+    /// both questions on the command, once, for every kind: does its own status count (<see cref="StatusCounts"/>), and
+    /// can one of its redirections fail to open (<see cref="HasOpenableRedirect"/>: every operator on every descriptor,
+    /// <c>{name}</c> ones too)? A redirection that cannot open fails the command (status 1; it never runs), and that ends
+    /// the shell also where the command's own status does not count: <c>: &gt; /nodir/f</c>, <c>x=1 &lt; /nofile</c>,
+    /// <c>{ ...; } 2&gt; /nodir/f</c>, <c>for ...; done 3&gt; /nodir/f</c>. Every opener raises
+    /// <see cref="PsBuild.RedirectFailedVariable"/> (Invoke-BashRedirect, <see cref="PsBuild.InputRedirectGuard"/>,
+    /// <see cref="PsBuild.FdOpensGated"/>), read by the one check (<see cref="PsBuild.RedirectFailureChecked"/>), which runs
+    /// the errexit check after the command when its status counts and only on a failed open when it does not (status 1
+    /// either way, which the check reads). bash leaves $LINENO at the command before a compound's failed
+    /// open, which is the last one that ran. Exempt contexts (conditions, <c>&amp;&amp;</c>/<c>||</c> operands, <c>!</c>) never
+    /// get here (<see cref="EmitStatementBody"/>). REGRESSION: <c>{ echo a; } 3&gt; /nodir/f</c>, <c>: 1&lt;&gt; /nodir/f</c>
+    /// and <c>true 3&lt; /nofile</c> went on under set -e; <c>: &gt; /nodir/f</c> printed x after it.
     /// </summary>
-    private static string EmitRedirectedCompound(Command cmd)
+    private static string EmitCheckedStatement(Command cmd)
     {
+        bool status = StatusCounts(cmd);
+        bool opens = HasOpenableRedirect(StatementRedirects(cmd));
+        if (!status && !opens) return EmitRecordingStatus(cmd);
+        // The check is built AFTER the command: its ERR trap reads the $LINENO the command's emission left (a subshell's
+        // is its last statement's). REGRESSION: built first, `(false)` on line 4 ran the trap with line 3.
         int prior = _priorTrapLine;
-        string text = Emit(cmd);
-        PsBuild.TrapLine = prior;
-        return PsBuild.RedirectFailureChecked(text, PsBuild.ErrexitCheck(ErrexitExitStatement()));
+        string text = EmitRecordingStatus(cmd);
+        if (!opens) return text + "; " + PsBuild.ErrexitCheck(ErrexitExitStatement());
+        if (cmd is not (Command.Simple or Command.ShAssignment)) PsBuild.TrapLine = prior;
+        return PsBuild.RedirectFailureChecked(text, PsBuild.ErrexitCheck(ErrexitExitStatement()), statusCounts: status);
     }
 
+    /// <summary>The redirections of a command at statement position: a simple command's, an assignment's, a compound's.</summary>
+    private static ImmutableArray<Redirect> StatementRedirects(Command cmd) => cmd switch
+    {
+        Command.Simple s => s.Redirects,
+        Command.ShAssignment a => a.Redirects,
+        _ => CompoundRedirects(cmd),
+    };
+
     /// <summary>
-    /// A simple command whose failure set -e acts on: any but the status-neutral builtins - and those too, and a command
-    /// that is only redirections, when a redirection opens a file (<c>: &gt; /nodir/f</c>, <c>&gt; /nodir/f</c>): a file that
-    /// cannot be opened fails the command (status 1). The redirect stage only sets that status (InvokeBashRedirectCommand
-    /// .FailOpen); this check is what ends the shell. REGRESSION: <c>( set -e; : &gt; /nodir/f; echo x )</c> printed x.
+    /// A command whose own non-zero status set -e and the ERR trap act on. Not the status-neutral builtins (<c>return</c>,
+    /// <c>exit</c>, <c>break</c>, <c>continue</c>, whose status is the caller's), <c>:</c> and <c>true</c>, a command that is only
+    /// redirections, a plain assignment, or a compound command (its status is its body's last command, already checked).
+    /// An assignment counts when it runs a substitution (<c>x=$(false)</c>), writes a readonly name, or is a declaration
+    /// (<c>local x</c> outside a function, <c>readonly r=2</c> again; <see cref="PsBuild.DeclarationSucceeded"/> sets its 0).
+    /// A failed redirection is decided apart from this (<see cref="EmitCheckedStatement"/>).
     /// </summary>
-    private static bool IsErrexitCheckedSimple(Command.Simple simple) =>
-        simple.Words.IsDefaultOrEmpty
-            ? OpensFile(simple.Redirects)
-            // `:` and `true` fail only through a redirection.
-            : !(GetLiteralValue(simple.Words[0]) is { } name && (ErrexitNeutralBuiltins.Contains(name) || name is ":" or "true"))
-              || OpensFile(simple.Redirects);
+    private static bool StatusCounts(Command cmd) => cmd switch
+    {
+        Command.Simple simple => !simple.Words.IsDefaultOrEmpty
+            && !(GetLiteralValue(simple.Words[0]) is { } name && (ErrexitNeutralBuiltins.Contains(name) || name is ":" or "true")),
+        Command.ShAssignment assign => ContainsCommandSub(assign) || WritesReadonly(assign)
+            || assign.IsLocal || assign.IsExport || assign.IsDeclare || assign.IsReadonly,
+        Command.BoolExpr or Command.ArithCommand or Command.Subshell => true,
+        _ => false,
+    };
 
     /// <summary>
     /// A value of <paramref name="assign"/> runs a command substitution: a scalar value or an element of an array value
@@ -1325,6 +1320,41 @@ public static partial class PsEmitter
             if (pair.ArrayValue is { } arr)
                 foreach (var element in arr.Elements)
                     if (WordRunsCommandSub(element)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// A value of <paramref name="assign"/> reads the status from before the assignment: <c>$?</c> anywhere in it (in quotes,
+    /// an arithmetic expansion, a parameter operator's word), or a command or process substitution, whose commands see it.
+    /// A parameter operator whose word is kept raw (<c>${x#$?}</c>) counts when it holds a <c>$</c>.
+    /// </summary>
+    private static bool ValuesReadStatus(Command.ShAssignment assign)
+    {
+        foreach (var pair in assign.Pairs)
+        {
+            if (pair.Value is not null && PartsReadStatus(pair.Value.Parts)) return true;
+            if (pair.ArrayValue is { } arr)
+                foreach (var element in arr.Elements)
+                    if (PartsReadStatus(element.Parts)) return true;
+        }
+        return false;
+    }
+
+    private static bool PartsReadStatus(IEnumerable<WordPart> parts)
+    {
+        foreach (var part in parts)
+        {
+            bool reads = part switch
+            {
+                WordPart.SimpleVarSub { Name: "?" } => true,
+                WordPart.BracedVarSub b => b.Name == "?" || (b.ArgWord is { } arg ? PartsReadStatus(arg) : b.Suffix?.Contains('$') == true),
+                WordPart.DoubleQuoted dq => PartsReadStatus(dq.Parts),
+                WordPart.ArithSub a => a.Expr.Source.Contains("$?", StringComparison.Ordinal) || a.Expr.Source.Contains("${?", StringComparison.Ordinal),
+                WordPart.CommandSub or WordPart.ProcessSub => true,
+                _ => false,
+            };
+            if (reads) return true;
         }
         return false;
     }
@@ -1741,6 +1771,10 @@ public static partial class PsEmitter
             {
                 _errexitMode |= priorErrexit; _errexitSetMode |= priorErrexitSet; _errtraceMode |= priorErrtrace;
             }
+            // Text transpiled at run time (eval, source) has the checks of the shell that runs it (InheritedErrexit).
+            _errexitSetMode |= InheritedErrexit;
+            _errexitMode |= InheritedErrexit || InheritedErrTrap;
+            _errtraceMode |= InheritedErrTrap && InheritedErrtrace;
             CollectCallSites(cmd);
             CollectArrayAssignments(cmd);
             CollectAliasDefs(cmd, bash);
@@ -2121,7 +2155,7 @@ public static partial class PsEmitter
     private static void PopLoopLabel() => _loopLabels!.RemoveAt(_loopLabels.Count - 1);
 
     /// <summary>A non-numeric loop-control count ends the script with status 128, as in bash.</summary>
-    private static string NumericArgExit => _subshellDepth > 0 ? LeavingReturn("$global:LASTEXITCODE = 128; return") : ShellExit("128");
+    private static string NumericArgExit => InSubshellBody ? LeavingReturn("$global:LASTEXITCODE = 128; return") : ShellExit("128");
 
     /// <summary><c>break [N]</c> / <c>continue [N]</c> → the labelled PowerShell keyword.</summary>
     private static string EmitLoopControl(string keyword, Command.Simple cmd)
@@ -3360,7 +3394,7 @@ public static partial class PsEmitter
                 : $"@() | & {{ {PsBuild.StdinScope(result)} }}";
         }
 
-        return WithScopedHighFds(result, highFds);
+        return WithScopedHighFds(result, highFds, clearsNested: !HasOpenableRedirect([.. subshell.Redirects.Where(r => !highFds.Contains(r))]));
     }
 
     /// <summary>
@@ -3368,13 +3402,15 @@ public static partial class PsEmitter
     /// the redirect tail it came out raw (<c>} 7&gt;&amp;1</c>), and PowerShell read the <c>&amp;</c> as its background
     /// operator: the command ran as a job, whose <c>$using:</c> rewrite broke every <c>$global:</c> assignment.
     /// Opened before the command, as <c>exec N...</c> would, and put back after it (an earlier <c>exec</c> of the same
-    /// descriptor names its file again: PsBuild.ScopedDescriptors).
+    /// descriptor names its file again: PsBuild.ScopedDescriptors). An open that fails skips the command
+    /// (<see cref="PsBuild.FdOpensGated"/>); <paramref name="clearsNested"/>: the command has no redirection of its own that
+    /// reports a failed open.
     /// </summary>
-    private static string WithScopedHighFds(string command, List<Redirect> highFds)
+    private static string WithScopedHighFds(string command, List<Redirect> highFds, bool clearsNested)
     {
         if (highFds.Count == 0) return command;
-        var open = string.Join("; ", highFds.Select(r => FdOpenStep(r, exec: false)));
-        return PsBuild.ScopedDescriptors(highFds.Select(r => r.Fd).Distinct(), open, command);
+        var opens = highFds.Select(r => FdOpenStep(r, exec: false)).ToList();
+        return PsBuild.ScopedDescriptors(highFds.Select(r => r.Fd).Distinct(), opens, command, clearsNested);
     }
 
     /// <summary>
@@ -4867,9 +4903,15 @@ public static partial class PsEmitter
         if (text.Contains(PsBuild.DeclareLocalArrayMark, StringComparison.Ordinal)) return text; // `local -A m`: so does this
         // `x=$((1/0))`: the failed expansion keeps status 1, and its mark must not abandon a LATER command. A word
         // expansion that succeeds leaves the status alone (`false; echo "$((1+1)) $?"` prints `2 1`), so the
-        // assignment's own 0 is set first (`false; y=$((2))` is 0).
+        // assignment's own 0 is set first (`false; y=$((2))` is 0) - after the value when the value reads the status
+        // from before it (`false; y=$(($?+1))` is 2; ValuesReadStatus), unless the value failed. REGRESSION: the 0 was
+        // always set first, so a value that read `$?` read 0 - and every `rc=$?` in a unit that runs source/eval text
+        // (PsBuild.AssignAttributed holds Invoke-BashArith) stored 0.
         if (text.Contains("Invoke-BashArith", StringComparison.Ordinal) || text.Contains(PsBuild.ExpansionErrorFunction, StringComparison.Ordinal))
-            return (ContainsCommandSub(cmd) ? "" : PsBuild.SetStatus(0) + "; ") + text + "; " + PsBuild.ClearExpansionFailed;
+            return ContainsCommandSub(cmd) ? text + "; " + PsBuild.ClearExpansionFailed
+                : ValuesReadStatus(cmd)
+                    ? PsBuild.ClearExpansionFailed + "; " + text + "; " + PsBuild.StatusZeroUnlessExpansionFailed + "; " + PsBuild.ClearExpansionFailed
+                    : PsBuild.SetStatus(0) + "; " + text + "; " + PsBuild.ClearExpansionFailed;
         // An assignment is a command whose status is 0 (a bare one with a command substitution: the substitution's;
         // a declaration builtin: its own). The status shows through far more than `$?`: a function's status, `return` /
         // `exit` with no operand, `( )`, `$( )`, `if y=1`, `&&`, errexit. So it is ALWAYS set, never on a guess from
@@ -4883,8 +4925,10 @@ public static partial class PsEmitter
             return text.Contains("LASTEXITCODE", StringComparison.Ordinal) ? text : PsBuild.SetStatus(0) + "; " + text;
         // An array literal whose glob fails under failglob ends the statement with status 1; keep it.
         if (cmd.Pairs.Any(p => p.ArrayValue is not null)) return text + "; if ($?) { $global:LASTEXITCODE = 0 }";
-        // A declaration builtin may refuse (local outside a function, status 1): its status is set first.
-        if (cmd.IsLocal || cmd.IsExport || cmd.IsDeclare || cmd.IsReadonly) return PsBuild.SetStatus(0) + "; " + text;
+        // A declaration builtin may report a status of its own (`declare -p nosuch` is 1): its 0 is set first - unless
+        // a value reads the status from before it (`false; local rc=$?` stores 1), which the 0 would hide.
+        if (cmd.IsLocal || cmd.IsExport || cmd.IsDeclare || cmd.IsReadonly)
+            return ValuesReadStatus(cmd) ? text + "; " + PsBuild.SetStatus(0) : PsBuild.SetStatus(0) + "; " + text;
         return text + "; $global:LASTEXITCODE = 0";
     }
 
@@ -6061,7 +6105,8 @@ public static partial class PsEmitter
                 if (r.FdVar is not null) opens.Add(FdOpenStep(r, exec: false));
             }
             var rest = cmd with { Redirects = [.. cmd.Redirects.Where(r => r.FdVar is null)] };
-            return RedirectGroup(EmitSimple(rest), body => ". { " + string.Join("; ", opens) + "; " + body + " }");
+            bool restReports = HasOpenableRedirect(rest.Redirects);
+            return RedirectGroup(EmitSimple(rest), body => ". { " + PsBuild.FdOpensGated(opens, body, clearsNested: !restReports) + " }");
         }
         // `w9 9>&1`, `echo hi 9>f.txt`, `read -u 7 l 7<f`: a numbered descriptor opened for this command only.
         if (ScopedHighFdRedirects(cmd) is { Count: > 0 } highFds)
@@ -6069,7 +6114,8 @@ public static partial class PsEmitter
             // The tail sees the descriptors in order with the rest (3>&1 1>&2 2>&3): WithFdPrelude.
             string scoped = WithFdPrelude(cmd.Redirects, _redirectCommandName,
                 () => EmitSimple(cmd with { Redirects = [.. cmd.Redirects.Where(r => !highFds.Contains(r))] }));
-            return RedirectGroup(scoped, body => WithScopedHighFds(body, highFds));
+            bool restReports = HasOpenableRedirect([.. cmd.Redirects.Where(r => !highFds.Contains(r))]);
+            return RedirectGroup(scoped, body => WithScopedHighFds(body, highFds, clearsNested: !restReports));
         }
         if (TryEmitOutputProcessSubs(cmd, out var outputProcSubResult))
             return outputProcSubResult;
@@ -6994,9 +7040,11 @@ public static partial class PsEmitter
         bool stderrSilenced = false;
         foreach (var redirect in cmd.Redirects)
         {
-            bool append = redirect.Op is ">>" or "&>>";
+            // `: 1<> f` opens f read-write: created when missing, never truncated - an appending open.
+            bool readWrite = redirect.ReadWrite && redirect.Fd is 1 or 2 && redirect.FdVar is null;
+            bool append = redirect.Op is ">>" or "&>>" || readWrite;
             bool opensFile = redirect.Op is ">" or ">>" or "&>" or "&>>"
-                || (redirect.Op == ">&" && redirect.Fd == 1);
+                || (redirect.Op == ">&" && redirect.Fd == 1) || readWrite;
             if (!opensFile) continue;
 
             var target = EmitFileRedirectTarget(redirect.Target);
@@ -7156,7 +7204,10 @@ public static partial class PsEmitter
             || (at == 0 && _definedFunctions?.Contains(name) == true))
             return null;
         if (!cmd.HereDocs.IsDefaultOrEmpty && cmd.HereDocs.Any(h => h.Fd != 0)) return null;
-        bool stream = !cmd.HereDocs.IsDefaultOrEmpty || (!cmd.Redirects.IsDefaultOrEmpty && cmd.Redirects.Any(r => r.FdVar is null
+        // A here-text on a builtin that reads no stdin (`true <<<x`, `cd d <<EOF`) is evaluated and dropped by the one
+        // non-reader path (PsBuild.DiscardHereText), not fed through a stdin scope.
+        bool hereFeeds = !cmd.HereDocs.IsDefaultOrEmpty && !IsProvenStdinFreeWhateverOperands(cmd);
+        bool stream = hereFeeds || (!cmd.Redirects.IsDefaultOrEmpty && cmd.Redirects.Any(r => r.FdVar is null
             && ((r.Fd == 0 && r.Op is "<") || (r.Fd == 1 && r.Op is ">&"))));
         if (!stream) return null;
         var all = cmd.Redirects.IsDefaultOrEmpty ? ImmutableArray<Redirect>.Empty : cmd.Redirects;
@@ -7498,7 +7549,7 @@ public static partial class PsEmitter
             specialResult = PsBuild.UsageDiscard("exit: too many arguments");
         }
 
-        else if (cmd0 == "exit" && _subshellDepth > 0)
+        else if (cmd0 == "exit" && InSubshellBody)
         {
             specialResult = LeavingReturn(cmd.Words.Length >= 2
                 ? $"$global:LASTEXITCODE = {EmitExitCodeValue(cmd.Words[1])}; return"
@@ -12627,10 +12678,18 @@ public static partial class PsEmitter
             else if (cmd is Command.ShAssignment shAssign)
             {
                 var assignText = Emit(cmd);
-                sb.Append(PsBuild.VoidStatement(assignText));
+                // `x=1 >/nodir/f || echo c`, `export y=1 3>/nodir/f && echo no`: a redirection that cannot be opened makes
+                // the assignment's status 1, which `||` sees only once bridged - from the flag its opener raised, since
+                // LASTEXITCODE may hold an `export y=$(false)` substitution's status, which is not the builtin's.
+                // REGRESSION: only a substitution was bridged, so the failed open fell through to `&&`.
+                bool opens = !isFinal && HasOpenableRedirect(StatementRedirects(cmd));
+                sb.Append(PsBuild.VoidStatement(opens ? PsBuild.RedirectFailedVariable + " = $false; " + assignText : assignText));
                 // `r=$(false) || echo fb`: the assignment's status is its command substitution's, which `||` only sees
                 // once bridged from LASTEXITCODE to $? (a plain `x=1` is always 0).
-                if (!isFinal && !shAssign.IsLocal && !shAssign.IsExport && ContainsCommandSub(shAssign))
+                bool substitutionStatus = !isFinal && !shAssign.IsLocal && !shAssign.IsExport && ContainsCommandSub(shAssign);
+                if (opens)
+                    sb.Append("; " + PsBuild.SignalFailIfOpenFailed(orStatus: substitutionStatus));
+                else if (substitutionStatus)
                     sb.Append("; " + PsBuild.SignalFailIfFailed());
             }
             else if (cmd is Command.Pipeline { Negated: true } negPipelineInChain)
@@ -12930,6 +12989,12 @@ public static partial class PsEmitter
                     || stateName is "builtin" or "command" && WrappedCommandName(stateStage) is { } wrappedState && SubshellStageBuiltins.Contains(wrappedState))
                 && !(_scriptLastpipe && i > 0 && i == pipeline.Commands.Length - 1))
                 cmd = new Command.Subshell(stateStage, ImmutableArray<Redirect>.Empty, KeepsLoopLevel: true);
+            // `... | cat 3>f`, `... | cat {v}>f`: a descriptor of the command's own is opened around it and put back after it
+            // (WithScopedHighFds, FdOpensGated), which only the command's own emission does. REGRESSION: a later stage's
+            // redirect tail wrote `3>` as PowerShell's warning stream, so a failed open was a raw .NET error that escaped
+            // `2>`, and a good one wrote nothing. As `{ cmd; }` the group's stdin scope hands it the pipe.
+            if (i > 0 && cmd is Command.Simple fdStage && OpensDescriptorsAroundItself(fdStage))
+                cmd = new Command.BraceGroup(fdStage, ImmutableArray<Redirect>.Empty);
             // Every pipe stage is a subshell: a lexical `break` must not reach the enclosing loop through the stage's script
             // block (a lastpipe stage runs in the shell itself). A compound stage starts with no loop (bash warns); a simple
             // stage, at any position, keeps the loop level, so `eval break | cat` and `echo q | break` end only that stage
@@ -13774,9 +13839,11 @@ public static partial class PsEmitter
         if (inputRedirect is { ReadWrite: true, Here: null })
             result = ". { " + PsBuild.ReadWriteInputOpen(EmitFileRedirectTarget(inputRedirect.Target), result) + " }";
 
-        result = WithScopedHighFds(result, highFds);
+        bool innerReports = HasOpenableRedirect([.. redirects.Where(r => r.FdVar is null && r.Fd < 3)]);
+        result = WithScopedHighFds(result, highFds, clearsNested: !innerReports);
         // One dot-sourced block, so the whole thing is still a single pipeline element.
-        return namedFds.Count == 0 ? result : ". { " + string.Join("; ", namedFds) + "; " + result + " }";
+        return namedFds.Count == 0 ? result
+            : ". { " + PsBuild.FdOpensGated(namedFds, result, clearsNested: !innerReports && highFds.Count == 0) + " }";
     }
 
     private static string EmitCd(ImmutableArray<CompoundWord> args)
@@ -14952,7 +15019,7 @@ public static partial class PsEmitter
     /// </summary>
     private static string RunTimeBashTextCall(string label)
     {
-        string returnCheck = _subshellDepth > 0 ? ""
+        string returnCheck = InSubshellBody ? ""
             : _functionDepth > 0 ? LeavingReturn(PsBuild.EvalReturnCheck(inFunction: true))
             : _context == TranspileContext.Eval ? LeavingReturn(PsBuild.EvalReturnCheck(inFunction: false)) : "";
         return PsBuild.RunBashTextCall(label, LoopModeForCallSite(),

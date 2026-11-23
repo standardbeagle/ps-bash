@@ -189,12 +189,18 @@ public static class BashTranspiler
         var fusion = PsEmitter.FusionEnabledOverride;
         var inheritedPipefail = PsEmitter.InheritedPipefail;
         var inheritedNounset = PsEmitter.InheritedNounset;
+        var inheritedErrexit = PsEmitter.InheritedErrexit;
+        var inheritedErrTrap = PsEmitter.InheritedErrTrap;
+        var inheritedErrtrace = PsEmitter.InheritedErrtrace;
         return NestingGuard.WithStackFallback(() =>
         {
             var prior = PsEmitter.FusionEnabledOverride;
             PsEmitter.FusionEnabledOverride = fusion;
             PsEmitter.InheritedPipefail = inheritedPipefail;
             PsEmitter.InheritedNounset = inheritedNounset;
+            PsEmitter.InheritedErrexit = inheritedErrexit;
+            PsEmitter.InheritedErrTrap = inheritedErrTrap;
+            PsEmitter.InheritedErrtrace = inheritedErrtrace;
             try { return work(); }
             finally { PsEmitter.FusionEnabledOverride = prior; }
         });

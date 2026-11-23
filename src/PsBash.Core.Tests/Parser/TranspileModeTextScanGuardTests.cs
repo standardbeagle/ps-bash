@@ -58,7 +58,7 @@ public class TranspileModeTextScanGuardTests
                 // The statement holding the scan: its line, and the lines before it that it continues (`|| ...`). Not the
                 // last `;` / `{` / `}`: a pattern holds those (`[|;&)}]`).
                 int start = text.LastIndexOf('\n', m.Index) + 1;
-                while (start > 1 && Continues(text.Substring(start, Math.Min(8, text.Length - start)).TrimStart()))
+                while (start > 1 && Continues(LineFrom(text, start)))
                     start = text.LastIndexOf('\n', start - 2) + 1;
                 string statement = text[start..m.Index];
                 var field = Assigned.Match(statement);
@@ -72,6 +72,13 @@ public class TranspileModeTextScanGuardTests
         }
         Assert.True(offenders.Count == 0,
             "a mode decided on the source text (decide it on the parsed commands, see this class):\n" + string.Join("\n", offenders));
+    }
+
+    /// <summary>The line starting at <paramref name="start"/>, without its indentation (which is deeper than any fixed width).</summary>
+    private static string LineFrom(string text, int start)
+    {
+        int end = text.IndexOf('\n', start);
+        return text[start..(end < 0 ? text.Length : end)].TrimStart();
     }
 
     private static bool Continues(string lineStart) =>

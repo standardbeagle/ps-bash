@@ -256,7 +256,11 @@ public class CompoundStdinEmitterTests
     {
         // REGRESSION: cd / eval / source / read / readonly / set emit their own statement text and the redirect
         // tail was silently dropped (`eval 'echo hi' > f` printed hi and created no file).
+        // Run-time eval text may turn set -e on, so a redirect that can fail to open is checked (PsBuild.RedirectFailureChecked):
+        // the statement starts with the flag reset.
         var ps = T(bash);
+        string reset = PsBuild.RedirectFailedVariable + " = $false; ";
+        if (ps.StartsWith(reset, StringComparison.Ordinal)) ps = ps[reset.Length..];
 
         // A statement list is grouped so the tail covers all of it; one Invoke-Bash* command (a static `eval 'echo hi'`)
         // takes the tail bare, as a group would not hand it a pipe (emitter-strategy.md: redirect tail written once).
@@ -379,5 +383,24 @@ public class CompoundStdinEmitterTests
     {
         Assert.False(StdinReaders.ShouldFeed("cat", new string?[] { null }));
         Assert.True(StdinReaders.ShouldFeed("grep", new string?[] { null }));   // the pattern
+    }
+
+    /// <summary>
+    /// A shell with no operand reads its program from stdin; other code runners with nothing to run read nothing.
+    /// REGRESSION: <c>{ bash &lt;&lt;&lt; 'echo b'; }</c> took bash for a non-reader and dropped the here-string
+    /// (PsBuild.DiscardHereText), so nothing ran.
+    /// </summary>
+    [Theory]
+    [InlineData("bash", true)]
+    [InlineData("sh", true)]
+    [InlineData("eval", false)]
+    [InlineData("exec", false)]
+    [InlineData("time", false)]
+    public void MayReadStdin_CodeRunnerWithNoOperand_OnlyAShellReads(string name, bool expected)
+    {
+        Assert.Equal(expected, StdinReaders.MayReadStdin(name, []));
+        if (!expected) return;
+        string ps = PsEmitter.Transpile("{ " + name + " <<< 'echo b'; }")!;
+        Assert.DoesNotContain(PsBuild.DiscardHereText("", "").TrimEnd(' ', ';'), ps);
     }
 }
