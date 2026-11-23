@@ -2051,8 +2051,12 @@ public static class PsBuild
     /// (<see cref="EvalReturnCheck"/> or empty: a <c>return</c> in the text leaves the function it ran in). A call site
     /// that called the runner itself missed some of these (fc's <c>return 7</c> did not return;
     /// guard <c>RunBashTextCallGuardTests</c>).
+    /// <para>Blank text runs no command. <paramref name="callerStatus"/> false (eval): its status is 0
+    /// (<c>false; e=''; eval "$e"</c>). True (fc): the call site's own command already published its status through
+    /// FileSystemHelpers.SetLastExitCode when it chose no text (<c>history -c; fc -s</c> is 1, <c>fc -z</c> 2), and that
+    /// status stands. REGRESSION: the blank branch set 0 for every caller, so a failed <c>fc</c> reported success.</para>
     /// </summary>
-    public static string RunBashTextCall(string label, string loopModeSet, string localsArg, string returnCheck) =>
+    public static string RunBashTextCall(string label, string loopModeSet, string localsArg, string returnCheck, bool callerStatus) =>
         // Get-Variable -ErrorAction SilentlyContinue: the depth probe is safe under Set-StrictMode -Version Latest
         // (set -u), where a plain $global:X throws on its first read.
         "if (-not [string]::IsNullOrWhiteSpace($__psbash_eval_src)) { "
@@ -2061,8 +2065,7 @@ public static class PsBuild
         + "$global:__BashEvalDepth = $__psbash_eval_depth + 1; "
         + "try { " + loopModeSet + RunBashTextAtRunTime(localsArg, label) + " } finally { $global:__BashEvalDepth = $__psbash_eval_depth } "
         + (returnCheck.Length > 0 ? returnCheck + " " : "") + "}"
-        // Blank text runs no command: status 0 (`false; e=''; eval "$e"`).
-        + " else { " + SetStatus(0) + " }";
+        + (callerStatus ? "" : " else { " + SetStatus(0) + " }");
 
     /// <summary>
     /// Transpile the bash text in <c>$__psbash_eval_src</c> as eval text and run it here (Invoke-Expression: the

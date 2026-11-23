@@ -58,7 +58,12 @@ public class RunBashTextCallGuardTests
 
     private const string CallHead = "if (-not [string]::IsNullOrWhiteSpace($__psbash_eval_src)) { ";
 
-    /// <summary>eval and fc at the same call site emit the same call, but for the label in its messages.</summary>
+    /// <summary>eval's blank-text branch: status 0. fc has none: its blank text keeps Invoke-BashFc's own status
+    /// (<c>history -c; fc -s</c> is 1, <c>fc --bogus</c> 2; PsBuild.RunBashTextCall <c>callerStatus</c>).</summary>
+    private const string EvalBlankElse = " else { $global:LASTEXITCODE = 0 }";
+
+    /// <summary>eval and fc at the same call site emit the same call, but for the label in its messages and eval's
+    /// blank-text status.</summary>
     [Theory]
     [InlineData("g() { local v=1; for i in 1 2; do CMD; done; }")]
     [InlineData("g() { CMD; }")]
@@ -70,7 +75,9 @@ public class RunBashTextCallGuardTests
         static string Call(string ps) => ps[ps.IndexOf(CallHead, StringComparison.Ordinal)..];
         var eval = Call(PsEmitter.Transpile(shape.Replace("CMD", "eval \"$c\""))!);
         var fc = Call(PsEmitter.Transpile(shape.Replace("CMD", "fc -s"))!);
-        Assert.Equal(eval.Replace("eval: ", "fc: "), fc);
+        int blank = eval.IndexOf(EvalBlankElse, StringComparison.Ordinal);
+        Assert.True(blank > 0, "eval's call has its blank-text branch");
+        Assert.Equal(eval.Remove(blank, EvalBlankElse.Length).Replace("eval: ", "fc: "), fc);
         Assert.Contains("__BashEvalDepth", fc);
     }
 
