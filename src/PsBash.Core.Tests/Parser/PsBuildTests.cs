@@ -770,14 +770,26 @@ public class PsBuildTests
     [Fact]
     public void RunBashTextCall_BoundsTheDepthAndEndsWithTheReturnCheck()
     {
-        var ps = PsBuild.RunBashTextCall("fc", PsBuild.LoopModeSet(0), ", $null", "CHECK");
+        var ps = PsBuild.RunBashTextCall("eval", PsBuild.LoopModeSet(0), ", $null", "CHECK", callerStatus: false);
         Assert.StartsWith("if (-not [string]::IsNullOrWhiteSpace($__psbash_eval_src)) { ", ps);
-        Assert.Contains("throw 'fc: nesting depth limit (5) exceeded; possible infinite recursion'", ps);
+        Assert.Contains("throw 'eval: nesting depth limit (5) exceeded; possible infinite recursion'", ps);
         Assert.Contains("try { " + PsBuild.LoopModeSet(0) + "$__psbash_eval_pwsh = $null; ", ps);
-        Assert.Contains("'fc: '", ps);
+        Assert.Contains("'eval: '", ps);
         // Blank text runs no command: status 0 (`false; e=''; eval "$e"`).
         Assert.EndsWith("} finally { $global:__BashEvalDepth = $__psbash_eval_depth } CHECK } else { $global:LASTEXITCODE = 0 }", ps);
-        Assert.EndsWith("} finally { $global:__BashEvalDepth = $__psbash_eval_depth } } else { $global:LASTEXITCODE = 0 }", PsBuild.RunBashTextCall("eval", "", ", $null", ""));
+        Assert.EndsWith("} finally { $global:__BashEvalDepth = $__psbash_eval_depth } } else { $global:LASTEXITCODE = 0 }",
+            PsBuild.RunBashTextCall("eval", "", ", $null", "", callerStatus: false));
+    }
+
+    /// <summary>fc chose no text (nothing to re-run, a bad option): the status Invoke-BashFc published stands; only eval's
+    /// blank text is 0. REGRESSION: <c>history -c; fc -s; echo $?</c> printed 0 (bash: 1).</summary>
+    [Fact]
+    public void RunBashTextCall_CallerStatus_BlankTextKeepsTheCommandsStatus()
+    {
+        string fc = PsBuild.RunBashTextCall("fc", "", ", $null", "", callerStatus: true);
+        string eval = PsBuild.RunBashTextCall("fc", "", ", $null", "", callerStatus: false);
+        Assert.EndsWith("} finally { $global:__BashEvalDepth = $__psbash_eval_depth } }", fc);
+        Assert.Equal(fc + " else { $global:LASTEXITCODE = 0 }", eval);
     }
 
     [Theory]

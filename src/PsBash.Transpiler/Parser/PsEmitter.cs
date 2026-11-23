@@ -15168,7 +15168,7 @@ public static partial class PsEmitter
             // on demand. A bare [PsBash.Core.Transpiler.BashTranspiler] silently
             // failed to resolve there, so eval emitted empty output.
             // A syntax error in the eval text is eval's own failure (status 2), not an exception out of the surrounding script.
-            RunTimeBashTextCall("eval");
+            RunTimeBashTextCall("eval", callerStatus: false);
     }
 
     /// <summary>`, [string[]]@('a','b')`: the locals of the function this eval runs in (empty at top level).</summary>
@@ -15182,15 +15182,16 @@ public static partial class PsEmitter
     /// hands it: the loop a <c>break</c> in the text leaves, the calling function's locals, and the check that makes a
     /// <c>return</c> in the text (which leaves only the Invoke-Expression) leave the function, or the eval text, it ran
     /// in; at the top of a script, or in a subshell, there is nothing to return from. <c>eval</c> and <c>fc -s</c> run
-    /// their text through it (guard <c>RunBashTextCallGuardTests</c>).
+    /// their text through it (guard <c>RunBashTextCallGuardTests</c>). <paramref name="callerStatus"/>: the call site's
+    /// command published its own status (Invoke-BashFc), which blank text keeps (PsBuild.RunBashTextCall).
     /// </summary>
-    private static string RunTimeBashTextCall(string label)
+    private static string RunTimeBashTextCall(string label, bool callerStatus)
     {
         string returnCheck = InSubshellBody ? ""
             : _functionDepth > 0 ? LeavingReturn(PsBuild.EvalReturnCheck(inFunction: true))
             : _context == TranspileContext.Eval ? LeavingReturn(PsBuild.EvalReturnCheck(inFunction: false)) : "";
         return PsBuild.RunBashTextCall(label, LoopModeForCallSite(),
-            EvalLocalNamesArg() is { Length: > 0 } locals ? locals : ", $null", returnCheck);
+            EvalLocalNamesArg() is { Length: > 0 } locals ? locals : ", $null", returnCheck, callerStatus);
     }
 
     /// <summary>
@@ -15289,7 +15290,7 @@ public static partial class PsEmitter
     /// <c>return</c>, <c>break</c> or <c>local</c> in it acts in the caller.
     /// </summary>
     private static string EmitFc(ImmutableArray<CompoundWord> args) =>
-        PsBuild.FcTakeRerun(EmitPassthrough("Invoke-BashFc", args)) + RunTimeBashTextCall("fc");
+        PsBuild.FcTakeRerun(EmitPassthrough("Invoke-BashFc", args)) + RunTimeBashTextCall("fc", callerStatus: true);
 
     /// <summary>
     /// Recover the post-quote-removal string value of a <see cref="CompoundWord"/>
