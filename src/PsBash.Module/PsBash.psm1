@@ -1055,21 +1055,52 @@ function ConvertTo-BashIntegerArray {
         (bash). A list stays a list; an indexed (sparse) or associative table is converted in place and returned.
         An element that is no expression is a failed WORD: inside a line scope the rest of the line is dropped, as
         bash drops it. -KeepStatus: the status is the command's own (`read`, `mapfile`), unless an element failed.
+        -Before: the array before a builtin that writes some elements only (`mapfile -O N`): an element still equal to
+        its old value was not written and is left alone (bash converts only what is assigned). Under `set -u` an
+        unbound name ends the command (Assert-BashArithBound).
     #>
-    param($__psbashItems, [Alias('KeepStatus')][switch]$__psbashKeepStatus)
+    param($__psbashItems, [Alias('KeepStatus')][switch]$__psbashKeepStatus, [Alias('Before')]$__psbashBefore)
     $__psbashStatus = $global:LASTEXITCODE
     $global:__BashExpansionFailed = $false
     if ($__psbashItems -is [System.Collections.IDictionary]) {
         foreach ($__psbashK in @($__psbashItems.Keys)) {
+            if ($null -ne $__psbashBefore -and (Test-BashElementKept $__psbashBefore $__psbashK $__psbashItems[$__psbashK])) { continue }
             $__psbashItems[$__psbashK] = [string]$(Invoke-BashArith ([string]$__psbashItems[$__psbashK]))
+            Assert-BashArithBound
         }
         if ($__psbashKeepStatus -and -not $global:__BashExpansionFailed) { $global:LASTEXITCODE = $__psbashStatus }
         return $__psbashItems
     }
     if ($null -eq $__psbashItems) { return $null }
-    $__psbashOut = [object[]]@(foreach ($__psbashV in @($__psbashItems)) { [string]$(Invoke-BashArith ([string]$__psbashV)) })
+    $__psbashI = 0
+    $__psbashOut = [object[]]@(foreach ($__psbashV in @($__psbashItems)) {
+        if ($null -ne $__psbashBefore -and (Test-BashElementKept $__psbashBefore $__psbashI $__psbashV)) { $__psbashV }
+        else { [string]$(Invoke-BashArith ([string]$__psbashV)); Assert-BashArithBound }
+        $__psbashI++
+    })
     if ($__psbashKeepStatus -and -not $global:__BashExpansionFailed) { $global:LASTEXITCODE = $__psbashStatus }
     return ,$__psbashOut
+}
+
+function Test-BashElementKept {
+    # ConvertTo-BashIntegerArray -Before: element KEY of BEFORE (a list, an indexed table, or a scalar as element 0)
+    # has the text VALUE, so the builtin did not write it. KEY is a number already (an indexed table's key or a
+    # list position), never text.
+    param($__psbashBefore, $__psbashKey, $__psbashValue)
+    $__psbashOld = if ($__psbashBefore -is [System.Collections.IDictionary]) { $__psbashBefore[$__psbashKey] }
+        elseif ($__psbashBefore -is [array]) { if ($__psbashKey -lt $__psbashBefore.Count) { $__psbashBefore[$__psbashKey] } }
+        elseif ($__psbashKey -eq 0) { $__psbashBefore }
+    return $null -ne $__psbashOld -and [string]$__psbashOld -ceq [string]$__psbashValue
+}
+
+function Assert-BashArithBound {
+    # After an integer attribute's Invoke-BashArith: under `set -u` an unbound name was reported (the cmdlet set
+    # $global:__BashUnbound) and ends the command, as the emitted PsBuild.ArithNounsetGuard does (bash 5.2: a script exits 1).
+    if ($global:__BashUnbound) {
+        $__psbashUn = $global:__BashUnbound
+        $global:__BashUnbound = $null
+        throw [PsBash.Cmdlets.BashParamErrorException]::Reported($__psbashUn + ': ', 'unbound variable')
+    }
 }
 
 function Get-BashIntegerElement {
@@ -1078,14 +1109,15 @@ function Get-BashIntegerElement {
         The value an integer array's element write stores (Set-BashElement -Integer): VALUE as arithmetic, and for
         `a[i]+=v` the element's old value as arithmetic plus it (bash evaluates the old value first). $null when an
         expression failed: outside a line scope the failure is marked and nothing is stored (inside one it drops the line).
+        Under `set -u` an unbound name ends the command (Assert-BashArithBound).
     #>
     param($__psbashOld, $__psbashNew, [Alias('Append')][switch]$__psbashAppend)
     $global:__BashExpansionFailed = $false
     if ($__psbashAppend) {
-        $__psbashO = [string]$(Invoke-BashArith ([string]$__psbashOld))
+        $__psbashO = [string]$(Invoke-BashArith ([string]$__psbashOld)); Assert-BashArithBound
         if ($global:__BashExpansionFailed) { return $null }
     }
-    $__psbashN = [string]$(Invoke-BashArith ([string]$__psbashNew))
+    $__psbashN = [string]$(Invoke-BashArith ([string]$__psbashNew)); Assert-BashArithBound
     if ($global:__BashExpansionFailed) { return $null }
     if (-not $__psbashAppend) { return $__psbashN }
     $__psbashSum = [string]$(Invoke-BashArith "($__psbashO)+($__psbashN)")

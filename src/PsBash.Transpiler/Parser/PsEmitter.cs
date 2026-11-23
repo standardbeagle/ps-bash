@@ -264,30 +264,37 @@ public static partial class PsEmitter
         => IsIntegerArray(name) ? PsBuild.IntegerElements(elementsExpr, keepStatus) : elementsExpr;
 
     /// <summary>
-    /// After <c>read -a NAME</c> / <c>mapfile NAME</c> into an integer array: the builtin stored the text, and this
-    /// statement evaluates each element (<see cref="ElementValues"/>), the builtin's status kept. "" for any other array.
+    /// Around a whole <c>read -a NAME</c> / <c>mapfile NAME</c> / <c>readarray NAME</c> statement into an integer array
+    /// (EmitSimpleFed, a lastpipe stage in EmitPipeline): the builtin stores the text, and the statement after it evaluates
+    /// each element (<see cref="PsBuild.IntegerElements"/>), the builtin's status kept. <c>mapfile -O N</c> keeps the
+    /// elements it does not write, so only what it wrote is converted: the array as it was is kept first, and an element
+    /// still equal to its old value is left alone (bash: <c>a=(x y); declare -i a; mapfile -O 2 a &lt;&lt;&lt; 5+5</c> is
+    /// <c>x y 10</c>). After the statement's redirects and its stdin feed, so <c>mapfile -t a &lt; f</c> converts what the
+    /// redirect block stored. REGRESSION: appended to the command's own text, it ran inside
+    /// <c>... | &amp; { Invoke-BashMapfile a; ... }</c> and left the array empty. A pipe stage other than a lastpipe one runs
+    /// as a subshell (its writes are lost), so it needs none.
     /// </summary>
-    private static string IntegerArrayAfter(string? name)
-        => name is not null && IsValidVarName(name) && IsIntegerArray(name) && ArrayWriteTarget(name) is var target
-            ? "; " + target + " = " + ElementValues(name, target, keepStatus: true) : "";
-
-    /// <summary>
-    /// The conversion after a whole <c>read -a NAME</c> / <c>mapfile NAME</c> / <c>readarray NAME</c> statement (EmitSimpleFed):
-    /// after its redirects and its stdin feed, so <c>mapfile -t a &lt; f</c> converts what the redirect block stored, and the
-    /// command is still one pipeable element for the feed. REGRESSION: appended to the command's own text, it ran inside
-    /// <c>... | &amp; { Invoke-BashMapfile a; ... }</c> and left the array empty. A pipe stage runs as a subshell (its writes
-    /// are lost), so it needs none.
-    /// </summary>
-    private static string IntegerArrayAfter(Command.Simple simple)
-        => _intVars is { Count: > 0 } && simple.Words.Length > 0 && GetLiteralValue(simple.Words[0]) is ("read" or "mapfile" or "readarray") and var builtin
-            ? IntegerArrayAfter(BuiltinArrayOperand(simple.Words.RemoveAt(0), isRead: builtin == "read")) : "";
+    private static string IntegerArrayAround(Command.Simple simple, string statement)
+    {
+        string? builtin = _intVars is { Count: > 0 } && simple.Words.Length > 0 ? GetLiteralValue(simple.Words[0]) : null;
+        if (builtin is not ("read" or "mapfile" or "readarray")
+            || BuiltinArrayOperand(simple.Words.RemoveAt(0), isRead: builtin == "read", out bool origin) is not { } name
+            || !IsValidVarName(name) || !IsIntegerArray(name))
+            return statement;
+        string target = ArrayWriteTarget(name);
+        return origin
+            ? PsBuild.IntegerBefore(target) + statement + "; " + target + " = " + PsBuild.IntegerElements(target, keepStatus: true, sinceBefore: true)
+            : statement + "; " + target + " = " + PsBuild.IntegerElements(target, keepStatus: true);
+    }
 
     /// <summary>
     /// The array <c>read</c> stores into (its <c>-a NAME</c>) or <c>mapfile</c> / <c>readarray</c> does (its operand, else
-    /// MAPFILE), read from static words; null when a word is not static or read has no <c>-a</c>.
+    /// MAPFILE), read from static words; null when a word is not static or read has no <c>-a</c>. <paramref name="origin"/>:
+    /// mapfile was given <c>-O</c> (it writes from there on and keeps the other elements).
     /// </summary>
-    private static string? BuiltinArrayOperand(ImmutableArray<CompoundWord> words, bool isRead)
+    private static string? BuiltinArrayOperand(ImmutableArray<CompoundWord> words, bool isRead, out bool origin)
     {
+        origin = false;
         string takesArgument = isRead ? "adinNptu" : "dnOsuCc";
         for (int i = 0; i < words.Length; i++)
         {
@@ -297,12 +304,43 @@ public static partial class PsEmitter
             for (int j = 1; j < word.Length; j++)
             {
                 if (takesArgument.IndexOf(word[j]) < 0) continue;
+                origin |= !isRead && word[j] == 'O';
                 string? argument = j + 1 < word.Length ? word[(j + 1)..] : ++i < words.Length ? GetLiteralValue(words[i]) : null;
                 if (isRead && word[j] == 'a') return argument;
                 break;
             }
         }
         return isRead ? null : "MAPFILE";
+    }
+
+    /// <summary>
+    /// The list whose commands run one after another, unconditionally, in the function being emitted (its body):
+    /// <see cref="DropIntegerAttribute"/> holds there for the rest of the body.
+    /// </summary>
+    [ThreadStatic] private static Command.CommandList? _functionBodyList;
+
+    /// <summary>
+    /// After an UNCONDITIONAL <c>unset NAME</c> / <c>declare +i NAME</c> (a command of the script's own top-level list or
+    /// of a function body's, which run in turn; EmitCommandList), NAME has lost the integer attribute: later writes store
+    /// the text (bash: <c>declare -ai g=(1); unset g; g=(2+2)</c> is 2+2). One that may not run (an if, a case arm, a
+    /// loop, after <c>&amp;&amp;</c> / <c>||</c>, eval text) leaves the attribute as it is. REGRESSION: any unset dropped it,
+    /// so <c>declare -i n=5; [ -z "$K" ] || unset n; n=n*2</c> stored the text n*2 (bash: 10).
+    /// </summary>
+    private static void DropIntegerAttribute(Command cmd)
+    {
+        if (_intVars is not { Count: > 0 } || cmd is not Command.Simple { Words.Length: > 1 } simple) return;
+        string? builtin = GetLiteralValue(simple.Words[0]);
+        bool unset = builtin == "unset";
+        if (!unset && builtin is not ("declare" or "typeset")) return;
+        var operands = simple.Words.RemoveAt(0);
+        // `unset -f NAME` removes a function; a declaration drops the attribute only with a + word holding i (`+i`, `+ai`).
+        if (unset ? operands.Any(w => GetLiteralValue(w) is { Length: > 1 } f && f[0] == '-' && f.Contains('f'))
+                  : !operands.Any(w => GetLiteralValue(w) is { Length: > 1 } f && f[0] == '+' && f.Contains('i')))
+            return;
+        foreach (var w in operands)
+            if (GetLiteralValue(w) is { Length: > 0 } operand && operand[0] is not ('-' or '+')
+                && (unset ? operand : DeclaredName(operand)) is var name && IsValidVarName(name))
+                _intVars.Remove(name);
     }
 
     /// <summary>A <c>declare -l/-u</c> variable converts the value it is assigned.</summary>
@@ -1924,7 +1962,7 @@ public static partial class PsEmitter
         _pipefailMode = false; _lineAbandonMode = false; _rootCommand = null; _execRestRoot = null; _discardInteractive = false;
         _pipeStatusMode = false; _xtraceMode = false; _trapMode = false; _debugTrapMode = false; _declarePrintMode = false;
         _nounsetMode = false; _loopDepth = 0; _stderrMergeDepth = 0;
-        _intVars = null; _assocVars = null; _arrayVars = null; _caseVars = null; _localAttrNames = null; _globalAttrsInFunctions = null;
+        _intVars = null; _assocVars = null; _arrayVars = null; _caseVars = null; _localAttrNames = null; _globalAttrsInFunctions = null; _functionBodyList = null;
         _readonlyVars = null; _readonlyViolation = false; _runtimeReadonly = false;
         _scriptReadsLastArg = false; _scriptPosix = false; _posixSplitNode = null;
         _inheritErrexitMode = false; _scriptLastpipe = false;
@@ -3153,6 +3191,14 @@ public static partial class PsEmitter
         var priorCaseVars = _caseVars is null ? null : new Dictionary<string, bool>(_caseVars, VarNameKeys);
         var priorLocalAttrNames = _localAttrNames;
         _localAttrNames = null;
+        var priorBodyList = _functionBodyList;
+        _functionBodyList = func.Body switch
+        {
+            Command.CommandList bodyList => bodyList,
+            Command.BraceGroup { Body: Command.CommandList groupList } => groupList,
+            Command.Subshell { Body: Command.CommandList subshellList } => subshellList,
+            _ => null,
+        };
         var priorNamerefs = _namerefs is null ? null : new Dictionary<string, string>(_namerefs, VarNameKeys);
         var priorPendingNamerefs = _pendingNamerefs is null ? null : new HashSet<string>(_pendingNamerefs, VarNameKeys);
         var priorRuntimeNamerefs = _runtimeNamerefs is null ? null : new HashSet<string>(_runtimeNamerefs, VarNameKeys);
@@ -3194,6 +3240,9 @@ public static partial class PsEmitter
             string EmitFunctionBodyOnce()
             {
                 if (priorFunctionReadonly is not null) _readonlyVars = new HashSet<string>(priorFunctionReadonly, VarNameKeys);
+                // Likewise the integer attributes: an `unset n` in the body dropped n's for the rest of the FIRST emission.
+                if (priorIntVars is not null && _intVars is not null) { _intVars.Clear(); _intVars.UnionWith(priorIntVars); }
+                _localAttrNames = null;
                 return EmitBody(func.Body);
             }
             try
@@ -3267,6 +3316,7 @@ public static partial class PsEmitter
                     if (gLetter == 'i') _intVars?.Add(gName);
                     else if (_caseVars is not null) _caseVars[gName] = gLetter == 'u';
             _localAttrNames = priorLocalAttrNames;
+            _functionBodyList = priorBodyList;
             if (priorNamerefs is not null && _namerefs is not null)
             {
                 _namerefs.Clear();
@@ -3534,7 +3584,7 @@ public static partial class PsEmitter
     /// does not read is put back — so a user function or a program that ignores stdin is never starved
     /// of what it would not have read, nor blocked on a stdin that never ends.
     /// </summary>
-    private static string EmitSimpleFed(Command.Simple simple) => EmitSimpleFedCore(simple) + IntegerArrayAfter(simple);
+    private static string EmitSimpleFed(Command.Simple simple) => IntegerArrayAround(simple, EmitSimpleFedCore(simple));
 
     private static string EmitSimpleFedCore(Command.Simple simple)
     {
@@ -5341,7 +5391,7 @@ public static partial class PsEmitter
                     string localAssigned = EmitAssignmentValue(pair.Value);
                     // `local s+=x` appends to the value already there (the caller's, or this function's earlier one).
                     sb.Append(pair.Op == AssignOp.Equal && _intVars?.Contains(pair.Name) == true
-                        ? "[string](Invoke-BashArith ([string](" + localAssigned + ")))"
+                        ? PsBuild.IntegerScalar("([string](" + localAssigned + "))", _nounsetMode)
                         : pair.Op == AssignOp.PlusEqual
                             ? "$__psbashLocBase + (" + localAssigned + ")"
                             : CaseAttr(pair.Name, localAssigned));
@@ -5392,9 +5442,11 @@ public static partial class PsEmitter
                     continue;
                 }
                 // `a=([2]=p [5]=q)`: explicit numeric subscripts; the gaps stay UNSET (a sparse array), as in bash.
-                if (pair.Op == AssignOp.Equal && !cmd.IsAssoc && _assocVars?.Contains(pair.Name) != true && TryEmitIndexedLiteral(pair.ArrayValue, out var indexed))
+                if (pair.Op == AssignOp.Equal && !cmd.IsAssoc && _assocVars?.Contains(pair.Name) != true && TryEmitIndexedLiteral(pair.ArrayValue, out var indexedEntries))
                 {
-                    sb.Append(arrTarget).Append(" = ").Append(ElementValues(pair.Name, indexed));
+                    // An integer array stores the elements one at a time, in written order (PsBuild.IntegerEntriesStore).
+                    sb.Append(IsIntegerArray(pair.Name) ? PsBuild.IntegerEntriesStore(arrTarget, indexedEntries, _nounsetMode)
+                        : arrTarget + " = " + PsBuild.SparseLiteral(indexedEntries));
                     continue;
                 }
                 // `declare -A m=()` is an EMPTY ASSOCIATIVE array, not an empty indexed one.
@@ -5409,11 +5461,7 @@ public static partial class PsEmitter
                 // eval'd text cannot see the caller's `declare -A a`: the run time picks pairs or list by a's kind.
                 bool kindAtRunTime = pair.Op == AssignOp.Equal && !wordsArePairs && !cmd.IsAssoc && !cmd.IsDeclare
                     && _context == TranspileContext.Eval;
-                sb.Append(arrTarget);
-                // `a+=(x)` goes through Add-BashArray: a sparse array appends after its highest subscript,
-                // which PowerShell's own `+=` cannot do on a dictionary.
-                sb.Append(pair.Op == AssignOp.PlusEqual ? " = Add-BashArray " + PsBuild.ArrayAppendBase(arrTarget, ScalarValueOf(ResolveNameref(pair.Name), braced: true)) + " " : " = ");
-                // The elements as one list (`@(a, b)`), which an integer array's write evaluates (ElementValues).
+                // The elements as one list (`@(a, b)`), which an integer array's write evaluates (IntegerListStore).
                 var elements = new StringBuilder("@(");
                 // A glob element (`arr=(*.txt)`) expands to ZERO or more elements, which the comma
                 // form cannot splice (`'a',@('b','c')` is two elements). Such a list is emitted as
@@ -5436,6 +5484,17 @@ public static partial class PsEmitter
                     elements.Append(EmitAssignmentValue(elem));
                 }
                 string list = elements.Append(')').ToString();
+                string? appendBase = pair.Op == AssignOp.PlusEqual ? PsBuild.ArrayAppendBase(arrTarget, ScalarValueOf(ResolveNameref(pair.Name), braced: true)) : null;
+                // An integer array evaluates and stores the elements one at a time, in written order, once every word is
+                // expanded: `a=(1 a[0]+1)` is 1 2 (bash). REGRESSION: the whole list was evaluated after it was built.
+                if (!wordsArePairs && !kindAtRunTime && IsIntegerArray(pair.Name))
+                {
+                    sb.Append(PsBuild.IntegerListStore(arrTarget, list, appendBase, _nounsetMode));
+                    continue;
+                }
+                // `a+=(x)` goes through Add-BashArray: a sparse array appends after its highest subscript,
+                // which PowerShell's own `+=` cannot do on a dictionary.
+                sb.Append(arrTarget).Append(appendBase is not null ? " = Add-BashArray " + appendBase + " " : " = ");
                 sb.Append(ElementValues(pair.Name, wordsArePairs ? "[PsBash.Cmdlets.BashAssoc]::FromWords(" + list + ")"
                     : kindAtRunTime ? "[PsBash.Cmdlets.BashAssoc]::ListOrPairs(" + arrTarget + ", " + list + ")"
                     : list));
@@ -5520,9 +5579,9 @@ public static partial class PsEmitter
                 string assigned = EmitAssignmentValue(pair.Value);
                 // A `declare -i` variable evaluates its value as arithmetic: `n=5; n+=2` adds (7), not appends (52).
                 sb.Append(intPlus
-                    ? "[string](Invoke-BashArith (" + PsBuild.SingleQuote(attrName + "+(") + " + [string](" + assigned + ") + ')'))"
+                    ? PsBuild.IntegerScalar("(" + PsBuild.SingleQuote(attrName + "+(") + " + [string](" + assigned + ") + ')')", _nounsetMode)
                     : pair.Op == AssignOp.Equal && _intVars?.Contains(attrName) == true
-                        ? "[string](Invoke-BashArith ([string](" + assigned + ")))"
+                        ? PsBuild.IntegerScalar("([string](" + assigned + "))", _nounsetMode)
                         : pair.Op == AssignOp.Equal ? CaseAttr(attrName, assigned)
                         : casePlus ? CaseAttr(attrName, varPrefix + attrName + " + (" + assigned + ")") : assigned);
                 if (toArray0)
@@ -6796,8 +6855,9 @@ public static partial class PsEmitter
                     : IsValidVarName(quotedVal.Split('=')[0])))
                 val = quotedVal;
             // `declare -gA m` (a function declaring a global associative array): the -g changes nothing here, every array
-            // is global. It was a plain `declare m`, so `m[k]=v` wrote an indexed element.
-            if (val == "-A" || val is { Length: > 2 } && val[0] == '-' && val.Contains('A') && val.AsSpan(1).IndexOfAnyExcept("gA") < 0) isAssoc = true;
+            // is global. It was a plain `declare m`, so `m[k]=v` wrote an indexed element. Any other attribute letter
+            // with A is still associative: `declare -Ai c` (REGRESSION: an indexed array, so `c[$w]+=1` summed into c[0]).
+            if (val is { Length: > 1 } && val[0] == '-' && val[1] != '-' && val.Contains('A') && val.AsSpan(1).IndexOfAnyExcept("Agilrtux") < 0) isAssoc = true;
             else if (val == "-n") isNameref = true;
             else if (val == "-i") { /* integer — handled below */ }
             else if (val is { Length: > 1 } && val[0] == '-' && (val.AsSpan(1).IndexOfAnyExcept("pfF") < 0 || (val[1] != '-' && val.Contains('p')))) isPrint = true;
@@ -6856,12 +6916,6 @@ public static partial class PsEmitter
         {
             string? intName = exprName ?? (varName is null ? null : DeclaredName(varName));
             if (intName is not null && IsValidVarName(intName)) { _intVars.Add(intName); NoteGlobalAttr(intName, 'i'); }
-        }
-        // 'declare +i k' takes it away: later writes store the text (bash: 'declare -ai k=(1); declare +i k; k+=(2+2)' gives 1 2+2).
-        else if (!isPrint && _intVars is not null && cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { Length: > 1 } f && f[0] == '+' && f.Contains('i')))
-        {
-            string? plainName = exprName ?? (varName is null ? null : DeclaredName(varName));
-            if (plainName is not null) _intVars.Remove(plainName);
         }
         if (!isPrint && !isAssoc && _caseVars is not null
             && DeclareCaseFlag(cmd) != '\0')
@@ -6927,7 +6981,7 @@ public static partial class PsEmitter
             string value = EmitAssignmentValue(exprValue);
             bool intAttr = HasDeclareFlag(cmd, 'i');
             result = "$env:" + exprName + " = "
-                + (intAttr ? "[string](Invoke-BashArith ([string](" + value + ")))" : CaseAttr(exprName, value))
+                + (intAttr ? PsBuild.IntegerScalar("([string](" + value + "))", _nounsetMode) : CaseAttr(exprName, value))
                 + (exprName == "PATH" ? "; " + PsBuild.NormalizePathVariable : "")
                 + "; " + PsBuild.SetStatus(0);
             return true;
@@ -6974,10 +7028,10 @@ public static partial class PsEmitter
                 // (`declare -i n=2+3` -> 5, `declare -i n=x*2` reads $x). A plain
                 // integer literal is emitted directly; any expression routes through
                 // the shared arithmetic evaluator instead of silently collapsing to 0.
-                string intVal = appends ? $"[string](Invoke-BashArith {PsBuild.SingleQuote(declName + "+(" + rawVal + ")")})"
+                string intVal = appends ? PsBuild.IntegerScalar(PsBuild.SingleQuote(declName + "+(" + rawVal + ")"), _nounsetMode)
                     : BashArithmeticParser.TryPlainDecimal(rawVal, out _)
                     ? PsBuild.SingleQuote(rawVal)
-                    : $"[string](Invoke-BashArith {PsBuild.SingleQuote(rawVal)})";
+                    : PsBuild.IntegerScalar(PsBuild.SingleQuote(rawVal), _nounsetMode);
                 result = "$env:" + declName + " = " + intVal;
                 return true;
             }
@@ -8979,6 +9033,7 @@ public static partial class PsEmitter
     /// Mixed or non-numeric forms are not handled here (non-numeric keys are the associative form).</summary>
     private static bool TryEmitIndexedLiteral(ArrayWord array, out string literal)
     {
+        // The subscript/value entries, comma-joined (PsBuild.SparseLiteral, PsBuild.IntegerEntriesStore).
         literal = "";
         if (array.Elements.IsDefaultOrEmpty) return false;
         var entries = new List<string>(array.Elements.Length * 2);
@@ -9003,7 +9058,7 @@ public static partial class PsEmitter
                 : PsBuild.ArithValue(EmitArithmeticInvocation(BashArithmeticParser.ParseOrDefer(key))));
             entries.Add("(" + EmitAssignmentValue(new CompoundWord(parts)) + ")");
         }
-        literal = "[PsBash.Cmdlets.BashSparseArray]::FromEntries(" + string.Join(", ", entries) + ")";
+        literal = string.Join(", ", entries);
         return true;
     }
 
@@ -11911,7 +11966,7 @@ public static partial class PsEmitter
         if (!m.Success) return $"({varRef} = {value})";
         string arr = "$" + m.Groups[1].Value;
         // An integer array stores, and the expansion yields, the value as arithmetic (`${a[5]:=2+2}` is 4).
-        if (IsIntegerArray(m.Groups[1].Value)) value = PsBuild.IntegerValue(value);
+        if (IsIntegerArray(m.Groups[1].Value)) value = PsBuild.IntegerValue(value, _nounsetMode);
         return $"$($__psbV = {value}; {PsBuild.SetElement(arr, m.Groups[2].Value, "$__psbV", append: false, integer: false)}; $__psbV)";
     }
 
@@ -12562,6 +12617,10 @@ public static partial class PsEmitter
         // The root script reports each input line to the shell's reader as it starts (ReaderCommandFor; "" for most scripts).
         var root = list;
         int inputLine = -1;
+        // The commands of the script's own top-level list, or of a function body's, run one after another: an attribute
+        // one of them takes away is gone for the rest (DropIntegerAttribute).
+        bool straightLine = _transpileNesting == 1 && (ReferenceEquals(root, _rootCommand) || ReferenceEquals(root, _execRestRoot))
+            || ReferenceEquals(root, _functionBodyList);
         list = list with { Commands = ResolveLastArgRefs(list.Commands) };
         var sb = new StringBuilder();
         for (int i = 0; i < list.Commands.Length; i++)
@@ -12625,6 +12684,7 @@ public static partial class PsEmitter
                 && lineOfThis > 0 && FirstSimpleLine(list.Commands[i + 1]) == LastSimpleLine(list.Commands[i]);
             if (lineStarts) sb.Append(PsBuild.FailGlobReset);
             string statement = readerCommand + EmitStatement(list.Commands[i]);
+            if (straightLine) DropIntegerAttribute(list.Commands[i]);
             // In POSIX mode a refused readonly assignment ends a non-interactive shell (bash 5.2: status 127). Whether
             // the mode is on is known only when it runs. REGRESSION: a `set -o posix` anywhere in the script made the
             // emitter drop every command after the assignment, also when the mode was set later or never reached.
@@ -13003,7 +13063,11 @@ public static partial class PsEmitter
         try
         {
             string text = EmitPipelineStages(pipeline, entryScope);
-            return _stageSeedUsed ? PsBuild.WithPipeEntryStatus(text) : text;
+            if (_stageSeedUsed) text = PsBuild.WithPipeEntryStatus(text);
+            // `shopt -s lastpipe; echo 1+1 | read -a r`: the last stage runs in the shell, and its write into an integer
+            // array converts after the pipeline, as after the builtin on its own (IntegerArrayAround).
+            return _scriptLastpipe && pipeline.Commands.Length > 1 && pipeline.Commands[^1] is Command.Simple lastStage
+                ? IntegerArrayAround(lastStage, text) : text;
         }
         finally
         {
@@ -14645,10 +14709,6 @@ public static partial class PsEmitter
                 return true;
             }
             case "unset":
-                // A variable unset loses its attributes: 'declare -ai g=(1); unset g; g=(2+2)' stores the text (bash: 2+2).
-                if (_intVars is { Count: > 0 } && !args.Any(w => GetLiteralValue(w) is { Length: > 1 } f && f[0] == '-' && f.Contains('f')))
-                    foreach (var w in args)
-                        if (GetLiteralValue(w) is { } unsetName && IsValidVarName(unsetName)) _intVars.Remove(unsetName);
                 result = EmitPassthrough("Invoke-BashUnset", args);
                 return true;
             case "pushd":

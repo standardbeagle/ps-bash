@@ -166,4 +166,49 @@ public class ArithOneEvaluatorDifferentialTests
             + "EOF\n"
             + Run + Done,
             timeout: TimeSpan.FromSeconds(60));
+
+    /// <summary>
+    /// The integer attribute, scalar and array: an <c>unset</c> / <c>declare +i</c> that may not run (after <c>||</c>
+    /// or <c>&amp;&amp;</c>, in an if, a case arm, a loop) keeps it, one that runs in turn (top level, a function body)
+    /// drops it; <c>declare -Ai</c> / <c>-iA</c> are associative; a lastpipe <c>read -a</c> / <c>mapfile</c> converts; a
+    /// list stores element by element in written order; <c>mapfile -O</c> converts only what it wrote; under
+    /// <c>set -u</c> an unbound name ends the shell. REGRESSION (fable review of 83676727): any unset dropped it, so
+    /// <c>declare -i n=5; [ -z "$KEEP" ] || unset n; n=n*2</c> printed n*2 (bash 5.2: 10). Guard:
+    /// Core.Tests/IntegerArrayWriteGuardTests.
+    /// </summary>
+    [SkippableFact]
+    public Task IntegerAttribute_UnsetScopeAssocLastpipeOrderAndNounset()
+        => AssertOracle.EqualAsync(Work
+            + "cat > s.sh <<'EOF'\n"
+            + "declare -i n=5; [ -z \"$KEEP\" ] || unset n; n=n*2; echo \"1 $n\"\n"
+            + "declare -i n2=0; for k in 1 2 3; do if [ $k = 9 ]; then unset n2; fi; n2+=k; done; echo \"2 $n2\"\n"
+            + "declare -i n3=1; if false; then unset n3; fi; n3=n3+1; echo \"3 $n3\"\n"
+            + "declare -i n4=1; case x in y) unset n4;; esac; n4=n4+1; echo \"4 $n4\"\n"
+            + "declare -ai a5=(1); if false; then unset a5; fi; a5+=(2+2); echo \"5 ${a5[@]}\"\n"
+            + "declare -ai a6=(1); [ -n \"$KEEP\" ] && declare +i a6; a6[1]=2+2; echo \"6 ${a6[@]}\"\n"
+            + "declare -i n7=1; unset n7; n7=2+2; echo \"7 $n7\"\n"
+            + "f8() { declare -i v=1; unset v; v=2+2; echo \"8 $v\"; }; f8\n"
+            + "f9() { declare -i v; v=1+1; echo \"9 $v\"; unset v; }; f9\n"
+            + "declare -Ai c; for w in a b a a; do c[$w]+=1; done; echo \"10 ${c[a]} ${c[b]}\"; declare -p c\n"
+            + "declare -iA c2; c2[x]=1+1; echo \"11 ${c2[x]}\"; declare -p c2\n"
+            + "shopt -s lastpipe; declare -ai r; echo \"1+1 2*2\" | read -a r; echo \"12 $? ${r[@]}\"\n"
+            + "declare -ai mp; printf '%s\\n' 3+3 4*4 | mapfile -t mp; echo \"13 ${mp[@]}\"\n"
+            + "i=5; declare -ai o=([2]=i++ [0]=i++); echo \"14 ${o[0]} ${o[2]} $i\"\n"
+            + "declare -ai a15=(1); a15+=(a15[0]+1 a15[1]+1); echo \"15 ${a15[@]}\"\n"
+            + "declare -ai a16=(1 2); a16=(a16[1]+1 a16[0]+1); echo \"16 ${a16[@]}\"\n"
+            + "a17=(x y); declare -i a17; mapfile -t -O 2 a17 <<< 5+5; echo \"17 ${a17[@]}\"\n"
+            + "declare -ai z18; z18=(5 1/0 3); echo not-here\n"
+            + "echo \"18 ${z18[@]}\"\n"
+            + "declare -ai a19; a19=(); echo \"19 ${#a19[@]}\"; a19+=(); echo \"19b ${#a19[@]}\"\n"
+            + "g() { local -ai l=(1); l+=(l[0]+1); echo \"20 ${l[@]}\"; }; g\n"
+            + "echo end\n"
+            + "EOF\n"
+            + Run + "\n"
+            + "for body in 'declare -ai a; a=(1 y+1); echo not-here' 'declare -i n; n=y+1; echo not-here' "
+            + "'declare -ai b; b[0]=y+1; echo not-here' 'declare -ai c; read -a c <<< \"y+1\"; echo not-here' "
+            + "'declare -ai d; d=([1]=y+1); echo not-here'; do\n"
+            + "  printf 'set -u\\n%s\\necho after\\n' \"$body\" > u.sh\n"
+            + "  bash u.sh 2>&1; echo \"rc=$?\"\n"
+            + "done" + Done,
+            timeout: TimeSpan.FromSeconds(90));
 }

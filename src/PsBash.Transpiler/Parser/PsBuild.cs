@@ -764,8 +764,9 @@ public static class PsBuild
     /// The one emitted element write, <c>NAME[KEY]=VALUE</c> / <c>+=</c> (<c>Set-BashElement</c>), assigning the
     /// container back to <paramref name="target"/>. <paramref name="integer"/>: NAME has the integer attribute
     /// (<c>declare -ai</c>), so the value is arithmetic, evaluated after the subscript, and <c>+=</c> adds. Every element
-    /// write the emitter makes goes through here, and every array-literal write through <see cref="IntegerElements"/>
-    /// (PsEmitter.ElementValues): the attribute is decided in one place (guard IntegerArrayWriteGuardTests).
+    /// write the emitter makes goes through here, and every array-literal write through <see cref="IntegerListStore"/>,
+    /// <see cref="IntegerEntriesStore"/> or <see cref="IntegerElements"/> (PsEmitter.ElementValues, IntegerArrayAround):
+    /// the attribute is decided in one place (guard IntegerArrayWriteGuardTests).
     /// </summary>
     public static string SetElement(string target, string key, string value, bool append, bool integer, string? written = null)
         => target + " = Set-BashElement " + TargetArg(target) + " " + key + " " + value + (append ? " -Append" : "")
@@ -775,18 +776,72 @@ public static class PsBuild
     public const string IntegerElementSwitch = "-Integer";
 
     /// <summary>
-    /// The elements an array write stores into an integer array (<c>declare -ai a=(1+1 x*2)</c>, <c>a+=(…)</c>,
-    /// <c>read -a</c>, <c>mapfile</c>): each one's text as arithmetic, in order, once every word is expanded
+    /// The elements a builtin or a keyed table write stores into an integer array (<c>read -a</c>, <c>mapfile</c>,
+    /// <c>declare -Ai c=([k]=1+1)</c>): each one's text as arithmetic, in order, once every word is expanded
     /// (<c>ConvertTo-BashIntegerArray</c>). <paramref name="keepStatus"/>: the command's status stands (read, mapfile).
+    /// <paramref name="sinceBefore"/>: only the elements that differ from <see cref="IntegerBefore"/>'s copy
+    /// (<c>mapfile -O N</c> keeps the others). A list write stores its elements one at a time instead
+    /// (<see cref="IntegerListStore"/>, <see cref="IntegerEntriesStore"/>).
     /// </summary>
-    public static string IntegerElements(string elementsExpr, bool keepStatus = false)
-        => "(" + IntegerElementsFunction + " (" + elementsExpr + ")" + (keepStatus ? " -KeepStatus" : "") + ")";
+    public static string IntegerElements(string elementsExpr, bool keepStatus = false, bool sinceBefore = false)
+        => "(" + IntegerElementsFunction + " (" + elementsExpr + ")" + (keepStatus ? " -KeepStatus" : "")
+           + (sinceBefore ? " -Before " + IntegerBeforeVariable : "") + ")";
 
     /// <summary>The run-time function <see cref="IntegerElements"/> calls.</summary>
     public const string IntegerElementsFunction = "ConvertTo-BashIntegerArray";
 
-    /// <summary>One value under the integer attribute, as a WORD (a failed expression drops the line, as in bash).</summary>
-    public static string IntegerValue(string valueExpr) => "[string]$(Invoke-BashArith ([string](" + valueExpr + ")))";
+    /// <summary>The array as it was before a builtin that writes some of its elements (<see cref="IntegerElements"/>).</summary>
+    public const string IntegerBeforeVariable = "$__psbash_iold";
+
+    /// <summary>Keeps <paramref name="target"/> as it is now, for <see cref="IntegerElements"/>' <c>sinceBefore</c>.</summary>
+    public static string IntegerBefore(string target) => IntegerBeforeVariable + " = " + target + "; ";
+
+    /// <summary>
+    /// One value under the integer attribute, as a WORD (a failed expression drops the line, as in bash). Under
+    /// <paramref name="nounset"/> an unbound name ends the command (<see cref="ArithNounsetGuard"/>; bash 5.2: a script exits 1).
+    /// </summary>
+    public static string IntegerValue(string valueExpr, bool nounset)
+        => "[string]" + (nounset ? ArithNounsetGuard("Invoke-BashArith ([string](" + valueExpr + "))")
+                                 : "$(Invoke-BashArith ([string](" + valueExpr + ")))");
+
+    /// <summary>
+    /// A scalar's value under the integer attribute (<c>declare -i n; n=x+1</c>): <c>Invoke-BashArith ARGUMENT</c> as a
+    /// value, not a word (a failed expression sets status 1 and the line goes on). Under <paramref name="nounset"/> an
+    /// unbound name ends the command (<see cref="ArithNounsetGuard"/>). REGRESSION: it printed the error and went on.
+    /// </summary>
+    public static string IntegerScalar(string argument, bool nounset)
+        => nounset ? "[string]" + ArithNounsetGuard("Invoke-BashArith " + argument, word: false)
+                   : "[string](Invoke-BashArith " + argument + ")";
+
+    /// <summary>
+    /// An integer array's list write (<c>a=(x y)</c>, <c>a+=(x y)</c>, <c>declare -ai a=(…)</c>): every word is expanded
+    /// first (<paramref name="elementsExpr"/>, <c>@(…)</c>), then each element is evaluated and stored in written order,
+    /// so an element sees the ones before it (bash: <c>a=(1 a[0]+1)</c> is <c>1 2</c>; <c>=</c> empties the array before
+    /// the first one, and a failed element keeps those already stored). <paramref name="appendBase"/>: what <c>+=</c>
+    /// appends to (<see cref="ArrayAppendBase"/>); null for <c>=</c>. REGRESSION: the list was evaluated as a whole after it
+    /// was built, so <c>a+=(a[0]+1 a[1]+1)</c> read no a[1].
+    /// </summary>
+    public static string IntegerListStore(string target, string elementsExpr, string? appendBase, bool nounset)
+        => "$__psbash_ie = " + elementsExpr + "; $__psbash_ib = " + (appendBase ?? "@()") + "; "
+           + (appendBase is null ? target + " = $__psbash_ib; " : "")
+           + "foreach ($__psbash_iv in $__psbash_ie) { $__psbash_ib = Add-BashArray $__psbash_ib @(" + IntegerValue("$__psbash_iv", nounset)
+           + "); " + target + " = $__psbash_ib }";
+
+    /// <summary>
+    /// An integer array's keyed list write (<c>a=([2]=i++ [0]=i++)</c>): the subscript/value
+    /// <paramref name="entries"/> (comma-joined, every word expanded first), then the array emptied and each value
+    /// evaluated and stored in written order (bash: a[2]=5, a[0]=6 for i=5). REGRESSION: the values were evaluated in
+    /// subscript order.
+    /// </summary>
+    public static string IntegerEntriesStore(string target, string entries, bool nounset)
+        => "$__psbash_ie = @(" + entries + "); " + target + " = @(); "
+           + "for ($__psbash_ii = 0; $__psbash_ii + 1 -lt $__psbash_ie.Count; $__psbash_ii += 2) { "
+           + SetElement(target, "($__psbash_ie[$__psbash_ii])", "(" + IntegerValue("$__psbash_ie[$__psbash_ii + 1]", nounset) + ")",
+               append: false, integer: false)
+           + " }";
+
+    /// <summary><c>a=([2]=p [5]=q)</c>: the subscript/value <paramref name="entries"/> (comma-joined) as a sparse array.</summary>
+    public static string SparseLiteral(string entries) => "[PsBash.Cmdlets.BashSparseArray]::FromEntries(" + entries + ")";
 
     /// <summary>
     /// The value of one emitted COMMAND-MODE argument, as an expression: <c>&amp; { $args[0] } arg</c>. An argument

@@ -1509,14 +1509,20 @@ slice of a string, an array or the positionals (`${s:o:l}`, `${a[@]:o:l}`, `${@:
 that is read, written, unset or named indirectly (`${a[i]}`, `${a[$k]}`, `a[i]=x`, `unset 'a[i]'`, `ref='a[i]'; ${!ref}`).
 
 **Integer arrays.** The integer attribute on an array (`declare -ai`, `local -ai`, `declare -ia`, `declare -Ai`,
-`declare -i` on an existing array) evaluates every element write, looked up in ONE place per form: a list, a literal,
-`+=(…)`, `read -a`, `mapfile`/`readarray` go through `PsEmitter.ElementValues` (`ConvertTo-BashIntegerArray`; for the
-builtins after the whole statement, `PsEmitter.IntegerArrayAfter`), and `a[i]=v`, `a[i]+=v`, `a=v` through
-`PsBuild.SetElement`'s `integer` flag (`Set-BashElement -Integer`: subscript first, then the old value, then the new
-one). `unset NAME` and `declare +i NAME` take the attribute away. The attribute is tracked at transpile time
-(`_intVars`), like the scalar's. Guard: `IntegerArrayWriteGuardTests`; differential
-`ArithOneEvaluatorDifferentialTests.IntegerArray_EveryElementWriteEvaluates`. Known gaps: a failing element keeps the
-old array (bash keeps the elements stored before it, and prefixes `read:`/`mapfile:`); a keyed element in an append
+`declare -i` on an existing array) evaluates every element write, looked up in ONE place per form. A list (`a=(…)`,
+`+=(…)`, `a=([2]=x [0]=y)`) is expanded whole, then each element evaluated and stored in written order
+(`PsBuild.IntegerListStore` / `IntegerEntriesStore`: `a=(1 a[0]+1)` is `1 2`, a failing element keeps those before
+it). `read -a`, `mapfile`/`readarray` (also as a lastpipe stage) and keyed tables convert after the write
+(`ConvertTo-BashIntegerArray` via `PsEmitter.ElementValues` / `IntegerArrayAround`; `mapfile -O` only the elements it
+changed). `a[i]=v`, `a[i]+=v`, `a=v` go through `PsBuild.SetElement`'s `integer` flag (`Set-BashElement -Integer`:
+subscript first, then the old value, then the new one). Under `set -u` an unbound name ends the shell, scalar or
+element. `unset NAME` and `declare +i NAME` take the attribute away only when they run unconditionally: a command of
+the top-level list or of a function body's list (`PsEmitter.DropIntegerAttribute`); one in an if, a case arm, a loop
+or after `&&`/`||` keeps it. The attribute is tracked at transpile time (`_intVars`), like the scalar's, so one
+dropped inside a function never reaches its caller, and one dropped in a loop body is kept. Guard:
+`IntegerArrayWriteGuardTests`; differentials `ArithOneEvaluatorDifferentialTests.IntegerArray_EveryElementWriteEvaluates`
+and `IntegerAttribute_UnsetScopeAssocLastpipeOrderAndNounset`. Known gaps: a failing `read -a`/`mapfile` element
+keeps the old array (bash keeps the elements stored before it, and prefixes `read:`/`mapfile:`); a keyed element in an append
 or a mixed list (`a+=([3]=x)`, `a=([3]=x 4)`, `a+=([0]+=z)`) is a plain word for EVERY indexed array (stored as the
 text `[3]=x`; bash: element 3), so an integer array reports it as an arithmetic error.
 
