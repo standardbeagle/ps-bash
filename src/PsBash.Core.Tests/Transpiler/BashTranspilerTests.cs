@@ -135,7 +135,7 @@ public class BashTranspilerTests
     public void Transpile_PositionalListDefaultOperators_TestTheListNotAString()
     {
         var result = BashTranspilerTests_Transpile("echo ${@:-x} z");
-        Assert.Contains("@($(if (@(", result);
+        Assert.Contains("$(if ([string]($(if (@(", result);
         Assert.Contains(".Count -eq 1 -and -not [string]", result);
         Assert.DoesNotContain("$null ?? \"x\"", result);
     }

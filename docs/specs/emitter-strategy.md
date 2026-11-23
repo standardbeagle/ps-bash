@@ -433,9 +433,9 @@ words (`$x`, `"a$y"`, `(…)`, `@(…)`) keep their emitted PowerShell value.
 An UNQUOTED `$(cmd)` / `` `cmd` `` word is word-split like an unquoted `$x`: bash expands it to TEXT,
 splits that text on `$IFS`, then glob-expands each word. The capture array only splits on LINES, so
 `for f in $(echo a b c)` used to iterate once over `a b c`. Such a word emits
-`@(ConvertTo-BashWords <the substitution's text>)` (`IsPureUnquotedCommandSubWord`; a quoted
-`"$(cmd)"` or a substitution glued into a longer word `x$(cmd)y` stays one word). The cmdlet
-(`ConvertToBashWordsCommand`, splitter = `BashWordSplitter`) follows bash's IFS rules (unset IFS =
+`@(ConvertTo-BashWords <the substitution's text>)` (a quoted `"$(cmd)"` stays one word; a substitution glued
+into a longer word `x$(cmd)y` is one word of segments, see "Word expansion: one primitive"). The cmdlet
+(`ConvertToBashWordsCommand`, engine = `BashWordFields`) follows bash's IFS rules (unset IFS =
 space/tab/newline; IFS whitespace folds and trims; every non-whitespace IFS character delimits and keeps
 empty fields, a single trailing delimiter adds none; empty IFS splits nothing), yields NO word for an
 empty / blank result (zero iterations), and expands each word containing `* ? [` against the filesystem
@@ -1034,7 +1034,50 @@ hoist wraps the stage in a script block, which used to swallow the pipe, so
 assigning a bare empty result collapses to `$null`, and
 splatting `$null` injects one spurious empty argument. This applies to both the
 general fallback path (`EmitSimple`) and the mapped passthrough path
-(`EmitPassthrough`), via `IsPureUnquotedVarWord` / `EmitCommandWithSplatArgs`.
+(`EmitPassthrough`), via `IsUnquotedSplitWord` / `EmitCommandWithSplatArgs`.
+
+### Word expansion: one primitive
+
+bash §3.5 expands a word in one pass over ALL its parts: every unquoted expansion's result is IFS-split, a
+quoted list (`"$@"`, `"${a[@]}"`, `"${@/a/X}"`, `"${a[@]@Q}"`) gives one field per element with its first
+and last element glued to the text beside it, quoted characters never glob, and a field made only of
+split text that came out empty is removed. Each word SHAPE used to have a predicate and an emission of its
+own (`IsUnquotedVarAffixWord`, `IsUnquotedDefaultAltWord`, `IsQuotedArrayAffixWord`, …), so every shape
+nobody had listed kept one field: with x='a b', `$x$x`, `~/$x`, `$x*`, `"$@"$x`, `{1,2}$x` and
+`${x/a/c d}${e}` did not split, `"${@^^}"` was one string.
+
+**Decision: one predicate, one emission, one run-time primitive.**
+
+- `PsEmitter.IsUnquotedSplitWord` (in `Parser/PsEmitter.Fields.cs`) is the ONLY "is this word split /
+  globbed?" decision, made from the AST parts: an unquoted expansion that splits (`ExpansionSplits`: not
+  a loop variable or a `$?`-style special), a quoted list part (`HasQuotedListPart`), or a glob / brace
+  word. A word it rejects is one field, emitted as before (the fast path).
+- `EmitUnquotedSplitWordArray` builds the word's SEGMENTS from its parts (never raw text) and emits one
+  call, `@(ConvertTo-BashWords -Parts @(kind, value, …))` (`PsBuild.WordFieldsArray` / `WordSegment`). A
+  lone expansion keeps its short form (`@(ConvertTo-BashWords $env:x)`, `ListFieldsArray` for `$@`,
+  `NumberFieldsArray` for `$((…))`) — the same segments with one element.
+- The kinds (`PsBash.Cmdlets.BashWordFields`): 1 quoted text, 2 pattern text (unquoted literals and glob
+  parts, never split), 3 a split value, 4 an unquoted list (values joined with IFS[0], then split), 5 a
+  quoted list, 6 a field break (between the words of a dynamic brace expansion). In place of a kind a
+  nested group may stand: `${v:-word}` / `${v:+word}` emit `PsBuild.WordSegmentGroup`, which picks at run
+  time between the value's segments and the WORD's own segments (`${e:-'a b'}` is one field, `${e:-a b}` two,
+  `${u:-"a b"$x}` splits only `$x`). `${v:=w}` / `${v:?m}` are one split value (bash splits the assigned
+  result whole: `${e:='v w'}` is two fields).
+- `BashWordFields.Expand` tags every character (split / quoted / pattern, plus zero-width anchors for a
+  quoted null and breaks between list values), splits on IFS, and gives each field a glob pattern only
+  when it holds an active glob character (quoted `* ? [ ] \` escaped). `ConvertTo-BashWords` globs those
+  fields with the `ConvertTo-BashGlob` engine (`set -f`, nullglob, failglob honoured).
+
+The same emission serves command arguments (the RC-7 splat hoist), `for` lists, `a=( … )`, `set --`, a
+command name glued to text (`IsAffixedSplitName`) and a redirect target (one field or "ambiguous
+redirect"). Guard: `Core.Tests/WordFieldsGuardTests` (the retired shape predicates stay gone; the predicate
+and emission are defined only in `PsEmitter.Fields.cs`; that file scans no raw quote text; only `PsBuild`
+spells the segments call). Behavior: `Differential.Tests/WordFieldsDifferentialTests`, engine rules
+`Cmdlets.Tests/BashWordFieldsTests`.
+
+Known gaps: `${!a[*]}` and `${!p*}` are parsed as their `@` forms, so `"${!a[*]}"` is not joined with IFS
+(parser); loop variables and `$? $# $$ $!` are never split (a word with one of them beside another expansion
+splits only the other).
 
 ---
 

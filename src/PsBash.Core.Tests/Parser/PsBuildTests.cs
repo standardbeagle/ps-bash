@@ -249,8 +249,22 @@ public class PsBuildTests
     }
 
     [Fact]
-    public void QuotedAffixArray_GluesTextToTheElementsWithoutSplitting()
-        => Assert.Equal("@([PsBash.Cmdlets.BashQuotedWords]::Affix(\"-\", '', @($a)))", PsBuild.QuotedAffixArray("\"-\"", "''", "@($a)"));
+    public void WordFieldsArray_IsOneConvertToBashWordsCallOverTheSegments()
+        => Assert.Equal("@(ConvertTo-BashWords -Parts @(2, 'a', 3, ($env:x)))",
+            PsBuild.WordFieldsArray(PsBuild.WordSegment(2, "'a'") + ", " + PsBuild.WordSegment(3, "$env:x")));
+
+    // A quoted literal stays bare; any other value is parenthesised so a command or `,` in it stays one element.
+    [Theory]
+    [InlineData("'a b'", "1, 'a b'")]
+    [InlineData("'it''s'", "1, ('it''s')")]
+    [InlineData("$null", "6, $null")]
+    [InlineData("@($a)", "5, (@($a))")]
+    public void WordSegment_ParenthesisesEveryValueButAQuotedLiteral(string value, string expected)
+        => Assert.Equal(expected, PsBuild.WordSegment(expected[0] - '0', value));
+
+    [Fact]
+    public void WordSegmentGroup_ProbesForTheAlternativeX()
+        => Assert.Equal("$(if ([string]($p) -ceq 'x') { ,@(3, ($v)) } else { ,@() })", PsBuild.WordSegmentGroup("$p", "3, ($v)", ""));
 
     // ─────────────── NullSafeBashText ───────────────
 
