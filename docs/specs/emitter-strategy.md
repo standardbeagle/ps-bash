@@ -755,20 +755,33 @@ Every place bash matches a PATTERN (§3.5.8.1) uses ONE compiler, `Transpiler/Pa
 
 | Context | Emitted / called as | Options |
 |---|---|---|
-| pathname component (`echo a*`) | `ConvertTo-BashGlob` → `BashGlob` → `LsGlob.Match` | `Pathname`-style rules on top: per component, leading `.`, nocaseglob, extglob |
-| `case`, `[[ == != ]]` | `PsBuild.PatternTest` → `BashPatternMatch.MatchesPattern` | nocasematch |
-| `# ## % %%` | `PsBuild.PatternRemove` → `BashPatternMatch.Remove` | never nocasematch (bash) |
-| `/ // /# /%` | `PsBuild.PatternSubstitute` → `BashPatternMatch.Substitute` | nocasematch, patsub_replacement |
-| `^ ^^ , ,,` | `PsBuild.PatternCaseModify` → `BashPatternMatch.ModifyCase` | — |
-| GLOBIGNORE, `compgen -X`, `ls -I` | `BashGlob.IsIgnored`, `BashPatternMatch.MatchesPattern` (`&` = the word, via `EscapeLiteral`), `LsGlob.Match` | `Pathname` (GLOBIGNORE) |
+| pathname component (`echo a*`) | `ConvertTo-BashGlob` → `BashGlob` → `LsGlob.Match` | per component; `LeadingPeriod` for a dot-file name (FNM_PERIOD: `@(.a|b)` matches `.a` through the arm's literal period, `!(b)` never); nocaseglob; extglob (a value word: `shopt extglob`) |
+| `case`, `[[ == != ]]` | `PsBuild.PatternTest` → `BashPatternMatch.MatchesPattern` | nocasematch; a `case` arm's unquoted value through `PsBuild.PatternValue` (extglob only while `shopt extglob` is on); `[[ ]]` always extglob |
+| `# ## % %%` | `PsBuild.PatternRemove` → `BashPatternMatch.Remove` | never nocasematch (bash); `NoExtGlob` while `shopt extglob` is off (the whole pattern is read at run time) |
+| `/ // /# /%` | `PsBuild.PatternSubstitute` → `BashPatternMatch.Substitute` | nocasematch, patsub_replacement, `shopt extglob` |
+| `^ ^^ , ,,` | `PsBuild.PatternCaseModify` → `BashPatternMatch.ModifyCase` | `shopt extglob` |
+| GLOBIGNORE, `compgen -X`, `ls -I`, `help PATTERN` | `BashGlob.IsIgnored`, `BashPatternMatch.MatchesFilter` (`&` = the word, via `EscapeLiteral`), `LsGlob.Match`, `InvokeBashHelpCommand.Matches` | `Pathname` (GLOBIGNORE); `shopt extglob` (GLOBIGNORE, `-X`); `NoExtGlob` (`ls -I`, `help`) |
 
 **The interface is canonical pattern TEXT**: quotes removed, every quoted or escaped character written `\c`
-(`BashPattern.EscapeLiteral` escapes `* ? [ ] \ ( ) |`). The emitter builds it with `EmitGlobPatternExpr`
-(static parts at transpile time, a quoted expansion through `BashGlobText.Escape` at run time, an UNQUOTED
-expansion's value spliced in active — `pre='*/'; ${p##$pre}` is a pattern, `"$pre"` literal). The operator
+(`BashPattern.EscapeLiteral` escapes `* ? [ ] \ ( ) | ! ^ -`, so a quoted `!` first in a bracket is a
+member: `["$x"a]` with x=! is {!, a}). The emitter builds it with `EmitGlobPatternExpr` (static parts at
+transpile time, unquoted literal text through `BashPattern.EscapeWordText` so its `[ ]` stay syntax and a
+bracket built around an expansion is a bracket — `[$c]`, a quoted expansion through `BashGlobText.Escape` at
+run time, an UNQUOTED expansion's value spliced in active — `pre='*/'; ${p##$pre}` is a pattern, `"$pre"` literal). The operator
 (`#`, `%`, `/#`, `/%`) is passed as an argument, never folded into the pattern text, so a quoted or escaped
-pattern keeps its anchor (`${v/#\*/X}`). The runtime compiles each distinct (text, options) once (bounded
-cache); a pattern without `* ? [ (` is matched as a string (no regex).
+pattern keeps its anchor (`${v/#\*/X}`). The runtime compiles each distinct (text, options) once (cache bounded by
+entries and by pattern characters; a pattern over 4096 characters is compiled for its one use); a pattern
+without `* ? [ (` is matched as a string (no regex).
+
+**Where a list ends is bash's PATSCAN** (`BashPattern.Converter.Scan`): any `(` nests (`@(a(x|y))` is one item
+`a(x|y)`), a bracket hides its `)` and `|`, and an operator whose list never closes makes the rest of the pattern
+plain text (`@(a*(b)` matches only itself). **No pattern hangs the host.** Each list is found by one scan, never by
+parsing it (`@(@(@(…` was 2^n, and 2,000 of them overran the nesting bound). Matching runs on .NET's NonBacktracking engine (linear in the subject: `*(a|aa)` on 45
+a's and a b, which bash itself does not finish in 300 s, answers at once); only `!(…)` (a lookbehind with
+backreferences) and a nocase POSIX class beside folded members need the backtracking engine, which runs with
+`BashPatternProgram.MatchBudget` (1 s): a match that runs out counts as no match and is written to the host
+log (`BashPattern.Diagnostic`). Guard: `BashPatternTests.PatternBombs_RunInLinearTime`,
+`BacktrackingBomb_GivesUpWithinTheBudgetAndIsReported`.
 
 Semantics, all as bash 5.2: `?`, `*` and a bracket match any character including a newline, and a match
 ends at `\z` (never before a trailing newline); a bracket follows POSIX (`]` first is a member, `[!]]`,

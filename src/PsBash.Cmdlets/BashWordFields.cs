@@ -228,7 +228,7 @@ public static class BashWordFields
                 else
                 {
                     field.Append(c);
-                    if (tag == TQuoted) { if (c is '*' or '?' or '[' or ']' or '\\') escapes = true; }
+                    if (tag == TQuoted) { if (PsBash.Core.Parser.BashPattern.QuotedNeedsEscape(c)) escapes = true; }
                     else if (c is '*' or '?' or '[' || extglob && c is '(' && i > start && text[i - 1] is '@' or '+' or '!' && tags[i - 1] != TQuoted)
                         active = true;
                 }
@@ -275,7 +275,8 @@ public static class BashWordFields
             byte tag = tags[k];
             if (tag is TAnchor or TBreak) continue;
             char c = text[k];
-            if (tag == TQuoted && c is '*' or '?' or '[' or ']' or '\\') pattern.Append('\\');
+            // A quoted character is literal in the pattern, its bracket syntax too (`["$x"a]` with x=! is {!, a}).
+            if (tag == TQuoted && PsBash.Core.Parser.BashPattern.QuotedNeedsEscape(c)) pattern.Append('\\');
             pattern.Append(c);
         }
         return new Field(value, pattern.ToString());

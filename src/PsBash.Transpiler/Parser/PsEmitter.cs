@@ -2775,7 +2775,7 @@ public static partial class PsEmitter
         // A static pattern is canonical text as well: quoted parts escaped, glob parts as written (no brace expansion;
         // a leading ~ expands). The one compiler (BashPattern) matches it at run time, cached per pattern text.
         var word = new CompoundWord(BashParser.DecomposeWord(raw, braceExpansion: false));
-        return PsBuild.PatternTest("$_", EmitGlobPatternExpr(word, mapPaths: false));
+        return PsBuild.PatternTest("$_", EmitGlobPatternExpr(word, mapPaths: false, valuesByShopt: true));
     }
     private static string EmitCase(Command.Case caseCmd)
     {
@@ -10903,7 +10903,10 @@ public static partial class PsEmitter
     /// <param name="mapPaths">False for a pattern that is not a path (<c>[[ $p == /tmp/$x ]]</c> compares
     /// text): no <c>/tmp/</c> or drive-prefix mapping.</param>
     /// <param name="parenSafe">The expression sits inside a PowerShell <c>"$( )"</c> string: no literal piece carries a raw paren.</param>
-    private static string EmitGlobPatternExpr(CompoundWord word, bool mapPaths = true, bool parenSafe = false)
+    /// <param name="valuesByShopt">A <c>case</c> arm: an unquoted expansion's extglob syntax counts only
+    /// while <c>shopt extglob</c> is on (<c>PsBuild.PatternValue</c>). <c>[[ ]]</c> matches as if extglob were on, and
+    /// the parameter-expansion operators apply the option to their whole pattern at run time.</param>
+    private static string EmitGlobPatternExpr(CompoundWord word, bool mapPaths = true, bool parenSafe = false, bool valuesByShopt = false)
     {
         const string Escape = "[PsBash.Cmdlets.BashGlobText]::Escape(";
         var pieces = new List<string>();
@@ -10921,6 +10924,8 @@ public static partial class PsEmitter
             Flush();
             pieces.Add("(" + expr + ")");
         }
+        // An unquoted expansion's value is pattern text; where the context says so, extglob in it follows the shopt.
+        string Active(string expr) => valuesByShopt ? PsBuild.PatternValue(expr) : expr;
 
         for (int i = 0; i < word.Parts.Length; i++)
         {
@@ -10936,7 +10941,9 @@ public static partial class PsEmitter
                     }
                     else if (mapPaths && i == 0 && TryTranslateMsysDrivePath(text, out var drive))
                         text = BashPath.ToShell(drive, windows: true);
-                    lit.Append(EscapeGlobLiteral(text));
+                    // Unquoted text: its `[ ] ! ^ -` stay pattern syntax, so a bracket built around an expansion
+                    // (`[$c]`, `["$x"a]`) is a bracket, as in bash.
+                    lit.Append(BashPattern.EscapeWordText(text));
                     break;
                 }
                 case WordPart.EscapedLiteral e:
@@ -10954,7 +10961,7 @@ public static partial class PsEmitter
                     foreach (var (text, isOperator) in SplitExtglob(gp.Pattern))
                     {
                         if (isOperator) lit.Append(text);
-                        else Dynamic(EmitGlobPatternExpr(new CompoundWord(BashParser.DecomposeWord(text)), mapPaths: false, parenSafe: parenSafe));
+                        else Dynamic(EmitGlobPatternExpr(new CompoundWord(BashParser.DecomposeWord(text)), mapPaths: false, parenSafe: parenSafe, valuesByShopt: valuesByShopt));
                     }
                     break;
                 case WordPart.GlobPart gp when gp.Pattern.Length > 1 && gp.Pattern[1] == '(' && gp.Pattern.AsSpan().IndexOfAny('\'', '"') >= 0:
@@ -10984,10 +10991,10 @@ public static partial class PsEmitter
                     if (ts.SlashConsumed) lit.Append('/');
                     break;
                 case WordPart.CommandSub cs:
-                    Dynamic(EmitCommandSubString(cs, nested: false));
+                    Dynamic(Active(EmitCommandSubString(cs, nested: false)));
                     break;
                 default: // SimpleVarSub, BracedVarSub, ArithSub: unquoted, so glob-active
-                    Dynamic(EmitWordPart(word.Parts[i]));
+                    Dynamic(Active(EmitWordPart(word.Parts[i])));
                     break;
             }
         }

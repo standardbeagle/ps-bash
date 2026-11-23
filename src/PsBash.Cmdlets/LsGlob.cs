@@ -19,13 +19,11 @@ internal static class LsGlob
     /// </summary>
     public static bool Match(string pattern, string name, bool allowLeadingPeriod, bool noCase = false, bool extGlob = false)
     {
-        if (!allowLeadingPeriod && name.Length > 0 && name[0] == '.' && !StartsWithPeriod(pattern)) return false;
+        // The leading-period rule is the compiler's (BashPatternOptions.LeadingPeriod), not a look at the pattern's
+        // first character: `@(.a|b)` and `?(.)a` match .a through an arm that starts with a literal period.
         var options = (noCase ? BashPatternOptions.NoCase : BashPatternOptions.None)
-                      | (extGlob ? BashPatternOptions.None : BashPatternOptions.NoExtGlob);
+                      | (extGlob ? BashPatternOptions.None : BashPatternOptions.NoExtGlob)
+                      | (!allowLeadingPeriod && name.Length > 0 && name[0] == '.' ? BashPatternOptions.LeadingPeriod : BashPatternOptions.None);
         return BashPatternMatch.Matches(name, pattern, options);
     }
-
-    // A literal period: `.x` or the escaped `\.x`.
-    private static bool StartsWithPeriod(string pattern)
-        => pattern.StartsWith('.') || (pattern.Length > 1 && pattern[0] == '\\' && pattern[1] == '.');
 }

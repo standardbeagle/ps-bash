@@ -149,7 +149,7 @@ public sealed class InvokeBashCompgenCommand : BashCmdlet
             pat.Append(filter[i]);
         }
         var p = pat.ToString();
-        return candidates.Where(c => BashPatternMatch.MatchesPattern(c, p) == negate).ToList();
+        return candidates.Where(c => BashPatternMatch.MatchesFilter(c, p) == negate).ToList();
     }
 
     /// <summary><c>-A user</c> / <c>-u</c>: the account names of <paramref name="passwd"/> in file order (bash reads

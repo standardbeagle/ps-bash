@@ -150,10 +150,11 @@ public sealed class InvokeBashHelpCommand : BashCmdlet
     private static bool IsPattern(string word) => word.AsSpan().IndexOfAny("*?[") >= 0;
 
     /// <summary>bash's help: a topic matches when the word is a prefix of its name (<c>help e</c> lists echo, enable, ...)
-    /// or, for a pattern, when the pattern matches the whole name.</summary>
+    /// or, for a pattern, when the pattern matches the whole name (bash's strmatch without extglob, through the one
+    /// pattern compiler: brackets and classes work, as in bash).</summary>
     internal static bool Matches(string word, string name) =>
         name.StartsWith(word, StringComparison.Ordinal)
-        || (IsPattern(word) && System.IO.Enumeration.FileSystemName.MatchesSimpleExpression(word, name, ignoreCase: false));
+        || (IsPattern(word) && BashPatternMatch.Matches(name, word, PsBash.Core.Parser.BashPatternOptions.NoExtGlob));
 
     internal static IEnumerable<string> Lines(string name, (string Synopsis, string Description) topic, char form) => form switch
     {

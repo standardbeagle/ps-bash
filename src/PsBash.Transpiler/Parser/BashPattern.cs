@@ -18,8 +18,14 @@ public enum BashPatternOptions
     Pathname = 2,
     /// <summary>The C / POSIX locale: the subject is bytes (one char per byte) and the POSIX classes are ASCII.</summary>
     Bytes = 4,
-    /// <summary>No extglob operators (GNU <c>fnmatch</c> without FNM_EXTMATCH: <c>ls -I</c>).</summary>
+    /// <summary>No extglob operators (GNU <c>fnmatch</c> without FNM_EXTMATCH: <c>ls -I</c>, and a pattern context
+    /// whose run-time value is matched while <c>shopt extglob</c> is off).</summary>
     NoExtGlob = 8,
+    /// <summary>FNM_PERIOD for a subject that STARTS WITH A PERIOD (a dot-file name; set it only for such a subject):
+    /// the period must be matched by a literal period. A <c>*</c>, <c>?</c>, bracket or <c>!(…)</c> at the start of the
+    /// pattern fails; an extglob at the start holds each arm's first character to the same rule, and when it matches
+    /// nothing, what follows it too (bash's <c>sm_loop</c> / <c>extmatch</c>).</summary>
+    LeadingPeriod = 16,
 }
 
 /// <summary>
@@ -70,22 +76,60 @@ public static class BashPattern
     }
 
     /// <summary>The characters a literal must escape to stay inert in a canonical pattern: the glob characters, the
-    /// escape itself, and the extglob list syntax (an escaped <c>(</c> cannot open <c>@(</c>, an escaped <c>|</c> or
-    /// <c>)</c> cannot end an arm).</summary>
-    private const string Specials = "*?[]\\()|";
+    /// escape itself, the extglob list syntax (an escaped <c>(</c> cannot open <c>@(</c>, an escaped <c>|</c> or
+    /// <c>)</c> cannot end an arm) and the bracket syntax (a quoted <c>!</c> / <c>^</c> first in a bracket does not
+    /// negate it, a quoted <c>-</c> is no range: <c>["$x"a]</c> with x=! is the set {!, a}).</summary>
+    private const string Specials = "*?[]\\()|!^-";
+
+    /// <summary>What unquoted literal text of a pattern word escapes: the extglob list syntax and the escape. Its
+    /// <c>[ ] ! ^ -</c> stay active, so a bracket assembled around an expansion (<c>[$c]</c>, <c>["$x"a]</c>) is a
+    /// bracket, as in bash (<c>*</c> and <c>?</c> never reach a literal part: the parser makes them glob parts).</summary>
+    private const string WordSpecials = "*?\\()|";
 
     /// <summary>
     /// <paramref name="literal"/> as canonical pattern text that matches exactly itself (a quoted part of a pattern
-    /// word, a quoted expansion's value): each of <c>* ? [ ] \ ( ) |</c> gets a backslash.
+    /// word, a quoted expansion's value): each of <c>* ? [ ] \ ( ) | ! ^ -</c> gets a backslash.
     /// </summary>
-    public static string EscapeLiteral(string? literal)
+    public static string EscapeLiteral(string? literal) => Escape(literal, Specials);
+
+    /// <summary>Whether a QUOTED <paramref name="c"/> needs a backslash in canonical pattern text (what
+    /// <see cref="EscapeLiteral"/> escapes), for a builder that assembles a pattern one tagged character at a time.</summary>
+    public static bool QuotedNeedsEscape(char c) => Specials.IndexOf(c) >= 0;
+
+    /// <summary>
+    /// UNQUOTED literal text of a pattern word as canonical pattern text: unlike <see cref="EscapeLiteral"/> its
+    /// bracket characters stay pattern syntax (<c>[$c]</c> is a bracket expression once c's value is spliced in).
+    /// </summary>
+    public static string EscapeWordText(string? text) => Escape(text, WordSpecials);
+
+    private static string Escape(string? literal, string specials)
     {
         if (string.IsNullOrEmpty(literal)) return literal ?? string.Empty;
-        if (literal.AsSpan().IndexOfAny(Specials) < 0) return literal;
+        if (literal.AsSpan().IndexOfAny(specials) < 0) return literal;
         var sb = new StringBuilder(literal.Length + 8);
         foreach (char c in literal)
         {
-            if (Specials.IndexOf(c) >= 0) sb.Append('\\');
+            if (specials.IndexOf(c) >= 0) sb.Append('\\');
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// An unquoted expansion's value as pattern text while <c>shopt extglob</c> is OFF: its extglob list syntax
+    /// (an unescaped <c>( ) |</c>) is escaped, so <c>v='+(a)'</c> matches the text +(a) and <c>*(a)</c> is a star
+    /// followed by the text (a), as bash's matcher without FNM_EXTMATCH reads them. Its other glob characters stay
+    /// active. (With extglob on, and always in <c>[[ ]]</c>, the value is used as it is.)
+    /// </summary>
+    public static string ValueWithoutExtGlob(string value)
+    {
+        if (value.AsSpan().IndexOfAny("()|") < 0) return value;
+        var sb = new StringBuilder(value.Length + 8);
+        for (int i = 0; i < value.Length; i++)
+        {
+            char c = value[i];
+            if (c == '\\' && i + 1 < value.Length) { sb.Append(c).Append(value[++i]); continue; }
+            if (c is '(' or ')' or '|') sb.Append('\\');
             sb.Append(c);
         }
         return sb.ToString();
@@ -109,18 +153,50 @@ public static class BashPattern
     }
 
     // One program per (text, options): a script line in a loop evaluates the same pattern every iteration. The host is
-    // long-lived and a run-time pattern can differ every iteration, so the cache is bounded.
+    // long-lived and a run-time pattern can differ every iteration, so the cache is bounded by entries AND by the
+    // pattern text it holds (a program's regexes grow with its pattern); a pattern too long to be worth keeping is
+    // compiled for the one use.
     private static readonly ConcurrentDictionary<(string, BashPatternOptions), BashPatternProgram> Programs = new();
     private const int MaxCached = 512;
+    private const int MaxCachedChars = 256 * 1024;
+    internal const int MaxCacheablePattern = 4096;
+    private static int s_cachedChars;
 
     /// <summary>The compiled program for the canonical <paramref name="pattern"/> (cached).</summary>
     public static BashPatternProgram Compile(string pattern, BashPatternOptions options = BashPatternOptions.None)
     {
         if (Programs.TryGetValue((pattern, options), out var hit)) return hit;
-        if (Programs.Count > MaxCached) Programs.Clear();
         var program = new BashPatternProgram(pattern, options);
-        Programs[(pattern, options)] = program;
+        if (pattern.Length > MaxCacheablePattern) return program;
+        if (Programs.Count >= MaxCached || Volatile.Read(ref s_cachedChars) + pattern.Length > MaxCachedChars)
+        {
+            Programs.Clear();
+            Interlocked.Exchange(ref s_cachedChars, 0);
+        }
+        if (Programs.TryAdd((pattern, options), program)) Interlocked.Add(ref s_cachedChars, pattern.Length);
         return program;
+    }
+
+    /// <summary>The number of cached programs and the pattern characters they hold (tests).</summary>
+    internal static (int Count, int Chars) CacheSize => (Programs.Count, Volatile.Read(ref s_cachedChars));
+
+    /// <summary>Where a match that ran out of time is reported (the host sets it to its host log). A match never hangs
+    /// the host: a pattern the backtracking engine cannot finish within <see cref="BashPatternProgram.MatchBudget"/>
+    /// fails to match and is reported here.</summary>
+    public static Action<string>? Diagnostic { get; set; }
+
+    internal static void ReportTimeout(string pattern, int subjectLength)
+    {
+        try
+        {
+            Diagnostic?.Invoke($"bash pattern match gave up after {BashPatternProgram.MatchBudget.TotalMilliseconds:0} ms "
+                + $"(no match): pattern of {pattern.Length} chars "
+                + $"'{(pattern.Length > 80 ? pattern[..80] + "..." : pattern)}' against {subjectLength} chars");
+        }
+        catch
+        {
+            // a diagnostic never fails the match
+        }
     }
 
     /// <summary>Which operator <see cref="Substitute"/> applies.</summary>
@@ -273,10 +349,20 @@ public static class BashPattern
     /// <summary>Canonical pattern → .NET regex body. Internal to the compiler: nothing else builds a glob regex.</summary>
     internal sealed class Converter(string raw, bool lazy, BashPatternOptions options)
     {
+        /// <summary>A set no character is in: what an element that can never match compiles to.</summary>
+        private const string Never = "[^\\s\\S]";
+        // How many times a nullable extglob at the start may fork the rest into its two readings (LeadingPeriod only):
+        // each fork compiles the rest twice, so a run of them is capped (past it the group keeps one reading).
+        private const int MaxStartForks = 8;
+
         private int _groups;
+        private int _startForks;
         private readonly bool _pathname = (options & BashPatternOptions.Pathname) != 0;
         private readonly bool _ascii = (options & BashPatternOptions.Bytes) != 0;
         private readonly bool _extglobOn = (options & BashPatternOptions.NoExtGlob) == 0;
+        private readonly bool _noCase = (options & BashPatternOptions.NoCase) != 0;
+        private readonly bool _period = (options & BashPatternOptions.LeadingPeriod) != 0;
+        private readonly int _lastClose = raw.LastIndexOf(']');
 
         /// <summary>True once an extglob operator was compiled (the program then tries candidate lengths).</summary>
         public bool UsedExtGlob { get; private set; }
@@ -284,38 +370,97 @@ public static class BashPattern
         /// <summary>True when the pattern is plain text: no operator, bracket or <c>*</c>/<c>?</c> took effect.</summary>
         public bool IsLiteral { get; private set; } = true;
 
+        /// <summary>True once a construct only the backtracking engine runs was compiled: <c>!(…)</c> (a lookbehind and
+        /// backreferences) or a POSIX class beside folded members under nocase (an inline option group). Everything
+        /// else runs on the linear-time NonBacktracking engine.</summary>
+        public bool NeedsBacktracking { get; private set; }
+
         public string Whole()
         {
             int pos = 0;
-            return Sequence(ref pos, inList: false);
+            return Sequence(ref pos, raw.Length, atStart: _period, out _);
         }
 
-        // A pattern sequence up to end of input, or — inside an extglob list — up to the `|` or
-        // `)` that ends this item (left unconsumed for the caller).
-        private string Sequence(ref int pos, bool inList)
+        // The pattern from pos up to end: the whole pattern, or one item of an extglob list (whose bounds Scan found, so
+        // a `|` or `)` met here is an ordinary character, as in bash). atStart (LeadingPeriod only): nothing before this
+        // point can have consumed a character, so the next element faces the subject's leading period. nullable: the
+        // sequence can match "".
+        private string Sequence(ref int pos, int end, bool atStart, out bool nullable)
         {
-            var sb = new StringBuilder(raw.Length * 2);
-            while (pos < raw.Length)
+            var sb = new StringBuilder((end - pos) * 2);
+            nullable = true;
+            while (pos < end)
             {
                 char c = raw[pos];
-                if (inList && c is '|' or ')') break;
-                if (_extglobOn && c is '?' or '*' or '+' or '@' or '!' && pos + 1 < raw.Length && raw[pos + 1] == '('
-                    && TryExtGlob(ref pos, sb))
-                    continue;
-                if (c == '*')
+                if (_extglobOn && c is '?' or '*' or '+' or '@' or '!' && pos + 1 < end && raw[pos + 1] == '(')
                 {
-                    while (pos + 1 < raw.Length && raw[pos + 1] == '*'
-                           && !(_extglobOn && pos + 2 < raw.Length && raw[pos + 2] == '(')) pos++;   // `**` is `*`
-                    IsLiteral = false;
-                    sb.Append(_pathname && pos + 1 < raw.Length ? "[^/]*" : lazy ? ".*?" : ".*");
-                    pos++;
+                    var (group, groupNullable) = ExtGlob(ref pos, end, atStart);
+                    if (group is null)
+                    {
+                        // A list that never closes: bash compares the rest of the pattern, operator included, with the
+                        // rest of the subject as plain strings (sm_loop.c EXTMATCH → STRCOMPARE, backslashes and all).
+                        // Its first character is the operator, never a period, so FNM_PERIOD holds as well.
+                        IsLiteral = false;
+                        for (; pos < end; pos++) AppendLiteral(sb, raw[pos]);
+                        nullable = false;
+                        break;
+                    }
+                    if (atStart && groupNullable)
+                    {
+                        if (_startForks < MaxStartForks)
+                        {
+                            // The group either consumed the period (and the rest is past the start) or matched nothing
+                            // (and the rest still faces the period): bash's extmatch passes FNM_PERIOD on in that case.
+                            _startForks++;
+                            int restPos = pos;
+                            string rest = Sequence(ref pos, end, atStart: false, out bool restNullable);
+                            string restAtStart = Sequence(ref restPos, end, atStart: true, out _);
+                            nullable = restNullable;
+                            return sb.Append("(?:").Append(group).Append(rest).Append('|').Append(restAtStart).Append(')').ToString();
+                        }
+                        sb.Append("(?:").Append(group).Append(")?");
+                    }
+                    else
+                    {
+                        sb.Append(group);
+                        nullable &= groupNullable;
+                    }
+                    atStart = false;
                     continue;
                 }
-                if (c == '?') { IsLiteral = false; sb.Append(_pathname ? "[^/]" : "."); pos++; continue; }
-                if (c == '[' && TryBracket(ref pos, sb)) { IsLiteral = false; continue; }
-                if (c == '\\' && pos + 1 < raw.Length) c = raw[++pos];
+                if (c == '*')
+                {
+                    while (pos + 1 < end && raw[pos + 1] == '*'
+                           && !(_extglobOn && pos + 2 < end && raw[pos + 2] == '(')) pos++;   // `**` is `*`
+                    IsLiteral = false;
+                    sb.Append(atStart ? Never : _pathname && pos + 1 < raw.Length ? "[^/]*" : lazy ? ".*?" : ".*");
+                    pos++;
+                    atStart = false;
+                    continue;
+                }
+                if (c == '?')
+                {
+                    IsLiteral = false;
+                    sb.Append(atStart ? Never : _pathname ? "[^/]" : ".");
+                    pos++;
+                    nullable = atStart = false;
+                    continue;
+                }
+                if (c == '[' && pos < _lastClose)
+                {
+                    var bracket = new StringBuilder();
+                    if (TryBracket(ref pos, end, bracket))
+                    {
+                        IsLiteral = false;
+                        sb.Append(atStart ? Never : bracket.ToString());
+                        nullable = atStart = false;
+                        continue;
+                    }
+                }
+                if (c == '\\' && pos + 1 < end) c = raw[++pos];
                 AppendLiteral(sb, c);
                 pos++;
+                nullable = atStart = false;
             }
             return sb.ToString();
         }
@@ -329,60 +474,119 @@ public static class BashPattern
             sb.Append(c);
         }
 
-        // `op( item | item … )` at pos (pos on the operator). False — nothing consumed — when the
-        // list has no closing paren; the operator is then an ordinary glob char.
-        private bool TryExtGlob(ref int pos, StringBuilder into)
+        // `op( item | item … )` at pos (pos on the operator), within [pos, end): the group's regex and whether it can
+        // match "". A null regex — nothing consumed — when the list has no closing paren (Sequence then compares the
+        // rest as a plain string). atStart (LeadingPeriod): the regex is the group's reading that CONSUMES the leading
+        // period (each arm's first character held to the rule; a repetition's later rounds are past it); Sequence adds
+        // the empty reading.
+        private (string? Regex, bool Nullable) ExtGlob(ref int pos, int end, bool atStart)
         {
-            // Sequence ↔ TryExtGlob recurse once per nested group: bounded like every other descent
+            int close = Scan(pos + 2, end, bar: false);
+            if (close < 0) return (null, false);
+            // Sequence ↔ ExtGlob recurse once per nested group: bounded like every other descent
             // (a pattern with 20,000 nested groups overflowed the stack and killed the host).
             using var nesting = NestingGuard.Enter();
             char op = raw[pos];
-            int p = pos + 2;
-            var list = new StringBuilder();
-            bool literal = IsLiteral;
-            while (true)
-            {
-                list.Append(Sequence(ref p, inList: true));                  // an item may be empty: `@(|a)`
-                if (p >= raw.Length) { IsLiteral = literal; return false; }   // unterminated list
-                if (raw[p] == ')') { p++; break; }
-                list.Append('|');
-                p++;                                                         // the `|`
-            }
+            string first = List(pos + 2, close, atStart, out bool armNullable);
             UsedExtGlob = true;
             IsLiteral = false;
-            string l = list.ToString();
-            switch (op)
+            string l = atStart && op is '*' or '+' ? List(pos + 2, close, atStart: false, out _) : first;
+            pos = close + 1;
+            return op switch
             {
-                case '?': into.Append("(?:").Append(l).Append(")?"); break;
-                case '*': into.Append("(?:").Append(l).Append(")*"); break;
-                case '+': into.Append("(?:").Append(l).Append(")+"); break;
-                case '@': into.Append("(?:").Append(l).Append(')'); break;
-                default: AppendNegation(into, l); break;
+                '?' => (atStart ? "(?:" + first + ")" : "(?:" + l + ")?", true),
+                '*' => (atStart ? "(?:" + first + ")(?:" + l + ")*" : "(?:" + l + ")*", true),
+                '+' => (atStart ? "(?:" + first + ")(?:" + l + ")*" : "(?:" + l + ")+", armNullable),
+                '@' => ("(?:" + l + ")", armNullable),
+                // bash: a `!(…)` at the start never matches a leading period (no arm matching a split is a failure).
+                _ => atStart ? (Never, false) : (Negation(l), true),
+            };
+        }
+
+        // The items of the list in [p, close), joined with `|` (an item may be empty: `@(|a)`).
+        private string List(int p, int close, bool atStart, out bool anyNullable)
+        {
+            var list = new StringBuilder();
+            anyNullable = false;
+            while (true)
+            {
+                int bar = Scan(p, close, bar: true);
+                int itemEnd = bar < 0 ? close : bar;
+                list.Append(Sequence(ref p, itemEnd, atStart, out bool nullable));
+                anyNullable |= nullable;
+                if (bar < 0) return list.ToString();
+                list.Append('|');
+                p = bar + 1;
             }
-            pos = p;
-            return true;
+        }
+
+        // bash's PATSCAN (lib/glob/sm_loop.c) from `from` up to `end`: the index of the `)` that closes the list (any
+        // `(` nests, so `@(a(x|y))` is one item `a(x|y)`), or with bar the `|` that ends the item, outside a bracket
+        // expression and nested parens; -1 when there is none. An escaped character is skipped, and a `[` opens a
+        // bracket that only its `]` closes (an unclosed one takes the rest: `@(a[b)` never closes). One pass per call:
+        // an unterminated list used to be found by parsing it, which every enclosing attempt and each later operator
+        // did again (2^n for `@(@(@(…`: the host hung on 40 of them).
+        private int Scan(int from, int end, bool bar)
+        {
+            int pnest = 0, bnest = 0, bfirst = -1;
+            char cchar = '\0';
+            for (int s = from; s < end; s++)
+            {
+                switch (raw[s])
+                {
+                    case '\\':
+                        s++;
+                        break;
+                    case '[':
+                        if (bnest == 0)
+                        {
+                            bfirst = s + 1;
+                            if (bfirst < end && raw[bfirst] is '!' or '^') bfirst++;
+                            bnest++;
+                        }
+                        else if (s + 1 < end && raw[s + 1] is ':' or '.' or '=') cchar = raw[s + 1];
+                        break;
+                    case ']':
+                        if (bnest > 0)
+                        {
+                            if (cchar != '\0' && raw[s - 1] == cchar) cchar = '\0';
+                            else if (s != bfirst) { bnest--; bfirst = -1; }
+                        }
+                        break;
+                    case '(':
+                        if (bnest == 0) pnest++;
+                        break;
+                    case ')':
+                        if (bnest == 0 && pnest-- <= 0) return s;
+                        break;
+                    case '|':
+                        if (bar && bnest == 0 && pnest == 0) return s;
+                        break;
+                }
+            }
+            return -1;
         }
 
         // !(list): capture the segment x and the tail t after it; the lookbehind walks back over x
         // (right to left) to x's start, where the lookahead asks whether the list matches EXACTLY x
         // (list, then precisely the captured tail, then end). If it can, this split is rejected.
-        private void AppendNegation(StringBuilder into, string list)
+        private string Negation(string list)
         {
+            NeedsBacktracking = true;
             int n = _groups++;
-            into.Append("(?<psbx").Append(n).Append(">.*)(?=(?<psbt").Append(n).Append(">.*))(?<!(?=(?:")
-                .Append(list).Append(")\\k<psbt").Append(n).Append(">\\z)\\k<psbx").Append(n).Append(">)");
+            return "(?<psbx" + n + ">.*)(?=(?<psbt" + n + ">.*))(?<!(?=(?:" + list + ")\\k<psbt" + n + ">\\z)\\k<psbx" + n + ">)";
         }
 
-        // [ … ] at pos. False (nothing consumed) when unclosed: the `[` is then a literal.
-        private bool TryBracket(ref int pos, StringBuilder into)
+        // [ … ] at pos, closed before end. False (nothing consumed) when unclosed: the `[` is then a literal.
+        private bool TryBracket(ref int pos, int end, StringBuilder into)
         {
             int p = pos + 1;
             bool negated = false;
-            if (p < raw.Length && raw[p] is '!' or '^') { negated = true; p++; }
+            if (p < end && raw[p] is '!' or '^') { negated = true; p++; }
             var members = new StringBuilder();
             StringBuilder? classes = null;
             bool first = true;
-            while (p < raw.Length)
+            while (p < end)
             {
                 char c = raw[p];
                 if (c == ']' && !first)
@@ -392,21 +596,21 @@ public static class BashPattern
                     return true;
                 }
                 first = false;
-                if (c == '[' && p + 1 < raw.Length && raw[p + 1] == ':'
-                    && raw.IndexOf(":]", p + 2, StringComparison.Ordinal) is var close and > 0)
+                if (c == '[' && p + 1 < end && raw[p + 1] == ':'
+                    && raw.IndexOf(":]", p + 2, end - (p + 2), StringComparison.Ordinal) is var close and > 0)
                 {
                     // An unknown name matches nothing; the other members still count (`[[:foo:]x]` matches x).
                     if (PosixClassBody(raw[(p + 2)..close], _ascii) is { } body) (classes ??= new StringBuilder()).Append(body);
                     p = close + 2;
                     continue;
                 }
-                if (!TryElement(ref p, out char lo)) continue;
+                if (!TryElement(ref p, end, out char lo)) continue;
                 // A range: `-` not last. Its end may be escaped or a collating symbol; a reversed range is empty.
-                if (p + 1 < raw.Length && raw[p] == '-' && raw[p + 1] != ']')
+                if (p + 1 < end && raw[p] == '-' && raw[p + 1] != ']')
                 {
                     int save = p;
                     p++;
-                    if (TryElement(ref p, out char hi))
+                    if (TryElement(ref p, end, out char hi))
                     {
                         if (lo <= hi) { AppendClassChar(members, lo); members.Append('-'); AppendClassChar(members, hi); }
                         continue;
@@ -420,14 +624,14 @@ public static class BashPattern
 
         // One bracket member at p: an escaped character, `[=c=]`, `[.c.]` / `[.name.]`, or a plain character.
         // False when it is a `[.x.]` / `[=x=]` whose content names no character (it matches nothing).
-        private bool TryElement(ref int p, out char ch)
+        private bool TryElement(ref int p, int end, out char ch)
         {
             char c = raw[p];
-            if (c == '\\' && p + 1 < raw.Length) { ch = raw[p + 1]; p += 2; return true; }
-            if (c == '[' && p + 1 < raw.Length && raw[p + 1] is '=' or '.')
+            if (c == '\\' && p + 1 < end) { ch = raw[p + 1]; p += 2; return true; }
+            if (c == '[' && p + 1 < end && raw[p + 1] is '=' or '.')
             {
                 char kind = raw[p + 1];
-                int close = raw.IndexOf(kind == '=' ? "=]" : ".]", p + 2, StringComparison.Ordinal);
+                int close = raw.IndexOf(kind == '=' ? "=]" : ".]", p + 2, end - (p + 2), StringComparison.Ordinal);
                 if (close > 0)
                 {
                     string name = Unescape(raw[(p + 2)..close]);
@@ -455,27 +659,31 @@ public static class BashPattern
             return sb.ToString();
         }
 
+        // One character class (no lookaround, so the NonBacktracking engine runs it). FNM_PATHNAME: a bracket never
+        // matches `/` (subtracted, or added to a negated set).
         private void EmitBracket(StringBuilder into, bool negated, string members, string? classes)
         {
-            // FNM_PATHNAME: a bracket never matches `/`.
-            if (_pathname) into.Append("(?!/)");
-            if (classes is null)
+            if (classes is not null && _noCase)
             {
-                if (members.Length == 0) into.Append(negated ? "(?s:.)" : "(?!)");
-                else into.Append(negated ? "[^" : "[").Append(members).Append(']');
+                // A class tests the character as written while members and ranges fold: (?-i:) keeps the class out
+                // of the folding. Only the backtracking engine has inline options and lookarounds.
+                NeedsBacktracking = true;
+                if (_pathname) into.Append("(?!/)");
+                if (negated)
+                    into.Append("(?!(?-i:[").Append(classes).Append("]))").Append(members.Length == 0 ? "." : "[^" + members + "]");
+                else if (members.Length == 0) into.Append("(?-i:[").Append(classes).Append("])");
+                else into.Append("(?:(?-i:[").Append(classes).Append("])|[").Append(members).Append("])");
                 return;
             }
-            // A class tests the character as written, members and ranges fold under nocase: (?-i:) keeps
-            // the class out of the folding.
+            string set = members + classes;
             if (negated)
             {
-                into.Append("(?!(?-i:[").Append(classes).Append("]))");
-                if (members.Length == 0) into.Append("(?s:.)");
-                else into.Append("[^").Append(members).Append(']');
+                if (set.Length == 0 && !_pathname) into.Append('.');
+                else into.Append("[^").Append(set).Append(_pathname ? "/" : "").Append(']');
                 return;
             }
-            if (members.Length == 0) into.Append("(?-i:[").Append(classes).Append("])");
-            else into.Append("(?:(?-i:[").Append(classes).Append("])|[").Append(members).Append("])");
+            if (set.Length == 0) { into.Append(Never); return; }
+            into.Append('[').Append(set).Append(_pathname ? "-[/]" : "").Append(']');
         }
 
         private static void AppendClassChar(StringBuilder sb, char c)
@@ -559,7 +767,14 @@ public sealed class BashPatternProgram
     private readonly bool _extGlob;             // alternation / repetition: candidate lengths are tried
     private readonly string _body;
     private readonly StringComparison _cmp;
+    private readonly bool _backtracking;        // `!(…)` or a nocase POSIX class: the time-boxed backtracking engine
     private Regex? _full, _prefixLong, _prefixShort, _suffixLatest, _suffixEarliest, _search;
+
+    /// <summary>How long one backtracking match may run before it counts as no match (and is reported through
+    /// <see cref="BashPattern.Diagnostic"/>). Only <c>!(…)</c> and nocase POSIX classes use that engine; every other
+    /// pattern runs on the NonBacktracking engine, linear in the subject (<c>*(a|aa)</c> against 45 a's and a b, or
+    /// <c>*a*a*a*a*a*a*a*a*a*b</c> against 300 a's, which bash itself takes minutes over).</summary>
+    public static readonly TimeSpan MatchBudget = TimeSpan.FromSeconds(1);
 
     internal BashPatternProgram(string pattern, BashPatternOptions options)
     {
@@ -568,6 +783,7 @@ public sealed class BashPatternProgram
         var conv = new BashPattern.Converter(pattern, lazy: false, options);
         _body = conv.Whole();
         _extGlob = conv.UsedExtGlob;
+        _backtracking = conv.NeedsBacktracking;
         _cmp = (options & BashPatternOptions.NoCase) != 0 ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         if (conv.IsLiteral) _literal = Unescape(pattern);
     }
@@ -578,9 +794,26 @@ public sealed class BashPatternProgram
     /// <summary>The anchored .NET regex this program matches whole strings with (diagnostics and tests).</summary>
     public string AnchoredRegex => "^(?:" + _body + ")\\z";
 
-    private Regex Build(string text) => new(text,
-        RegexOptions.Singleline | RegexOptions.CultureInvariant
-        | ((_options & BashPatternOptions.NoCase) != 0 ? RegexOptions.IgnoreCase : RegexOptions.None));
+    /// <summary>True when the program runs on the linear-time NonBacktracking engine (tests).</summary>
+    internal bool IsLinear => !_backtracking;
+
+    private Regex Build(string text)
+    {
+        var opts = RegexOptions.Singleline | RegexOptions.CultureInvariant
+                   | ((_options & BashPatternOptions.NoCase) != 0 ? RegexOptions.IgnoreCase : RegexOptions.None);
+        if (!_backtracking)
+        {
+            try
+            {
+                return new Regex(text, opts | RegexOptions.NonBacktracking);
+            }
+            catch (NotSupportedException)
+            {
+                // a construct the converter did not flag: the time-boxed engine below
+            }
+        }
+        return new Regex(text, opts, MatchBudget);
+    }
 
     private Regex Full => _full ??= Build("^(?:" + _body + ")\\z");
     private Regex PrefixLong => _prefixLong ??= Build("^(?:" + _body + ")");
@@ -591,11 +824,66 @@ public sealed class BashPatternProgram
 
     /// <summary>Does the whole of <paramref name="text"/> match?</summary>
     public bool IsMatch(ReadOnlySpan<char> text)
-        => _literal is not null ? text.Equals(_literal, _cmp) : Full.IsMatch(text);
+    {
+        if (_literal is not null) return text.Equals(_literal, _cmp);
+        try
+        {
+            return Full.IsMatch(text);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            BashPattern.ReportTimeout(_pattern, text.Length);
+            return false;
+        }
+    }
 
     /// <summary>The length of the shortest (<c>#</c>) or longest (<c>##</c>) prefix of <paramref name="s"/> the
     /// pattern matches whole; -1 when none does.</summary>
     public int MatchPrefix(string s, bool longest)
+    {
+        try
+        {
+            return MatchPrefixCore(s, longest);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            BashPattern.ReportTimeout(_pattern, s.Length);
+            return -1;
+        }
+    }
+
+    /// <summary>The start of the shortest (<c>%</c>) or longest (<c>%%</c>) suffix of <paramref name="s"/> the
+    /// pattern matches whole; -1 when none does.</summary>
+    public int MatchSuffix(string s, bool longest)
+    {
+        try
+        {
+            return MatchSuffixCore(s, longest);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            BashPattern.ReportTimeout(_pattern, s.Length);
+            return -1;
+        }
+    }
+
+    /// <summary>The match <c>${v/p/r}</c> replaces, searching from <paramref name="from"/>: the leftmost start at which
+    /// the pattern matches some substring, and the longest substring there.</summary>
+    public bool Find(string s, int from, out int start, out int end)
+    {
+        try
+        {
+            return FindCore(s, from, out start, out end);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            BashPattern.ReportTimeout(_pattern, s.Length);
+            start = end = -1;
+            return false;
+        }
+    }
+
+    private int MatchPrefixCore(string s, bool longest)
     {
         if (_literal is not null) return s.StartsWith(_literal, _cmp) ? _literal.Length : -1;
         if (!_extGlob)
@@ -617,9 +905,7 @@ public sealed class BashPatternProgram
         return -1;
     }
 
-    /// <summary>The start of the shortest (<c>%</c>) or longest (<c>%%</c>) suffix of <paramref name="s"/> the
-    /// pattern matches whole; -1 when none does.</summary>
-    public int MatchSuffix(string s, bool longest)
+    private int MatchSuffixCore(string s, bool longest)
     {
         if (_literal is not null) return s.EndsWith(_literal, _cmp) ? s.Length - _literal.Length : -1;
         if (!_extGlob)
@@ -646,9 +932,7 @@ public sealed class BashPatternProgram
         return -1;
     }
 
-    /// <summary>The match <c>${v/p/r}</c> replaces, searching from <paramref name="from"/>: the leftmost start at which
-    /// the pattern matches some substring, and the longest substring there.</summary>
-    public bool Find(string s, int from, out int start, out int end)
+    private bool FindCore(string s, int from, out int start, out int end)
     {
         start = end = -1;
         if (_literal is not null)

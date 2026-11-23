@@ -36,16 +36,25 @@ public class InvokeBashCompgenCommandTests : IClassFixture<SharedPwshFixture>
     public void FunctionResults_AreNotFilteredByThePrefix()
         => Assert.Equal(new[] { "one", "two" }, Run("function g { $global:COMPREPLY = @('one','two') }; Invoke-BashCompgen '-F' g zzz"));
 
-    // bash 5.2: `compgen -X "@(two|bin)" -W "one two three bin"` prints one three; a leading ! keeps the matches.
+    // bash 5.2 with `shopt -s extglob` (bash-completion sets it): `compgen -X "@(two|bin)" -W "one two three bin"`
+    // prints one three; a leading ! keeps the matches.
     [Theory]
     [InlineData("@(two|bin)", new[] { "one", "three" })]
     [InlineData("!@(two|bin)", new[] { "two", "bin" })]
     [InlineData("t*", new[] { "one", "bin" })]
     public void Filter_RemovesMatchingCandidates(string filter, string[] expected)
     {
-        Assert.Equal(expected, Run($"Invoke-BashCompgen '-X' '{filter}' '-W' 'one two three bin'"));
-        Assert.Equal(expected, Run($"function g {{ $global:COMPREPLY = @('one','two','three','bin') }}; Invoke-BashCompgen '-X' '{filter}' '-F' g"));
+        Assert.Equal(expected, Run($"Invoke-BashShopt -s extglob; Invoke-BashCompgen '-X' '{filter}' '-W' 'one two three bin'"));
+        Assert.Equal(expected, Run($"Invoke-BashShopt -s extglob; function g {{ $global:COMPREPLY = @('one','two','three','bin') }}; Invoke-BashCompgen '-X' '{filter}' '-F' g"));
     }
+
+    // bash 5.2, extglob off (a script's default): the filter's @( ) is literal text, so it removes nothing, and with
+    // a leading ! it keeps nothing.
+    [Theory]
+    [InlineData("@(two|bin)", new[] { "one", "two", "three", "bin" })]
+    [InlineData("!@(two|bin)", new string[0])]
+    public void Filter_ExtGlobOff_ListSyntaxIsLiteral(string filter, string[] expected)
+        => Assert.Equal(expected, Run($"Invoke-BashShopt -u extglob; Invoke-BashCompgen '-X' '{filter}' '-W' 'one two three bin'"));
 
     [Fact]
     public void Filter_Ampersand_IsTheWordBeingCompleted()

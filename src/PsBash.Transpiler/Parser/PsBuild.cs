@@ -1554,6 +1554,13 @@ public static class PsBuild
     public static string PatternTest(string valueExpr, string patternExpr) =>
         "[PsBash.Cmdlets.BashPatternMatch]::MatchesPattern(" + valueExpr + ", " + patternExpr + ")";
 
+    /// <summary>
+    /// An unquoted expansion spliced into the pattern of a <c>case</c> arm or a glob word: its value, with its extglob
+    /// syntax made literal while <c>shopt extglob</c> is off (<c>BashPatternMatch.ValuePattern</c>).
+    /// </summary>
+    public static string PatternValue(string valueExpr) =>
+        "[PsBash.Cmdlets.BashPatternMatch]::ValuePattern(" + valueExpr + ")";
+
     /// <summary><c>${v#p}</c> <c>${v##p}</c> (<paramref name="suffix"/> false) and <c>${v%p}</c> <c>${v%%p}</c>.</summary>
     public static string PatternRemove(string valueExpr, string patternExpr, bool suffix, bool longest) =>
         "[PsBash.Cmdlets.BashPatternMatch]::Remove(" + valueExpr + ", " + patternExpr + ", "

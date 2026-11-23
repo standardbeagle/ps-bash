@@ -238,4 +238,157 @@ public class BashPatternTests
     [Fact]
     public void Compile_SamePatternTwice_IsCached()
         => Assert.Same(BashPattern.Compile("a*b"), BashPattern.Compile("a*b"));
+
+    // The cache is bounded by the pattern text it holds as well as by entries: a pattern past MaxCacheablePattern is
+    // compiled for its one use, so a script that builds huge patterns cannot pin them in the long-lived host.
+    [Fact]
+    public void Compile_PatternTooLongToCache_IsNotKept()
+    {
+        string big = new string('a', BashPattern.MaxCacheablePattern + 1) + "*";
+        Assert.NotSame(BashPattern.Compile(big), BashPattern.Compile(big));
+        Assert.True(BashPattern.CacheSize.Chars <= 256 * 1024);
+    }
+
+    // Quoted text in a pattern escapes the bracket syntax too: ["$x"a] with x=! is the set {!, a} (bash: lit).
+    [Theory]
+    [InlineData("!", "z", false)]
+    [InlineData("!", "!", true)]
+    [InlineData("^", "z", false)]
+    [InlineData("^", "^", true)]
+    public void EscapeLiteral_QuotedNegationInABracket_IsAMember(string quoted, string subject, bool expected)
+        => Assert.Equal(expected, BashPattern.Compile("[" + BashPattern.EscapeLiteral(quoted) + "a]").IsMatch(subject));
+
+    [Theory]
+    [InlineData("a-c", "b", false)]   // ["$x"] with x=a-c: three members, no range
+    [InlineData("a-c", "-", true)]
+    public void EscapeLiteral_QuotedDashInABracket_IsNoRange(string quoted, string subject, bool expected)
+        => Assert.Equal(expected, BashPattern.Compile("[" + BashPattern.EscapeLiteral(quoted) + "]").IsMatch(subject));
+
+    [Fact]
+    public void EscapeWordText_KeepsBracketSyntaxActive()
+    {
+        // [$c] with c=abc: the unquoted `[` and `]` around the spliced value make a bracket expression.
+        Assert.Equal("[", BashPattern.EscapeWordText("["));
+        Assert.True(BashPattern.Compile(BashPattern.EscapeWordText("[") + "abc" + BashPattern.EscapeWordText("]")).IsMatch("b"));
+        Assert.Equal("\\(", BashPattern.EscapeWordText("("));
+    }
+
+    [Theory]
+    [InlineData("+(a)", "+\\(a\\)")]
+    [InlineData("*(a|b)", "*\\(a\\|b\\)")]
+    [InlineData("\\(x", "\\(x")]
+    [InlineData("a*", "a*")]
+    public void ValueWithoutExtGlob_MakesTheListSyntaxLiteral(string value, string expected)
+        => Assert.Equal(expected, BashPattern.ValueWithoutExtGlob(value));
+
+    // FNM_PERIOD on a dot-file name (bash 5.2, oracle: touch .a b; echo @(.a|b) ?(.)a +(.)a !(b) prints
+    // `.a b .a`, `.a`, `!(b)`): the leading period needs a literal period, also inside an extglob arm.
+    [Theory]
+    [InlineData("@(.a|b)", ".a", true)]
+    [InlineData("?(.)a", ".a", true)]
+    [InlineData("+(.)a", ".a", true)]
+    [InlineData("!(b)", ".a", false)]
+    [InlineData("*", ".a", false)]
+    [InlineData("?a", ".a", false)]
+    [InlineData("[.]a", ".a", false)]
+    [InlineData(".*", ".a", true)]
+    [InlineData("\\.a", ".a", true)]
+    [InlineData("?(x)*", ".a", false)]   // the group matched nothing: the star still faces the period
+    [InlineData("?(x).a", ".a", true)]
+    [InlineData("@(.|x)*", ".abc", true)]
+    [InlineData("*(.)a*", ".abc", true)]
+    public void LeadingPeriod_NeedsALiteralPeriod(string pattern, string name, bool expected)
+        => Assert.Equal(expected, BashPattern.Compile(pattern, BashPatternOptions.LeadingPeriod).IsMatch(name));
+
+    // A list that never closes is found by one scan: `@(@(@(…` used to cost 2^n (the host hung on 40), and 2,000 of
+    // them recursed past the nesting bound (an error, status 0). bash 5.2: h1 1, h2 0, at once.
+    [Theory]
+    [InlineData("@(", 40)]
+    [InlineData("+(a|", 40)]
+    [InlineData("!(", 40)]
+    [InlineData("@(", 300)]
+    [InlineData("@(", 5000)]
+    public void Compile_UnterminatedExtGlobLists_AreLinear(string unit, int count)
+    {
+        string p = string.Concat(System.Linq.Enumerable.Repeat(unit, count));
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var program = BashPattern.Compile(p);
+        Assert.False(program.IsMatch("x"));
+        Assert.True(program.IsMatch(p));               // every operator is literal text
+        Assert.Equal(-1, program.MatchPrefix("x", longest: true));
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(20), $"took {sw.Elapsed}");
+    }
+
+    // bash 5.2 (lib/glob/sm_loop.c PATSCAN, EXTMATCH): any `(` in a list nests, a bracket hides its `)` and `|`, and an
+    // operator whose list never closes compares the rest of the pattern with the rest of the subject as plain text.
+    [Theory]
+    [InlineData("@(a(b)c)", "a(b)c", true)]
+    [InlineData("@(a(b)c)", "a(bc)", false)]
+    [InlineData("@(a(x|y))", "a(x|y)", true)]
+    [InlineData("@(a(x|y))", "ax", false)]
+    [InlineData("@(a[)]b)", "a)b", true)]
+    [InlineData("@(a\\)b)", "a)b", true)]
+    [InlineData("@(a\\|b)", "a|b", true)]
+    [InlineData("@(a(b)", "a(b", false)]
+    [InlineData("@(a(b)", "@(a(b)", true)]
+    [InlineData("@(a*(b)", "@(abb", false)]
+    [InlineData("@(a*(b)", "@(a*(b)", true)]
+    [InlineData("@(a[)]b", "@(a)b", false)]
+    [InlineData("@(a[)]b", "@(a[)]b", true)]
+    [InlineData("@(a?", "@(ab", false)]
+    [InlineData("*@(a", "z@(a", true)]
+    [InlineData("*@(a", "za", false)]
+    [InlineData("@(a\\\\", "@(a\\", false)]
+    public void ExtGlob_ListBoundsAreBashPatscan(string pattern, string subject, bool matches)
+        => Assert.Equal(matches, BashPattern.Compile(pattern).IsMatch(subject));
+    // The host never hangs on a pattern. Without `!( )` the program runs on the NonBacktracking engine, linear in the
+    // subject: these bombs (bash 5.2 itself did not finish *(a|aa) on 45 a's and a b within 300 s) answer at once.
+    // The bound is a hang detector far above the expected milliseconds, not a benchmark.
+    [Theory]
+    // `*(a|aa)` matches the empty string: ${v%%…} keeps v whole (the empty suffix), ${v/#…/X} takes the a's.
+    [InlineData("*(a|aa)", 45, "b", 46, "Xb")]
+    [InlineData("*a*a*a*a*a*a*a*a*a*b", 300, "", -1, null)]
+    [InlineData("+(a|aa|aaa)c", 60, "b", -1, null)]
+    public void PatternBombs_RunInLinearTime(string pattern, int count, string tail, int suffixAt, string? substituted)
+    {
+        string s = new string('a', count) + tail;
+        var program = BashPattern.Compile(pattern);
+        Assert.True(program.IsLinear);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        Assert.False(program.IsMatch(s));
+        Assert.Equal(suffixAt, program.MatchSuffix(s, longest: true));
+        Assert.Equal(substituted ?? s, BashPattern.Substitute(s, program, false, "X", true, BashPattern.SubstituteMode.Start));
+        program.MatchPrefix(s, longest: true);
+        program.MatchPrefix(s, longest: false);
+        program.Find(s, 0, out _, out _);
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(30), $"took {sw.Elapsed}");
+    }
+
+    // `!( )` needs the backtracking engine (a lookbehind and backreferences); a bomb behind one runs out of
+    // BashPatternProgram.MatchBudget, counts as no match and is reported (the host log) instead of hanging the host.
+    [Fact]
+    public void BacktrackingBomb_GivesUpWithinTheBudgetAndIsReported()
+    {
+        var program = BashPattern.Compile("!(x)*a*a*a*a*a*a*a*a*a*b");
+        Assert.False(program.IsLinear);
+        string s = new string('a', 300);
+        var seen = new List<string>();
+        var before = BashPattern.Diagnostic;
+        BashPattern.Diagnostic = m => { lock (seen) seen.Add(m); };
+        try
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            Assert.False(program.IsMatch(s));
+            Assert.Equal(-1, program.MatchPrefix(s, longest: true));
+            Assert.Equal(-1, program.MatchSuffix(s, longest: false));
+            Assert.Equal(s, BashPattern.Substitute(s, program, false, "X", true, BashPattern.SubstituteMode.All));
+            // four operations, each stopped by one budget (a loop of candidate lengths stops at the first timeout)
+            Assert.True(sw.Elapsed < BashPatternProgram.MatchBudget * 4 + TimeSpan.FromSeconds(40), $"took {sw.Elapsed}");
+        }
+        finally
+        {
+            BashPattern.Diagnostic = before;
+        }
+        lock (seen) Assert.Contains(seen, m => m.Contains("gave up", StringComparison.Ordinal));
+    }
 }
