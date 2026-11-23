@@ -15,18 +15,69 @@ public static class BashArith
     /// it belongs to and bash's error token (<see cref="BashArithException.Describe"/>): an operand variable whose value
     /// is itself an expression (<c>y='1/0'; $(( y + 1 ))</c>) reports THAT expression, as bash does.
     /// </summary>
+    /// <param name="resolve">
+    /// Turns an assignment target into the variable it names with any subscript evaluated (<c>a[i++]</c> -> <c>a[0]</c>),
+    /// once: a compound assignment and <c>++</c>/<c>--</c> read and then write the SAME element, and its subscript's side
+    /// effects happen once (bash: <c>i=0; a=(1 2 3); (( a[i++]++ ))</c> leaves i=1, a=(2 2 3)). Null: names are used as given.
+    /// </param>
     public static long Evaluate(string expression, Func<string, long> read, Action<string, long> write,
-        Func<string, string?>? readRaw = null)
+        Func<string, string?>? readRaw = null, Func<string, string>? resolve = null)
     {
         var tokens = NewTokenMap();
         ArithmeticSyntax syntax = ParseOrThrow(expression, tokens);
-        return EvaluateCore(syntax, tokens, read, write, readRaw);
+        return EvaluateCore(syntax, tokens, new Callbacks(read, write, readRaw, resolve));
     }
 
     /// <summary>Evaluates already-parsed syntax, allowing all arithmetic consumers to share one parse.</summary>
     public static long Evaluate(ArithmeticSyntax syntax, Func<string, long> read, Action<string, long> write,
-        Func<string, string?>? readRaw = null)
-        => EvaluateCore(syntax, null, read, write, readRaw);
+        Func<string, string?>? readRaw = null, Func<string, string>? resolve = null)
+        => EvaluateCore(syntax, null, new Callbacks(read, write, readRaw, resolve));
+
+    /// <summary>
+    /// The caller's variable access. Every call goes through here so an exception a callback raises is marked as the
+    /// callback's (<see cref="MarkCallbackFault"/>): the evaluator converts only its OWN .NET failures into arithmetic
+    /// errors, and a fault in the variable layer passes on as the fault it is.
+    /// </summary>
+    private readonly record struct Callbacks(Func<string, long> ReadFn, Action<string, long> WriteFn,
+        Func<string, string?>? ReadRawFn, Func<string, string>? ResolveFn)
+    {
+        public long Read(string name)
+        {
+            try { return ReadFn(name); }
+            catch (Exception ex) when (MarkCallbackFault(ex)) { throw; }
+        }
+
+        public void Write(string name, long value)
+        {
+            try { WriteFn(name, value); }
+            catch (Exception ex) when (MarkCallbackFault(ex)) { throw; }
+        }
+
+        public string? ReadRaw(string name)
+        {
+            if (ReadRawFn is null) return null;
+            try { return ReadRawFn(name); }
+            catch (Exception ex) when (MarkCallbackFault(ex)) { throw; }
+        }
+
+        public string Resolve(string name)
+        {
+            if (ResolveFn is null) return name;
+            try { return ResolveFn(name); }
+            catch (Exception ex) when (MarkCallbackFault(ex)) { throw; }
+        }
+    }
+
+    private const string CallbackFaultKey = "PsBash.Cmdlets.BashArith.CallbackFault";
+
+    /// <summary>An exception filter that never catches: it tags a .NET fault thrown by a callback so
+    /// <see cref="IsEvaluatorFault"/> lets it pass (a callback's own arithmetic error, a nested evaluation's, is not a
+    /// .NET fault and is untouched).</summary>
+    private static bool MarkCallbackFault(Exception ex)
+    {
+        if (IsFaultType(ex) && !ex.Data.IsReadOnly) ex.Data[CallbackFaultKey] = true;
+        return false;
+    }
 
     private static Dictionary<ArithmeticExpr, int> NewTokenMap() => new(ReferenceEqualityComparer.Instance);
 
@@ -47,13 +98,12 @@ public static class BashArith
         }
     }
 
-    private static long EvaluateCore(ArithmeticSyntax syntax, Dictionary<ArithmeticExpr, int>? tokens,
-        Func<string, long> read, Action<string, long> write, Func<string, string?>? readRaw)
+    private static long EvaluateCore(ArithmeticSyntax syntax, Dictionary<ArithmeticExpr, int>? tokens, Callbacks vars)
     {
         string source = syntax.Source;
         try
         {
-            string expanded = ExpandUnbracedDigitSuffixes(source, read, readRaw);
+            string expanded = ExpandUnbracedDigitSuffixes(source, vars);
             ArithmeticExpr root = syntax.Root;
             if (expanded != source)
             {
@@ -61,7 +111,7 @@ public static class BashArith
                 source = expanded;
                 root = ParseOrThrow(expanded, tokens).Root;
             }
-            return Eval(root, read, write, readRaw);
+            return Eval(root, vars);
         }
         catch (BashArithException ex) when (ex.Expression is null)
         {
@@ -80,14 +130,16 @@ public static class BashArith
 
     /// <summary>
     /// A failure of the evaluator's own arithmetic or bookkeeping (overflow, a bad cast, an index), as opposed to a
-    /// read or write callback's signal (an unbound variable, the recursion limit, a stopped pipeline), which passes on.
+    /// read or write callback's signal (an unbound variable, the recursion limit, a stopped pipeline) or a .NET fault
+    /// raised inside a callback (<see cref="MarkCallbackFault"/>), which pass on unchanged.
     /// </summary>
-    private static bool IsEvaluatorFault(Exception ex)
+    private static bool IsEvaluatorFault(Exception ex) => IsFaultType(ex) && !ex.Data.Contains(CallbackFaultKey);
+
+    private static bool IsFaultType(Exception ex)
         => ex is ArithmeticException or InvalidCastException or IndexOutOfRangeException or FormatException
             or ArgumentException or NullReferenceException or KeyNotFoundException;
 
-    private static string ExpandUnbracedDigitSuffixes(string source, Func<string, long> read,
-        Func<string, string?>? readRaw)
+    private static string ExpandUnbracedDigitSuffixes(string source, Callbacks vars)
     {
         if (source.Length > MaxExpandedSourceLength)
             throw new BashArithException("expanded arithmetic source exceeded maximum length");
@@ -101,8 +153,8 @@ public static class BashArith
             foreach (System.Text.RegularExpressions.Match match in UnbracedDigitSuffix.Matches(current))
             {
                 string key = match.Groups["key"].Value;
-                string raw = readRaw?.Invoke(key)
-                    ?? read(key).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                string raw = vars.ReadRaw(key)
+                    ?? vars.Read(key).ToString(System.Globalization.CultureInfo.InvariantCulture);
                 string suffix = match.Groups["suffix"].Value;
                 int literalLength = match.Index - copiedThrough;
                 long projected = (long)builder.Length + literalLength + raw.Length + suffix.Length;
@@ -125,13 +177,12 @@ public static class BashArith
         throw new BashArithException("arithmetic parameter expansion exceeded maximum depth");
     }
 
-    private static long Eval(ArithmeticExpr expression, Func<string, long> read, Action<string, long> write,
-        Func<string, string?>? readRaw)
+    private static long Eval(ArithmeticExpr expression, in Callbacks vars)
     {
         switch (expression)
         {
             case ArithmeticExpr.Number number: return number.Value;
-            case ArithmeticExpr.Identifier identifier: return read(identifier.Name);
+            case ArithmeticExpr.Identifier identifier: return vars.Read(identifier.Name);
             // The runtime variable contract historically receives bare names. Keep
             // `$name` identical to `name`; positional/special parameters use the
             // same stripped key and therefore naturally read as zero when unset.
@@ -142,15 +193,15 @@ public static class BashArith
                 if (baseHash > 0 && baseHash + 1 < parameter.Spelling.Length && parameter.Spelling[baseHash + 1] == '$'
                     && parameter.Spelling[..baseHash].All(char.IsDigit))
                 {
-                    string raw = readRaw?.Invoke(parameter.LookupKey) ?? read(parameter.LookupKey).ToString(System.Globalization.CultureInfo.InvariantCulture);
-                    return Evaluate(parameter.Spelling[..(baseHash + 1)] + raw, read, write, readRaw);
+                    string raw = vars.ReadRaw(parameter.LookupKey) ?? vars.Read(parameter.LookupKey).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    return Evaluate(parameter.Spelling[..(baseHash + 1)] + raw, vars.ReadFn, vars.WriteFn, vars.ReadRawFn, vars.ResolveFn);
                 }
-                if (parameter.UnbracedSuffix.Length == 0) return read(parameter.LookupKey);
+                if (parameter.UnbracedSuffix.Length == 0) return vars.Read(parameter.LookupKey);
                 // Normally eliminated by whole-source expansion before parsing.
                 // Retain a numeric fallback for manually constructed syntax nodes.
-                string expanded = read(parameter.LookupKey).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                string expanded = vars.Read(parameter.LookupKey).ToString(System.Globalization.CultureInfo.InvariantCulture)
                     + parameter.UnbracedSuffix;
-                return Evaluate(expanded, read, write, readRaw);
+                return Evaluate(expanded, vars.ReadFn, vars.WriteFn, vars.ReadRawFn, vars.ResolveFn);
             }
             // The emitter substitutes every `$( … )` operand with the command's
             // runtime value before the expression string reaches this evaluator, so a
@@ -160,7 +211,7 @@ public static class BashArith
                 throw new BashArithException($"command substitution is not evaluable here: {sub.Spelling}");
             case ArithmeticExpr.Unary unary:
             {
-                long value = Eval(unary.Operand, read, write, readRaw);
+                long value = Eval(unary.Operand, vars);
                 return unary.Op switch
                 {
                     ArithmeticUnaryOp.Plus => value,
@@ -172,17 +223,22 @@ public static class BashArith
             }
             case ArithmeticExpr.Increment increment:
             {
-                long old = read(increment.Name);
+                // The target is resolved ONCE, then read and written: `a[i++]++` evaluates `i++` once (bash).
+                string target = vars.Resolve(increment.Name);
+                long old = vars.Read(target);
                 long value = old + increment.Delta;
-                write(increment.Name, value);
+                vars.Write(target, value);
                 return increment.Prefix ? value : old;
             }
             case ArithmeticExpr.Assignment assignment:
             {
-                // A compound assignment reads its target BEFORE the right side runs (expr.c expassign): `x=1; x += (x=10)`
-                // is 11, `x += x++` is 2, `x=3; x += x *= 2` is 9.
-                long current = assignment.Op == ArithmeticAssignmentOp.Assign ? 0 : read(assignment.Name);
-                long rhs = Eval(assignment.Value, read, write, readRaw);
+                // A compound assignment resolves and reads its target BEFORE the right side runs (expr.c expassign):
+                // `x=1; x += (x=10)` is 11, `x += x++` is 2, `x=3; x += x *= 2` is 9, and `i=0; a[i++] += i` adds 1 to a[0].
+                // A plain `=` evaluates the target's subscript AFTER the right side: `i=0; (( a[i] = i++ ))` sets a[1].
+                bool compound = assignment.Op != ArithmeticAssignmentOp.Assign;
+                string target = compound ? vars.Resolve(assignment.Name) : assignment.Name;
+                long current = compound ? vars.Read(target) : 0;
+                long rhs = Eval(assignment.Value, vars);
                 long value = assignment.Op switch
                 {
                     ArithmeticAssignmentOp.Assign => rhs,
@@ -198,30 +254,29 @@ public static class BashArith
                     ArithmeticAssignmentOp.BitwiseXor => current ^ rhs,
                     _ => rhs,
                 };
-                write(assignment.Name, value);
+                vars.Write(target, value);
                 return value;
             }
             case ArithmeticExpr.Conditional conditional:
-                return Eval(conditional.Condition, read, write, readRaw) != 0
-                    ? Eval(conditional.WhenTrue, read, write, readRaw)
-                    : Eval(conditional.WhenFalse, read, write, readRaw);
+                return Eval(conditional.Condition, vars) != 0
+                    ? Eval(conditional.WhenTrue, vars)
+                    : Eval(conditional.WhenFalse, vars);
             case ArithmeticExpr.Binary binary:
-                return EvalBinary(binary, read, write, readRaw);
+                return EvalBinary(binary, vars);
             default:
                 throw new BashArithException("unknown arithmetic syntax node");
         }
     }
 
-    private static long EvalBinary(ArithmeticExpr.Binary binary, Func<string, long> read, Action<string, long> write,
-        Func<string, string?>? readRaw)
+    private static long EvalBinary(ArithmeticExpr.Binary binary, in Callbacks vars)
     {
-        long left = Eval(binary.Left, read, write, readRaw);
+        long left = Eval(binary.Left, vars);
         if (binary.Op == ArithmeticBinaryOp.LogicalOr)
-            return left != 0 ? 1 : Eval(binary.Right, read, write, readRaw) != 0 ? 1 : 0;
+            return left != 0 ? 1 : Eval(binary.Right, vars) != 0 ? 1 : 0;
         if (binary.Op == ArithmeticBinaryOp.LogicalAnd)
-            return left == 0 ? 0 : Eval(binary.Right, read, write, readRaw) != 0 ? 1 : 0;
+            return left == 0 ? 0 : Eval(binary.Right, vars) != 0 ? 1 : 0;
 
-        long right = Eval(binary.Right, read, write, readRaw);
+        long right = Eval(binary.Right, vars);
         return binary.Op switch
         {
             ArithmeticBinaryOp.Comma => right,

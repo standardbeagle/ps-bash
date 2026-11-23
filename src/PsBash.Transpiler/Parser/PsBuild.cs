@@ -544,9 +544,27 @@ public static class PsBuild
     public static string ArithPlainDecimal(string textExpr)
         => "[PsBash.Core.Parser.BashArithmeticParser, PsBash.Transpiler]::PlainDecimal(" + textExpr + ")";
 
-    public static string ArithNounsetGuard(string invocation) =>
-        "$($__psbash_av = " + invocation + "; if ($global:__BashUnbound) { $__psbash_un = $global:__BashUnbound; $global:__BashUnbound = $null; "
-        + "throw [PsBash.Cmdlets.BashParamErrorException]::Reported($__psbash_un + ': ', 'unbound variable') }; $__psbash_av)";
+    /// <summary>
+    /// The value of an arithmetic operand whose text is a run-time string (<c>$i</c> in <c>${a[$i]}</c> or
+    /// <c>${a[@]:$i:1}</c>): <see cref="ArithPlainDecimal"/> when it is a canonical decimal (no evaluator call, the hot
+    /// loop case), else <see cref="ArithValue"/> of <paramref name="invocation"/>, the one evaluator on the same text.
+    /// </summary>
+    public static string ArithPlainOrValue(string textExpr, string invocation)
+        => "(" + ArithPlainDecimal(textExpr) + " ?? " + ArithValue(invocation) + ")";
+
+    /// <summary>
+    /// An arithmetic evaluation under <c>set -u</c>: an unbound operand ends the command. <paramref name="word"/> is
+    /// false for the command and condition forms (<c>(( expr ))</c>, <c>let</c>, <c>for (( ))</c>), which hold their
+    /// value in <c>$__psbash_ac</c>: the cmdlet's IsWordExpansion reads <c>$__psbash_av = </c> as a WORD, and a failed
+    /// word abandons its command. REGRESSION: in a script with <c>set -u</c> anywhere, <c>(( 1/0 )); echo $?</c>
+    /// lost the echo (bash: status 1, the line goes on).
+    /// </summary>
+    public static string ArithNounsetGuard(string invocation, bool word = true)
+    {
+        string value = word ? "$__psbash_av" : "$__psbash_ac";
+        return "$(" + value + " = " + invocation + "; if ($global:__BashUnbound) { $__psbash_un = $global:__BashUnbound; $global:__BashUnbound = $null; "
+            + "throw [PsBash.Cmdlets.BashParamErrorException]::Reported($__psbash_un + ': ', 'unbound variable') }; " + value + ")";
+    }
 
     /// <summary>
     /// The save / <c>try</c> / restore of <see cref="ShellStateScope"/> WITHOUT its child <c>&amp; { }</c>: for a

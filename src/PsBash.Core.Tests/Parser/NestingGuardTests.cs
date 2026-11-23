@@ -76,6 +76,72 @@ public class NestingGuardTests
         Assert.Contains(NestingGuard.TooDeepMessage, ex.Message);
     }
 
+    private const int VeryDeep = 100_000;
+
+    /// <summary>
+    /// One input per recursive edge of the arithmetic grammar, 100k levels deep. REGRESSION: the <c>?:</c> false branch
+    /// recursed into a function that held no NestingGuard level, so <c>0?0:0?0:…1</c> overflowed the stack (the host,
+    /// for <c>e=…; $((e))</c>) instead of failing cleanly. A new recursive edge needs a row here.
+    /// </summary>
+    public static IEnumerable<object[]> EveryArithmeticRecursionEdge() => new[]
+    {
+        new object[] { "?: false branch", Rep("0?0:", VeryDeep) + "1" },
+        new object[] { "?: middle operand", Rep("1?", VeryDeep) + "1" + Rep(":0", VeryDeep) },
+        new object[] { "paren", Rep("(", VeryDeep) + "1" + Rep(")", VeryDeep) },
+        new object[] { "paren comma", Rep("(1,", VeryDeep) + "1" + Rep(")", VeryDeep) },
+        new object[] { "unary -", Rep("- ", VeryDeep) + "1" },
+        new object[] { "unary +", Rep("+ ", VeryDeep) + "1" },
+        new object[] { "unary !", Rep("!", VeryDeep) + "1" },
+        new object[] { "unary ~", Rep("~", VeryDeep) + "1" },
+        new object[] { "power", Rep("2**", VeryDeep) + "1" },
+        new object[] { "assignment chain", Rep("a=", VeryDeep) + "1" },
+        new object[] { "compound assignment chain", Rep("a+=", VeryDeep) + "1" },
+        new object[] { "comma", Rep("1,", VeryDeep) + "1" },
+    };
+
+    [Theory]
+    [MemberData(nameof(EveryArithmeticRecursionEdge))]
+    public void ArithmeticParse_EveryRecursionEdge_FailsCleanly(string shape, string expr)
+    {
+        var ex = Assert.Throws<BashArithmeticParseException>(() => BashArithmeticParser.Parse(expr));
+        Assert.True(ex.Message.Contains(NestingGuard.TooDeepMessage, StringComparison.Ordinal)
+                    || ex.Message.Contains(NestingGuard.TooLongMessage, StringComparison.Ordinal), shape + ": " + ex.Message);
+    }
+
+    [Theory]
+    [MemberData(nameof(EveryArithmeticRecursionEdge))]
+    public void ArithmeticParse_EveryRecursionEdge_OnSmallStackThread_FailsCleanly(string shape, string expr)
+    {
+        // The depth cap and the stack probe both bound every edge: on a 256 KB stack too.
+        Exception? caught = null;
+        var t = new Thread(() =>
+        {
+            try { BashArithmeticParser.Parse(expr); }
+            catch (Exception e) { caught = e; }
+        }, 256 * 1024);
+        t.Start();
+        t.Join();
+        Assert.True(caught is BashArithmeticParseException, shape + ": " + caught);
+    }
+
+    [Theory]
+    [MemberData(nameof(EveryArithmeticRecursionEdge))]
+    public void Transpile_EveryArithmeticRecursionEdge_ThrowsParseException(string shape, string expr)
+    {
+        // A literal $(( … )) is parsed at transpile time: the same limit, as a clean parse error.
+        var ex = Assert.Throws<ParseException>(() => BashTranspiler.Transpile("echo $((" + expr + "))"));
+        Assert.True(ex.Message.Contains(NestingGuard.TooDeepMessage, StringComparison.Ordinal)
+                    || ex.Message.Contains(NestingGuard.TooLongMessage, StringComparison.Ordinal), shape + ": " + ex.Message);
+    }
+
+    [Fact]
+    public void ArithmeticParse_RealisticTernaryChainAndParens_AreAccepted()
+    {
+        // 100 levels of each still parse (a ?: chain is how scripts write a lookup table).
+        Assert.NotNull(BashArithmeticParser.Parse(Rep("0?0:", 100) + "1"));
+        Assert.NotNull(BashArithmeticParser.Parse(Rep("(", 100) + "1" + Rep(")", 100)));
+    }
+
     [Fact]
     public void Transpile_RealisticNesting_IsNotRejected()
     {

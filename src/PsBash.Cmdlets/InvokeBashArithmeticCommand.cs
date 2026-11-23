@@ -75,7 +75,7 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
         try
         {
             expanded = SubstituteExpressionVariables(expr);
-            long result = BashArith.Evaluate(expanded, ReadVar, WriteVar, ReadRawVar);
+            long result = BashArith.Evaluate(expanded, ReadVar, WriteVar, ReadRawVar, ResolveLvalue);
             WriteObject(result);
         }
         catch (UnboundVariableException)
@@ -205,7 +205,7 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
         string text = raw!.TrimStart();
         try
         {
-            return BashArith.Evaluate(text, n => ReadVar(n, depth + 1), WriteVar, ReadRawVar);
+            return BashArith.Evaluate(text, n => ReadVar(n, depth + 1), WriteVar, ReadRawVar, ResolveLvalue);
         }
         catch (ArithRecursionException ex) when (ex.Expression is null)
         {
@@ -229,7 +229,27 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
         return false;
     }
 
-    private BashArrayElement.Vars ElementVars => new(ReadVar, WriteVar, ReadRawVar);
+    private BashArrayElement.Vars ElementVars => new(ReadVar, WriteVar, ReadRawVar, ResolveLvalue);
+
+    /// <summary>
+    /// An assignment target as the element it names, its subscript evaluated ONCE (<c>a[i++]</c> -> <c>a[0]</c>, i now 1):
+    /// a compound assignment or <c>++</c>/<c>--</c> then reads and writes that element (BashArith's resolve callback).
+    /// REGRESSION: read and write each re-evaluated the subscript, so <c>(( a[i++] += i ))</c> ran i++ twice and wrote
+    /// the next element. A plain name, a plain decimal subscript and an associative key (expanded text, never evaluated)
+    /// are already what they name.
+    /// </summary>
+    private string ResolveLvalue(string name)
+    {
+        if (name.IndexOf('[') < 0 || !TrySplitElement(name, out var baseName, out var subscript)) return name;
+        if (PsBash.Core.Parser.BashArithmeticParser.TryPlainDecimal(subscript, out _)) return name;
+        if (BashVariableLookup.ArrayHolder(SessionState, BashShellState.ResolveNameref(baseName)) is System.Collections.IDictionary)
+            return name;
+        string sub = ExpandSubscript(subscript, out _);
+        long index;
+        try { index = BashArith.Evaluate(sub, ReadVar, WriteVar, ReadRawVar, ResolveLvalue); }
+        catch (BashArith.BashArithException ex) { ex.InSubscript = true; throw; }
+        return baseName + "[" + index.ToString(CultureInfo.InvariantCulture) + "]";
+    }
 
     /// <summary>
     /// A subscript read from a VALUE (<c>x='a[$(cmd)]'; $(( x ))</c>) with a command substitution in it: bash expands it

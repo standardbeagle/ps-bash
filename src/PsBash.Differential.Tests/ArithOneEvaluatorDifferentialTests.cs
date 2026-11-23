@@ -87,4 +87,46 @@ public class ArithOneEvaluatorDifferentialTests
             + "EOF\n"
             + Run + Done,
             timeout: TimeSpan.FromSeconds(60));
+
+    /// <summary>
+    /// An element target's subscript is evaluated ONCE: at the read for a compound op or <c>++</c>/<c>--</c>, at the
+    /// write (after the right side) for a plain <c>=</c>. Only a bare name may be assigned (<c>1 + x = 5</c> is an
+    /// error). An indexed literal key is arithmetic (<c>[010]=x</c> is element 8). A variable slice bound takes the
+    /// plain-decimal shortcut yet still evaluates <c>010</c>, <c>' 1 '</c>, <c>1+1</c>. A failing expansion abandons
+    /// the rest of its line, also in <c>[[ ]]</c>, a function body, <c>$( )</c> and <c>( )</c>.
+    /// </summary>
+    [SkippableFact]
+    public Task LvaluesLiteralKeysSliceVarsAndAbandonment_MatchBash()
+        => AssertOracle.EqualAsync(Work
+            + "cat > s.sh <<'EOF'\n"
+            + "i=0; a=(10 20 30); (( a[i++] += i )); echo \"$i ${a[*]}\"\n"
+            + "i=0; a=(1 2 3); (( a[i++]++ )); echo \"$i ${a[*]}\"\n"
+            + "i=0; a=(1 2 3); (( ++a[i++] )); echo \"$i ${a[*]}\"\n"
+            + "i=0; a=(1 2 3); (( a[i] = i++ )); echo \"$i ${a[*]}\"\n"
+            + "i=0; a=(1 2 3); (( a[i++] = 9 )); echo \"$i ${a[*]}\"\n"
+            + "i=0; a=(1 2 3); echo $(( a[i++] *= 5 )) \"$i ${a[*]}\"\n"
+            + "i=0; a=(1 2 3); let 'a[i++]+=10'; echo \"$i ${a[*]}\"\n"
+            + "i=0; a=(1 2 3); (( a[i++] += a[i++] )); echo \"$i ${a[*]}\"\n"
+            + "i=0; a=(1 2 3); x='a[i++]'; (( x++ )); echo \"$i ${a[*]} $x\"\n"
+            + "a=(1 2 3); (( a[-1]++ )); echo \"${a[*]}\"\n"
+            + "declare -A m=([k]=5); k=k; (( m[$k]++ )); echo \"${m[k]}\"\n"
+            + "x=1; echo $((1 + x = 5)) $x\n"
+            + "echo $((2 * x = 5 + 1))\n"
+            + "echo $((1 + x += 5))\n"
+            + "(( 3 + x = 4 )); echo \"st=$? x=$x\"\n"
+            + "declare -i n=5; declare n+=010; echo \"$n\"; declare n=010; echo \"$n\"; n+=010; echo \"$n\"\n"
+            + "b=([010]=x [2]=y); declare -p b\n"
+            + "c=([08]=x [1]=y); declare -p c; echo after-c\n"
+            + "a=(a b c d e); i=1; echo \"${a[@]:$i:2}\"; set -- p q r s; echo \"${@:$i:1}\" \"${@:$#}\"\n"
+            + "i=010; echo \"${a[@]:$i}|\"; i=' 1 '; echo \"${a[@]:$i:1}\"; j='1+1'; echo \"${a[@]:$j:1}\"; i=-2; echo \"${a[@]:$i}\"\n"
+            + "( set -u; echo \"${a[@]:$zz}\"; echo not-here ); echo \"st=$?\"\n"
+            + "s=abcdef; x=${s:08}; echo \"[$x]\"; echo same-line\n"
+            + "if [[ ${s:08} == a ]]; then echo y; fi; echo same\n"
+            + "f(){ echo ${s:08}; echo in-f; }; f; echo after\n"
+            + "y=$(echo ${s:08}; echo inner); echo \"[$y]\"\n"
+            + "( echo ${s:08}; echo inner ); echo outer\n"
+            + "echo end\n"
+            + "EOF\n"
+            + Run + Done,
+            timeout: TimeSpan.FromSeconds(60));
 }

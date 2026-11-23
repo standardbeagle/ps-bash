@@ -6783,6 +6783,11 @@ public static partial class PsEmitter
             // emitted `$env:s+ = 'x'`, which failed the parse of the whole script.
             bool appends = declName.EndsWith('+') && IsValidVarName(declName[..^1]);
             if (appends) declName = declName[..^1];
+            // The integer attribute is the VARIABLE's: `declare -i n=5; declare n+=010` adds (13) and `declare n=010` is 8,
+            // as `n+=010` is. REGRESSION: without -i on this declare, the value was appended as text (5010).
+            if (!isInt && _intVars?.Contains(ResolveNameref(declName)) == true
+                && !cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { Length: > 1 } f && f[0] == '+' && f.Contains('i')))
+                isInt = true;
             if (isAssoc)
             {
                 result = "$global:" + declName + " = [PsBash.Cmdlets.BashAssoc]::new()";
@@ -8762,7 +8767,11 @@ public static partial class PsEmitter
                 || ArraySubscript.PlainText(subscript) is not { } key) return false;
             if (key.Length == 0 || key.Length > 9 || !key.All(char.IsDigit)) return false;
             if (head.Length > 0) parts = parts.Insert(0, new WordPart.Literal(head));
-            entries.Add(PsBuild.SingleQuote(key));
+            // An indexed subscript is arithmetic: `a=([010]=x)` is element 8 and `[08]=x` an error (bash), so only a plain
+            // decimal key is written as its literal. REGRESSION: BashSparseArray.FromEntries read '010' as 10.
+            entries.Add(BashArithmeticParser.TryPlainDecimal(key, out _)
+                ? PsBuild.SingleQuote(key)
+                : PsBuild.ArithValue(EmitArithmeticInvocation(BashArithmeticParser.ParseOrDefer(key))));
             entries.Add("(" + EmitAssignmentValue(new CompoundWord(parts)) + ")");
         }
         literal = "[PsBash.Cmdlets.BashSparseArray]::FromEntries(" + string.Join(", ", entries) + ")";
@@ -10220,7 +10229,8 @@ public static partial class PsEmitter
             ? PsBuild.SingleQuote(expr)
             : $"('' + {string.Join(" + ", fragments)})";
         var invocation = $"Invoke-BashArith {argument}" + (label is null ? "" : " -Label " + PsBuild.SingleQuote(label));
-        return _nounsetMode ? PsBuild.ArithNounsetGuard(invocation) : invocation;
+        // The command and condition forms (`((`, `let`) are not words: a failure there sets status 1 and the line goes on.
+        return _nounsetMode ? PsBuild.ArithNounsetGuard(invocation, word: label is not (ArithCommandLabel or "let")) : invocation;
     }
 
     /// <summary>
@@ -11876,13 +11886,16 @@ public static partial class PsEmitter
     // WORD (`$(Invoke-BashArith`): a subscript error discards the rest of the line in bash, as `$((1/0))` does
     // (InvokeBashArithmeticCommand.IsWordExpansion, PsBuild.CanDiscardLine).
     private static string EmitVarSubscript(string arrayVar, string valueRef)
-        => $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {valueRef} }} else {{ {PsBuild.ArithPlainDecimal("[string]" + valueRef)} ?? {PsBuild.ArithValue($"Invoke-BashArith ([string]{valueRef}) -Subscript")} }})";
+        => $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {valueRef} }} else {{ {PsBuild.ArithPlainOrValue("[string]" + valueRef, $"Invoke-BashArith ([string]{valueRef}) -Subscript")} }})";
 
     /// <summary>
     /// A slice bound that bash evaluates as ARITHMETIC, as a PowerShell number: an empty one is 0, a plain decimal its
     /// literal (BashArithmeticParser.TryPlainDecimal, the one fast path), anything else the one evaluator's value
     /// (`010` is 8; `08` is an error that abandons the command; `i+1`; `$j` with j='1+1'). <paramref name="label"/> names
     /// the expansion in an error: `s: 08: value too great for base (error token is "08")`.
+    /// <para>A bound that is ONE variable (`${a[@]:$i:1}`, `${@:$i}`, `${@:$#}`) is read first and, when its value is a
+    /// plain decimal, used without an evaluator call (PsBuild.ArithPlainOrValue, as EmitVarSubscript does): a loop over
+    /// `${a[@]:$i:1}` ran one Invoke-BashArith per expansion.</para>
     /// </summary>
     private static string EmitArithOperandValue(string text, string? label)
     {
@@ -11890,8 +11903,16 @@ public static partial class PsEmitter
         if (expr.Trim().Length == 0) return "0";
         if (BashArithmeticParser.TryPlainDecimal(expr.TrimEnd(), out long n))
             return n.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        return PsBuild.ArithValue(EmitArithmeticInvocation(BashArithmeticParser.ParseOrDefer(expr), label));
+        string invocation = EmitArithmeticInvocation(BashArithmeticParser.ParseOrDefer(expr), label);
+        var one = s_oneVariableBound.Match(expr.TrimEnd());
+        if (one.Success)
+            return PsBuild.ArithPlainOrValue("[string](" + EmitSimpleVar(one.Groups[1].Success ? one.Groups[1].Value : one.Groups[2].Value) + ")", invocation);
+        return PsBuild.ArithValue(invocation);
     }
+
+    /// <summary>`$name`, `${name}`, `$1`, `${10}`, `$#`: an arithmetic operand that is one variable's value.</summary>
+    private static readonly System.Text.RegularExpressions.Regex s_oneVariableBound =
+        new(@"^\$(?:\{([A-Za-z_]\w*|[0-9]+|#)\}|([A-Za-z_]\w*|[0-9]|#))$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     /// <summary>A literal subscript or slice bound that needs no evaluator: BashArithmeticParser.TryPlainDecimal, within int.</summary>
     private static bool IsPlainIndex(string text, out int value)

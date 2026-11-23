@@ -66,6 +66,85 @@ public class ArithOneEvaluatorTests
     public void Evaluate_MatchesBash(string expr, long expected)
         => Assert.Equal(expected, Eval(expr));
 
+    /// <summary>
+    /// A compound assignment and <c>++</c> resolve their target ONCE, then read and write it (bash 5.2: <c>i=0;
+    /// a=(10 20 30); (( a[i++] += i ))</c> is i=1, a=(11 20 30)). REGRESSION: read and write each got <c>a[i++]</c>.
+    /// </summary>
+    [Theory]
+    [InlineData("a[i++] += i", 1L, 11L, 20L)]
+    [InlineData("a[i++]++", 1L, 11L, 20L)]
+    [InlineData("++a[i++]", 1L, 11L, 20L)]
+    [InlineData("a[i++] *= 2", 1L, 20L, 20L)]
+    public void Evaluate_CompoundTarget_IsResolvedOnce(string expr, long i, long a0, long a1)
+    {
+        var vars = new Dictionary<string, long> { ["i"] = 0, ["a[0]"] = 10, ["a[1]"] = 20 };
+        int resolved = 0;
+        string Resolve(string name)
+        {
+            if (name != "a[i++]") return name;
+            resolved++;
+            long at = vars["i"];
+            vars["i"] = at + 1;
+            return "a[" + at + "]";
+        }
+        BashArith.Evaluate(expr, n => vars.TryGetValue(n, out var v) ? v : 0, (n, v) => vars[n] = v, null, Resolve);
+        Assert.Equal(1, resolved);
+        Assert.Equal(i, vars["i"]);
+        Assert.Equal(a0, vars["a[0]"]);
+        Assert.Equal(a1, vars["a[1]"]);
+    }
+
+    [Fact]
+    public void Evaluate_PlainAssignment_LeavesItsSubscriptToTheWrite()
+    {
+        // `(( a[i] = i++ ))` sets a[1] in bash: a plain `=` evaluates the subscript after the right side, at the write.
+        var written = new List<string>();
+        BashArith.Evaluate("a[i] = 5", _ => 0, (n, _) => written.Add(n), null, n => throw new InvalidOperationException("resolved " + n));
+        Assert.Equal(new[] { "a[i]" }, written);
+    }
+
+    /// <summary>
+    /// A .NET fault raised inside a read or write callback is the variable layer's, not an arithmetic error: it passes
+    /// on unchanged. REGRESSION: the evaluator's catch turned it into "EXPR: Object reference not set …".
+    /// </summary>
+    [Fact]
+    public void Evaluate_CallbackFault_PassesOnUnchanged()
+    {
+        Assert.Throws<NullReferenceException>(() =>
+            BashArith.Evaluate("x + 1", _ => throw new NullReferenceException("store"), (_, _) => { }));
+        Assert.Throws<ArgumentException>(() =>
+            BashArith.Evaluate("x = 1", _ => 0, (_, _) => throw new ArgumentException("store")));
+        Assert.Throws<InvalidCastException>(() =>
+            BashArith.Evaluate("16#$h", _ => 0, (_, _) => { }, _ => throw new InvalidCastException("store")));
+    }
+
+    [Fact]
+    public void Evaluate_NestedEvaluationErrorInACallback_IsStillAnArithmeticError()
+    {
+        // A callback that evaluates a value (x='1/0') fails with the inner expression's arithmetic error, not a fault.
+        var ex = Assert.Throws<BashArith.BashArithException>(() =>
+            BashArith.Evaluate("x + 1", _ => BashArith.Evaluate("1/0", _ => 0, (_, _) => { }), (_, _) => { }));
+        Assert.Equal("division by 0", ex.Message);
+    }
+
+    /// <summary>The runtime evaluator parses what an expanded value holds: 100k levels of any recursive edge fail cleanly.
+    /// REGRESSION: <c>e=0?0:0?0:…1; $((e))</c> overflowed the stack and took the host down.</summary>
+    [Theory]
+    [InlineData("0?0:", "1")]
+    [InlineData("(", "1")]
+    [InlineData("- ", "1")]
+    [InlineData("!", "1")]
+    [InlineData("~", "1")]
+    [InlineData("2**", "1")]
+    [InlineData("a=", "1")]
+    public void Evaluate_VeryDeepValue_FailsCleanly(string unit, string tail)
+    {
+        string expr = string.Concat(System.Linq.Enumerable.Repeat(unit, 100_000)) + tail
+                      + (unit == "(" ? string.Concat(System.Linq.Enumerable.Repeat(")", 100_000)) : "");
+        var ex = Assert.Throws<BashArith.BashArithException>(() => Eval(expr));
+        Assert.Contains("nesting too deep", ex.Message);
+    }
+
     [Theory]
     // A compound assignment reads its target before the right side runs.
     [InlineData("x += (x=10)", 1L, 11L)]
@@ -118,15 +197,12 @@ public class ArithOneEvaluatorTests
         Assert.Equal(5, vars["x"]);
     }
 
-    // No .NET exception leaves the evaluator: a callback's failure of the evaluator's own kind becomes its error.
+    // A fault in a read / write callback is the CALLER's fault, not an arithmetic error of the expression: it passes on
+    // unchanged (Evaluate_CallbackFault_PassesOnUnchanged). REGRESSION: IsEvaluatorFault also caught the callbacks'.
     [Fact]
-    public void Evaluate_DotNetFault_IsABashArithmeticError()
-    {
-        var ex = Assert.Throws<BashArith.BashArithException>(() =>
+    public void Evaluate_CallbackOverflow_IsNotAnArithmeticError()
+        => Assert.Throws<OverflowException>(() =>
             BashArith.Evaluate("y + 1", _ => throw new OverflowException("boom"), (_, _) => { }));
-        Assert.Equal("y + 1", ex.Expression);
-        Assert.IsType<OverflowException>(ex.InnerException);
-    }
 
     // A callback's own signal (an unbound variable under set -u, the recursion limit) is not swallowed.
     [Fact]
@@ -146,7 +222,17 @@ public class ArithOneEvaluatorCmdletTests : IClassFixture<SharedPwshFixture>
     public ArithOneEvaluatorCmdletTests(SharedPwshFixture fixture) => _fixture = fixture;
 
     private CmdResult Run(string script) => CmdResult.Run(_fixture.AcquireFresh(),
-        "try { " + script + " } finally { Remove-Item env:zzh, env:zzx, env:zzr1, env:zzr2, env:zza, env:zzb, env:zzc -ErrorAction Ignore }");
+        "try { " + script + " } finally { Remove-Item env:zzh, env:zzx, env:zzr1, env:zzr2, env:zza, env:zzb, env:zzc, env:zzi -ErrorAction Ignore }");
+
+    // bash: i=0; a=(10 20 30); (( a[i++] += i )) -> i=1, a=(11 20 30); (( a[i++]++ )) -> i=1, a=(11 20 30) from (10 20 30).
+    // REGRESSION: the read and the write each evaluated the subscript (i=2, a[1] written).
+    [Theory]
+    [InlineData("zzq[zzi++] += zzi", "1 11 20 30")]
+    [InlineData("zzq[zzi++]++", "1 11 20 30")]
+    [InlineData("zzq[zzi] = zzi++", "1 10 0 30")]
+    public void InvokeBashArith_ElementTarget_SubscriptEvaluatedOnce(string expr, string expected)
+        => Assert.Equal(expected, Run("$zzq = @('10', '20', '30'); $env:zzi = '0'; $null = Invoke-BashArith '" + expr
+                                      + "'; \"$env:zzi $($zzq -join ' ')\"").AssertSuccess().Stdout.Trim());
 
     [Theory]
     [InlineData("$env:zzh = 'ff'; Invoke-BashArith '16#$zzh'", "255")]

@@ -1446,6 +1446,23 @@ degraded to the whole array. The evaluator itself also pasted a `$x` value with 
   "expression expected".
 - The recursion limit names the expression that went one level too deep: `r1=r2 r2=r1; $((r1+1))` is
   `r2: expression recursion level exceeded (error token is "r2")`.
+- An element target's subscript is evaluated ONCE. For a compound op or `++`/`--`, it is resolved at the read and
+  that element is written (`i=0; a=(10 20 30); (( a[i++] += i ))` leaves `i=1 a=(11 20 30)`). For a plain `=`, it is
+  resolved at the write, after the right side (`(( a[i] = i++ ))` sets `a[1]`). The cmdlet passes the resolver
+  (`InvokeBashArithmeticCommand.ResolveLvalue`, the `resolve` callback of `BashArith.Evaluate`).
+- Only the evaluator's own .NET faults become a `BashArithException`. A fault thrown by a read, write or resolve
+  callback passes on unchanged (it is tagged by an exception filter in `BashArith.Callbacks`, without unwinding).
+- Every recursive descent function of the parser (`ParseComma`, `ParseAssignment`, `ParseConditional`,
+  `ParsePower`, `ParseUnary`) holds one `NestingGuard` level, so no edge recurses unbounded: a 100000-deep `0?0:…`,
+  `(((…`, `- - …`, `2**2**…` or `a=a=…` fails cleanly ("nesting too deep"). bash computes such chains; ps-bash
+  stops at its depth limit (guard `NestingGuardTests.ArithmeticParse_EveryRecursionEdge*`).
+
+**Emitted shapes.** A slice bound or subscript that is ONE variable (`${a[@]:$i:1}`, `${@:$#}`, `${a[$k]}`) reads it
+and takes `PsBuild.ArithPlainOrValue`: its plain-decimal value without an evaluator call, else the evaluator's
+value. An indexed literal key (`a=([010]=x)`) is its literal only when it is a plain decimal; otherwise it is the
+evaluator's value (element 8; `[08]` is an error). Under `set -u`, `PsBuild.ArithNounsetGuard` holds a WORD's value
+in `$__psbash_av` and a command's (`(( ))`, `let`) in `$__psbash_ac`: the cmdlet reads only the first as a word, and
+only a failed word abandons its command.
 
 **Guard.** `Core.Tests/ArithmeticOperandGuardTests`: no C# `int`/`long` `.Parse`/`.TryParse` of an arithmetic operand
 in `PsEmitter*.cs`, `PsBuild.cs` or the cmdlets that evaluate arithmetic. No emitted `[int]`/`[long]` cast except of

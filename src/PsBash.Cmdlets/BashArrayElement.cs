@@ -21,8 +21,10 @@ namespace PsBash.Cmdlets;
 /// </summary>
 public static class BashArrayElement
 {
-    /// <summary>How the subscript reads and writes variables (an arithmetic subscript may assign: <c>a[i++]</c>).</summary>
-    public readonly record struct Vars(Func<string, long> Read, Action<string, long> Write, Func<string, string?> ReadRaw);
+    /// <summary>How the subscript reads and writes variables (an arithmetic subscript may assign: <c>a[i++]</c>), and
+    /// resolves an assignment target inside it once (the <c>resolve</c> callback of <see cref="BashArith"/>.Evaluate).</summary>
+    public readonly record struct Vars(Func<string, long> Read, Action<string, long> Write, Func<string, string?> ReadRaw,
+        Func<string, string>? Resolve = null);
 
     /// <summary>
     /// Variables seen through <paramref name="state"/>, with no side effects allowed. A value that is not a plain number
@@ -78,7 +80,7 @@ public static class BashArrayElement
     /// </summary>
     public static long Index(string subscript, long count, Vars vars)
     {
-        long index = BashArith.Evaluate(subscript, vars.Read, vars.Write, vars.ReadRaw);
+        long index = BashArith.Evaluate(subscript, vars.Read, vars.Write, vars.ReadRaw, vars.Resolve);
         return index < 0 ? index + count : index;
     }
 

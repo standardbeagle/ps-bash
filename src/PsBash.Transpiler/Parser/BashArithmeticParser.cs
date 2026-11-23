@@ -128,8 +128,14 @@ public sealed class BashArithmeticParser
         return node;
     }
 
+    // Every function a recursive edge of this grammar enters holds one NestingGuard level: ParseComma (from a paren group
+    // and a ?: middle operand), ParseAssignment (a=b=…), ParseConditional (the ?: false branch), ParsePower (2**2**…) and
+    // ParseUnary (- - … x). So no expression can overflow the stack, at transpile time or in the runtime evaluator, whose
+    // recursion follows the tree built here. REGRESSION: the ?: false branch recursed into ParseConditional, which held no
+    // level, and `0?0:0?0:…1` 30000 deep overflowed the host. Guard: NestingGuardTests.ArithmeticParse_EveryRecursionEdge*.
     private ArithmeticExpr ParseComma()
     {
+        using var nesting = NestingGuard.EnterArithmetic();
         var value = ParseAssignment();
         int count = 0;
         while (Accept(T.Comma))
@@ -140,9 +146,6 @@ public sealed class BashArithmeticParser
         return value;
     }
 
-    // NestingGuard bounds the three self-recursions — assignment chains (a=b=…), ** chains, and
-    // ParseUnary, which every paren group (( … )) and unary chain (- - … x) passes through — so no
-    // expression can overflow the stack (at transpile time or in the runtime arithmetic evaluator).
     private ArithmeticExpr ParseAssignment()
     {
         using var nesting = NestingGuard.EnterArithmetic();
@@ -164,6 +167,7 @@ public sealed class BashArithmeticParser
 
     private ArithmeticExpr ParseConditional()
     {
+        using var nesting = NestingGuard.EnterArithmetic();
         var condition = ParseLogicalOr();
         if (!Accept(T.Question)) return condition;
         // bash (expr.c expcond): nothing, or a `:`, after the `?` and nothing after the `:` is "expression expected".
