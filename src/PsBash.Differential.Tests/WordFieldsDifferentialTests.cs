@@ -44,6 +44,11 @@ public class WordFieldsDifferentialTests
     [InlineData(P + "touch m1 m2; p ${u:-m*}; p ${u:-'m*'}; p ${u:-\"m\"*}")]
     public Task DefaultOperatorWords_KeepTheirQuoting(string script) => AssertOracle.EqualAsync(script);
 
+    // R6: `$'…'` in a quoted expansion's word is still ANSI-C quoting (extquote).
+    [SkippableFact]
+    public Task AnsiCQuoteInAQuotedDefaultWord_IsDecoded() => AssertOracle.EqualAsync(
+        P + "p \"${e:-$'t\\x41'}\"; p \"${e:-$'a\\tb'}x\"; p ${e:-$'q\\x42'}");
+
     // R8: every quoted `*` form joins with the first IFS character.
     [SkippableTheory]
     [InlineData(P + "set -- a b c; IFS=-; p \"${*:2}\" \"$*\" \"${*}\" \"${*^^}\" \"${*/a/X}\" \"${*:-d}\" $*")]

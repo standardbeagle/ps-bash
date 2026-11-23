@@ -46,4 +46,12 @@ public class QuotedAltWordTests
     public void Transpile_QuotedOrDefaultForm_KeepsItsForm(string bash)
         => Assert.DoesNotContain(",@() }", T(bash));
 
+    // bash (extquote, on by default): `$'…'` in the word of a double-quoted `${e:-…}` is still ANSI-C quoting, so
+    // `echo "${e:-$'t\x41'}"` prints tA; a plain `'…'` there is literal text, quotes included ('t\x41').
+    [Fact]
+    public void Transpile_AnsiCQuoteInQuotedDefaultWord_IsDecoded()
+    {
+        Assert.Contains(": 'tA')", T("echo \"${e:-$'t\\x41'}\""));
+        Assert.Contains(": '''t\\x41''')", T("echo \"${e:-'t\\x41'}\""));
+    }
 }
