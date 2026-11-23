@@ -117,6 +117,44 @@ public sealed class HostRetireTests
         Assert.Equal(["started:" + HostRetire.HoldBody, "shutdown", "claim-closed"], host.Events);
     }
 
+    // The install's drain: each host is retired once it is idle; one still busy at the deadline is reported, never
+    // told to shut down; a host whose process exited, or whose endpoint another host now owns, is left alone.
+    [Fact]
+    public async Task Drain_RetiresEachHostOnceIdle_ReportsTheStillBusy_LeavesGoneAndReplacedAlone()
+    {
+        await using var finishes = new ScriptedHost(busy: true);
+        await using var neverFinishes = new ScriptedHost(busy: true);
+        await using var replaced = new ScriptedHost(busy: false);
+        await finishes.StartAsync();
+        await neverFinishes.StartAsync();
+        await replaced.StartAsync();
+        var targets = new[]
+        {
+            new HostDrain.Target(101, "unix", finishes.Endpoint),
+            new HostDrain.Target(102, "unix", neverFinishes.Endpoint),
+            new HostDrain.Target(103, "unix", replaced.Endpoint),
+            new HostDrain.Target(104, "unix", Path.Combine(Path.GetTempPath(), "ps-bash", "gone.sock")),
+        };
+        int polls = 0;
+        bool IsAlive(int pid)
+        {
+            if (pid == 101 && Interlocked.Increment(ref polls) == 3) finishes.Release();  // its command ends mid-drain
+            return pid != 104;
+        }
+
+        var results = await HostDrain.DrainAsync(targets, TimeSpan.FromSeconds(2), TimeSpan.FromMilliseconds(100),
+            IsAlive, t => t.Pid == 103 ? 999 : t.Pid, report: null, CancellationToken.None);
+
+        var byPid = results.ToDictionary(r => r.Target.Pid, r => r.State);
+        Assert.Equal(HostDrain.State.Retired, byPid[101]);
+        Assert.Equal(HostDrain.State.Busy, byPid[102]);
+        Assert.Equal(HostDrain.State.Replaced, byPid[103]);
+        Assert.Equal(HostDrain.State.Gone, byPid[104]);
+        Assert.Contains("shutdown", finishes.Events);
+        Assert.DoesNotContain("shutdown", neverFinishes.Events);
+        Assert.Empty(replaced.Events);
+    }
+
     [Fact]
     public async Task NoHost_IsUnreachable()
     {
