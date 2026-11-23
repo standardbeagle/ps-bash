@@ -200,7 +200,7 @@ internal sealed class Program
         int? launcherPid = GetNonInteractiveLauncherPid(args);
         await using var deathWatcher = ParentDeathWatcher.TryCreate(launcherPid, cts);
         // A daemon keyed by a session anchor exits soon after that session is gone (GH #7).
-        await using var anchorWatcher = SessionAnchorWatcher.TryCreate(GetSessionAnchor(args), idle);
+        await using var anchorWatcher = SessionAnchorWatcher.TryCreate(GetSessionAnchor(args), idle, cts);
 
         await using var server = new HostServer(transport, pool, idle, stateful);
         server.WarmSessionWorker();

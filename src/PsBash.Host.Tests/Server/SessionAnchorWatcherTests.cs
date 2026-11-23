@@ -21,7 +21,7 @@ public sealed class SessionAnchorWatcherTests
     {
         using var cts = new CancellationTokenSource();
         using var idle = new IdleShutdown(cts, TimeSpan.FromHours(1), _ => { });
-        Assert.Null(SessionAnchorWatcher.TryCreate(null, idle));
+        Assert.Null(SessionAnchorWatcher.TryCreate(null, idle, cts));
     }
 
     [Fact]
@@ -30,9 +30,9 @@ public sealed class SessionAnchorWatcherTests
         using var cts = new CancellationTokenSource();
         using var idle = new IdleShutdown(cts, TimeSpan.FromHours(1), _ => { });
         await using var watcher = SessionAnchorWatcher.TryCreate(
-            new ProcessIdentity(1, 2), idle,
+            new ProcessIdentity(1, 2), idle, cts,
             pollInterval: TimeSpan.FromMilliseconds(20), grace: TimeSpan.FromMilliseconds(50),
-            isAnchorRunning: () => false);
+            isAnchorRunning: () => false, recordExitReason: _ => { });
 
         Assert.True(cts.Token.WaitHandle.WaitOne(TimeSpan.FromSeconds(5)),
             "a daemon whose session anchor is gone must exit within the grace, not the idle hour");
@@ -44,12 +44,52 @@ public sealed class SessionAnchorWatcherTests
         using var cts = new CancellationTokenSource();
         using var idle = new IdleShutdown(cts, TimeSpan.FromHours(1), _ => { });
         await using var watcher = SessionAnchorWatcher.TryCreate(
-            new ProcessIdentity(1, 2), idle,
+            new ProcessIdentity(1, 2), idle, cts,
             pollInterval: TimeSpan.FromMilliseconds(20), grace: TimeSpan.FromMilliseconds(50),
-            isAnchorRunning: () => true);
+            isAnchorRunning: () => true, recordExitReason: _ => { });
 
         Assert.False(cts.Token.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(300)),
             "warm reuse inside a live session must be unchanged");
+    }
+
+    /// <summary>
+    /// The orphaned-daemon leak: a command still in flight when the session ended kept the daemon alive for
+    /// good (idle shortening waits for the last command); after a Claude Code restart seven orphaned hosts on
+    /// one desktop ran for 25+ minutes at about half a core each. Nobody in a gone session waits for that command, so after a grace it
+    /// is hung up, as bash hangs up a session's jobs when the session leader dies.
+    /// </summary>
+    [Fact]
+    public async Task AnchorGone_CommandStillRunning_IsHungUpAfterTheGrace()
+    {
+        using var cts = new CancellationTokenSource();
+        using var idle = new IdleShutdown(cts, TimeSpan.FromHours(1), _ => { });
+        idle.ConnectionStarted(); // a command whose launcher never disconnects
+        string? reason = null;
+        await using var watcher = SessionAnchorWatcher.TryCreate(
+            new ProcessIdentity(1, 2), idle, cts,
+            pollInterval: TimeSpan.FromMilliseconds(20), grace: TimeSpan.FromMilliseconds(50),
+            hangupGrace: TimeSpan.FromMilliseconds(100),
+            isAnchorRunning: () => false, recordExitReason: r => reason = r);
+
+        Assert.True(cts.Token.WaitHandle.WaitOne(TimeSpan.FromSeconds(5)),
+            "a command still running after its session is gone must not keep the daemon alive");
+        Assert.Contains("hung up", reason);
+    }
+
+    [Fact]
+    public async Task AnchorAlive_CommandStillRunning_IsLeftAlone()
+    {
+        using var cts = new CancellationTokenSource();
+        using var idle = new IdleShutdown(cts, TimeSpan.FromHours(1), _ => { });
+        idle.ConnectionStarted();
+        await using var watcher = SessionAnchorWatcher.TryCreate(
+            new ProcessIdentity(1, 2), idle, cts,
+            pollInterval: TimeSpan.FromMilliseconds(20), grace: TimeSpan.FromMilliseconds(50),
+            hangupGrace: TimeSpan.FromMilliseconds(50),
+            isAnchorRunning: () => true, recordExitReason: _ => { });
+
+        Assert.False(cts.Token.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(400)),
+            "a long command inside a live session runs as long as it needs");
     }
 
     [Theory]
@@ -112,6 +152,63 @@ public sealed class SessionAnchorWatcherTests
             if (!anchorProc.HasExited) anchorProc.Kill(entireProcessTree: true);
             if (hostPid is { } pid && IsAlive(pid))
                 try { using var p = Process.GetProcessById(pid); p.Kill(entireProcessTree: true); } catch { }
+            IpcTransportFactory.SessionAnchorOverride = null;
+            try { HostMetadata.Remove(scheme, endpoint); } catch { }
+            try { IpcTransportFactory.RetireEndpoint(scheme, endpoint); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// End to end, the leak itself: the daemon is running a command for a launcher that stays connected (this
+    /// test), and the session anchor dies. Before the fix the daemon logged "session anchor gone; exiting 5s after
+    /// the last command" and then ran forever, because that last command never ended.
+    /// </summary>
+    [SkippableFact]
+    public async Task Daemon_WithACommandStillRunning_ExitsAfterItsSessionAnchorDies()
+    {
+        var hostBinary = HostStartupStressTests.TryLocateHostBinary();
+        Skip.If(hostBinary is null, "ps-bash-host binary not found — build src/PsBash.Host first");
+
+        using var anchorProc = StartLongLivedProcess();
+        var anchor = new ProcessIdentity(anchorProc.Id, ProcessIdentity.StartTicksOf(anchorProc));
+
+        using var env = ProcessEnv.Set(
+            (IpcTransportFactory.EndpointEnvVar, null),
+            (IpcTransportFactory.SessionEnvVar, null),
+            ("PSBASH_HOST_IDLE_SECS", "600"));
+        IpcTransportFactory.SessionAnchorOverride = () => anchor;
+        var (scheme, endpoint) = IpcTransportFactory.ResolveEndpoint();
+        int? hostPid = null;
+        IpcWorker? worker = null;
+        Task<int>? running = null;
+        try
+        {
+            using var startCts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            worker = await IpcWorker.StartAsync(
+                hostBinary!, startupTimeout: TimeSpan.FromSeconds(40),
+                lifetime: Lifetime.Daemon, ct: startCts.Token);
+            hostPid = int.Parse((await worker.QueryAsync("$PID", startCts.Token)).Trim());
+
+            // The connected launcher's command: still running when the session ends.
+            running = worker.ExecuteAsync("Start-Sleep -Seconds 600");
+            await Task.Delay(TimeSpan.FromSeconds(2));
+            Assert.False(running.IsCompleted, "the command must be in flight when the anchor dies");
+
+            anchorProc.Kill(entireProcessTree: true);
+            anchorProc.WaitForExit();
+
+            // 1 s poll + hang-up grace + the command's stop; generous slack for a loaded box.
+            using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            using var host = Process.GetProcessById(hostPid.Value);
+            await host.WaitForExitAsync(exitCts.Token);
+        }
+        finally
+        {
+            if (!anchorProc.HasExited) anchorProc.Kill(entireProcessTree: true);
+            if (hostPid is { } pid && IsAlive(pid))
+                try { using var p = Process.GetProcessById(pid); p.Kill(entireProcessTree: true); } catch { }
+            if (running is not null) try { await running; } catch { /* the host hung it up */ }
+            if (worker is not null) try { await worker.DisposeAsync(); } catch { }
             IpcTransportFactory.SessionAnchorOverride = null;
             try { HostMetadata.Remove(scheme, endpoint); } catch { }
             try { IpcTransportFactory.RetireEndpoint(scheme, endpoint); } catch { }

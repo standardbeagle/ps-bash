@@ -84,6 +84,12 @@ public sealed class IdleShutdown : IDisposable
         }
     }
 
+    /// <summary>Connections in flight now: a command, or a request waiting for one.</summary>
+    public int InFlight
+    {
+        get { lock (_gate) return _inFlight; }
+    }
+
     public void ConnectionStarted()
     {
         lock (_gate)
