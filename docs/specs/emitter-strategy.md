@@ -1477,7 +1477,11 @@ degraded to the whole array. The evaluator itself also pasted a `$x` value with 
   (`NestingGuard.MaxArithmeticDepth`, 1024) is counted apart from the shell's, so 1000 nested parens parse as in
   bash. A 100000-deep `0?0:…`, `(((…`, `- - …`, `2**2**…` or `a=a=…` fails cleanly ("nesting too deep"), where
   bash computes some and crashes on others. A run-time parse that runs out of stack first retries on the large
-  stack (`NestingGuard.WithStackFallback`, as a transpile does). Guards: `NestingGuardTests.ArithmeticParse_EveryRecursionEdge*`,
+  stack (`NestingGuard.WithStackFallback`, as a transpile does). The TREE is evaluated on the caller's thread and
+  its depth is not bounded by the parse alone (a left-deep `1+1+…` run takes no level; inside nested parens it is
+  ~32000 nodes deep within the 64 KB source cap), so `BashArith.Eval` probes the stack per node: out of stack is a
+  clean "nesting too deep (out of stack)" error, never a StackOverflow (guard
+  `ArithOneEvaluatorTests.Evaluate_DeepTree_*`, `HostRobustnessTests` "arith-deep-tree"). Guards: `NestingGuardTests.ArithmeticParse_EveryRecursionEdge*`,
   `NestingGuardTests.ArithmeticParse_NestedParensAndChains_TheLimitIsOneLevelPerEdge`.
 
 **Emitted shapes.** A slice bound or subscript that is ONE variable (`${a[@]:$i:1}`, `${@:$#}`, `${a[$k]}`) reads it

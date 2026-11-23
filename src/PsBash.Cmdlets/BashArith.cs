@@ -179,8 +179,25 @@ public static class BashArith
         throw new BashArithException("arithmetic parameter expansion exceeded maximum depth");
     }
 
+    /// <summary>
+    /// The evaluator's recursion follows the tree, whose depth the parser's nesting cap does not bound alone: a left-deep
+    /// chain (<c>1+1+…</c>, up to MaxChainLength per precedence level) takes no nesting level, and nested in parens it
+    /// grows to tens of thousands of nodes; and a tree parsed on the large-stack retry is evaluated HERE, on the caller's
+    /// thread. So every node probes the stack: out of stack is the clean error, never a StackOverflow (uncatchable: it
+    /// killed the host). On the host's pipeline thread bash's 1000-deep <c>1**1**…</c> / <c>- - …</c> / <c>?:</c> chains fit.
+    /// </summary>
+    private static void EnsureStack(ArithmeticExpr expression)
+    {
+        if (!System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack())
+            throw new BashArithException(OutOfStackMessage) { Node = expression };
+    }
+
+    /// <summary>The evaluator's out-of-stack error, worded as the parser's depth limit.</summary>
+    internal const string OutOfStackMessage = "nesting too deep (out of stack) in arithmetic expression";
+
     private static long Eval(ArithmeticExpr expression, in Callbacks vars)
     {
+        EnsureStack(expression);
         switch (expression)
         {
             case ArithmeticExpr.Number number: return number.Value;

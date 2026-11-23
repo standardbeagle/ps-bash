@@ -167,6 +167,64 @@ public class ArithOneEvaluatorTests
         Assert.Equal(1L, value);
     }
 
+    /// <summary>
+    /// A deep TREE: each node-building edge 1000 deep (bash computes each: 1), and a left-deep <c>1+1+…</c> run inside
+    /// nested parens (no nesting level per operator; ~32000 nodes deep within the 64 KB source cap; bash: 32001).
+    /// </summary>
+    public static IEnumerable<object[]> DeepTrees() => new[]
+    {
+        new object[] { "power", Repeat("1**", 1000) + "1", 1L },
+        new object[] { "unary -", Repeat("- ", 1000) + "1", 1L },
+        new object[] { "?: false branch", Repeat("0?0:", 1000) + "1", 1L },
+        new object[] { "assignment chain", Repeat("a=", 1000) + "1", 1L },
+        new object[] { "left-deep chain in parens", LeftDeepInParens(groups: 8, terms: 4000), 8L * 4000 + 1 },
+    };
+
+    private static string Repeat(string s, int n) => string.Concat(System.Linq.Enumerable.Repeat(s, n));
+
+    private static string LeftDeepInParens(int groups, int terms)
+    {
+        string run = Repeat("+1", terms), s = "1" + run;
+        for (int g = 1; g < groups; g++) s = "(" + s + ")" + run;
+        return s;
+    }
+
+    // REGRESSION: the parse of a run-time value retries on a 256 MB stack, but the tree it returned was evaluated on the
+    // caller's small or nearly exhausted stack with no probe: a StackOverflow, which no catch survives, killed the host.
+    // On a 256 KB thread each is now its value or the clean out-of-stack error; on an ample stack, bash's value.
+    [Theory]
+    [MemberData(nameof(DeepTrees))]
+    public void Evaluate_DeepTree_OnSmallStackThread_IsTheValueOrACleanError(string shape, string expr, long expected)
+    {
+        var (value, caught) = OnThread(256 * 1024, () => Eval(expr));
+        if (caught is null) Assert.Equal(expected, value);
+        else Assert.True(caught is BashArith.BashArithException a && a.Message.Contains("nesting too deep", StringComparison.Ordinal),
+            shape + ": " + caught);
+    }
+
+    [Theory]
+    [MemberData(nameof(DeepTrees))]
+    public void Evaluate_DeepTree_OnAmpleStack_IsBashsValue(string shape, string expr, long expected)
+    {
+        var (value, caught) = OnThread(64 * 1024 * 1024, () => Eval(expr));
+        Assert.True(caught is null, shape + ": " + caught);
+        Assert.Equal(expected, value);
+    }
+
+    private static (long? Value, Exception? Caught) OnThread(int stackBytes, Func<long> work)
+    {
+        long? value = null;
+        Exception? caught = null;
+        var t = new System.Threading.Thread(() =>
+        {
+            try { value = work(); }
+            catch (Exception e) { caught = e; }
+        }, stackBytes);
+        t.Start();
+        t.Join();
+        return (value, caught);
+    }
+
     [Theory]
     // A compound assignment reads its target before the right side runs.
     [InlineData("x += (x=10)", 1L, 11L)]

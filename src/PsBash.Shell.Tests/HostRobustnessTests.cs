@@ -17,6 +17,14 @@ public class HostRobustnessTests
 
     private static string Rep(string s, int n) => string.Concat(Enumerable.Repeat(s, n));
 
+    /// <summary>`((1+1…+1)+1…+1)…`: <paramref name="groups"/> nested parens, each a left-deep run of <paramref name="terms"/>.</summary>
+    private static string LeftDeepInParens(int groups, int terms)
+    {
+        string run = Rep("+1", terms), s = "1" + run;
+        for (int g = 1; g < groups; g++) s = "(" + s + ")" + run;
+        return s;
+    }
+
     private static string DeepPayload(string shape) => shape switch
     {
         "cmdsub" => "echo " + Rep("$(echo ", 5000) + "x" + Rep(")", 5000),
@@ -105,6 +113,10 @@ public class HostRobustnessTests
     // Survival only: bash has no nesting limit here (20000 levels crash it, exit 139). ps-bash reports a recursion error,
     // which like bash's own (`a=a; $((a))`) drops the rest of the line, so the status is echoed on the next line.
     [InlineData("arith-runtime", "@ARITH", "rc=1", null)]
+    // A deep TREE from a shallow parse: a left-deep 1+1+… run inside nested parens (~32000 nodes deep) and a 1000-deep
+    // 1**1**… chain. The evaluator recursed over it with no stack probe after the parse's large-stack retry (bash: 32001
+    // and 1). Survival: the value, or the clean out-of-stack error, and the next line runs.
+    [InlineData("arith-deep-tree", "@ARITHTREE", "rc=", null)]
     public async Task RuntimeHostileInput_FailsOnlyThatCommand_HostSurvives(string name, string script, string? expectOut, string? expectErr)
     {
         Skip.If(InteractiveShellHarness.FindPsBashBinary() is null, "ps-bash binary not built");
@@ -120,6 +132,7 @@ public class HostRobustnessTests
                 "@TESTPAREN" => "[ " + Rep("\\( ", 3000) + "x" + Rep(" \\)", 3000) + " ]; echo rc=$?",
                 "@TESTOR" => "[ " + Rep("a -o ", 50000) + "a ]; echo rc=$?",
                 "@ARITH" => "e='" + Rep("(", 20000) + "1" + Rep(")", 20000) + "'; echo $(( $e ))\necho rc=$?",
+                "@ARITHTREE" => "e='" + LeftDeepInParens(8, 4000) + "'; echo $(( $e ))\np='" + Rep("1**", 1000) + "1'; echo $((p))\necho rc=$?",
                 _ => script,
             };
             var file = Path.Combine(dir, name + ".sh");

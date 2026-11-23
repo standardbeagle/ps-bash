@@ -131,8 +131,9 @@ public sealed class BashArithmeticParser
     // Every recursive EDGE of this grammar holds one NestingGuard level while it is taken: a paren group and a ?: middle
     // operand (-> ParseComma), the ?: false branch (-> ParseConditional), a=b=… (-> ParseAssignment), 2**2**… (->
     // ParsePower) and - - … x (-> ParseUnary). Every cycle of the call graph passes one of them, so no expression can
-    // overflow the stack, at transpile time or in the runtime evaluator, whose recursion follows the tree built here; and a
-    // paren costs ONE level, not one per precedence function it passes through (bash takes 1000 nested parens).
+    // overflow the stack while it is PARSED; and a paren costs ONE level, not one per precedence function it passes
+    // through (bash takes 1000 nested parens). The tree's depth is not bounded by this alone (a left-deep `1+1+…` run
+    // takes no level), so the runtime evaluator, which recurses over the tree, probes the stack per node (BashArith.Eval).
     // REGRESSIONS: the ?: false branch held no level and `0?0:0?0:…1` 30000 deep overflowed the host; then a level per
     // FUNCTION cut nested parens to ~200. Guards: NestingGuardTests.ArithmeticParse_EveryRecursionEdge*, *_NestedParens*.
     private ArithmeticExpr ParseComma()
