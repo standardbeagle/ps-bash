@@ -8801,7 +8801,8 @@ public static partial class PsEmitter
         key = head = "";
         parts = default;
         // The subscript's parts as ArraySubscript reads them (`[k1]`, `['a]=b']`, `[` 'k' `]`): its raw text, a
-        // single-quoted part quoted again, for the quote removal below. An expansion makes it no static key.
+        // single-quoted part quoted again as one bash word (PsBuild.BashSingleQuote), for the quote removal below. An
+        // expansion makes it no static key. The key reaches PowerShell only through PsBuild.SingleQuote.
         if (!ArraySubscript.TrySplit(elem, out var keyParts, out head, out parts)) return false;
         var keyText = new StringBuilder();
         foreach (var part in keyParts)
@@ -8810,7 +8811,7 @@ public static partial class PsEmitter
             {
                 WordPart.Literal l => l.Value,
                 WordPart.GlobPart g => g.Pattern,
-                WordPart.SingleQuoted sq => "'" + sq.Value + "'",
+                WordPart.SingleQuoted sq => PsBuild.BashSingleQuote(sq.Value),
                 _ => null,
             };
             if (piece is null) return false;
