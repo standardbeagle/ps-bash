@@ -117,15 +117,18 @@ public class BashTranspilerReviewRegressionTests
     // The find was always matched as literal text, so globs never matched and the anchors were literal `#`/`%`.
 
     [Theory]
-    [InlineData("echo ${v/c*/XX}", "(?s)c.*")]
-    [InlineData("echo ${s/#xx/yy}", "(?s)^xx")]
-    [InlineData("echo ${s/%xx/yy}", "(?s)xx$")]
-    [InlineData("echo ${s//[.]/_}", "(?s)[.]")]
-    public void Transpile_PatternSubstitutionFind_IsAGlobWithAnchors(string bash, string regexStart)
+    [InlineData("echo ${v/c*/XX}", "Substitute($env:v, 'c*', 'XX', 0)")]
+    [InlineData("echo ${s/#xx/yy}", "Substitute($env:s, 'xx', 'yy', 2)")]
+    [InlineData("echo ${s/%xx/yy}", "Substitute($env:s, 'xx', 'yy', 3)")]
+    [InlineData("echo ${s//[.]/_}", "Substitute($env:s, '[.]', '_', 1)")]
+    // The anchor is the operator, not pattern text: a quoted or escaped pattern keeps it (bash: v='*x'; ${v/#\*/X} is Xx).
+    [InlineData("echo ${v/#\\*/X}", "Substitute($env:v, '\\*', 'X', 2)")]
+    [InlineData("echo ${v/%\"x\"/Y}", "Substitute($env:v, 'x', 'Y', 3)")]
+    public void Transpile_PatternSubstitutionFind_IsAGlobWithAnchors(string bash, string call)
     {
         var ps = BashTranspiler.Transpile(bash);
-        Assert.Contains("'" + regexStart, ps);
-        Assert.DoesNotContain("[regex]::Escape", ps);
+        Assert.Contains("[PsBash.Cmdlets.BashPatternMatch]::" + call, ps);
+        Assert.DoesNotContain("[regex]", ps);
     }
 
     // Oracle: bash `echo {a..e..2}` -> a c e (the step was dropped for letter ranges: a b c d e).
@@ -292,7 +295,7 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_SubstituteQuotedOrVariableOperand_MatchesTheValue(string bash)
     {
         string ps = BashTranspiler.Transpile(bash);
-        Assert.Contains("[regex]::Escape(", ps);
+        Assert.Contains("[PsBash.Cmdlets.BashPatternMatch]::Substitute($env:x, ", ps);
         Assert.DoesNotContain("$'", ps);
     }
 
@@ -302,9 +305,9 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_SubstituteUnquotedVariablePattern_IsConvertedAsAGlobAtRunTime()
     {
         string ps = BashTranspiler.Transpile("echo \"${x//$g/,}\"");
-        Assert.Contains("BashPattern]::ToRegex(", ps);
+        Assert.Contains("Substitute($env:x, ($env:g), ',', 1)", ps);
         string quoted = BashTranspiler.Transpile("echo \"${x//\"$g\"/,}\"");
-        Assert.Contains("[regex]::Escape(", quoted);
+        Assert.Contains("Substitute($env:x, ([PsBash.Cmdlets.BashGlobText]::Escape(\"$env:g\")), ',', 1)", quoted);
     }
 
     // Oracle: the delimiter `/` is the first UNQUOTED one after the first character: `${p////\\/}` replaces `/`
@@ -317,7 +320,7 @@ public class BashTranspilerReviewRegressionTests
     {
         string ps = BashTranspiler.Transpile(bash);
         Assert.DoesNotContain("/\\\\//", ps);
-        Assert.Contains("[regex]::Escape(", ps);
+        Assert.Contains("Substitute($env:p, '/', ", ps);
     }
 
     // Oracle: quotes inside a bracket expression come off and the quoted characters stay literal.
@@ -344,9 +347,10 @@ public class BashTranspilerReviewRegressionTests
     // Oracle: `f() { trap 'echo ret' RETURN; echo in; }; f` prints in then ret - a RETURN trap runs when the
 
     // Oracle: an empty pattern (`${x//$unset/r}`) replaces nothing; an empty regex would match between every character.
+    // The pattern's run-time value goes to Substitute, which treats an empty one as no match (BashPatternTests).
     [Fact]
     public void Transpile_SubstituteVariablePattern_EmptyValueMatchesNothing()
-        => Assert.Contains("(?!)", BashTranspiler.Transpile("x=ab; echo ${x//$foo/r}"));
+        => Assert.Contains("Substitute($env:x, ($env:foo), 'r', 1)", BashTranspiler.Transpile("x=ab; echo ${x//$foo/r}"));
 
     // Oracle: the trim idiom `${s#"${s%%[![:space:]]*}"}`: a quoted / expanded strip pattern is the quote-removed value,
     // matched literally. The pattern text was regex-escaped as source (`"${s%%...}"` never matched).
@@ -355,13 +359,14 @@ public class BashTranspilerReviewRegressionTests
     [InlineData("s=\"a  \"; echo \"${s%\"${s##*[![:space:]]}\"}\"")]
     [InlineData("f=a.txt; e=.txt; echo \"${f%\"$e\"}\"")]
     public void Transpile_StripQuotedExpansionPattern_IsMatchedAsTheValue(string bash)
-        => Assert.Contains("[regex]::Escape(", BashTranspiler.Transpile(bash));
+        => Assert.Contains("[PsBash.Cmdlets.BashGlobText]::Escape(", BashTranspiler.Transpile(bash));
 
     // Oracle: `[!x]` negates and `[[:space:]]` is a POSIX class in a strip pattern; the first `]` is not the close.
+    // The bracket reaches the one compiler intact (its meaning: BashPatternTests.Compile_Brackets).
     [Theory]
-    [InlineData("echo ${s%%[![:space:]]*}", "[^\\s]")]
-    [InlineData("echo ${s#[[:digit:]]}", "[0-9]")]
-    [InlineData("echo ${s#[!a]}", "[^a]")]
+    [InlineData("echo ${s%%[![:space:]]*}", "Remove($env:s, '[![:space:]]*', $true, $true)")]
+    [InlineData("echo ${s#[[:digit:]]}", "Remove($env:s, '[[:digit:]]', $false, $false)")]
+    [InlineData("echo ${s#[!a]}", "Remove($env:s, '[!a]', $false, $false)")]
     public void Transpile_StripGlobBracketExpression_IsTranslatedToARegexClass(string bash, string expectedClass)
         => Assert.Contains(expectedClass, BashTranspiler.Transpile(bash));
 
@@ -1057,7 +1062,7 @@ public class BashTranspilerReviewRegressionTests
 
     [Fact]
     public void Transpile_PatsubWithUnquotedVarBracketClass_UsesTheGlobEngine()
-        => Assert.Contains("BashPattern]::ToRegex(", BashTranspiler.Transpile("p='[z-a]'; t=foo; echo ${t//$p/z}"));
+        => Assert.Contains("Substitute($env:t, ($env:p), 'z', 1)", BashTranspiler.Transpile("p='[z-a]'; t=foo; echo ${t//$p/z}"));
 
     // Oracle: bash expands the text first, then evaluates (`zero=0; echo $(( ${zero}11 ))` is octal 011 = 9).
     [Fact]
@@ -1110,7 +1115,7 @@ public class BashTranspilerReviewRegressionTests
     // Oracle: ${x%$'b'*} removes from the quoted b on — the quoted part is literal, the * still a glob.
     [Fact]
     public void Transpile_PatternStripWithQuotedPartAndGlob_KeepsTheGlob()
-        => Assert.Contains("b.*", BashTranspiler.Transpile("x=abc; echo ${x%$'b'*}"));
+        => Assert.Contains("Remove($env:x, 'b*', $true, $false)", BashTranspiler.Transpile("x=abc; echo ${x%$'b'*}"));
 
     // Oracle: `echo empty=${empty,}` — an unset variable converts to "" (no null-method call) beside a literal prefix.
     [Theory]

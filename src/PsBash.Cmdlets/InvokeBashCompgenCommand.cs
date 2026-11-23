@@ -143,7 +143,7 @@ public sealed class InvokeBashCompgenCommand : BashCmdlet
             if (filter[i] == '\\' && i + 1 < filter.Length && filter[i + 1] == '&') { pat.Append('&'); i++; continue; }
             if (filter[i] == '&')
             {
-                foreach (var ch in word) { if (ch is '*' or '?' or '[' or ']' or '\\' or '(' or ')' or '|' or '@' or '!' or '+') pat.Append('\\'); pat.Append(ch); }
+                pat.Append(PsBash.Core.Parser.BashPattern.EscapeLiteral(word));
                 continue;
             }
             pat.Append(filter[i]);

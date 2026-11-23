@@ -1,7 +1,5 @@
 using System.Collections;
-using System.Collections.Concurrent;
 using System.Management.Automation;
-using System.Text.RegularExpressions;
 using PsBash.Core;
 
 namespace PsBash.Cmdlets;
@@ -49,32 +47,5 @@ public static class BashLocale
         for (int i = 1; i < s.Length; i++)
             if (char.IsLowSurrogate(s[i]) && char.IsHighSurrogate(s[i - 1])) n--;   // a surrogate pair is one character
         return n;
-    }
-
-    private static readonly ConcurrentDictionary<string, Regex> Regexes = new(StringComparer.Ordinal);
-
-    /// <summary>
-    /// <c>${VAR/pat/rep}</c> (<paramref name="count"/> 1) and <c>${VAR//pat/rep}</c> (-1): replace matches of the
-    /// regex <paramref name="pattern"/> (the translated glob) in <paramref name="input"/>; <paramref name="replacement"/>
-    /// is a .NET replacement string. In the C locale the match is done on the bytes: the input, pattern and replacement
-    /// are taken one char per byte (<see cref="RawBytes.ToByteChars"/>) and the result decoded back.
-    /// </summary>
-    public static string Replace(string pattern, string? input, string replacement, int count)
-    {
-        input ??= "";
-        bool bytes = IsByteLocale() && !(System.Text.Ascii.IsValid(input) && System.Text.Ascii.IsValid(pattern));
-        if (bytes)
-        {
-            pattern = RawBytes.ToByteChars(pattern);
-            input = RawBytes.ToByteChars(input);
-            replacement = RawBytes.ToByteChars(replacement);
-        }
-        if (!Regexes.TryGetValue(pattern, out var regex))
-        {
-            if (Regexes.Count > 512) Regexes.Clear();
-            regex = Regexes.GetOrAdd(pattern, static p => new Regex(p));
-        }
-        string result = regex.Replace(input, replacement, count);
-        return bytes ? RawBytes.FromByteChars(result) : result;
     }
 }

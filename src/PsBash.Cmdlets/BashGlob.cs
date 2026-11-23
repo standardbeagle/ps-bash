@@ -9,23 +9,12 @@ namespace PsBash.Cmdlets;
 public static class BashGlobText
 {
     /// <summary>
-    /// Makes <paramref name="literal"/> inert inside a glob pattern: a quoted or escaped <c>* ? [ ] \</c> must
+    /// Makes <paramref name="literal"/> inert inside a glob pattern: a quoted or escaped <c>* ? [ ] \ ( ) |</c> must
     /// match itself (<c>"*"</c>, <c>\*</c>, <c>"$x"</c> where x holds a star), and a quoted <c>]</c> cannot close a
     /// bracket (<c>[a"$x"</c> with x=<c>]</c> stays literal). The pattern dialect is bash's own:
     /// <c>\</c> escapes the next character and <c>/</c> separates components.
     /// </summary>
-    public static string Escape(string? literal)
-    {
-        if (string.IsNullOrEmpty(literal)) return literal ?? string.Empty;
-        if (literal.AsSpan().IndexOfAny("*?[]\\") < 0) return literal;
-        var sb = new StringBuilder(literal.Length + 4);
-        foreach (char c in literal)
-        {
-            if (c is '*' or '?' or '[' or ']' or '\\') sb.Append('\\');
-            sb.Append(c);
-        }
-        return sb.ToString();
-    }
+    public static string Escape(string? literal) => PsBash.Core.Parser.BashPattern.EscapeLiteral(literal);
 }
 
 /// <summary>bash <c>${v@Q}</c>. Emitted PowerShell reaches it as <c>[PsBash.Cmdlets.BashQuoteText]::ForReuse(...)</c>.</summary>
@@ -84,8 +73,9 @@ public static class BashQuoteText
 ///
 /// <para><c>globstar</c>: a <c>**</c> component matches zero or more directory levels (dot-directories only under
 /// <c>dotglob</c>, symlinked directories are not followed); as the last component it matches every file and
-/// directory below. Its results are sorted as a whole, like bash. <c>nocaseglob</c> compares case-insensitively
-/// (ordinal lower-casing). Not implemented: collation order other than ordinal.</para>
+/// directory below, and as the last component before a trailing <c>/</c> every directory below. Its results are sorted as a
+/// whole, like bash. Every component is matched by the one pattern compiler (<c>BashPattern</c>, through
+/// <see cref="LsGlob"/>); <c>nocaseglob</c> folds characters, never a POSIX class (bash 5.2). Not implemented: collation order other than ordinal.</para>
 /// </summary>
 internal static class BashGlob
 {
@@ -174,18 +164,17 @@ internal static class BashGlob
         if (ignore is null) return ExpandCore(pattern, cwd, dotGlob, globStar, noCase, skipDots);
         // GLOBIGNORE set (non-empty): dotfiles become matchable, `.` / `..` never are, and matches equal to an ignore pattern drop out.
         var all = ExpandCore(pattern, cwd, dotGlob: true, globStar, noCase, skipDots);
-        all.RemoveAll(m => { var b = m.TrimEnd('/'); b = b[(b.LastIndexOf('/') + 1)..]; return b is "." or ".." || ignore.Exists(re => re.IsMatch(m)); });
+        all.RemoveAll(m => { var b = m.TrimEnd('/'); b = b[(b.LastIndexOf('/') + 1)..]; return b is "." or ".." || ignore.Exists(p => IsIgnored(m, p)); });
         return all;
     }
 
-    private static List<System.Text.RegularExpressions.Regex>? GlobIgnorePatterns()
+    private static List<string>? GlobIgnorePatterns()
     {
         var v = BashVariableStore.Get("GLOBIGNORE");
         if (string.IsNullOrEmpty(v)) return null;
-        var list = new List<System.Text.RegularExpressions.Regex>();
+        var list = new List<string>();
         var cur = new System.Text.StringBuilder();
-        // bash matches an ignore pattern against the whole result with FNM_PATHNAME: `*.txt` keeps `foo/two.txt`.
-        void Flush() { if (cur.Length > 0) list.Add(new System.Text.RegularExpressions.Regex(PsBash.Core.Parser.BashPattern.ToAnchoredRegex(cur.ToString(), honorQuotes: false, pathname: true), System.Text.RegularExpressions.RegexOptions.Singleline)); cur.Clear(); }
+        void Flush() { if (cur.Length > 0) list.Add(cur.ToString()); cur.Clear(); }
         for (int i = 0; i < v.Length; i++)
         {
             if (v[i] == '\\' && i + 1 < v.Length) { cur.Append(v[i]).Append(v[++i]); continue; }
@@ -197,6 +186,10 @@ internal static class BashGlob
         Flush();
         return list;
     }
+
+    // bash matches an ignore pattern against the whole result with FNM_PATHNAME: `*.txt` keeps `foo/two.txt`.
+    private static bool IsIgnored(string match, string pattern)
+        => BashPatternMatch.Matches(match, pattern, PsBash.Core.Parser.BashPatternOptions.Pathname);
 
     /// <summary>Index of the <c>]</c> closing the bracket expression opened at <paramref name="open"/>; -1 when unclosed.</summary>
     internal static int BracketEnd(string text, int open)
@@ -263,7 +256,13 @@ internal static class BashGlob
             {
                 if (globStar && comp == "**")
                 {
-                    if (last)
+                    if (last && dirOnly)
+                    {
+                        // `a/**/`: `a/` itself, then every directory below, each with the one trailing separator.
+                        if (i > 0) next.Add((pfx[..^1], fsDir));
+                        AddDescendants(pfx, fsDir, dotGlob, includeFiles: false, next, dirSlash: false);
+                    }
+                    else if (last)
                     {
                         if (i > 0) next.Add((pfx, fsDir)); // `a/**` lists `a/` itself first
                         AddDescendants(pfx, fsDir, dotGlob, includeFiles: true, next);
@@ -283,7 +282,7 @@ internal static class BashGlob
 
                 foreach (var name in ListNames(fsDir, withDots: !skipDots && comp.StartsWith('.')))
                 {
-                    if (!MatchComponent(noCase ? comp.ToLowerInvariant() : comp, noCase ? name.ToLowerInvariant() : name, dotGlob)) continue;
+                    if (!LsGlob.Match(comp, name, dotGlob, noCase, extGlob: true)) continue;
                     string full = Path.Combine(fsDir, name);
                     if (!last || dirOnly)
                     {
@@ -308,30 +307,24 @@ internal static class BashGlob
     }
 
     /// <summary>Pre-order walk below <paramref name="fsDir"/> (sorted names): directories, plus files when asked.</summary>
-    private static void AddDescendants(string pfx, string fsDir, bool dotGlob, bool includeFiles, List<(string, string)> sink)
+    /// <param name="dirSlash">A directory is listed with a trailing <c>/</c> (by default when only directories are).</param>
+    private static void AddDescendants(string pfx, string fsDir, bool dotGlob, bool includeFiles, List<(string, string)> sink, bool? dirSlash = null)
     {
+        bool slash = dirSlash ?? !includeFiles;
         foreach (var name in ListNames(fsDir))
         {
             if (!dotGlob && name.StartsWith('.')) continue;
             string full = Path.Combine(fsDir, name);
             bool isDir = SafeDirectoryExists(full) && !IsLink(full);
             if (!isDir && !includeFiles) continue;
-            sink.Add((pfx + name + (includeFiles ? "" : "/"), full));
-            if (isDir) AddDescendants(pfx + name + "/", full, dotGlob, includeFiles, sink);
+            sink.Add((pfx + name + (slash ? "/" : ""), full));
+            if (isDir) AddDescendants(pfx + name + "/", full, dotGlob, includeFiles, sink, dirSlash);
         }
     }
 
     private static bool IsLink(string path)
     {
         try { return new DirectoryInfo(path).LinkTarget is not null; } catch { return false; }
-    }
-
-    /// <summary>One path component against one name; an extglob component (<c>@(a|b)</c>, <c>!(*.h)</c>) goes through <see cref="BashPattern"/>.</summary>
-    private static bool MatchComponent(string comp, string name, bool dotGlob)
-    {
-        if (!PsBash.Core.Parser.BashPattern.HasExtGlob(comp, honorQuotes: false)) return LsGlob.Match(comp, name, dotGlob);
-        if (!dotGlob && name.Length > 0 && name[0] == '.' && !comp.StartsWith('.')) return false;
-        return System.Text.RegularExpressions.Regex.IsMatch(name, PsBash.Core.Parser.BashPattern.ToAnchoredRegex(comp, honorQuotes: false));
     }
 
     private static bool SafeDirectoryExists(string path)
