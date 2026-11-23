@@ -368,7 +368,7 @@ The parser recognizes bash special variables and maps them to PowerShell equival
 | `$-` | `$global:BashFlags` | Shell flags |
 | `$_` | `$global:BashLastArg` | Last argument of previous command |
 | `$RANDOM` | `$(Get-Random -Maximum 32768)` | Random number 0-32767 |
-| `$SECONDS` | `$([math]::Floor(([DateTime]::UtcNow - $global:BashStartTime).TotalSeconds))` | Seconds since shell started |
+| `$SECONDS` | `$([PsBash.Cmdlets.BashRuntime]::Seconds($ExecutionContext.SessionState))` | Whole seconds since the shell started (a host resets the start per command), or since the last assignment plus the value assigned |
 | `$PPID` | `(Get-Process -Id $PID -ErrorAction SilentlyContinue).Parent.Id` | Parent process ID |
 | `$BASH_VERSION` | `$global:BashVersion` | Bash version string |
 | `$BASH_VERSINFO` | `$global:BashVersionInfo` | Bash version array |

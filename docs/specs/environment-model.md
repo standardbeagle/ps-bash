@@ -329,6 +329,9 @@ Behavior: `ShellLanguageGapDifferentialTests.FunctionLocal*`, `FunctionDeclare_*
   `${!ref}` reads both through the same two (psm1 `Get-BashIndirectValue`). `BASH_SUBSHELL` is the depth
   `BashShellState.Save` counts. A computed scalar can be a number, and 0 is false in PowerShell: a colon
   operator (`${SECONDS:+y}`) tests its text (`PsEmitter.IsNumericShellValue`, also `$? $# $$ $!`).
+  `SECONDS` counts from the shell's start: `SdkWorker` resets `$global:BashStartTime` as it seeds each new shell (a
+  host's runspace is warmed long before), and an assignment restarts the count from the value assigned
+  (`BashRuntime.Seconds`; the clock `__BashSecondsClock` is shell state, so `( SECONDS=5 )` stays in the subshell).
 
 Not provided, with reasons: `ShellVariablesGuardTests.NotProvided` (`BASH_ARGC BASH_ARGV BASH_ARGV0 BASH_CMDS
 BASH_COMMAND BASH_EXECUTION_STRING BASH_LOADABLES_PATH HISTCMD _`). Guard: `Core.Tests/ShellVariablesGuardTests`
