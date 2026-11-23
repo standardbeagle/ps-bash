@@ -1198,6 +1198,35 @@ public static class PsBuild
         + assignment + "; " + SetStatus(0) + " } else { " + ShellDiagnosticLine(SingleQuote(written + BadArithSubscriptMessage))
         + "; " + SetStatus(1) + " }";
     /// <summary>
+    /// <c>readonly NAME=VALUE</c>: <paramref name="declaration"/> (mark and assign) unless NAME is read-only already, which
+    /// bash refuses with <c>NAME: readonly variable</c> and status 1 (<see cref="ReadonlyGuardStatus"/>). Decided at run
+    /// time: a name made read-only on one branch only, or in another unit, is known only then.
+    /// </summary>
+    public static string ReadonlyValueGuard(string name, string declaration) =>
+        "if ([PsBash.Cmdlets.BashShellState]::FirstReadonly(" + SingleQuote(name) + ")) { "
+        + ShellDiagnosticLine(SingleQuote(name + ": readonly variable")) + "; $__psbash_rb = 1 } else { " + declaration + " }";
+
+    /// <summary>
+    /// <c>export -f NAME…</c>: each name must be a function now; one that is not is bash's <c>export: NAME: not a
+    /// function</c>, status 1 (the builtin's own failure, which errexit and the ERR trap see).
+    /// </summary>
+    public static string FunctionExportCheck(IEnumerable<string> names)
+    {
+        var sb = new System.Text.StringBuilder(ReadonlyGuardStart);
+        foreach (var name in names)
+            sb.Append("if (-not (Test-Path -LiteralPath ('function:' + ").Append(SingleQuote(name)).Append("))) { ")
+              .Append(ShellDiagnosticLine(SingleQuote("export: " + name + ": not a function"))).Append("; $__psbash_rb = 1 }; ");
+        return sb.Append(ReadonlyGuardStatus(false)).ToString();
+    }
+
+    /// <summary>Starts a <c>readonly</c> command with a <see cref="ReadonlyValueGuard"/>: no name refused yet.</summary>
+    public const string ReadonlyGuardStart = "$__psbash_rb = 0; ";
+
+    /// <summary>The status of a <c>readonly</c> command with a <see cref="ReadonlyValueGuard"/>: 1 when a name was refused.</summary>
+    public static string ReadonlyGuardStatus(bool refusedStatically) =>
+        refusedStatically ? SetStatus(1) : "$global:LASTEXITCODE = $__psbash_rb";
+
+    /// <summary>
     /// A plain assignment to <paramref name="names"/> in a script that made names read-only at run time
     /// (<c>readonly $names</c>, <c>readonly</c> in a function): when one of them is read-only now, report
     /// <c>NAME: readonly variable</c> and set status 1 instead of assigning.
@@ -1315,6 +1344,31 @@ public static class PsBuild
     public static string BareLocal => LocalInFunction(SetStatus(0));
 
     /// <summary>
+    /// Emitted before a <c>return</c> in a function that may set a RETURN trap: the status before the return, which is the
+    /// trap's <c>$?</c> (bash: <c>trap 'echo $?' RETURN; false; return 6</c> prints 1, and the call's status is 6).
+    /// </summary>
+    public const string NotePreReturnStatus = "$__psbash_prs = $global:LASTEXITCODE; ";
+
+    /// <summary>
+    /// A function <paramref name="body"/> that may set a <c>trap … RETURN</c>: the action runs when the function returns
+    /// (then is spent, so a later call does not re-fire it), with <c>$?</c> the status before a <c>return</c>
+    /// (<see cref="NotePreReturnStatus"/>) or else the last command's, and the call's status is put back after it.
+    /// </summary>
+    public static string ReturnTrapScope(string body) =>
+        "$global:__BashTrapRETURN = $null; $__psbash_prs = $null; try { " + body + " } finally { "
+        + "$__psbash_rs = $global:LASTEXITCODE; $__psbash_rt = $global:__BashTrapRETURN; $global:__BashTrapRETURN = $null; "
+        + "try { if ($__psbash_rt) { if ($null -ne $__psbash_prs) { $global:LASTEXITCODE = $__psbash_prs }; & $__psbash_rt } } catch { }; "
+        + "$global:LASTEXITCODE = $__psbash_rs }";
+
+    /// <summary>
+    /// After a declaration builtin whose value ran a command substitution (<c>local x=$(exit 3)</c>,
+    /// <c>export e=$(false)</c>): its status is the builtin's 0, not the substitution's. <c>local</c> outside a function
+    /// keeps the 1 of its refusal (<see cref="LocalInFunction"/>).
+    /// </summary>
+    public static string DeclarationSucceeded(bool local) =>
+        local ? "if ([PsBash.Cmdlets.VarFrameStack]::Current.Depth -ne 0) { " + SetStatus(0) + " }" : SetStatus(0);
+
+    /// <summary>
     /// <paramref name="inFunction"/> when a function is running, else bash's <c>local: can only be used in a function</c>
     /// (status 1), which bash reports before it looks at any option or operand (<c>local -Q</c> at the top level).
     /// </summary>
@@ -1409,6 +1463,17 @@ public static class PsBuild
     public static string InheritErrexitCapture(string statements) =>
         "$__psbash_ie = [PsBash.Cmdlets.InvokeBashShoptCommand]::ShoptOn('inherit_errexit'); if (-not $__psbash_ie) { "
         + ErrexitSuppressVar + "++ }; try { " + statements + " } finally { if (-not $__psbash_ie) { " + ErrexitSuppressVar + "-- } }";
+
+    /// <summary>
+    /// The start of a command substitution's body that runs the ERR trap inside (errtrace, or its own ERR trap): bash
+    /// turns <c>-e</c> off there, unless <c>shopt -s inherit_errexit</c> is on when it runs (<paramref name="inheritable"/>:
+    /// the unit can turn that option on). REGRESSION: with <c>set -E</c> anywhere in the script the substitution always
+    /// dropped <c>-e</c>, so <c>shopt -s inherit_errexit; x=$(false; echo after)</c> captured <c>after</c>.
+    /// </summary>
+    public static string SubstitutionErrexitOff(bool inheritable) =>
+        inheritable
+            ? "if (-not [PsBash.Cmdlets.InvokeBashShoptCommand]::ShoptOn('inherit_errexit')) { $global:__BashErrexit = $false }; "
+            : "$global:__BashErrexit = $false; ";
 
     /// <summary>
     /// The FINAL operand of an <c>&amp;&amp;</c>/<c>||</c> list at statement position: it is NOT
@@ -1823,7 +1888,9 @@ public static class PsBuild
         + "if ($__psbash_eval_depth -ge 5) { throw '" + label + ": nesting depth limit (5) exceeded; possible infinite recursion' }; "
         + "$global:__BashEvalDepth = $__psbash_eval_depth + 1; "
         + "try { " + loopModeSet + RunBashTextAtRunTime(localsArg, label) + " } finally { $global:__BashEvalDepth = $__psbash_eval_depth } "
-        + (returnCheck.Length > 0 ? returnCheck + " " : "") + "}";
+        + (returnCheck.Length > 0 ? returnCheck + " " : "") + "}"
+        // Blank text runs no command: status 0 (`false; e=''; eval "$e"`).
+        + " else { " + SetStatus(0) + " }";
 
     /// <summary>
     /// Transpile the bash text in <c>$__psbash_eval_src</c> as eval text and run it here (Invoke-Expression: the

@@ -716,8 +716,9 @@ public class PsBuildTests
         Assert.Contains("throw 'fc: nesting depth limit (5) exceeded; possible infinite recursion'", ps);
         Assert.Contains("try { " + PsBuild.LoopModeSet(0) + "$__psbash_eval_pwsh = $null; ", ps);
         Assert.Contains("'fc: '", ps);
-        Assert.EndsWith("} finally { $global:__BashEvalDepth = $__psbash_eval_depth } CHECK }", ps);
-        Assert.EndsWith("} finally { $global:__BashEvalDepth = $__psbash_eval_depth } }", PsBuild.RunBashTextCall("eval", "", ", $null", ""));
+        // Blank text runs no command: status 0 (`false; e=''; eval "$e"`).
+        Assert.EndsWith("} finally { $global:__BashEvalDepth = $__psbash_eval_depth } CHECK } else { $global:LASTEXITCODE = 0 }", ps);
+        Assert.EndsWith("} finally { $global:__BashEvalDepth = $__psbash_eval_depth } } else { $global:LASTEXITCODE = 0 }", PsBuild.RunBashTextCall("eval", "", ", $null", ""));
     }
 
     [Theory]

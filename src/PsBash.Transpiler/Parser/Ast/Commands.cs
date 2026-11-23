@@ -82,7 +82,9 @@ public abstract record Command : BashNode
         string? Builtin = null,
         // `declare -g a=(…)` / `readonly a=(…)`: a declaration that is global even when a function runs it (eval text,
         // which cannot know whether one does, keeps any other `declare`'s array local to the running function).
-        bool IsGlobal = false) : Command;
+        bool IsGlobal = false,
+        // `export -f NAME`: the names are functions (one that is not is refused: `export: NAME: not a function`, status 1).
+        bool IsFunctionExport = false) : Command;
 
     /// <summary>
     /// An if/elif/else statement.

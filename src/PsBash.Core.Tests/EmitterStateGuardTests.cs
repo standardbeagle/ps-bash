@@ -38,6 +38,7 @@ public class EmitterStateGuardTests
         ["PsEmitter.InheritedPipefail"] = "input: the running shell's pipefail, set by the caller (RuntimeOptionHints, BashTranspiler) before it transpiles",
         ["PsEmitter.InheritedNounset"] = "input: the running shell's nounset, set by the caller before it transpiles",
         ["PsEmitter.TrapActionSignal"] = "input: the trap whose action is being transpiled (BashTranspiler), read and cleared by Transpile itself",
+        ["PsEmitter.CheckedTrapAction"] = "input: the trap action being transpiled runs under the caller's set -e (BashTranspiler), read and cleared by Transpile itself",
         ["PsEmitter.FusionEnabledOverride"] = "input: the fused-lane switch of the caller (BashTranspiler, tests)",
         ["PsEmitter.EvalLocalNames"] = "input: the locals of the function an eval runs in (BashTranspiler's eval entry)",
         ["PsEmitter._inStdinScope"] = "input: whether the text runs in a stdin scope (BashTranspiler, TranspileWithLauncherStdin)",

@@ -1374,9 +1374,11 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_ScriptEndingInAssignment_EndsWithStatusZero()
     {
         Assert.EndsWith("$env:len = \"0\"; $global:LASTEXITCODE = 0", BashTranspiler.Transpile("nosuchcmd\nlen=0"));
-        // Only the last statement pays for it, and a lone assignment (status 0 already) does not.
-        Assert.DoesNotContain("$env:a = \"1\"; $global:LASTEXITCODE = 0", BashTranspiler.Transpile("a=1\nnosuchcmd"));
-        Assert.Equal("$env:a = \"1\"", BashTranspiler.Transpile("a=1"));
+        // Every assignment sets it, wherever it stands: the status may be read where the text does not show it (a
+        // function's or loop's status is its last command's, `eval "$t"`, a trap). REGRESSION: it was set only when the
+        // script text held `$?`, so `f() { false; x=1; }; f` returned 1.
+        Assert.Contains("$env:a = \"1\"; $global:LASTEXITCODE = 0", BashTranspiler.Transpile("a=1\nnosuchcmd"));
+        Assert.Equal("$env:a = \"1\"; $global:LASTEXITCODE = 0", BashTranspiler.Transpile("a=1"));
     }
 
     // Oracle: `a=(); a[-1]=1` exits 1 ("bad array subscript"). Set-BashElement leaves status 1, which a status of 0

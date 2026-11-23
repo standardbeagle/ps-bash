@@ -60,6 +60,78 @@ public static partial class PsEmitter
     /// <summary><c>set -u</c> / <c>set -o nounset</c> (or a word known only at run time): every expansion is checked.</summary>
     internal static bool CanSetNounset(Command? root) => CanSetShellOption(root, NounsetWord, opaqueText: false);
 
+    /// <summary>
+    /// <c>set -e</c> / <c>set -o errexit</c>, or a word known only at run time (<c>set -$o</c>, <c>set -o $nm</c>,
+    /// <c>c=set; $c -e</c>, <c>eval "$cmd"</c>): the unit gets the errexit statement checks (<see cref="EmitStatement"/>).
+    /// <b>Invariant</b>: errexit is decided once, at run time, by the one check <see cref="PsBuild.ErrexitCheck"/> (the
+    /// flag, the exempt-context counter, the subshell's scoped return); this only decides where that check is emitted,
+    /// so it must say yes wherever the flag could be on. Text known only at run time counts (the checks are inert while
+    /// the flag is off). REGRESSION: a regex over the source text missed <c>set -$o</c>, and the unit's bare
+    /// <c>false</c> then ran its own <c>exit</c>, which knew neither the <c>||</c> that exempted it nor the subshell
+    /// it was in (<c>( set -$o; f || echo caught )</c> ended the whole script).
+    /// </summary>
+    internal static bool CanSetErrexit(Command? root) => CanSetShellOption(root, ErrexitWord, opaqueText: true);
+
+    /// <summary><c>set -E</c> / <c>set -o errtrace</c> (or a word known only at run time).</summary>
+    internal static bool CanSetErrtrace(Command? root) => CanSetShellOption(root, ErrtraceWord, opaqueText: true);
+
+    /// <summary><c>shopt -s inherit_errexit</c> (or a word known only at run time).</summary>
+    internal static bool CanSetInheritErrexit(Command? root) => CanSetShellOption(root, InheritErrexitWord, opaqueText: true);
+
+    private static readonly Func<string, bool> ErrexitWord = v => v == "errexit" || IsShortOptionCluster(v, 'e');
+    private static readonly Func<string, bool> ErrtraceWord = v => v == "errtrace" || IsShortOptionCluster(v, 'E');
+    private static readonly Func<string, bool> InheritErrexitWord = v => v == "inherit_errexit";
+
+    /// <summary>
+    /// True when running <paramref name="root"/> can set an ERR trap: a <c>trap</c> with an <c>ERR</c> operand or an
+    /// operand known only at run time, in the unit, in static eval text or in a trap action, and text known only at
+    /// run time (<c>eval "$cmd"</c>). Like <see cref="CanSetErrexit"/>, it decides only where the checks are emitted.
+    /// </summary>
+    internal static bool CanSetErrTrap(Command? root)
+    {
+        bool can = false;
+        VisitAllCommands(root, c =>
+        {
+            if (can || c is not Command.Simple s || s.Words.IsDefaultOrEmpty) return;
+            string? name = StaticCommandName(s, out int at);
+            if (at >= s.Words.Length) return;
+            switch (name)
+            {
+                case null:
+                    // `$t 'echo E' ERR`: a command named at run time may be trap.
+                    for (int i = at + 1; i < s.Words.Length && !can; i++)
+                        can = TryGetStaticArgValue(s.Words[i]) is { } v && IsErrSignalWord(v);
+                    break;
+                case "trap":
+                    // The action is the first operand; every later one is a signal (or one known only at run time).
+                    bool action = false;
+                    for (int i = at + 1; i < s.Words.Length && !can; i++)
+                    {
+                        string? v = TryGetStaticArgValue(s.Words[i]);
+                        if (v is "--" && !action) continue;
+                        if (v is "-p" or "-l" && !action) return;
+                        if (!action) { action = true; if (v is not null && IsErrSignalWord(v) && s.Words.Length == i + 1) return; continue; }
+                        can = v is null || IsErrSignalWord(v);
+                    }
+                    if (!can && StaticTrapAction(s, at) is { } text) can = ParsedTextMatches(text, CanSetErrTrap);
+                    break;
+                case "eval":
+                    can = StaticEvalText(s, at) is not { } evalText || ParsedTextMatches(evalText, CanSetErrTrap);
+                    break;
+                case "fc":
+                    can = FcRunsText(s.Words.AsSpan().Slice(at + 1));
+                    break;
+                case "source":
+                case ".":
+                    can = true;
+                    break;
+            }
+        });
+        return can;
+    }
+
+    private static bool IsErrSignalWord(string v) => v.Equals("ERR", StringComparison.OrdinalIgnoreCase) || v.Equals("SIGERR", StringComparison.OrdinalIgnoreCase);
+
     private static readonly Func<string, bool> PipefailWord = v => v.Contains("pipefail", StringComparison.Ordinal);
     private static readonly Func<string, bool> XtraceWord = v => v.Contains("xtrace", StringComparison.Ordinal) || IsShortOptionCluster(v, 'x');
     private static readonly Func<string, bool> NounsetWord = v => v.Contains("nounset", StringComparison.Ordinal) || IsShortOptionCluster(v, 'u');
@@ -139,6 +211,11 @@ public static partial class PsEmitter
                 string? prev = null;
                 foreach (var w in args)
                 {
+                    // `set -- "$@"`, `set -- -e`, `set a "$b"`: the words from `--` / `-` or the first operand that is no
+                    // option (and no `-o` name) on are positional parameters, which turn nothing on.
+                    if (name == "set" && TryGetStaticArgValue(w) is { } p
+                        && (p is "--" or "-" || ((p.Length == 0 || p[0] is not ('-' or '+')) && !TakesOptionName(prev))))
+                        return false;
                     if (TryGetStaticArgValue(w) is not { } v) { if (prev != "+o") return true; }
                     else if (prev != "+o" && optionWord(v)) return true;
                     prev = TryGetStaticArgValue(w);
@@ -147,8 +224,19 @@ public static partial class PsEmitter
             case "eval":
                 return StaticEvalText(s, at) is { } text ? ParsedTextMatches(text, judge) : opaqueText;
             case "trap":
-                // `trap 'set -u' EXIT`: the action is shell text run later in this shell.
-                return StaticTrapAction(s, at) is { } action ? ParsedTextMatches(action, judge) : opaqueText && args.Length > 0;
+                // `trap 'set -u' EXIT`: the action is shell text run later in this shell. `trap - DEBUG` / `trap -p`
+                // (every word known now, no action) runs nothing.
+                if (StaticTrapAction(s, at) is { } action) return ParsedTextMatches(action, judge);
+                foreach (var w in args)
+                    if (TryGetStaticArgValue(w) is null) return opaqueText;
+                return false;
+            case "fc":
+                // `fc -s`: the command it re-runs is known only at run time (a listing runs nothing).
+                return opaqueText && FcRunsText(args);
+            case "source":
+            case ".":
+                // The file's text is known only at run time; its `set -e` stays on in this shell.
+                return opaqueText;
             case "alias":
                 foreach (var w in args)
                 {
@@ -161,6 +249,18 @@ public static partial class PsEmitter
                 return functions.Contains(name) && OperandsMayNameOption(args, optionWord);
         }
     }
+
+    /// <summary><c>fc</c> re-runs (or edits and runs) a command unless an option word lists (<c>-l</c>, <c>-ln</c>).</summary>
+    private static bool FcRunsText(ReadOnlySpan<CompoundWord> args)
+    {
+        foreach (var w in args)
+            if (TryGetStaticArgValue(w) is { Length: > 1 } v && v[0] == '-' && v[1] != '-' && v.Contains('l')) return false;
+        return true;
+    }
+
+    /// <summary><c>-o</c> / <c>+o</c> / <c>-eo</c>: the next operand of <c>set</c> is an option name.</summary>
+    private static bool TakesOptionName(string? prev) =>
+        prev is { Length: > 1 } p && p[0] is '-' or '+' && p[1] != '-' && p[^1] == 'o';
 
     /// <summary>
     /// The operands of a call that may run <c>set</c> (<c>run set -o pipefail</c>, <c>c=set; $c -x</c>): one names the

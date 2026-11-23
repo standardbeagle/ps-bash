@@ -684,9 +684,14 @@ public sealed partial class BashParser
             throw new ParseException("syntax error in conditional expression", BashLexer.LineAt(_input, open.Position), 1, "[[");
         // `[` whose last word is not `]` (`[ -n x`, `[ -n x ] y`) is the command `[` called with those arguments: the runtime
         // reports "missing `]'" with status 2, as bash does.
+        // The operator words taken as test operators (`<`, `>`, `<>`) are its arguments then, quoted: bare, they reached
+        // PowerShell as its own redirect operators and the WHOLE script failed to parse (`[ < f` still reports the
+        // missing `]`, status 2; the file is not opened).
         if (!extended && !closed)
             return new Command.Simple(
-                ImmutableArray.Create(new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal("[")))).AddRange(inner.ToImmutable()),
+                ImmutableArray.Create(new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal("["))))
+                    .AddRange(inner.Select(w => w.Parts is [WordPart.Literal { Value: var v }] && v.Length > 0 && v.All(c => c is '<' or '>' or '|' or '&' or '!')
+                        ? new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.SingleQuoted(v))) : w)),
                 ImmutableArray<EnvPair>.Empty, ImmutableArray<Redirect>.Empty,
                 // Its line, as every command's: "missing `]'" names it (s.sh: line 7: [: missing `]').
                 Line: BashLexer.LineAt(_input, open.Position));

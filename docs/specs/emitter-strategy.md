@@ -908,8 +908,16 @@ capture is cheap). Turning an option off (`set +o xtrace`, `+x`) never turns its
 for `grep -c pipefail f && echo y`; a regex for `set -x` missed `c=set; $c -x`. Guards:
 `Core.Tests/PipefailModeEmitterTests`, Differential `PipefailPositionDifferentialTests`,
 `DynamicBuiltinDifferentialTests.XtraceNounset_TurnedOnThroughARunTimeWord`.
-**errexit checks** (`PsEmitter.EmitStatement`, `PsBuild.Errexit*`). Emitted only when the script itself
-contains `set -e`/`-o errexit` (`PsEmitter.EnablesErrexit`); every other script is byte-identical. Each
+**errexit checks** (`PsEmitter.EmitStatement`, `PsBuild.Errexit*`). Emitted only when the unit CAN turn errexit
+on (`PsEmitter.DecideErrexitModes`: `CanSetErrexit` / `CanSetErrTrap` / `CanSetErrtrace` / `CanSetInheritErrexit`,
+the same `CanSetShellOption` predicate on the parsed commands). For errexit the options are "opaque": a word known
+only at run time (`set -$o`, `set -o $nm`), eval / `source` / `.` text, `fc` re-running a line (any `fc` without an
+`l` option) and a run-time command name all count, as their text cannot be judged here; a `trap` with only static
+words and no action (`trap - DEBUG`, `trap -p`) runs nothing. A text scan missed `set -$o` (errexit on, no checks
+emitted). Every unit that cannot is byte-identical to one without checks. Guards: `ErrexitModeEmitterTests`,
+`TranspileModeTextScanGuardTests` (a mode decided by searching the source text must be allow-listed with a reason;
+errexit, ERR, errtrace, inherit_errexit and assignment status may never be). The four modes are independent:
+`inherit_errexit` applies whether or not the unit can also set `-E` (it was ignored beside `set -E`). Each
 command at STATEMENT position (`EmitBody`/`EmitCommandList`: script top level, if/loop/case/function/group/
 subshell bodies) that bash's errexit applies to — a simple command (not a status-neutral builtin such as
 `export`/`local`/`set`), a pipeline (last stage's status), `[ ]`, `(( ))`, a subshell, `X=$(…)` — is followed by
@@ -920,6 +928,32 @@ own failures: if/elif/while/until conditions, non-final `&&`/`||` operands, `!`,
 and process substitutions. An `&&`/`||` list leaves only if its final command ran and failed
 (`$global:__BashErrexitTail`). An untaken `if` and a finished `while`/`until` set status 0, so a function
 ending in one does not leak the failed condition's code to its caller's check.
+
+**Every command sets the status, unconditionally.** The status a command leaves is read as `$?`, as a function's or
+loop's last status, by eval / a trap / a caller's errexit check, so it is never gated on the text holding `$?`:
+- a scalar assignment ends with `$global:LASTEXITCODE = 0` (a `$(…)` in its value leaves that command's status, as
+  bash); an array assignment `if ($?) { $global:LASTEXITCODE = 0 }` (`arr=( $(exit 3) )` is 3); a declaration
+  (`declare -a`, `local`, `export`) is prefixed with `PsBuild.SetStatus(0)` and fails through `ReadonlyGuardStatus`
+  (`export -f nofn` is 1, `PsBuild.FunctionExportCheck`);
+- a function definition is 0 (`FunctionSources.Defined`, the one call every definition makes);
+- blank `eval` is 0; `kill -USR1 $$` sets kill's status before the trap runs; an arithmetic WORD (`$((1+1))`)
+  leaves the status alone, only `(( ))` / `let` set it;
+- `shift` past the end is status 1, reported only under `shopt -s shift_verbose`.
+The status was once reset only when the script's text contained `$?`: `f() { [ -n "" ] || y=def; }; if f` was false.
+Differential: `ErrexitStatusDifferentialTests`.
+
+**A failing builtin is a failing command.** A builtin the emitter writes out as statements (`cd`, `set`, `export`,
+`source`, `fc`, …) gets the same `PsBuild.ErrexitCheck` (and ERR trap) after it as a cmdlet: `cd /nodir` under `set -e`
+ends the shell. A redirect-only command (`x=1 > /nodir/x`, `: 2>/dev/null > /nodir/x`) fails with status 1.
+
+**A statement builtin takes stream redirects as a compound does.** Fed stdin (`<`, `<>`, a here-document, a here-string)
+or with stdout duplicated (`1>&2`), a builtin from `BashBuiltins.RunAsSource` / `CallStackBuiltins` (also through
+`builtin` / `command`; not eval / source / `.`, whose stdin path is their own, not `readarray`, not a redirect-only
+`exec`) has its redirects applied by `ApplyCompoundRedirects` around its statements
+(`PsEmitter.InlineBuiltinStreamRedirects`). Piped into or out of statement text, `true < f`, `cd 1>&2` and
+`return <<< w` were not valid PowerShell and the WHOLE script failed to parse. Guard (every builtin x every redirect
+operator, bare / with an argument / in a pipe / followed by a command): Host.Tests
+`BuiltinRedirectParseabilityTests.Transpile_BuiltinWithAnyRedirectOperator_EmitsParseablePowerShell`.
 
 **A stage inherits `-e`.** A compound or function stage of a pipeline at an armed statement is a subshell that
 inherits `-e`: its statements carry checks, and the stage lifts the pipeline's suppression around them

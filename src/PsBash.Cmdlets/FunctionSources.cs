@@ -33,9 +33,14 @@ public static class FunctionSources
     /// <summary>bash's name for a function read from stdin (a piped script, <c>bash -s</c>, an interactive shell).</summary>
     internal const string Main = "main";
 
-    /// <summary>The definition of <paramref name="name"/> just ran: record where.</summary>
+    /// <summary>
+    /// The definition of <paramref name="name"/> just ran: record where. A definition is a command whose status is 0
+    /// (<c>false; g() { :; }; echo $?</c> prints 0, and a function whose last command is a definition returns 0), so it
+    /// sets that status here, the one place every definition runs.
+    /// </summary>
     public static void Defined(SessionState session, string name)
     {
+        session.PSVariable.Set("global:LASTEXITCODE", 0);
         var files = VarFrameStack.BashSource(session.PSVariable.GetValue("global:BASH_SOURCE"));
         if (Unwrap(session.PSVariable.GetValue("global:" + TableVariable)) is not Hashtable table)
         {

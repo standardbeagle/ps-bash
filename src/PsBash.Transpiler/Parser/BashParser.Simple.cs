@@ -149,7 +149,8 @@ public sealed partial class BashParser
                 Builtin: isLocal ? keyword : null,
                 Redirects: _declRedirects.Count == 0 ? default : [.. _declRedirects],
                 // `export -n NAME` takes the attribute away (-n is no nameref there); `local -x` / `typeset +x` set / clear it.
-                ExportAttr: isLocal ? _declExport : _declSawNameref ? -1 : 0);
+                ExportAttr: isLocal ? _declExport : _declSawNameref ? -1 : 0,
+                IsFunctionExport: !isLocal && _declSawFunction);
 
         // No assignment or name followed — rewind and parse as a normal command
         // so forms like `export -p` still reach the general path.
@@ -546,6 +547,7 @@ public sealed partial class BashParser
     private bool _declSawLower;
     private bool _declSawUpper;
     private bool _declSawGlobal;
+    private bool _declSawFunction;
     /// <summary>Set by <see cref="ParseDeclarationPairs"/>: +1 after a flag with <c>x</c> (<c>-x</c>), -1 after <c>+x</c>, else 0.</summary>
     private int _declExport;
     /// <summary>The redirects <see cref="ParseDeclarationPairs"/> consumed (the builtin's own).</summary>
@@ -656,6 +658,7 @@ public sealed partial class BashParser
         _declSawLower = false;
         _declSawUpper = false;
         _declSawGlobal = false;
+        _declSawFunction = false;
         _declExport = 0;
         _declRedirects.Clear();
         var pairs = ImmutableArray.CreateBuilder<Assignment>();
@@ -697,6 +700,7 @@ public sealed partial class BashParser
                 if (value[1] != '-' && value.Contains('i')) _declSawInteger = true;
                 if (value[1] != '-' && value.Contains('l')) _declSawLower = true;
                 if (value[1] != '-' && value.Contains('u')) _declSawUpper = true;
+                if (value[1] != '-' && value.Contains('f')) _declSawFunction = true;
                 if (value[1] != '-' && value.Contains('x')) _declExport = 1;
                 if (value[1] != '-' && value.Contains('g')) _declSawGlobal = true;
                 Advance();
