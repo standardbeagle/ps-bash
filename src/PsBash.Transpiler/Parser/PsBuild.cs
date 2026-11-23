@@ -968,6 +968,9 @@ public static class PsBuild
         "$(if (" + boolExpr + ") { $global:LASTEXITCODE = 0 } "
         + "else { $global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue })";
 
+    /// <summary>PIPESTATUS of a plain command: its own status, as the one stage it is.</summary>
+    public const string RecordStatusAsPipeStatus = "$global:PIPESTATUS = @([int]$global:LASTEXITCODE)";
+
     /// <summary>bash's <c>!</c>: the status just set, inverted (0 becomes 1, any failure becomes 0).</summary>
     public const string NegateLastStatus = "$global:LASTEXITCODE = if ($global:LASTEXITCODE -eq 0) { 1 } else { 0 }";
 

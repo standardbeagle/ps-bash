@@ -620,13 +620,22 @@ public static partial class PsEmitter
     private static string EmitRecordingStatus(Command cmd)
     {
         string text = Emit(cmd);
-        // An assignment statement is a command too: `x=1; echo ${PIPESTATUS[*]}` is `0` (and `x=$(false)` is 1).
-        if (_pipeStatusMode && cmd is Command.ShAssignment { IsLocal: false, IsExport: false, IsDeclare: false } assign)
-            return text + (ContainsCommandSub(assign) ? "; $global:PIPESTATUS = @([int]$global:LASTEXITCODE)" : "; $global:PIPESTATUS = @(0)");
-        return _pipeStatusMode && cmd is Command.Simple { Words.Length: > 0 }
-            ? text + "; $global:PIPESTATUS = @([int]$global:LASTEXITCODE)"
-            : text;
+        return PipeStatusRecord(cmd) is { } record ? text + "; " + record : text;
     }
+
+    /// <summary>
+    /// The statement that makes PIPESTATUS a plain command's own status, when the script reads PIPESTATUS: after a
+    /// simple command, its status; after an assignment, 0 (or its command substitution's: `x=$(false)` is 1). Null for
+    /// anything else. At statement position (<see cref="EmitRecordingStatus"/>) and inside an <c>&amp;&amp;</c> / <c>||</c>
+    /// operand, so it runs only when the chain runs the command: `cd /nodir &amp;&amp; a | b; echo ${PIPESTATUS[@]}` is `1`.
+    /// </summary>
+    private static string? PipeStatusRecord(Command cmd) => !_pipeStatusMode ? null : cmd switch
+    {
+        Command.ShAssignment { IsLocal: false, IsExport: false, IsDeclare: false } assign
+            => ContainsCommandSub(assign) ? PsBuild.RecordStatusAsPipeStatus : "$global:PIPESTATUS = @(0)",
+        Command.Simple { Words.Length: > 0 } => PsBuild.RecordStatusAsPipeStatus,
+        _ => null,
+    };
 
     /// <summary>
     /// The <c>+ cmd args</c> line <c>set -x</c> prints before a command, as a call that checks the flag at run time.
@@ -13213,6 +13222,7 @@ public static partial class PsEmitter
             else if (cmd is Command.ShAssignment shAssign)
             {
                 var assignText = Emit(cmd);
+                if (PipeStatusRecord(cmd) is { } assignRecord) assignText += "; " + assignRecord;
                 sb.Append(PsBuild.VoidStatement(assignText));
                 // `r=$(false) || echo fb`: the assignment's status is its command substitution's, which `||` only sees
                 // once bridged from LASTEXITCODE to $? (a plain `x=1` is always 0).
@@ -13247,6 +13257,8 @@ public static partial class PsEmitter
                 // such as assignments plus if/else blocks. Pipeline-chain operators
                 // require a pipeline operand, so wrap only those statement rewrites.
                 var simpleText = EmitSimpleFed(simple);
+                // Recorded inside the operand (a statement list, so it goes in `$( )`): only when the chain runs it.
+                if (PipeStatusRecord(simple) is { } simpleRecord) simpleText += "; " + simpleRecord;
                 sb.Append(!inOperandBlock && NeedsChainOperandSubexpression(simpleText) ? $"$({simpleText})" : simpleText);
                 // `&&`/`||` test PowerShell's $?, which a bash function's `return 3` (or a cmdlet
                 // that sets only the exit code) leaves true — `f || echo fb` never fell back.
@@ -13310,9 +13322,9 @@ public static partial class PsEmitter
     }
 
     /// <summary>
-    /// A simple or compound operand goes in <c>$( â€¦ )</c> when it is no pipeline (<see cref="PsBuild.IsPipelineChainOperand"/>:
+    /// A simple or compound operand goes in <c>$( … )</c> when it is no pipeline (<see cref="PsBuild.IsPipelineChainOperand"/>:
     /// <c>cd x &amp;&amp; set -- a b</c> was "Unexpected token '='" for the whole script), and, as these operands always
-    /// were, when it has a <c>;</c> anywhere outside a lone <c>$( â€¦ )</c>.
+    /// were, when it has a <c>;</c> anywhere outside a lone <c>$( … )</c>.
     /// </summary>
     private static bool NeedsChainOperandSubexpression(string emitted) =>
         !PsBuild.IsPipelineChainOperand(emitted)

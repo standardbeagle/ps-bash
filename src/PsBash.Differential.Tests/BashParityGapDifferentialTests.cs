@@ -115,6 +115,17 @@ public class BashParityGapDifferentialTests
                 + "true && false | true; echo st=$? \"${PIPESTATUS[@]}\"; ! echo d | cat && echo no2; echo st=$?; "
                 + "true && echo e | false || echo f | cat; echo st=$?");
 
+    // REGRESSION: a pipeline whose statuses are read (PIPESTATUS) after `cd x &&` was a PowerShell parse error for the
+    // whole line (`… && $__pf = [int[]]…`, "Unexpected token '='"); seen as `cd d && py 2>&1 | sed -n '…'; echo "EXIT
+    // ${PIPESTATUS[0]}"` in the Bash tool. PIPESTATUS is the pipeline's when it ran, and the last command's that did when it did not
+    // (a plain operand never recorded its own, so the failed cd left the previous line's).
+    [SkippableFact] public Task Pipestatus_PipelineAfterCdAndAnd()
+        => Recorded("cd / && printf 'a\\nb\\nc\\n' 2>&1 | sed -n '1p;/c/,/^z/p'; echo \"EXIT ${PIPESTATUS[0]} ${PIPESTATUS[1]} $?\"; "
+                + "cd / && (exit 3) | cat; echo \"EXIT ${PIPESTATUS[0]} ${PIPESTATUS[1]}\"; "
+                + "cd /nodir-psb 2>/dev/null && echo a | cat; echo \"st=$? ${PIPESTATUS[@]}\"; "
+                + "false || (exit 4) | (exit 5); echo \"st=$? ${PIPESTATUS[@]}\"; "
+                + "true | true && false; echo \"st=$? ${PIPESTATUS[@]}\"; false || x=1; echo \"st=$? ${PIPESTATUS[@]}\"");
+
     // REGRESSION: a `!` operand of `&&` / `||` flipped the status even when the chain skipped it (`false && ! true &&
     // echo no` printed no), and `true && ! x=1` was a PowerShell parse error for the whole line.
     [SkippableFact] public Task Negation_AsAndOrOperand_FlipsOnlyWhenItRuns()

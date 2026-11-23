@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 409
+stdout-length: 54
+stderr-length: 0
+==== SCRIPT ====
+cd / && printf 'a\nb\nc\n' 2>&1 | sed -n '1p;/c/,/^z/p'; echo "EXIT ${PIPESTATUS[0]} ${PIPESTATUS[1]} $?"; cd / && (exit 3) | cat; echo "EXIT ${PIPESTATUS[0]} ${PIPESTATUS[1]}"; cd /nodir-psb 2>/dev/null && echo a | cat; echo "st=$? ${PIPESTATUS[@]}"; false || (exit 4) | (exit 5); echo "st=$? ${PIPESTATUS[@]}"; true | true && false; echo "st=$? ${PIPESTATUS[@]}"; false || x=1; echo "st=$? ${PIPESTATUS[@]}"
+==== STDOUT ====
+a
+c
+EXIT 0 0 0
+EXIT 3 0
+st=1 1
+st=5 4 5
+st=1 1
+st=0 0
+
+==== STDERR ====
+
