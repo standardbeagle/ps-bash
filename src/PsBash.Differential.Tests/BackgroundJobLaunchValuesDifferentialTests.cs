@@ -68,4 +68,15 @@ public class BackgroundJobLaunchValuesDifferentialTests
     [InlineData("printf '1\\n2\\n' | while read -r v; do { v=x$v; echo \"$v\"; } & wait; done")]
     [InlineData("for i in 1; do { unset i; echo \"[${i-unset}]\"; } & wait; done")]
     public Task AJobsOwnAssignment_ReachesItsLaterReads(string script) => Eq(script);
+
+    // Jobs that only write variables run in-process (PsEmitter.JobNeedsOwnProcess, background-jobs.md section 12.6): a
+    // loop variable, an assigning expansion, an arithmetic command, an array append and an env prefix stay in the job.
+    [SkippableTheory]
+    [InlineData("for i in 1 2 3; do last=$i; echo \"job $i\"; done & wait; echo \"shell i=${i-unset} last=${last-unset}\"")]
+    [InlineData("for ((k = 0; k < 2; k++)); do echo \"job $k\"; done & wait; echo \"shell k=${k-unset}\"")]
+    [InlineData("echo \"job ${bar=2}\" & wait; echo \"shell bar=${bar-unset}\"")]
+    [InlineData("n=1; (( n += 5 )) & wait; echo \"shell n=$n\"")]
+    [InlineData("a=(1 2); { a+=(3); echo \"job ${#a[@]}\"; } & wait; echo \"shell ${#a[@]}\"")]
+    [InlineData("FOO=job sh -c 'echo \"child FOO=$FOO\"' & wait; echo \"shell FOO=${FOO-unset}\"")]
+    public Task AnInProcessJobsWrites_StayInTheJob(string script) => Eq(script);
 }

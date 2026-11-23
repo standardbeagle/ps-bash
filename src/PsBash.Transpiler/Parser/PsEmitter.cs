@@ -3578,9 +3578,9 @@ public static partial class PsEmitter
         if (outerCapture is not null)
             foreach (var v in captured)
                 if (outerCapture.ContainsKey(v)) outerCaptureUsed!.Add(v);
-        // A job that can change shell state (variables, cwd, options, functions) must not share this
-        // process's environment and cwd: it runs in a host of its own (-Isolated). A job that only runs
-        // programs keeps the cheap in-process path, whose text is unchanged.
+        // A job that can change what an in-process job shares with the shell (cwd, the readonly/attribute tables,
+        // options, ...) runs in a host of its own (-Isolated, JobNeedsOwnProcess). A job that only runs programs or
+        // writes scalars and arrays (its own copy, ScalarOverlay) keeps the in-process path, whose text is unchanged.
         string vars = captured.Count == 0 || capture is null
             ? ""
             : " -Vars @{ " + string.Join("; ", captured.Order(StringComparer.Ordinal).Select(v => $"{PsBuild.SingleQuote(v)} = {capture[v]}")) + " }";
@@ -3588,7 +3588,7 @@ public static partial class PsEmitter
         string live = _liveJobs is not null && _liveJobs.Contains(bg) ? " -Live" : "";
         // The job's command as written: `fg` prints it when it brings the job back (PsBuild.JobText).
         string text = PsBuild.JobText(bg.Source);
-        return MayMutateShellState(bg.Inner)
+        return JobNeedsOwnProcess(bg.Inner)
             ? $"Invoke-BashBackground -Isolated{live}{vars} {{ {inner} }}{text}"
             : $"Invoke-BashBackground{live}{vars} {{ {inner} }}{text}";
     }
@@ -3626,30 +3626,6 @@ public static partial class PsEmitter
 
     // Function names defined so far in the unit being emitted: calling one can do anything.
     [ThreadStatic] private static HashSet<string>? _unitFunctions;
-
-    /// <summary>True when running <paramref name="cmd"/> could change variables, cwd, options or functions of the shell.</summary>
-    private static bool MayMutateShellState(Command cmd) => cmd switch
-    {
-        Command.Simple s => !s.EnvPairs.IsEmpty
-            || s.Words.IsDefaultOrEmpty
-            || GetLiteralValue(s.Words[0]) is not { } name
-            || _stateBuiltins.Contains(name)
-            || (_unitFunctions?.Contains(name) ?? false)
-            // `echo ${bar=2} &`: expanding a word assigns (the job's copy only, in bash).
-            || s.Words.Any(MutatesShellState),
-        Command.Pipeline p => p.Commands.Any(MayMutateShellState),
-        Command.AndOrList a => a.Commands.Any(MayMutateShellState),
-        Command.CommandList l => l.Commands.Any(MayMutateShellState),
-        Command.If i => i.Arms.Any(arm => MayMutateShellState(arm.Cond) || MayMutateShellState(arm.Body))
-            || (i.ElseBody is not null && MayMutateShellState(i.ElseBody)),
-        Command.While w => MayMutateShellState(w.Cond) || MayMutateShellState(w.Body),
-        Command.Case c => c.Arms.Any(arm => MayMutateShellState(arm.Body)),
-        Command.Subshell sub => MayMutateShellState(sub.Body),
-        Command.BraceGroup bg => MayMutateShellState(bg.Body),
-        Command.BoolExpr => false,
-        // Assignments, loops (they set their variable), (( )), functions, select, anything new: assume it can.
-        _ => true,
-    };
 
     /// <summary>
     /// Standalone <c>(( expr ))</c> statement. Bash evaluates the expression for

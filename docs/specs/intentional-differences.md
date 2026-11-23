@@ -162,7 +162,7 @@ subshell it ends only the subshell (status 1), as bash does.
 
 `xargs -P N` is accepted but runs serially (one single-threaded runspace), so output order equals input order. `xargs -p` runs nothing when there is no `/dev/tty` to confirm on, as GNU does.
 
-A background job (`cmd &`) runs in-process unless it can change shell state (assignments, `cd`, state builtins, functions, loops). Those get `Invoke-BashBackground -Isolated`, which uses a private host process so the job cannot alter the parent's variables or cwd. `PSBASH_BG_MODE=inproc|process` overrides the choice.
+A background job (`cmd &`) runs in-process unless it can change something an in-process job shares with the shell: the working directory (`cd`, also inside `$( )`), the readonly/attribute/nameref tables (`readonly`, `declare`, `typeset`, `local`), `PATH` (program lookup), the other state builtins, `eval`/`source`, or a function of the script. Those get `Invoke-BashBackground -Isolated`, which uses a private host process (seconds to start on Windows). Assignments, loops and `${x=..}` stay in-process: the job's variables are its own copy (background-jobs.md §3, §12.6). `PSBASH_BG_MODE=inproc|process` overrides the choice.
 
 A job's output streams live when the job's stdout is the shell's own. In these cases it is still collected and printed at `wait` (or at exit), in one piece:
 

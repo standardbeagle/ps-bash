@@ -770,6 +770,45 @@ idle and asserts:
 `ConnectionJobRunspaceWarmTests` pins which commands warm the runspaces. `BackgroundJobPoolLifetimeTests`
 covers teardown. `BackgroundJobPoolTests` covers the execution policy of a job runspace.
 
+### 12.6 Which jobs need a host process of their own (`PsEmitter.JobNeedsOwnProcess`)
+
+An `-Isolated` job runs in a `ps-bash-host` of its own (§11, `JobHostSpares`). On Windows that host's start (process,
+runspace, psm1) takes seconds, and the spares started when the command begins are not ready for a job reached in its
+first seconds. A job runspace (§12.5) starts in milliseconds.
+
+**Invariant: a job goes to a host process only when it can change something an in-process job shares with the
+shell.** That is:
+- the working directory, which is the process's (`cd`, `pushd`, `popd`, also inside a `$( )` or `<( )` of the job);
+- the readonly, attribute and nameref tables, which are process-wide statics (`readonly`, `declare`, `typeset`,
+  `local`);
+- the program lookup, which reads the process `PATH` (§3, not covered);
+- the other state builtins (`set`, `shopt`, `trap`, `exec`, `umask`, `read`, ...), `eval` and `source` text, a command
+  named by an expansion, a function of the unit (a job runspace has no copy of the shell's functions), a function
+  definition, `select`, a job in a job.
+
+Writing a scalar or an array is not on the list. An in-process job's scalars are its own copy (§3, `ScalarOverlay`)
+and its arrays are globals of its own runspace, so an assignment, `FOO=1 prog`, a loop variable, `${x=1}`,
+`$((n++))`, `(( ))` and `let` stay in-process. The classifier was written before that copy existed (it isolated
+assignments, loops and assigning expansions) and was not narrowed when the copy arrived.
+
+**Measured** (beagle-ab, Windows, idle, `tman dev`, so the host is fresh per run; `&` → next statement, from
+`$EPOCHREALTIME`):
+
+| Job | Before | After |
+|---|---|---|
+| `echo a &` (first job: a job runspace opens) | 587 ms | 362 ms |
+| `for i in 1 2 3; do echo $i; sleep 0.0$i; done &` | 4751 ms (a job host spawned: the spare was still starting) | 18 ms |
+| `echo ${bar=2} &` | 20 ms, then 440 ms to finish (the spare job host) | 7 ms, 31 ms to finish |
+| `{ echo x; } &` | 4 ms | 4 ms |
+| the whole probe (7 jobs, each waited for) | 7.2 s | 1.0 s |
+
+Two oils `background.spec.sh` cases had passed the spec runner's 30 s case limit under gate load because of the
+job-host start. The `bgtime.sh` probe that reported 8 s for `{ echo x; } &` measured with `SECONDS=0`, which ps-bash
+ignores (`$SECONDS` counts from the shell's start): the 8 s was the earlier `for` job's.
+
+Guards: `JobProcessChoiceEmitterTests` (Core.Tests: which jobs are `-Isolated`, with the reason for each); bash
+behaviour of the newly in-process forms: `BackgroundJobLaunchValuesDifferentialTests.AnInProcessJobsWrites_StayInTheJob`.
+
 ## 13. A signal sent to a ps-bash shell
 
 `$$` is the pid of the host process that runs the script. A host runs one command at a time (the executor lease),

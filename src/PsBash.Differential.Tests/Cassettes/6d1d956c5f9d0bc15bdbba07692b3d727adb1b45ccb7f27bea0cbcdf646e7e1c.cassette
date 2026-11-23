@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 57
+stdout-length: 22
+stderr-length: 0
+==== SCRIPT ====
+echo "job ${bar=2}" & wait; echo "shell bar=${bar-unset}"
+==== STDOUT ====
+job 2
+shell bar=unset
+
+==== STDERR ====
+

@@ -7775,20 +7775,6 @@ public class PsEmitterTests
     public void Transpile_EnvPrefixNotReadByTheCommand_KeepsTheOriginalText()
         => Assert.DoesNotContain("__psbash_ea_", PsEmitter.Transpile("x=1 env"));
 
-    [Theory]
-    [InlineData("sleep 1 &", false)]
-    [InlineData("make all &", false)]
-    [InlineData("{ cat f | wc -l; } &", false)]
-    [InlineData("x=1 &", true)]
-    [InlineData("{ x=1; sleep 1; } &", true)]
-    [InlineData("cd other &", true)]
-    [InlineData("(cd other && make) &", true)]
-    [InlineData("FOO=1 prog &", true)]
-    [InlineData("f() { :; }; f &", true)]
-    [InlineData("for i in 1 2; do echo $i; done &", true)]
-    public void Transpile_Background_IsolatedOnlyWhenItCanChangeShellState(string bash, bool isolated)
-        => Assert.Equal(isolated, PsEmitter.Transpile(bash)!.Contains("Invoke-BashBackground -Isolated"));
-
     [Fact]
     public void Transpile_SetPlusOXtrace_TurnsTracingOffAndClearsTheFlag()
         => Assert.Equal("Set-PSDebug -Off; $global:__BashXtrace = $false", PsEmitter.Transpile("set +o xtrace"));
