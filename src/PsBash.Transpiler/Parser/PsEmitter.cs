@@ -1299,18 +1299,6 @@ public static partial class PsEmitter
             ? OpensFile(simple.Redirects)
             : !(GetLiteralValue(simple.Words[0]) is { } name && ErrexitNeutralBuiltins.Contains(name)) || OpensFile(simple.Redirects);
 
-    /// <summary>A redirection that opens a file by name (not <c>/dev/null</c>, a descriptor, a here-document or <c>{name}</c>).</summary>
-    private static bool OpensFile(ImmutableArray<Redirect> redirects)
-    {
-        if (redirects.IsDefaultOrEmpty) return false;
-        foreach (var r in redirects)
-        {
-            if (r.Here is not null || r.FdVar is not null || r.Op is not (">" or ">>" or ">|" or "&>" or "&>>" or "<")) continue;
-            if (GetLiteralValue(r.Target) != DevicePath.Null) return true;
-        }
-        return false;
-    }
-
     private static bool ContainsCommandSub(Command.ShAssignment assign)
     {
         foreach (var pair in assign.Pairs)
