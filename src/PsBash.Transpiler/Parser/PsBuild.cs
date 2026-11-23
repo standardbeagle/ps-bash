@@ -968,6 +968,36 @@ public static class PsBuild
         "$(if (" + boolExpr + ") { $global:LASTEXITCODE = 0 } "
         + "else { $global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue })";
 
+    /// <summary>bash's <c>!</c>: the status just set, inverted (0 becomes 1, any failure becomes 0).</summary>
+    public const string NegateLastStatus = "$global:LASTEXITCODE = if ($global:LASTEXITCODE -eq 0) { 1 } else { 0 }";
+
+    /// <summary>
+    /// True when emitted text can be an operand of PowerShell's <c>&amp;&amp;</c> / <c>||</c> as it is: ONE pipeline.
+    /// The chain takes only pipelines, so a statement list (only its first statement would join the chain), an
+    /// assignment (<c>$x = …</c>: "Unexpected token '='" for the WHOLE script) or a keyword statement (<c>if</c>,
+    /// <c>foreach</c>, <c>try</c>, …: a parse error, or a call to a command of that name) is no operand and goes in
+    /// <c>$( … )</c>. Flow statements (<c>return</c>, <c>exit</c>, <c>throw</c>, <c>break</c>, <c>continue</c>) are
+    /// valid operands. The ONE test for every operand the chain emitter appends: each construct that came to emit a
+    /// leading assignment (<c>time</c>'s timer, PIPESTATUS's slots, <c>set --</c>, <c>! x=1</c>) broke the chain until
+    /// its own branch learned the rule.
+    /// </summary>
+    public static bool IsPipelineChainOperand(string psText) =>
+        !IsStatementList(psText) && !LeadingStatement.IsMatch(psText);
+
+    /// <summary>An assignment (<c>$x = </c>, <c>$global:a[0] += </c>, <c>${x} = </c>) or a keyword statement at the start.</summary>
+    private static readonly System.Text.RegularExpressions.Regex LeadingStatement = new(
+        @"^(?:\$(?:\{[^}]*\}|[\w:]+)(?:\[[^\]]*\])?(?:\.\w+)*\s*[-+*/%]?=(?!=)"
+        + @"|(?:if|switch|foreach|for|while|do|try|trap|function|filter|data|class|enum|using)(?=[\s({]|$))",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// A <c>!</c> pipeline as an <c>&amp;&amp;</c> / <c>||</c> operand: the pipeline and the inversion of its status
+    /// in ONE operand, so the inversion runs only when the chain runs the pipeline. REGRESSION: the inversion followed
+    /// the operand as a statement of its own, so it ran after a skipped operand too (<c>false &amp;&amp; ! true &amp;&amp;
+    /// echo no</c> printed no), and <c>true &amp;&amp; ! x=1</c> left the assignment bare after the operator.
+    /// </summary>
+    public static string NegatedChainOperand(string pipelineText) => Subexpr(pipelineText + "; " + NegateLastStatus);
+
     /// <summary>
     /// Bridge a plain pipeline's <c>$global:LASTEXITCODE</c> to <c>$?</c> WITHOUT
     /// re-running or suppressing it: emit the pipeline as a statement, then append this

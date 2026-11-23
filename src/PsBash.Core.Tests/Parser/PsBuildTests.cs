@@ -326,6 +326,49 @@ public class PsBuildTests
         Assert.True(PsBuild.IsStatementList("Invoke-BashEcho 'a;b'; cmd2"));
     }
 
+    // ─────────────── IsPipelineChainOperand ───────────────
+    //
+    // Decides whether emitted text may stand bare after PowerShell's && / ||. A false POSITIVE is "Unexpected token
+    // '='" (or a call to a command named `if`) for the whole script; a false negative only costs a `$( )` wrap.
+    // PowerShell's own parser accepts flow statements there, and nothing that starts with an assignment (Host.Tests
+    // ChainOperandParseabilityTests checks the classification against the parser).
+
+    [Theory]
+    [InlineData("Invoke-BashCat f")]
+    [InlineData("Invoke-BashGrep a b | Invoke-BashHead -1")]
+    [InlineData(". { $__pf = [int[]]::new(2); a; b }")]
+    [InlineData("$(cmd1; cmd2)")]
+    [InlineData("[void]$($x = 1)")]
+    [InlineData("$x -eq 1")]
+    [InlineData("$x | Invoke-BashCat")]
+    [InlineData("iffy-command a")]
+    [InlineData("format-table")]
+    [InlineData("return 3")]
+    [InlineData("exit 1")]
+    [InlineData("throw 'x'")]
+    [InlineData("break")]
+    public void IsPipelineChainOperand_OnePipeline_True(string text)
+        => Assert.True(PsBuild.IsPipelineChainOperand(text), text);
+
+    [Theory]
+    [InlineData("$__psbash_time0 = [PsBash.Cmdlets.BashTimeKeyword]::Start(); try { a } finally { b }")]
+    [InlineData("$__pf = [int[]]::new(2); a; b")]
+    [InlineData("$global:BashPositional = @('a', 'b')")]
+    [InlineData("$env:x = '1'")]
+    [InlineData("$x=1")]
+    [InlineData("${x} = 1")]
+    [InlineData("$global:a[0] = 1")]
+    [InlineData("$x.y = 1")]
+    [InlineData("$n += 1")]
+    [InlineData("if ($x) { a }")]
+    [InlineData("foreach ($i in @(1)) { a }")]
+    [InlineData("switch ($x) { 'a' { b } }")]
+    [InlineData("try { a } finally { b }")]
+    [InlineData("while ($true) { break }")]
+    [InlineData("a; b")]
+    public void IsPipelineChainOperand_Statement_False(string text)
+        => Assert.False(PsBuild.IsPipelineChainOperand(text), text);
+
     [Fact]
     public void IsStatementList_EscapedQuoteInsideDoubleQuotes_DoesNotEndTheString()
     {

@@ -114,4 +114,11 @@ public class BashParityGapDifferentialTests
         => Recorded("set -o pipefail; true && echo a | cat; false || echo b | cat; echo c | false && echo no; echo st=$?; "
                 + "true && false | true; echo st=$? \"${PIPESTATUS[@]}\"; ! echo d | cat && echo no2; echo st=$?; "
                 + "true && echo e | false || echo f | cat; echo st=$?");
+
+    // REGRESSION: a `!` operand of `&&` / `||` flipped the status even when the chain skipped it (`false && ! true &&
+    // echo no` printed no), and `true && ! x=1` was a PowerShell parse error for the whole line.
+    [SkippableFact] public Task Negation_AsAndOrOperand_FlipsOnlyWhenItRuns()
+        => Recorded("false && ! true && echo no1; echo st=$?; false && ! true; echo st=$?; true || ! false; echo st=$?; "
+                + "true || ! false || echo no4; echo st=$?; false && ! echo no5; echo st=$?; "
+                + "true && ! x=1; echo \"st=$? x=$x\"; ! false && ! true || echo fb; echo st=$?");
 }

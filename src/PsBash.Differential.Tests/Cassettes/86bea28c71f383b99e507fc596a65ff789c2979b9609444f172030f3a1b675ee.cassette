@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 247
+stdout-length: 42
+stderr-length: 0
+==== SCRIPT ====
+false && ! true && echo no1; echo st=$?; false && ! true; echo st=$?; true || ! false; echo st=$?; true || ! false || echo no4; echo st=$?; false && ! echo no5; echo st=$?; true && ! x=1; echo "st=$? x=$x"; ! false && ! true || echo fb; echo st=$?
+==== STDOUT ====
+st=1
+st=1
+st=0
+st=0
+st=1
+st=1 x=1
+fb
+st=0
+
+==== STDERR ====
+

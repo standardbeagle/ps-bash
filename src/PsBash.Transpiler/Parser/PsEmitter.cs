@@ -13221,13 +13221,11 @@ public static partial class PsEmitter
             }
             else if (cmd is Command.Pipeline { Negated: true } negPipelineInChain)
             {
-                // Negated pipeline (! cmd) in && / || chain: mirror the BoolExpr-in-chain
-                // pattern. PS pipeline-chain operators check $?, not $LASTEXITCODE.
-                // Use Write-Error to set $?=false when negation yields failure so the
-                // chain operators observe the correct success/failure state.
+                // Negated pipeline (! cmd) in && / || chain: the pipeline and the inversion of its status are ONE operand
+                // (the inversion must not run when the chain skips the pipeline), then the status is bridged to $? as
+                // for any pipeline. The command's own output still reaches stdout (`! echo hi || .` prints hi).
                 var unnegated = negPipelineInChain with { Negated = false };
-                // The command's own output must still reach stdout (`! echo hi || .` prints hi): run it as a statement, then invert its status.
-                sb.Append(ChainPipelineOperand(EmitPipeline(unnegated)) + "; " + PsBuild.SetExitFromBool("$global:LASTEXITCODE -ne 0"));
+                sb.Append(PsBuild.NegatedChainOperand(EmitPipeline(unnegated)) + "; " + PsBuild.SignalFailIfNonZero());
             }
             else if (cmd is Command.Pipeline pipeline)
             {
@@ -13311,28 +13309,23 @@ public static partial class PsEmitter
         return sb.ToString();
     }
 
-    private static bool NeedsChainOperandSubexpression(string emitted)
-    {
-        if (emitted.StartsWith("$(", StringComparison.Ordinal))
-            return false;
-
-        // A lone assignment statement (`set -- a b` is `$global:BashPositional = @('a', 'b')`) is no pipeline either:
-        // `cd x && set -- a b` was "Unexpected token '='", a parse error for the whole script.
-        return emitted.Contains(';') || emitted.StartsWith("if ", StringComparison.Ordinal)
-            || ChainOperandAssignment.IsMatch(emitted);
-    }
+    /// <summary>
+    /// A simple or compound operand goes in <c>$( â€¦ )</c> when it is no pipeline (<see cref="PsBuild.IsPipelineChainOperand"/>:
+    /// <c>cd x &amp;&amp; set -- a b</c> was "Unexpected token '='" for the whole script), and, as these operands always
+    /// were, when it has a <c>;</c> anywhere outside a lone <c>$( â€¦ )</c>.
+    /// </summary>
+    private static bool NeedsChainOperandSubexpression(string emitted) =>
+        !PsBuild.IsPipelineChainOperand(emitted)
+        || (emitted.Contains(';') && !emitted.StartsWith("$(", StringComparison.Ordinal));
 
     /// <summary>
     /// A pipeline as an <c>&amp;&amp;</c> / <c>||</c> operand. A pipeline usually emits ONE PowerShell pipeline, which
     /// stays bare so it keeps streaming; under pipefail it is still one element (<see cref="PsBuild.PipefailPipeline"/>).
-    /// A statement list (a negated pipeline: the status flip follows it) bare would make only its first statement the
-    /// chain's operand, so it is wrapped in <c>$( ... )</c> like a compound operand (current scope). Test:
-    /// <see cref="PsBuild.IsStatementList"/> (quote/nesting aware), not a raw <c>;</c>, which every script block has.
+    /// Anything else (<c>time</c>'s timer statements, a lone assignment) is wrapped in <c>$( ... )</c> like a compound
+    /// operand (current scope): <see cref="PsBuild.IsPipelineChainOperand"/>.
     /// </summary>
     private static string ChainPipelineOperand(string pipelineText)
-        => PsBuild.IsStatementList(pipelineText) ? PsBuild.Subexpr(pipelineText) : pipelineText;
-
-    private static readonly System.Text.RegularExpressions.Regex ChainOperandAssignment = new(@"^\$[A-Za-z_][\w:]*\s*=(?!=)", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        => PsBuild.IsPipelineChainOperand(pipelineText) ? pipelineText : PsBuild.Subexpr(pipelineText);
 
     /// <summary>
     /// A SIMPLE command can still emit a PowerShell statement LIST — the runtime-`eval`
@@ -13722,7 +13715,7 @@ public static partial class PsEmitter
             // Using $global:LASTEXITCODE (not PowerShell's $?) ensures we check the bash
             // exit code set by the runtime (e.g. Invoke-BashGrep sets it to 1 on no-match)
             // rather than PowerShell's own cmdlet-success flag.
-            body += "; $global:LASTEXITCODE = if ($global:LASTEXITCODE -eq 0) { 1 } else { 0 }";
+            body += "; " + PsBuild.NegateLastStatus;
 
         return body;
     }
