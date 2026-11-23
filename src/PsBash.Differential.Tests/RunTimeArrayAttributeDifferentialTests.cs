@@ -63,6 +63,55 @@ public class RunTimeArrayAttributeDifferentialTests
         + "xu(){ eval 'declare -u xv'; xv=ab; export xv; xv+=cd; echo \"$xv\"; env | grep '^xv='; }; xu\n"
         + "dz=1; $d dq; x=$(false); echo \"s1=$?\"; y=ok; echo \"s2=$?\"; false; z=1; echo \"s3=$?\"\n");
 
+    // A write after a run-time array declaration, in the same eval text: the declaration made the array the running
+    // function's local, so `+=`, `[k]=`, `unset`, `read -a` and `mapfile` reach that local, and nothing is left after the
+    // call. REGRESSION: the declaration was the local, the writes after it went to a global. Primitive: the eval text's
+    // array write target is VarFrameStack.ArraySlot (resolved when it runs).
+    [SkippableFact]
+    public Task RunTimeArrayLocals_LaterWritesInTheSameEvalText_AreTheLocal() => Same(
+        "f(){ eval \"$1\"; }\n"
+        + "f 'local -a a=(1 2); a+=(3); declare -A m; m[k]=v; echo \"${a[*]} ${m[k]}\"'; echo \"[${a[*]}][${m[k]}]\"\n"
+        + "f 'local -a u=(1 2 3); unset \"u[1]\"; echo \"u1:${u[*]}\"; unset u; echo \"u2:${u[*]-gone}\"'; echo \"[${u[*]-unset}]\"\n"
+        + "f 'local -a r; read -a r <<< \"x y z\"; echo \"r:${r[*]}\"; declare -a q; mapfile -t q < <(printf \"1\\n2\\n\"); echo \"q:${q[*]}\"'; echo \"[${r[*]}][${q[*]}]\"\n"
+        + "f 'declare -A h=([a]=1); h[b]=2; h+=([c]=3); echo \"h:${#h[@]}\"; local -a e; e[3]=x; e[0]=y; echo \"e:${!e[*]}\"'; echo \"[${#h[@]}][${e[*]}]\"\n"
+        + "ca(){ local -a z=(caller); cb; echo \"ca:${z[*]}\"; }; cb(){ eval 'z+=(callee)'; }; ca; echo \"[${z[*]-unset}]\"\n"
+        + "ga=(top); eval 'ga+=(more)'; echo \"ga:${ga[*]}\"\n"
+        + "gb(){ eval 'gl+=(x)'; }; gb; gb; echo \"gl:${gl[*]}\"\n"
+        + "c='declare -ga gx=(glob)'; gc(){ local -a gx=(loc); eval \"$c\"; echo \"in:${gx[*]}\"; }; gc; echo \"gx:${gx[*]}\"\n"
+        + "( sz=(1); eval 'sz+=(2)'; echo \"sub:${sz[*]}\" ); echo \"[${sz[*]-none}]\"\n");
+
+    // The same for a sourced file: what it declares in a function is the function's, and so are its later writes.
+    [SkippableFact]
+    public Task RunTimeArrayLocals_LaterWritesInTheSameSourcedFile_AreTheLocal() => Same(
+        "printf 'declare -A M\\nM[k]=v\\ndeclare -a L=(a b)\\nL+=(c)\\n' > cfg.sh\n"
+        + "g(){ source ./cfg.sh; echo \"${M[k]} ${L[*]}\"; }; g; echo \"[${L[*]}][${M[k]}]\"\n"
+        + "printf 'local -a S=(1)\\nS+=(2)\\nS[5]=6\\nunset \"S[0]\"\\nread -a R <<< \"p q\"\\ndeclare -a R2\\nread -a R2 <<< \"s t\"\\n"
+        + "mapfile -t MP <<< \"m1\"\\nlocal -a MQ; mapfile -t MQ <<< \"n1\"\\necho \"S:${S[*]} R2:${R2[*]} MQ:${MQ[*]}\"\\n' > src2.sh\n"
+        + "k(){ source ./src2.sh; }; k; echo \"[${S[*]}][${R2[*]}][${MQ[*]}][${R[*]}][${MP[*]}]\"\n"
+        + "source ./cfg.sh; echo \"top: ${M[k]} ${L[*]}\"\n");
+
+    // Eval and sourced text writes through the run-time attribute table: an attribute its caller set, at run time or not,
+    // holds there (`v=n; declare -i "$v"; source ./w.sh` with `n=2+3` in w.sh prints 5).
+    [SkippableFact]
+    public Task AttributesFromTheCaller_HoldInEvalAndSourcedText() => Same(
+        "printf 'n=2+3\\necho \"w:$n\"\\nu=ab\\necho \"u:$u\"\\n' > w.sh\n"
+        + "v=n; declare -i \"$v\"; source ./w.sh\n"
+        + "unset n; declare -i n; declare -u u; source ./w.sh\n"
+        + "c='n=4*4; u=cd'; eval \"$c\"; echo \"c:$n $u\"\n"
+        + "f(){ local -i n; source ./w.sh; }; f; echo \"after:$n\"\n");
+
+    // `read -a` / `mapfile` fill the array; for the shell's global its element 0 is `$name`, while a function's local
+    // array leaves nothing behind. REGRESSION: the joined value went to the shell variable, a global: `$r` was `x y` and
+    // `f(){ local -a r; read -a r <<< "x y"; }; f; echo ${r[*]}` printed x y.
+    [SkippableFact]
+    public Task WholeArrayBuiltins_FillTheArray_AndALocalLeavesNoGlobal() => Same(
+        "s1(){ local -a r; read -a r <<< \"x y z\"; echo \"s1:${r[*]}\"; }; s1; echo \"[${r[*]}]\"; declare -p r 2>&1\n"
+        + "ra=old; read -a ra <<< \"x y\"; echo \"ra:$ra ${ra[1]}\"; declare -p ra\n"
+        + "read -a rb <<< \"p q\"; echo \"rb:$rb ${rb[*]}\"\n"
+        + "mq=old; mapfile -t mq <<< \"m1\"; echo \"mq:$mq\"\n"
+        + "h(){ read -a hr <<< \"3 4\"; }; h; echo \"hr:${hr[*]}\"\n"
+        + "k(){ local -a ka=(0); kb; echo \"k:${ka[*]}\"; }; kb(){ read -a ka <<< \"5 6\"; }; k; echo \"[${ka[*]-unset}]\"\n");
+
     [SkippableFact]
     public Task StaticEvalText_InAFunction_IsTheFunctionsOwnCode() => Same(
         "e1(){ eval 'declare -a ea=(7 8)'; eval 'declare -i ei=2*3'; ei+=1; ea+=(9); echo \"e1: ${ea[*]} $ei\"; }\n"

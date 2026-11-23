@@ -2139,10 +2139,13 @@ public static class PsBuild
 
     /// <summary>
     /// <see cref="InputRedirectGuard"/> without its own scope, for a loop whose variables must stay in the caller's scope
-    /// (a function's `local`s are plain PowerShell variables).
+    /// (a function's `local`s are plain PowerShell variables). Once the loop ran, a failure nested in its body that the
+    /// body already handled is not the loop's own (<see cref="RedirectFailedVariable"/> is lowered, as in
+    /// <see cref="SimpleInputRedirectGuard"/>).
     /// </summary>
     public static string InputRedirectGuardInline(string target, string ok, string? onFail = null, string? failTail = null) =>
         "$__psbash_ir = [string](Write-Output " + target + "); Invoke-BashTest -e $__psbash_ir; if ($global:LASTEXITCODE -eq 0) { " + ok
+        + "; " + RedirectFailedVariable + " = $false"
         + " } else { " + InputRedirectFailure(failTail, onFail) + " }";
     /// <summary>
     /// A compound command's <c>&lt; file</c> that cannot be opened fails the command: bash reports
@@ -2226,9 +2229,14 @@ public static class PsBuild
     /// and still one pipeline element for a following <c>| …</c> or <c>|| …</c>.
     /// </summary>
     /// <para>The failure raises <see cref="RedirectFailedVariable"/>: a builtin whose own status errexit ignores
-    /// (<c>true &lt; missing</c>) is checked on it (<see cref="RedirectFailureChecked"/>).</para>
-    public static string SimpleInputRedirectGuard(string target, string ok, string? failTail = null) =>
+    /// (<c>true &lt; missing</c>) is checked on it (<see cref="RedirectFailureChecked"/>). The flag says only whether THIS
+    /// redirect failed: <paramref name="clearsNested"/> (the command has no output file of its own, whose
+    /// Invoke-BashRedirect would report on the flag after the command) lowers it once the command ran, so a failure inside
+    /// its words that was already handled (<c>: "$(cat &lt; missing || true)" &lt; f</c>) is not taken for this one.
+    /// REGRESSION: under set -e that ended the shell.</para>
+    public static string SimpleInputRedirectGuard(string target, string ok, string? failTail = null, bool clearsNested = true) =>
         ". { $__psbash_ir = [string](Write-Output " + target + "); Invoke-BashTest -e $__psbash_ir; if ($global:LASTEXITCODE -eq 0) { " + ok
+        + (clearsNested ? "; " + RedirectFailedVariable + " = $false" : "")
         + " } else { " + InputRedirectFailure(failTail, RedirectFailedVariable + " = $true") + " } }";
 
     /// <summary>

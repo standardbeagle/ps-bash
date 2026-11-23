@@ -369,9 +369,9 @@ public static class BashVariableLookup
     /// Assign an array the way bash scopes it: the existing variable (in whichever scope owns it: a function writing
     /// a caller's array reaches the caller), else a new GLOBAL. A bare <c>PSVariable.Set</c> from a cmdlet creates the
     /// variable in the calling function's own scope, so <c>mapfile arr</c> / <c>read -a arr</c> inside a function
-    /// never reached the shell.
+    /// never reached the shell. True when the array written is the shell's global (not a function's local).
     /// </summary>
-    public static void SetArray(SessionState state, string name, object holder)
+    public static bool SetArray(SessionState state, string name, object holder)
     {
         name = BashNameCase.ToStore(name);
         PSVariable? existing = null;
@@ -381,17 +381,32 @@ public static class BashVariableLookup
         // with it, as an assigned one (`( arr=(1 2) )`) does: its journal puts the variable back. REGRESSION: a new one
         // was made global, and an existing one the subshell inherited was written in place; both leaked out of it.
         ArrayWriteJournal? journal = Journal(state);
+        string global = "global:" + name;
         if (existing is not null && !PowerShellOwnedVariables.Contains(name) && Writable(existing))
         {
             journal?.Note(existing, made: null);
             existing.Value = holder;
-            return;
+            return ReferenceEquals(existing, state.PSVariable.Get(global));
         }
-        string global = "global:" + name;
         PSVariable? before = journal is null ? null : state.PSVariable.Get(global);
         if (before is not null) journal!.Note(before, made: null);
         state.PSVariable.Set(global, holder);
         if (journal is not null && before is null && state.PSVariable.Get(global) is { } created) journal.Note(created, made: name);
+        return true;
+    }
+
+    /// <summary>
+    /// <see cref="SetArray"/> for a builtin that fills a whole array (<c>read -a</c>, <c>mapfile</c>): when the array is
+    /// the shell's global, the shell variable of the name is its element 0 (<c>read -a r &lt;&lt;&lt; "x y"; echo $r</c>
+    /// prints x, also over an earlier <c>r=old</c>), unset when it has none. A function's local array gets no such copy:
+    /// it would be a global that outlives the local. REGRESSION: the JOINED value always went to the shell variable, so
+    /// <c>$r</c> printed <c>x y</c>, and after <c>f(){ local -a r; read -a r &lt;&lt;&lt; "x y"; }; f</c> a global r remained.
+    /// </summary>
+    public static void SetWholeArray(SessionState state, string name, string[] elements)
+    {
+        if (!SetArray(state, name, elements)) return;
+        try { BashVariableStore.Set(BashNameCase.ToStore(name), elements.Length > 0 ? elements[0] : null); }
+        catch (Exception) { /* a name the store refuses (restricted): the array stands, as before */ }
     }
 
     /// <summary>

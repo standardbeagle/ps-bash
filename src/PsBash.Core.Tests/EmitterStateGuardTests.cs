@@ -6,7 +6,8 @@ using Xunit;
 namespace PsBash.Core.Tests;
 
 /// <summary>
-/// Guards the emitter's thread state: every <c>[ThreadStatic]</c> field of <c>PsEmitter</c> and <c>PsBuild</c> goes back to
+/// Guards the emitter's thread state: every <c>[ThreadStatic]</c> field of the Transpiler assembly (<c>PsEmitter</c>,
+/// <c>PsBuild</c>, <c>BashParser</c>, <c>NestingGuard</c>, ... found by reflection, so a new one is checked too) goes back to
 /// its first value at the start of a top-level transpile (<c>PsEmitter.ResetUnitState</c>), or is listed here as the
 /// caller's input to that transpile, with the reason. The state of one nested emission scope (<c>$( )</c>, <c>&lt;( )</c>, a
 /// pipe stage, a <c>&amp;</c> job, a subshell, a function body) is <c>PsEmitter.EmitterScope</c>'s.
@@ -43,12 +44,18 @@ public class EmitterStateGuardTests
         ["PsEmitter._inStdinScope"] = "input: whether the text runs in a stdin scope (BashTranspiler, TranspileWithLauncherStdin)",
         ["PsEmitter._launcherStdin"] = "input: set by TranspileWithLauncherStdin around its Transpile",
         ["PsEmitter._transpileNesting"] = "the nesting count that decides a top-level transpile: 0 there by definition",
+        ["NestingGuard.t_depth"] = "the parser's recursion depth, raised and lowered by each NestingGuard.Scope (using); a transpile can start inside one",
+        ["NestingGuard.t_onLargeStack"] = "a fact about the thread (set on the large-stack worker OnLargeStack starts), not about a unit",
+        ["NestingGuard.t_stackExhausted"] = "cleared by WithStackFallback before the work it wraps, which may be several units or part of one",
+        ["CommandHashTable._probeDepth"] = "run-time command lookup (hash), not emission: raised and lowered by each CommandHashTable.ProbeScope (using)",
+        ["ShellVariables.t_launcherParent"] = "shell startup's own value, set and cleared in one call's finally; never read by the emitter",
     };
 
+    /// <summary>Every <c>[ThreadStatic]</c> field of the Transpiler assembly (the emitter, the parser, and what they call).</summary>
     private static IEnumerable<(string Name, FieldInfo Field)> ThreadStaticFields()
     {
-        foreach (var type in new[] { typeof(PsEmitter), typeof(PsBuild) })
-            foreach (var f in type.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+        foreach (var type in typeof(PsEmitter).Assembly.GetTypes())
+            foreach (var f in type.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
                 if (f.IsDefined(typeof(ThreadStaticAttribute), inherit: false))
                     yield return (type.Name + "." + f.Name, f);
     }
@@ -73,8 +80,8 @@ public class EmitterStateGuardTests
         foreach (var (name, field) in fields)
         {
             if (Exempt.ContainsKey(name)) continue;
-            // PsEmitter's own fields by name; PsBuild's through the class (`PsBuild.TrapLine = 0`).
-            string written = field.DeclaringType == typeof(PsBuild) ? "PsBuild." + field.Name : field.Name;
+            // PsEmitter's own fields by name; another type's through the class (`PsBuild.TrapLine = 0`, `BashParser.SawBadSubstitution = false`).
+            string written = field.DeclaringType == typeof(PsEmitter) ? field.Name : field.DeclaringType!.Name + "." + field.Name;
             if (!Regex.IsMatch(reset, @"(?<![\w.])" + Regex.Escape(written) + @"\s*=[^=]"))
                 missing.Add(name);
         }

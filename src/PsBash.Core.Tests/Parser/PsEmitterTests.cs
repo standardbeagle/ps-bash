@@ -5987,6 +5987,22 @@ public class PsEmitterTests
     public void Transpile_CompoundWithoutAnOpenedFile_HasNoRedirectCheck(string script)
         => Assert.DoesNotContain("__BashRedirectFailed", PsEmitter.Transpile(script));
 
+    // Oracle: `set -e; : "$(cat < /nonexistent 2>/dev/null || true)" < f; echo ok` prints ok (and so with `{ }`, a function
+    // call or `<( )` in the word). REGRESSION: the handled inner failure raised the flag the builtin's check read, and the
+    // shell ended. The input guard lowers it once the command ran; an output file of the command's own reports instead.
+    [Theory]
+    [InlineData("set -e\n: \"$(nf || true)\" < f", true)]
+    [InlineData("set -e\ntrue \"$(nf || :)\" < f", true)]
+    [InlineData("set -e\n: \"$(nf || true)\" < f > out", false)]
+    [InlineData("set -e\n: \"$(nf || true)\" < f 2> err", false)]
+    [InlineData("set -e\n: \"$(nf || true)\" < f > /dev/null", true)]
+    public void Transpile_NeutralBuiltinWithAnInputFile_ChecksOnlyItsOwnOpen(string script, bool guardLowers)
+    {
+        var ps = PsEmitter.Transpile(script)!;
+        Assert.Contains("if ($global:__BashRedirectFailed)", ps);
+        Assert.Equal(guardLowers, ps.Contains("; $global:__BashRedirectFailed = $false } else { ", StringComparison.Ordinal));
+    }
+
     [Theory]
     [InlineData("true | (false)", 3)]
     [InlineData("(false) | (false) | (false; false)", 3)]

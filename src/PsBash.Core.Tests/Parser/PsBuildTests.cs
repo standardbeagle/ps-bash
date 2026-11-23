@@ -35,6 +35,19 @@ public class PsBuildTests
             + "if ($global:__BashRedirectFailed) { $global:__BashRedirectFailed = $false; $global:LASTEXITCODE = 1; CHECK }",
             PsBuild.RedirectFailureChecked("& { x } | Invoke-BashRedirect -Path f", "CHECK"));
 
+    // Oracle: `set -e; : "$(cat < /nonexistent 2>/dev/null || true)" < f; echo ok` prints ok. The flag is the guard's own
+    // result: once the command ran, a failure in its words that was handled is lowered; a failed open raises it; with an
+    // output file of the command's own, Invoke-BashRedirect reports on it after the command, so the guard leaves it be.
+    [Fact]
+    public void SimpleInputRedirectGuard_LowersANestedFailureOnceTheCommandRan()
+    {
+        string guard = PsBuild.SimpleInputRedirectGuard("f", "CMD");
+        Assert.Contains("{ CMD; $global:__BashRedirectFailed = $false } else { ", guard);
+        Assert.EndsWith("$global:__BashRedirectFailed = $true } }", guard);
+        Assert.DoesNotContain("$false", PsBuild.SimpleInputRedirectGuard("f", "CMD | Invoke-BashRedirect -Path o", clearsNested: false));
+        Assert.Contains("{ LOOP; $global:__BashRedirectFailed = $false } else { ", PsBuild.InputRedirectGuardInline("f", "LOOP"));
+    }
+
     // ─────────────── InheritErrexitCapture / PosixElse / SpecialBuiltinRedefined ───────────────
 
     // `shopt -s inherit_errexit`: a substitution keeps set -e only while the option is on; otherwise it runs suppressed,

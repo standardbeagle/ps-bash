@@ -524,17 +524,9 @@ public sealed class InvokeBashReadCommand : BashCmdlet
             if (!BashArrayElement.Assign(this, name, scalarValue, "read")) _assignFailed = true;
             return;
         }
-        BashVariableLookup.SetArray(SessionState, name, value);
-        // Mirror the oracle's Set-Item Env:$name slice. For array values,
-        // join with spaces — bash exports arrays as scalars too.
-        string envVal = value switch
-        {
-            string s => s,
-            string[] arr => string.Join(' ', arr),
-            _ => value?.ToString() ?? ""
-        };
-        try { BashVariableStore.Set(name, envVal); }
-        catch { /* env-set may fail for restricted names; non-fatal */ }
+        // The array, and for the shell's global its element 0 as the shell variable (BashVariableLookup.SetWholeArray).
+        if (value is string[] elements) BashVariableLookup.SetWholeArray(SessionState, name, elements);
+        else BashVariableLookup.SetArray(SessionState, name, value);
     }
 
     /// <summary>

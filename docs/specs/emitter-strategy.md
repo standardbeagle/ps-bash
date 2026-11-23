@@ -266,8 +266,10 @@ simple commands are checked on their status. The open failure raises `PsBuild.Re
 Invoke-BashRedirect for an output file, the failure branch of `PsBuild.InputRedirectGuard` /
 `SimpleInputRedirectGuard` for `< file`. Invoke-BashRedirect does not decide errexit itself, so this check is the only
 errexit decision for a failed open. The exit/return is never inside the guard's `& { }` block, where it would leave only the
-block in a function or subshell. A nested failure the body handled (`{ { cat; } < missing || :; } < in`) is cleared by
-the outer command's own guard or Invoke-BashRedirect. REGRESSION: the input guard lost its errexit exit and nothing
+block in a function or subshell. A nested failure the body handled (`{ { cat; } < missing || :; } < in`), or one in a
+simple command's words (`: "$(cat < missing || true)" < f`, also a read loop's body), is cleared by the outer command's
+own guard once the command ran (`SimpleInputRedirectGuard`/`InputRedirectGuardInline` lower the flag), or by
+Invoke-BashRedirect when the command has an output file of its own: the flag says only whether that command's open failed. REGRESSION: the input guard lost its errexit exit and nothing
 checked after the compound, so `set -e; { { cat; } < missing; } 2>/dev/null; echo no` printed no. Guard:
 `RedirectGroupGuardTests.Transpile_RedirectedCompoundUnderErrexit_IsFollowedByTheOpenFailureCheck`; behavior
 `Differential.Tests/ErrexitInputRedirectTests`.

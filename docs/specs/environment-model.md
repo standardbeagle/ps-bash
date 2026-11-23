@@ -191,20 +191,26 @@ back what the local hid.**
   shell's global. A nameref (`declare -n "$3"`, `local -n r=x`) takes the run-time local's frame, which puts the
   caller's reference back. A static eval's text in a function is the function's own code: it parses as the body does
   (`BashParser.Parse(text, inFunctionBody: true)`, its `declare` local) and shares the body's attribute and nameref
-  sets. REGRESSION: `f(){ local -a "$1"; }; f 'a=(1 2)'` left a global a. Behavior:
-  `Differential.Tests/RunTimeArrayAttributeDifferentialTests`.
+  sets. A later write in the same text (`a+=(3)`, `m[k]=v`, `read -a`, `mapfile`) must agree with that run-time choice,
+  so the text's array write target is the run-time slot (`PsBuild.ArraySlot` → `VarFrameStack.ArraySlot`: the running
+  function's local array, else the global); only the top-level form and `-g`/`readonly` write `$global:`.
+  REGRESSION: `f(){ local -a "$1"; }; f 'a=(1 2)'` left a global a, and later `$global:` writes in the same text went
+  around the local. Behavior: `Differential.Tests/RunTimeArrayAttributeDifferentialTests`.
 - **Attributes set by such text hold for the writes after it** (`eval 'declare -i n'; n=2*3` stores 6; `-u`/`-l`
   convert, `+=` too). The emitter cannot see them, so in a unit that runs run-time declaration text
   (`PsEmitter.RunsRunTimeDeclarations`: a command named at run time, `eval` of text known only then, `source`, a
-  declaration builtin with an expanded name) a plain scalar write to a name with no static attribute goes through
+  declaration builtin with an expanded name), and in all eval and sourced text, a plain scalar write to a name with
+  no static attribute goes through
   `PsBuild.AssignAttributed` → `BashShellState.AssignScalar` (the one attribute table: nameref target, `-u`/`-l`;
-  an `-i` target is evaluated as arithmetic and stored by `AssignEvaluated`). Every other unit keeps the plain
-  `$env:` write. Not covered: `for`/`read` into such a variable, `+i` removal, a run-time nameref's reads.
+  an `-i` target is evaluated as arithmetic and stored by `AssignEvaluated`). A unit that runs eval or sourced text
+  also records its static `-i`/`-l`/`-u` in that table (`declare -i n; source ./w.sh`). Every other unit keeps the
+  plain `$env:` write. Not covered: `for`/`read` into such a variable, `+i` removal, a run-time nameref's reads.
 - **A callee's array write** reaches the nearest caller's local of that name, else the global (bash's dynamic
   scope). The function's prologue lists its local arrays (`PsBuild.LocalArrays` → `VarFrameStack.LocalArrays`), and
   every array write target goes through `PsBuild.ArraySlot` → `VarFrameStack.ArraySlot`. That covers element writes,
   `+=`, `mapfile`, `read -a`, `unset 'a[i]'` and `printf -v 'a[i]'`. As an argument the slot is wrapped by
-  `PsBuild.TargetArg`.
+  `PsBuild.TargetArg`. `read -a` / `mapfile` also make element 0 the shell variable, for the global array only
+  (`BashVariableLookup.SetWholeArray`): a local array leaves no global behind.
 - **Attributes** (`-i`, `-l`, `-u`, `-r`, `-x`, `-n`) of a local are its frame's. `VarFrameStack.TakeAttributes`
   saves the caller's attribute letters, its read-only state and its nameref target when a local of that name is
   made. `Exit` restores them: the attributes come back, a read-only mark the function added is removed, and the outer

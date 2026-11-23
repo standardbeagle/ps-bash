@@ -113,6 +113,41 @@ public class VarFrameEmitTests
         if (bash.StartsWith("declare")) Assert.Contains("$global:" + name, ps);   // the top-level form (`local` there is an error)
     }
 
+    // Oracle: `f(){ eval "$1"; }; f 'local -a a=(1 2); a+=(3); declare -A m; m[k]=v'` leaves no a or m after f, and so
+    // for a sourced file. The text cannot know whether a function runs it, so a later write in it is the run-time slot
+    // (VarFrameStack.ArraySlot: the running function's local array when it holds one, else the global).
+    // REGRESSION: it was `$global:a`, while the declaration had made a the function's local.
+    [Theory]
+    [InlineData("local -a a=(1 2); a+=(3)", "a")]
+    [InlineData("declare -A m; m[k]=v", "m")]
+    [InlineData("local -a e; e[3]=x", "e")]
+    [InlineData("S+=(2)", "S")]
+    public void Transpile_EvalTextArrayWrite_IsTheRunTimeSlot(string bash, string name)
+        => Assert.Contains(PsBuild.ArraySlot(name)[..^".Value".Length], Eval(bash));
+
+    // Oracle: `f(){ local -a g; eval 'declare -ga g=(1 2)'; }; f; echo ${g[*]}` prints 1 2: -g (and readonly) is the
+    // global, never the function's local array of the name.
+    [Theory]
+    [InlineData("declare -ga g=(1 2)")]
+    [InlineData("readonly -a g=(1 2)")]
+    public void Transpile_EvalTextGlobalArrayDeclaration_WritesTheGlobal(string bash)
+    {
+        var ps = Eval(bash);
+        Assert.Contains("$global:g", ps);
+        Assert.DoesNotContain("ArraySlot(", ps);
+    }
+
+    // Oracle: `v=n; declare -i "$v"; source ./w.sh` with `n=2+3` in w.sh prints 5, and `declare -i n; source ./w.sh` too:
+    // eval and sourced text cannot see its caller's attributes, so it writes through the run-time table, and a unit that
+    // runs such text records its static attributes there.
+    [Fact]
+    public void Transpile_EvalOrSourcedText_WritesThroughTheAttributeTable()
+    {
+        Assert.Contains("[PsBash.Cmdlets.BashShellState]::AssignScalar('n', ", Eval("n=2+3"));
+        Assert.Contains("[PsBash.Cmdlets.BashShellState]::MarkAttribute('n', 'i')", T("declare -i n\nsource ./w.sh"));
+        Assert.DoesNotContain("MarkAttribute('n', 'i')", T("declare -i n\nn=1"));
+    }
+
     [Theory]
     [InlineData("declare -n g=x")]
     [InlineData("local -n g=x")]

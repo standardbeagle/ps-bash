@@ -1655,7 +1655,8 @@ public static partial class PsEmitter
         var priorDeclarePrint = _declarePrintMode;
         // Eval and sourced text cannot see the `declare -p` that will print what they declare (it is in the caller), so
         // they always record the attributes.
-        _declarePrintMode = _context == TranspileContext.Eval
+        // A unit that runs eval or sourced text records them too: that text writes through the table (`declare -i n; source ./w.sh`).
+        _declarePrintMode = _context == TranspileContext.Eval || _runsDynamicCode
             || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\b(?:declare|typeset)\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*p")
             || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bexport\s*(?:-p\s*)?(?:[|;&)}]|\r?\n|$)")
             || bash.Contains("@a}", StringComparison.Ordinal) || bash.Contains("@A}", StringComparison.Ordinal);
@@ -1674,15 +1675,17 @@ public static partial class PsEmitter
             if (trapSignal != "DEBUG") _debugTrapMode = true;
         }
         var priorScriptRoot = _scriptRoot;
-        if (_transpileNesting++ == 0) _scriptRoot = context == TranspileContext.Default;
-        // Nested text (eval, source, a trap action) counts its own statements.
         int priorRedirectLine = _redirectLine;
-        _redirectLine = 0;
-        // Only the root script's input lines are read by the shell's reader; eval, sourced and inline text are not.
         var priorReaderMode = _readerMode;
-        _readerMode = _transpileNesting == 1 && context == TranspileContext.Default ? ReaderModeFor(bash) : ReaderMode.Off;
         try
         {
+            // Raised inside the try whose finally lowers it: a throw before the try (ReaderModeFor) left the count raised, so
+            // the thread never started a top-level unit again (ResetUnitState runs only at 0).
+            if (_transpileNesting++ == 0) _scriptRoot = context == TranspileContext.Default;
+            // Nested text (eval, source, a trap action) counts its own statements.
+            _redirectLine = 0;
+            // Only the root script's input lines are read by the shell's reader; eval, sourced and inline text are not.
+            _readerMode = _transpileNesting == 1 && context == TranspileContext.Default ? ReaderModeFor(bash) : ReaderMode.Off;
             Command? cmd;
             bool aliasesSpliced = false;
             BashParser.SawBadSubstitution = false;
@@ -1709,7 +1712,9 @@ public static partial class PsEmitter
                 return null;
             // A lone statement starts from status 0 anyway.
             _finalAssignment = (cmd is Command.CommandList { Commands.Length: > 1 } top ? top.Commands[^1] : null) as Command.ShAssignment;
-            _runTimeAttrs = priorRunTimeAttrs || RunsRunTimeDeclarations(cmd);
+            // Eval and sourced text cannot see the attributes its caller set at run time (`v=n; declare -i "$v"; source ./w.sh`
+            // with `n=2+3` in w.sh stores 5), so it always writes through the table.
+            _runTimeAttrs = priorRunTimeAttrs || _context == TranspileContext.Eval || RunsRunTimeDeclarations(cmd);
             CollectCallSites(cmd);
             CollectArrayAssignments(cmd);
             CollectAliasDefs(cmd, bash);
@@ -1807,7 +1812,8 @@ public static partial class PsEmitter
         _scriptReadsStatus = false; _scriptReadsLastArg = false; _scriptPosix = false; _posixSplitNode = null;
         _inheritErrexitMode = false; _scriptLastpipe = false;
         _namerefs = null; _litAssigned = null; _pendingNamerefs = null; _runtimeNamerefs = null; _subshellFunctionDepth = 0;
-        _inlineEvalText = false; _runTimeAttrs = false; _evalLocalArrays = false; _runTimeLocalSplit = false;
+        _inlineEvalText = false; _runTimeAttrs = false; _evalLocalArrays = false; _runTimeLocalSplit = false; _globalArrayWrites = false;
+        BashParser.SawBadSubstitution = false;
         _emptyStdinDepth = 0; _context = default; _captureDepth = 0; _subshellDepth = 0; _andOrChainDepth = 0;
         _errexitMode = false; _errexitSetMode = false; _errexitExemptDepth = 0; _negatedDepth = 0; _negationGuardedAtRuntime = false;
         _errtraceMode = false; _lineBase = 0; _priorTrapLine = 0; _redirectLine = 0; _scriptRoot = false;
@@ -3066,9 +3072,14 @@ public static partial class PsEmitter
 
     private static string ArrayWriteTarget(string name) =>
         ResolveNameref(name) is var resolved && resolved != name ? ArrayWriteTarget(resolved) :
-        // eval'd text runs in the calling function's scope: an array it assigns is the shell's own unless that function declared it `local`.
+        // eval'd / sourced text runs in the calling function's scope: an array it assigns is the running function's local when
+        // one holds the name, else the shell's own. Which one is known only when the text runs: the text's own `local -a a`
+        // (EmitRunTimeArrayLocals) makes `a` a local array only inside a function, so a later `a+=(3)` / `m[k]=v` / `S[5]=6`
+        // in the same text is the run-time slot (VarFrameStack.ArraySlot: the nearest local array, else the global).
+        // REGRESSION: it was `$global:a`, so `f(){ eval "$1"; }; f 'local -a a=(1 2); a+=(3)'` appended to a global.
         _context == TranspileContext.Eval && _functionDepth == 0 && _subshellDepth == 0
-            ? (_evalLocalArrays || EvalLocalNames?.Contains(name) == true ? "$" + name : "$global:" + name) :
+            ? (_evalLocalArrays || EvalLocalNames?.Contains(name) == true ? "$" + name
+                : _globalArrayWrites ? "$global:" + name : PsBuild.ArraySlot(name)) :
         // Not this function's local: a calling function's local array of the name, else the global (bash's dynamic scope);
         // in a function defined inside a subshell, the subshell's own array (a subshell body's `$name` is its copy already).
         _functionDepth > _subshellFunctionDepth && _functionLocalNames is { } locals && !locals.Contains(name)
@@ -3107,6 +3118,10 @@ public static partial class PsEmitter
 
     /// <summary>A run-time array declaration is being split into its two forms (<see cref="EmitRunTimeArrayLocals"/>).</summary>
     [ThreadStatic] private static bool _runTimeLocalSplit;
+
+    /// <summary>While a declaration in eval text at its top that is the shell's global is emitted: its top-level form, or
+    /// `declare -g` / `readonly` (a function's local array of the name must not take it). Its array writes are `$global:`.</summary>
+    [ThreadStatic] private static bool _globalArrayWrites;
 
     /// <summary>Eval text at its own top (no function, no subshell of its own): a function may be running it.</summary>
     private static bool EvalTextAtTop => _context == TranspileContext.Eval && _functionDepth == 0 && _subshellDepth == 0;
@@ -4969,7 +4984,10 @@ public static partial class PsEmitter
         _runTimeLocalSplit = true;
         try
         {
-            string atTop = EmitShAssignment(cmd);
+            _globalArrayWrites = true;
+            string atTop;
+            try { atTop = EmitShAssignment(cmd); }
+            finally { _globalArrayWrites = false; }
             var inFunction = new StringBuilder(PsBuild.SetStatus(0)).Append("; ").Append(PsBuild.LocalArrays(names));
             foreach (var n in names)
                 inFunction.Append("[PsBash.Cmdlets.VarFrameStack]::LocalAttributes(").Append(PsBuild.SingleQuote(n)).Append("); ");
@@ -4992,6 +5010,13 @@ public static partial class PsEmitter
         }
         if (!_runTimeLocalSplit && RunTimeArrayLocals(cmd) is { } arrayLocals)
             return EmitRunTimeArrayLocals(cmd, arrayLocals);
+        // `eval 'declare -ga g=(1)'` / `readonly -a r=(2)` in a function: the global, never the function's local array of the name.
+        if (cmd.IsGlobal && EvalTextAtTop && !_globalArrayWrites)
+        {
+            _globalArrayWrites = true;
+            try { return EmitShAssignment(cmd); }
+            finally { _globalArrayWrites = false; }
+        }
         if (!NeedsArrayKindGuard(cmd)) return EmitShAssignmentCore(cmd);
         _inArrayKindGuard = true;
         try
@@ -6404,6 +6429,9 @@ public static partial class PsEmitter
         bool guarded = !(TryGetPureLiteralText(inputRedirect.Target.Parts, out var literalTarget)
                          && DevicePath.Classify(literalTarget, windows: false, out _) != DeviceKind.None);
         string? failTail = guarded ? InputFailTail(cmd.Redirects, inputRedirect) : null;
+        // The redirect-failure flag is this command's own: lowered after it ran (a `$( )` in its words that failed and was
+        // handled is not its failure), unless an output file of its own reports on it after the command (Invoke-BashRedirect).
+        bool clearsNested = !OpensOutputFile(remaining);
         bool noCommand = innerCmd.Words.IsDefaultOrEmpty && innerCmd.EnvPairs.IsDefaultOrEmpty;
         var inner = noCommand ? "" : WithPipeStageFeed(true, () => EmitSimple(innerCmd));
         if (inner.Length == 0)
@@ -6415,7 +6443,7 @@ public static partial class PsEmitter
             if (!remaining.IsDefaultOrEmpty) AppendRedirectTail(read, remaining);
             result = read.ToString();
             // `x=$(< missing)`: reported (status 1), as for a command; Get-Content's own error was a PowerShell one, status 0.
-            if (guarded) result = InputRedirectGuarded(target, result, static r => r, failTail);
+            if (guarded) result = InputRedirectGuarded(target, result, static r => r, failTail, clearsNested);
             return true;
         }
 
@@ -6433,7 +6461,7 @@ public static partial class PsEmitter
         {
             var fed = WithStdinScope(true, () => EmitSimple(innerCmd));
             string Feed(string body) => $"Invoke-BashCat {target} -RawStdinBytes | {DotStdinBlock(body)}";
-            result = guarded ? InputRedirectGuarded(target, fed, Feed, failTail) : RedirectGroup(fed, Feed);
+            result = guarded ? InputRedirectGuarded(target, fed, Feed, failTail, clearsNested) : RedirectGroup(fed, Feed);
             return true;
         }
         // The command is a pipe stage: `true < f` / `: < f` emit an expression, which PowerShell allows only first in a
@@ -6443,7 +6471,7 @@ public static partial class PsEmitter
             ? $"Invoke-BashCat {target} -RawStdinBytes | {stage}"
             : $"Invoke-BashCat {target} -RawStdinBytes | {NativeStdinFeedStage(innerCmd)}{stage}";
         if (guarded)
-            result = InputRedirectGuarded(target, result, static r => r, failTail);
+            result = InputRedirectGuarded(target, result, static r => r, failTail, clearsNested);
         return true;
     }
 
@@ -6452,10 +6480,10 @@ public static partial class PsEmitter
     /// <paramref name="body"/>) behind the guard that reports a file it cannot open, through <see cref="RedirectGroup(string, Func{string, string})"/>:
     /// a return in the body leaves the function (when the file cannot be opened the body never runs, nor returns).
     /// </summary>
-    private static string InputRedirectGuarded(string target, string body, Func<string, string> feed, string? failTail)
+    private static string InputRedirectGuarded(string target, string body, Func<string, string> feed, string? failTail, bool clearsNested)
     {
         return RedirectGroup(body, b =>
-            PsBuild.SimpleInputRedirectGuard(target, feed(b), failTail));
+            PsBuild.SimpleInputRedirectGuard(target, feed(b), failTail, clearsNested));
     }
 
     /// <summary>

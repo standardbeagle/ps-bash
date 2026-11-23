@@ -67,4 +67,25 @@ public class ErrexitInputRedirectTests
         "trap 'echo \"ERR L=$LINENO\"' ERR\necho a\n{ { cat; } < /nonexistent/zz\n} 2>/dev/null\necho after\n"
         + "{ cat; } 2>/dev/null < /nonexistent/zz\necho end\n"
         + ": 2>/dev/null > /nonexistent/d/o\ntrue 2>/dev/null < /nonexistent/zz\n{ :; } 2>/dev/null 2> /nonexistent/d/e\necho done\n");
+
+    // A redirect that cannot open fails only its own command: a failure inside the command's words (`$( )`, a function
+    // call in it, `<( )`) that was handled or whose status the builtin ignores does not end the shell when the
+    // command's own file opens. REGRESSION: the inner failure raised the flag the builtin's open check read, and
+    // `set -e; : "$(cat < /nonexistent 2>/dev/null || true)" < f; echo ok` printed no ok.
+    [SkippableFact]
+    public Task AFailureInsideTheWords_IsNotTheCommandsOwnOpen() => AssertOracle.EqualAsync(
+        "echo host > hn\n"
+        + "( set -e; : \"$(cat < /nonexistent 2>/dev/null || true)\" < hn; echo ok1 ); echo \"s1=$?\"\n"
+        + "( set -e; : \"$({ cat; } < /nonexistent 2>/dev/null || true)\" < hn; echo ok2 ); echo \"s2=$?\"\n"
+        + "( set -e; nf(){ cat < /nonexistent 2>/dev/null; }; true \"$(nf || :)\" < hn; echo ok3 ); echo \"s3=$?\"\n"
+        + "( set -e; nf(){ cat < /nonexistent 2>/dev/null || :; }; : \"$(nf)\" < hn; echo ok4 ); echo \"s4=$?\"\n"
+        + "( set -e; : \"$(cat < /nonexistent 2>/dev/null || true)\" > out; echo ok5 ); echo \"s5=$?\"\n"
+        + "( set -e; { : \"$(cat < /nonexistent 2>/dev/null || true)\"; } < hn; echo ok6 ); echo \"s6=$?\"\n"
+        + "( set -e; : <(cat < /nonexistent 2>/dev/null) < hn; echo ok7 ); echo \"s7=$?\"\n"
+        + "( set -e; : \"$(cat < /nonexistent 2>/dev/null)\" < hn; echo ok9 ); echo \"s9=$?\"\n"
+        + "( set -e; : \"$(cat < /nonexistent 2>/dev/null || true)\" < /nonexistent2; echo no11 ) 2>/dev/null; echo \"s11=$?\"\n"
+        + "( trap 'echo ERR' ERR; : \"$(cat < /nonexistent 2>/dev/null || true)\" < hn; echo ok12 ); echo \"s12=$?\"\n"
+        + "( set -e; export Q=\"$(cat < /nonexistent 2>/dev/null || true)\" < hn; echo ok13 ); echo \"s13=$?\"\n"
+        + "( set -e; while read -r l; do : \"$(cat < /nonexistent 2>/dev/null || :)\"; done < hn; echo ok14 ); echo \"s14=$?\"\n"
+        + "( set -e; for i in 1; do : \"$(cat < /nonexistent 2>/dev/null || :)\"; done < hn; echo ok15 ); echo \"s15=$?\"\n");
 }
