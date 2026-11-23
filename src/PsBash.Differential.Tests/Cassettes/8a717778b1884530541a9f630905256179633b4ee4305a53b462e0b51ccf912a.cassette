@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 84
+stdout-length: 9
+stderr-length: 0
+==== SCRIPT ====
+TIMEFORMAT=; f() { true && time { x=1; return 4; }; echo no; }; f; echo "st=$? x=$x"
+==== STDOUT ====
+st=4 x=1
+
+==== STDERR ====
+

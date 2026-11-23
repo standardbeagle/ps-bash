@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 97
+stdout-length: 16
+stderr-length: 0
+==== SCRIPT ====
+TIMEFORMAT=; true && time false || echo fb; echo st=$?; false || time true && echo ok; echo st=$?
+==== STDOUT ====
+fb
+st=0
+ok
+st=0
+
+==== STDERR ====
+

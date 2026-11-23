@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 134
+stdout-length: 20
+stderr-length: 0
+==== SCRIPT ====
+TIMEFORMAT=; cd / && time (exit 2) | true; echo "st=$? ${PIPESTATUS[@]}"; false || time echo a | tr a b; echo "st=$? ${PIPESTATUS[@]}"
+==== STDOUT ====
+st=0 2 0
+b
+st=0 0 0
+
+==== STDERR ====
+
