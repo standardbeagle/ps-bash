@@ -753,13 +753,13 @@ public sealed partial class BashParser
     }
 
     /// <summary>
-    /// Decompose the =~ right-hand side. Parameter/command expansions still expand
-    /// (bash: <c>re='^a.b$'; [[ $x =~ $re ]]</c> matches), but EVERY other character —
-    /// crucially backslashes and <c>$</c> anchors — passes through verbatim to the
-    /// regex engine. Running the ordinary word decomposer here would turn <c>\.</c>
-    /// into an escaped literal <c>.</c> (which then matches ANY character, silently
-    /// widening the pattern) and would try to read <c>$)</c> as a variable.
-    /// Verified against the oracle: <c>[[ axb =~ ^a\.b$ ]]</c> does NOT match.
+    /// Decompose the =~ right-hand side into what bash's regcomp text is built from: unquoted literal text (regex
+    /// syntax, <see cref="WordPart.Literal"/>), QUOTED characters (<c>'x'</c>, <c>"x"</c>, <c>$'x'</c> and a
+    /// backslash-escaped <c>\x</c> = <see cref="WordPart.EscapedLiteral"/>: each matches itself) and expansions
+    /// (<c>re='^a.b$'; [[ $x =~ $re ]]</c>: an unquoted expansion's value is regex text). The emitter hands the pieces
+    /// to <see cref="BashEre.WordToRegex"/> marked, which escapes a quoted ERE special (<c>\.</c> is a literal dot) and
+    /// drops the quoting of any other character (<c>\d</c> is the regex <c>d</c>, as in bash). Running the ordinary
+    /// word decomposer here would read <c>$)</c> as a variable.
     /// </summary>
     private ImmutableArray<WordPart> DecomposeRegexWord(string raw)
     {
@@ -769,8 +769,7 @@ public sealed partial class BashParser
         void FlushLiteral()
         {
             if (literal.Length == 0) return;
-            parts.Add(new WordPart.Literal(
-                TranslatePosixClassesForRegex(literal.ToString())));
+            parts.Add(new WordPart.Literal(literal.ToString()));
             literal.Clear();
         }
 
@@ -790,11 +789,18 @@ public sealed partial class BashParser
 
         for (int i = first; i < raw.Length;)
         {
-            // A backslash pair is regex syntax (`\.`): keep both characters verbatim.
+            // A backslash quotes the next character (bash: `\.` is a literal dot, `\d` is just `d`).
             if (raw[i] == '\\' && i + 1 < raw.Length)
             {
-                literal.Append(raw[i]).Append(raw[i + 1]);
-                i += 2;
+                FlushLiteral();
+                if (raw[i + 1] == '\n')
+                {
+                    i += 2; // line continuation
+                    continue;
+                }
+                int len = char.IsHighSurrogate(raw[i + 1]) && i + 2 < raw.Length && char.IsLowSurrogate(raw[i + 2]) ? 2 : 1;
+                parts.Add(new WordPart.EscapedLiteral(raw.Substring(i + 1, len)));
+                i += 1 + len;
                 continue;
             }
             // Quoted segments match THEMSELVES in bash (`a"."c` is a, literal dot, c): keep them as

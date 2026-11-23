@@ -184,36 +184,32 @@ public static class PsBuild
     }
 
     /// <summary>
-    /// The .NET regex of <c>[[ s =~ re ]]</c> from <paramref name="patExpr"/> (a PowerShell expression for the ERE text).
-    /// A single-quoted literal is converted now (<see cref="BashEre"/>); one bash's regcomp rejects, or a pattern built at
-    /// run time, goes through <c>BashPatternMatch.Ere</c>, which converts it then (and throws for an invalid one).
+    /// <c>[[ lhs =~ word ]]</c>: <paramref name="lhs"/> and <paramref name="word"/> are PowerShell expressions, the word
+    /// one built by <see cref="EreWord"/>. The match runs in <c>BashPatternMatch.EreTest</c> (THE POSIX ERE primitive,
+    /// <see cref="BashEre"/>); status 2 (a regex regcomp rejects) marks the test bad and leaves BASH_REMATCH alone, as
+    /// bash does, and otherwise BASH_REMATCH becomes the groups (an empty array after a failed match).
     /// </summary>
-    public static string EreRegex(string patExpr)
-    {
-        if (TryUnquoteSingle(patExpr, out var literal))
-        {
-            try { return SingleQuote(BashEre.ToDotNet(literal)); }
-            catch (ArgumentException) { /* report it when the test runs, as bash does */ }
-        }
-        return "[PsBash.Cmdlets.BashPatternMatch]::Ere(" + patExpr + ")";
-    }
+    public static string EreTest(string lhs, string word) =>
+        "$( $__psbash_ere = [PsBash.Cmdlets.BashPatternMatch]::EreTest((" + lhs + "), (" + word + ")); "
+        + "if ($__psbash_ere.Status -eq 2) { $global:__BashTestBad = $true } "
+        + "else { $global:BASH_REMATCH = $__psbash_ere.Groups }; $__psbash_ere.Status -eq 0 )";
 
-    // 'text' (with '' for a quote) -> text; false for any other expression.
-    private static bool TryUnquoteSingle(string expr, out string text)
-    {
-        text = "";
-        if (expr.Length < 2 || expr[0] != '\'' || expr[^1] != '\'') return false;
-        string inner = expr[1..^1];
-        var sb = new System.Text.StringBuilder(inner.Length);
-        for (int i = 0; i < inner.Length; i++)
-        {
-            if (!IsSingleQuoteMark(inner[i])) { sb.Append(inner[i]); continue; }
-            if (i + 1 < inner.Length && IsSingleQuoteMark(inner[i + 1])) { sb.Append(inner[i + 1]); i++; continue; }
-            return false;
-        }
-        text = sb.ToString();
-        return true;
-    }
+    /// <summary>The <c>=~</c> word from its pieces (<see cref="EreLiteral"/>, <see cref="EreQuoted"/>,
+    /// <see cref="EreUnquoted"/>), in order.</summary>
+    public static string EreWord(IReadOnlyList<string> pieces) =>
+        pieces.Count == 0 ? "''" : pieces.Count == 1 ? pieces[0] : "(" + string.Join(" + ", pieces) + ")";
+
+    /// <summary>Literal text of the <c>=~</c> word: QUOTED (matches literally) or unquoted (regex text).</summary>
+    public static string EreLiteral(string text, bool quoted) =>
+        quoted ? EreQuoted(SingleQuote(text))
+        : text.Contains(BashEre.Ctlesc) ? EreUnquoted(SingleQuote(text))
+        : SingleQuote(text);
+
+    /// <summary>A quoted part of the <c>=~</c> word whose value is the PowerShell expression <paramref name="expr"/>.</summary>
+    public static string EreQuoted(string expr) => "[PsBash.Cmdlets.BashPatternMatch]::EreQuote(" + expr + ")";
+
+    /// <summary>An unquoted part (an expansion) of the <c>=~</c> word: its value is regex text.</summary>
+    public static string EreUnquoted(string expr) => "[PsBash.Cmdlets.BashPatternMatch]::EreRaw(" + expr + ")";
 
     /// <summary>
     /// Escape <paramref name="value"/> for placement INSIDE a PowerShell double-quoted

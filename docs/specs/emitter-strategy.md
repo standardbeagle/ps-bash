@@ -761,12 +761,18 @@ matches it as in every other context.
 
 ### `[[ … =~ … ]]` and `BASH_REMATCH`
 
-`[[ $s =~ PATTERN ]]` emits a subexpression that evaluates `-match` AND copies the
-automatic `$Matches` hashtable into `$global:BASH_REMATCH`, so `${BASH_REMATCH[1]}`
-and friends resolve — bash fills `BASH_REMATCH` on a successful `=~` and clears it on
-failure. The parser reads the whole right-hand side as a raw regex operand BEFORE the
-grouping-paren branch, so a pattern that STARTS with `(` (`(a)(b)`) is not mistaken
-for a test grouping.
+`[[ $s =~ WORD ]]` emits `PsBuild.EreTest`: one subexpression that calls
+`[PsBash.Cmdlets.BashPatternMatch]::EreTest(lhs, word)` (THE POSIX ERE engine, `BashEre`, see
+[regex-ere.md](regex-ere.md)), sets `$global:BASH_REMATCH` from the result (all groups on a match,
+an EMPTY array on no match), marks `__BashTestBad` on a regcomp error (status 2, BASH_REMATCH
+untouched) and yields the test. Never `-match`/`-cmatch`/`[regex]` (guard `EreNoDotNetRegexGuardTests`).
+The word is built by `PsEmitter.BuildEreWord` as bash hands it to `quote_string_for_globbing`:
+quoted parts (`'…'`, `"…"`, `\c`, `$'…'`, a tilde's expansion) are marked (`EreQuote`) to match
+themselves, unquoted text and an unquoted expansion's value (`EreRaw`) are regex text;
+`BashEre.WordToRegex` turns the marked word into regcomp's text at run time. The parser reads the
+whole right-hand side as a raw regex operand BEFORE the grouping-paren branch, so a pattern that
+STARTS with `(` (`(a)(b)`) is not mistaken for a test grouping; an unquoted `\c` in it is an
+`EscapedLiteral` (quoted `c`).
 
 ### `[ … ]` (single bracket) vs the `test` cmdlet
 

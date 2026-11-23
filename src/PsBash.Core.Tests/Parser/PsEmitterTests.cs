@@ -341,16 +341,20 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_RegexMatch_IsCaseSensitiveUnlessNocasematch()
+    public void Transpile_RegexMatch_RunsTheEreEngineNotDotNetRegex()
     {
+        // nocasematch and every ERE rule live in BashPatternMatch.EreTest: PowerShell's -match/-cmatch is .NET regex
+        // (leftmost-first, Perl syntax), not glibc's leftmost-longest POSIX ERE.
         var ps = PsEmitter.Transpile("[[ ABC =~ abc ]]")!;
-        Assert.Contains("-cmatch", ps);
-        Assert.Contains("BashPatternMatch]::NoCase", ps);
+        Assert.Contains("BashPatternMatch]::EreTest(", ps);
+        Assert.DoesNotContain("-cmatch", ps);
+        Assert.DoesNotContain("-match", ps);
     }
 
     [Theory]
-    [InlineData("[[ 'a.c' =~ a\".\"c ]]", "[regex]::Escape")]
-    [InlineData("[[ 'a b' =~ 'a 'b ]]", "a\\ ")]
+    [InlineData("[[ 'a.c' =~ a\".\"c ]]", "('a' + [PsBash.Cmdlets.BashPatternMatch]::EreQuote([string](")]
+    [InlineData("[[ 'a b' =~ 'a 'b ]]", "([PsBash.Cmdlets.BashPatternMatch]::EreQuote('a ') + 'b')")]
+    [InlineData("[[ d =~ ^\\d$ ]]", "('^' + [PsBash.Cmdlets.BashPatternMatch]::EreQuote('d') + '$')")]
     public void Transpile_RegexMatch_QuotedPartsMatchThemselves(string src, string expected)
     {
         Assert.Contains(expected, PsEmitter.Transpile(src)!);
@@ -3031,11 +3035,10 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a =~ ^[0-9]+$ ]]");
 
-        // The match is wrapped in a subexpression that also copies $Matches into
-        // BASH_REMATCH (bash fills it on =~), so the emitted form is no longer a
-        // bare `-match` boolean.
-        Assert.Contains("$env:a -match '^[0-9]+$'", result);
-        Assert.Contains("$global:BASH_REMATCH = [PsBash.Cmdlets.BashPatternMatch]::Rematch($Matches, '^[0-9]+$')", result);
+        // One subexpression: the ERE engine's result sets BASH_REMATCH (or marks a regcomp error) and yields the test.
+        Assert.Contains("[PsBash.Cmdlets.BashPatternMatch]::EreTest(($env:a), ('^[0-9]+$'))", result);
+        Assert.Contains("$global:BASH_REMATCH = $__psbash_ere.Groups", result);
+        Assert.Contains("$global:__BashTestBad = $true", result);
     }
 
     // ── =~ right-hand side is a REGEX, not a shell token stream ──────────────
@@ -3050,15 +3053,10 @@ public class PsEmitterTests
     // 100-file corpus sweep).
     [InlineData("[[ $a =~ ^(x|y)$ ]]", "^(x|y)$")]
     [InlineData("[[ $a =~ ^(ls|pwd)(1|2) ]]", "^(ls|pwd)(1|2)")]
-    // Backslash escapes reach the regex engine verbatim. Oracle-verified:
-    // `[[ axb =~ ^a\.b$ ]]` does NOT match, so the backslash must survive —
-    // the ordinary word decomposer dropped it, widening `\.` to "any char".
-    [InlineData(@"[[ $a =~ ^a\.b$ ]]", @"^a\.b$")]
-    // POSIX bracket classes are valid ERE but not valid .NET regex.
-    [InlineData("[[ $a =~ ^[[:digit:]]+$ ]]", "^[0-9]+$")]
-    [InlineData("[[ $a =~ [^[:alpha:]] ]]", "[^a-zA-Z]")]
-    [InlineData("[[ $a =~ [[:space:]] ]]", @"[\s]")]
-    // An unknown class name is left alone rather than guessed at.
+    // POSIX bracket classes reach the ERE engine as written (it implements them; nothing translates them).
+    [InlineData("[[ $a =~ ^[[:digit:]]+$ ]]", "^[[:digit:]]+$")]
+    [InlineData("[[ $a =~ [^[:alpha:]] ]]", "[^[:alpha:]]")]
+    [InlineData("[[ $a =~ [[:space:]] ]]", "[[:space:]]")]
     [InlineData("[[ $a =~ [[:zzz:]] ]]", "[[:zzz:]]")]
     // A leading @ is regex text, not PowerShell's splat sigil: the argument form's backtick escape ("`@f(x)")
     // reached the regex, so [[ @fx =~ @f(x) ]] did not match.
@@ -3068,8 +3066,15 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile(bash);
 
-        Assert.Contains($"-match '{expectedPattern}'", result);
+        Assert.Contains($"::EreTest(($env:a), ('{expectedPattern}'))", result);
     }
+
+    // A backslash in the =~ word QUOTES the next character (bash): `\.` is a literal dot (oracle: axb does not match
+    // ^a\.b$), and `\d` is just d.
+    [Fact]
+    public void Transpile_ExtendedRegexRhs_BackslashQuotesTheNextCharacter()
+        => Assert.Contains("('^a' + [PsBash.Cmdlets.BashPatternMatch]::EreQuote('.') + 'b$')",
+            PsEmitter.Transpile(@"[[ $a =~ ^a\.b$ ]]"));
 
     [Fact]
     public void Transpile_ExtendedRegexInIfCondition_ParsesGroupedPattern()
@@ -3077,7 +3082,7 @@ public class PsEmitterTests
         // Same pattern inside an `if` — the context that threw before.
         var result = PsEmitter.Transpile("if [[ $a =~ ^(x|y)$ ]]; then echo hit; fi");
 
-        Assert.Contains("-match '^(x|y)$'", result);
+        Assert.Contains("::EreTest(($env:a), ('^(x|y)$'))", result);
         Assert.Contains("hit", result);
     }
 
@@ -3088,14 +3093,14 @@ public class PsEmitterTests
     public void Transpile_RegexRhsLeadingTilde_IsExpandedAndEscaped(string bash)
     {
         var result = PsEmitter.Transpile(bash);
-        Assert.Contains("[regex]::Escape([string]", result);
-        Assert.DoesNotContain("-match '~", result);
+        Assert.Contains("::EreQuote([string](", result);
+        Assert.DoesNotContain("'~", result);
     }
 
     // `[[ '|' =~ $'|' ]]`: ANSI-C quoted text in a regex matches itself, like '|' does.
     [Fact]
     public void Transpile_RegexRhsAnsiCQuoted_IsEscaped()
-        => Assert.Contains("('\\|')", PsEmitter.Transpile("[[ $a =~ $'|' ]]"));
+        => Assert.Contains("::EreQuote('|')", PsEmitter.Transpile("[[ $a =~ $'|' ]]"));
 
     // `shopt -s failglob; for x in *.ZZ`: the failed list leaves status 1, so the zero-iteration reset to 0 checks the flag.
     [Fact]
@@ -3113,13 +3118,11 @@ public class PsEmitterTests
     public void Transpile_ExtendedRegexRhs_SoleVariable_PassedBareNotQuoted(
         string bash, string expected)
     {
-        // `re='^a.b$'; [[ $x =~ $re ]]` is the idiomatic bash regex form.
-        // Single-quoting the emitted variable would match the literal text
-        // "$env:re" instead of the pattern the variable holds; the value is converted from ERE at run time.
+        // `re='^a.b$'; [[ $x =~ $re ]]` is the idiomatic bash regex form: the variable's VALUE is regex text.
         var result = PsEmitter.Transpile(bash);
 
-        Assert.Contains($"-match [PsBash.Cmdlets.BashPatternMatch]::Ere({expected})", result);
-        Assert.DoesNotContain($"-match '{expected}'", result);
+        Assert.Contains($"::EreTest(($env:a), ([PsBash.Cmdlets.BashPatternMatch]::EreRaw([string]({expected}))))", result);
+        Assert.DoesNotContain($"'{expected}'", result);
     }
 
     [Fact]
@@ -3128,8 +3131,8 @@ public class PsEmitterTests
         // Only a SOLE expansion goes bare; a mixed word is built part by part (literal text + the variable's value).
         var result = PsEmitter.Transpile("[[ $a =~ ^${p}[0-9]+$ ]]");
 
-        Assert.Contains("'^' + [string](", result);
-        Assert.Contains("'[0-9]+$'", result);
+        Assert.Contains("('^' + [PsBash.Cmdlets.BashPatternMatch]::EreRaw([string](", result);
+        Assert.Contains(") + '[0-9]+$')", result);
     }
 
     // ── here-string on a COMPOUND command, `for` single item, multi-var `read` ──
@@ -8355,8 +8358,8 @@ public class PsEmitterTests
         // `$global:BASH_REMATCH`, so `${BASH_REMATCH[1]}` indexed a null array.
         var result = PsEmitter.Transpile("[[ $s =~ (a)(b) ]]")!;
 
-        Assert.Contains("-match", result);
-        Assert.Contains("BASH_REMATCH", result);
+        Assert.Contains("::EreTest(", result);
+        Assert.Contains("$global:BASH_REMATCH = $__psbash_ere.Groups", result);
     }
 
     [Fact]
