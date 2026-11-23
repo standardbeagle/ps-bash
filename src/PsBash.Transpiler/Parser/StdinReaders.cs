@@ -130,6 +130,16 @@ public static class StdinReaders
         }
     }
 
+    /// <summary>
+    /// True for a command that reads no stdin whatever its operands turn out to be at run time (<c>echo $x</c>,
+    /// <c>true</c>, <c>cd "$d"</c>): a never-reading builtin or ps-bash command that runs no other code and takes no
+    /// <c>-</c> operand for stdin. <see cref="MayReadStdin"/> judges an operand it cannot see as a file, which may be
+    /// <c>-</c> (<c>g=-; cat $g</c>).
+    /// </summary>
+    public static bool NeverReadsWhateverOperands(string name) =>
+        Classify(name) == Kind.Never && !CodeRunners.Contains(name)
+        && name is not ("read" or "command" or "tar" or "diff" or "cmp" or "xan");
+
     /// <summary>True for <c>command -v NAME</c> / <c>command -V NAME</c> (also bundled, <c>-pv</c>): a lookup that runs nothing.</summary>
     private static bool IsCommandLookup(IReadOnlyList<string?> args)
     {

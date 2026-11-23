@@ -2619,7 +2619,7 @@ public static partial class PsEmitter
             // read loop in the body) takes from the SAME input as the loop, line by line: the input becomes a stdin scope
             // and the loop reads its lines through the shared cursor. A body that reads nothing keeps iterating the records.
             if (!whileCmd.Redirects.IsDefaultOrEmpty
-                && whileCmd.Redirects is [{ Fd: 0, Op: "<" or "<<" or "<<<" } only])
+                && whileCmd.Redirects is [{ Fd: 0, Op: "<" or "<<" or "<<<", ReadWrite: false } only])
             {
                 string source = ReadLoopSource(only);
                 bool bodyReads = false;
@@ -6122,6 +6122,15 @@ public static partial class PsEmitter
             result = RedirectGroup(WithStdinScope(true, () => EmitSimple(innerCmd)), body => $"{hereText} | Emit-BashLine | {DotStdinBlock(body)}");
             return true;
         }
+        // A command proven not to read stdin (`echo {a} <<<x`, `true <<EOF`, `printf hi <<<x`): the body is evaluated and
+        // discarded, then the command runs on its own. REGRESSION: piped the body, a cmdlet with no pipeline input refused
+        // the records ("The input object cannot be bound") and `true <<<x` (an expression) failed the whole script's parse.
+        // A bare `exec <<EOF` rebinds the shell's own stdin: not this case.
+        if (IsProvenStdinFreeWhateverOperands(innerCmd) && !HasInputRedirect(innerCmd.Redirects) && GetLiteralValue(cmd.Words[0]) != "exec")
+        {
+            result = PsBuild.DiscardHereText(EmitHereDocLiteral(cmd.HereDocs[^1]), EmitSimple(innerCmd));
+            return true;
+        }
         // The command is the pipe stage after the body (`body | Emit-BashLine | cmd`): any script block its emission wraps it in
         // (a splat hoist, an env prefix, the run-time exec branch of `$SH >out <<EOF`) must hand the block's input on, or the
         // command reads nothing (`f=-; cat $f <<EOF`, `$SH >stdout <<EOF` printed nothing).
@@ -6178,8 +6187,9 @@ public static partial class PsEmitter
         if (!cmd.Redirects.Any(IsStdoutToStderrDup))
             return false;
 
+        // `2<> f` too: a read-write open of fd 1 / 2 is an output target of the model (`echo XY 2<> f >&2` writes into f).
         static bool IsOutputRedirect(Redirect r) =>
-            r.Fd is 1 or 2 && r.Op is ">" or ">|" or ">>" or "&>" or "&>>" or ">&";
+            r.Fd is 1 or 2 && (r.Op is ">" or ">|" or ">>" or "&>" or "&>>" or ">&" || (r.Op == "<" && r.ReadWrite));
         var output = cmd.Redirects.Where(IsOutputRedirect).ToList();
         var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs,
             cmd.Redirects.Where(r => !IsOutputRedirect(r)).ToImmutableArray());
@@ -6240,8 +6250,8 @@ public static partial class PsEmitter
                     ? new Redirect("<", r.Fd, inputRedirect.Target, ReadWrite: true)
                     : r);
             TryEmitInputRedirect(cmd with { Redirects = [.. plain] }, out var fed);
-            string touch = PsBuild.TouchRedirectTarget(EmitFileRedirectTarget(inputRedirect.Target), append: true);
-            result = RedirectGroup(fed, body => ". { " + touch + "; " + body + " }");
+            string rwTarget = EmitFileRedirectTarget(inputRedirect.Target);
+            result = RedirectGroup(fed, body => ". { " + PsBuild.ReadWriteInputOpen(rwTarget, body) + " }");
             return true;
         }
         var remaining = cmd.Redirects.Remove(inputRedirect);
@@ -8348,7 +8358,8 @@ public static partial class PsEmitter
             // Not a PowerShell stream: `9>f.txt` / `9>$null` were literal ARGUMENTS ("hi 9>f.txt"), and `9>&1` ended in
             // PowerShell's background `&`. (A simple command opens it around itself: ScopedHighFdRedirects.)
             _ when r.Fd > 6 => $"<# ps-bash: fd {r.Fd} {r.Op} redirect ignored #>",
-            // `cmd 1<<EOF`, `cmd 2<<< w`, `cmd 2<> f`: input on an output descriptor has no PowerShell stream.
+            // `cmd 1<<EOF`, `cmd 2<<< w`, `cmd 2< f`: input on an output descriptor has no PowerShell stream (`1<>` / `2<>`
+            // are the modelled tail's).
             _ when r.Here is not null || (r.Op == "<" && r.Fd is 1 or 2) => $"<# ps-bash: fd {r.Fd} input redirect ignored #>",
             ">&" or "<&" when r.Fd > 2 && target == "0" => $"<# ps-bash: fd {r.Fd} {r.Op} redirect ignored #>",
             ">" => r.Fd == 1 ? $">{target}" : $"{r.Fd}>{target}",
@@ -13259,11 +13270,14 @@ public static partial class PsEmitter
                 case "&>" or "&>>":
                     fd1 = fd2 = Open(target, r.Op == "&>>");
                     break;
-                case "<" when r.ReadWrite && r.Fd == 1:
-                    // `echo XY 1<> f`: f opened for reading and writing - created if missing, never truncated, written
-                    // from its start (bash: `abcdef` becomes `XY\ndef`).
-                    fd1 = Open(target, append: false, readWrite: true);
+                case "<" when r.ReadWrite:
+                {
+                    // `echo XY 1<> f` / `cmd 2<> f`: f opened for reading and writing - created if missing, never
+                    // truncated, written from its start (bash: `abcdef` becomes `XY\ndef`). REGRESSION: `2<> f` was dropped.
+                    var dest = Open(target, append: false, readWrite: true);
+                    if (r.Fd == 1) fd1 = dest; else fd2 = dest;
                     break;
+                }
                 case ">&" when target == "-":
                     if (r.Fd == 1) fd1 = new FdDest(FdDestKind.Null); else fd2 = new FdDest(FdDestKind.Null);
                     break;
@@ -13349,6 +13363,7 @@ public static partial class PsEmitter
             force: fd1.Kind == FdDestKind.File && opened[fd1.File].Force,
             errorForce: errorPath is not null && opened[fd2.File].Force,
             readWrite: fd1.Kind == FdDestKind.File && opened[fd1.File].ReadWrite,
+            errorReadWrite: errorPath is not null && opened[fd2.File].ReadWrite,
             openPlan: RedirectOpenPlan(opened, openDiag, fd1, fd2)));
         // `>f >&2`, `2>f >&2`-style lists: the stage (no -Path) passes stdout on to stderr.
         if (fd1.Kind == FdDestKind.StderrDefault) sb.Append(PsBuild.StdoutToStderrStage);
@@ -13529,6 +13544,9 @@ public static partial class PsEmitter
             else if (stdinScope)
                 result = $"@() | {result}";
         }
+
+        if (inputRedirect is { ReadWrite: true, Here: null })
+            result = ". { " + PsBuild.ReadWriteInputOpen(EmitFileRedirectTarget(inputRedirect.Target), result) + " }";
 
         result = WithScopedHighFds(result, highFds);
         // One dot-sourced block, so the whole thing is still a single pipeline element.

@@ -362,12 +362,16 @@ public sealed partial class BashParser
             AddRedirect(redirects, stdinHereText);
         }
 
-        // If only assignments and no command words, it's a bare assignment.
+        // If only assignments and no command words, it's a bare assignment, WHATEVER its redirects.
         // `x=$(cmd) 2>/dev/null` / `y=1 >f` too: with no command word the assignments are the shell's own, and the
         // redirects are the statement's (a value's `$( )` is expanded before them). As a temp binding the value was lost.
-        if (assignmentPairs.Count > 0 && words.Count == 0
-            && hereDocs.Count == 0 && !redirects.Any(r => r.Here is not null))
-            return new Command.ShAssignment(assignmentPairs.ToImmutable(), Redirects: redirects.Count == 0 ? default : redirects.ToImmutable());
+        // A here-text (`x=1 <<<y`, `x=1 3<<<y`, `x=1 <<EOF`) has no command to read it and is dropped (gap: bash still
+        // expands a here-document body, so a `$( )` in it runs). REGRESSION: `x=1 3<<<y; echo "[$x]"` printed `[]`.
+        if (assignmentPairs.Count > 0 && words.Count == 0)
+        {
+            var kept = redirects.Where(r => r.Here is null).ToImmutableArray();
+            return new Command.ShAssignment(assignmentPairs.ToImmutable(), Redirects: kept.IsEmpty ? default : kept);
+        }
 
         // `\break` / `'return'`: quoting only escapes alias expansion, so it is still the control builtin.
         if (words.Count > 0 && EscapedControlBuiltin(words[0]) is { } controlName)
@@ -1104,8 +1108,8 @@ public sealed partial class BashParser
 
         return new Redirect(op, fd, target, fdVar, Force: opToken.Value == ">|", ReadWrite: opToken.Value == "<>");
     }
-    /// <summary>True for a <c>{varname}</c> named-fd prefix token (the lexer only
-    /// emits this Word shape when a redirect immediately follows).</summary>
+    /// <summary>True for a <c>{varname}</c> word: a named-fd prefix when a redirect immediately follows
+    /// (<see cref="IsNamedFdRedirect"/>).</summary>
     private static bool IsNamedFdToken(string s)
     {
         if (s.Length < 3 || s[0] != '{' || s[^1] != '}')
@@ -1217,11 +1221,21 @@ public sealed partial class BashParser
     }
 
     /// <summary>A <c>{name}</c> word right before a redirection operator: the descriptor bash allocates into <c>name</c>.</summary>
-    private bool IsNamedFdRedirect() =>
-        Peek().Kind == BashTokenKind.Word
-        && IsNamedFdToken(Peek().Value)
-        && _pos + 1 < _tokens.Count
-        && IsRedirectOp(_tokens[_pos + 1].Kind);
+    /// <summary>
+    /// A <c>{name}</c> word is a descriptor variable only when a redirection operator that takes a descriptor prefix
+    /// follows it IMMEDIATELY, as a digit word becomes an IO number (<see cref="BashLexer"/> TryReclassifyIoNumber):
+    /// <c>{a}&gt;f</c> opens a descriptor into <c>a</c>; <c>echo {a} &gt;f</c> writes the word <c>{a}</c>, and
+    /// <c>{a}&amp;&gt;f</c> is the word then <c>&amp;&gt;f</c> (<c>&amp;&gt;</c>/<c>&amp;&gt;&gt;</c> take no prefix).
+    /// REGRESSION: the name was taken without adjacency, so <c>echo {a} &gt;f</c> wrote nothing.
+    /// </summary>
+    private bool IsNamedFdRedirect()
+    {
+        if (Peek().Kind != BashTokenKind.Word || !IsNamedFdToken(Peek().Value) || _pos + 1 >= _tokens.Count)
+            return false;
+        var word = Peek();
+        var op = _tokens[_pos + 1];
+        return RedirectOperators.TakesFdPrefix(op.Kind) && word.Position + word.Value.Length == op.Position;
+    }
 
     /// <summary>A redirection starts here: a descriptor number (the lexer makes one only right before an operator) or an operator.</summary>
     private static bool IsRedirectStart(BashTokenKind kind) => kind == BashTokenKind.IoNumber || IsRedirectOp(kind);

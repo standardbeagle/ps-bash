@@ -56,6 +56,55 @@ public class RedirectOperatorDifferentialTests
             + "printf 'abc\\n' > rd; read -u 7 l 7<> rd; echo \"7=$l\"; od -c rd\n"
             + "exec 3>fm; exec 4>&3-; echo m >&4; exec 4>&-; cat fm\n");
 
+    // Class: a `{name}` word was taken for a descriptor variable without being glued to the operator (`echo {a} >f` wrote
+    // nothing, `echo {a}&>f` failed). Primitive: BashParser.IsNamedFdRedirect (adjacency + RedirectOperators.TakesFdPrefix).
+    [SkippableFact]
+    public Task NamedDescriptorPrefix_OnlyWhenGluedToAPrefixTakingOperator()
+        => Eq("cd \"$(mktemp -d)\" || exit\n"
+            + "echo {a} >f; cat f\n"
+            + "echo {a} <<<x\n"
+            + "echo {a}&>g; cat g\n"
+            + "echo {a} 2>e; cat e\n"
+            + "echo {a}>h; echo \"a=${a:+set}\"; ls h; exec {a}>&-\n");
+
+    // Class: an assignment-only command with a here-text redirect was a temp binding of no command (`x=1 3<<<y` lost x).
+    // Primitive: the parser's assignment-only rule takes every redirect.
+    [SkippableFact]
+    public Task AssignmentOnly_WithAnyRedirect_KeepsItsAssignments()
+        => Eq("cd \"$(mktemp -d)\" || exit\n"
+            + "x=1 3<<<y; echo \"[$x]\"\n"
+            + "y=2 <<<z; echo \"[$y]\"\n"
+            + "z=3 <<EOF\nbody\nEOF\necho \"[$z]\"\n"
+            + "w=4 >wf; echo \"[$w]\"; ls wf\n");
+
+    // `2<> f` (was dropped), a group's `0<> new` (was not created), and a `0<>` that cannot be opened (reported twice).
+    [SkippableFact]
+    public Task ReadWriteOpen_OnStderrAndOnAGroup()
+        => Eq("cd \"$(mktemp -d)\" || exit\n"
+            + "printf 'abcdefgh' > e2; echo XY 2<> e2 >&2; od -c e2\n"
+            + "echo hi 2<> e3 >&2; od -c e3\n"
+            + "{ echo x; } 0<> newc; echo \"s=$?\"; ls newc\n"
+            + "printf 'q\\n' > rc; { read l; echo \"l=$l\"; } 0<> rc\n"
+            + "while read -r l; do echo \"w=$l\"; done 0<> rc\n"
+            + "while read -r l; do echo \"w=$l\"; done 0<> newd; echo \"s=$?\"; ls newd\n"
+            + "( cat 0<> /nodir_zz/f ) 2>&1 | wc -l; ( cat 0<> /nodir_zz/f ) 2>/dev/null; echo \"s=$?\"\n"
+            + "{ cat; } 0<> /nodir_zz/f 2>/dev/null; echo \"s=$?\"\n");
+
+    // Class: a here-text on a command that reads no stdin was piped into it: `echo hi <<<x` printed a PowerShell binding
+    // error and `true <<<x` failed the whole script's parse. Primitive: PsEmitter.IsProvenStdinFree + PsBuild.DiscardHereText.
+    [SkippableFact]
+    public Task HereText_OnACommandThatReadsNothing()
+        => Eq("cd \"$(mktemp -d)\" || exit\n"
+            + "echo hi <<<x\n"
+            + "true <<<x; echo \"s=$?\"\n"
+            + "false <<EOF\nbody\nEOF\necho \"s=$?\"\n"
+            + "printf 'p\\n' <<<x\n"
+            + "echo $(echo q) <<EOF\n$(touch made)\nEOF\nls made\n"
+            + "f() { echo in-f; }; f <<<x\n"
+            + "g() { cat; }; g <<<from-g\n"
+            + "echo a | echo b <<<x\n"
+            + "v=w; echo $v <<<y; g=-; cat $g <<<from-dash\n");
+
     // Class: Invoke-BashRedirect threw a terminating error under set -e: it ignored `||` / `if` (__BashErrexitSuppress),
     // ended the whole script from inside a subshell, and its text escaped the subshell's 2>/dev/null. Primitive: the cmdlet
     // only sets the status (FailOpen); the one emitted errexit check (IsErrexitCheckedSimple, RedirectFailureChecked) ends

@@ -466,6 +466,55 @@ public class BashParserTests
         Assert.Equal(stripTabs, hereDoc.StripTabs);
     }
 
+    // A `{name}` word is a descriptor variable only when a prefix-taking operator follows IMMEDIATELY (bash 5.2:
+    // `echo {a} >f` and `echo {a}&>f` write `{a}`, `echo {a} <<<x` prints it; `echo {a}>f` opens a descriptor into a).
+    // REGRESSION: the name was taken without adjacency, so `echo {a} >f` wrote nothing and `echo {a}&>f` failed.
+    [Theory]
+    [InlineData("echo {a} >f", ">")]
+    [InlineData("echo {a} <<<x", "<<<")]
+    [InlineData("echo {a}&>f", "&>")]
+    [InlineData("echo {a}&>>f", "&>>")]
+    [InlineData("echo {a} 2>f", ">")]
+    public void Parse_NamedFdWordNotAdjacentOrBeforeAmpGreat_IsAWord(string src, string op)
+    {
+        var simple = Assert.IsType<Command.Simple>(Parse(src));
+
+        Assert.Equal(["echo", "{a}"], GetWordValues(simple));
+        var all = (simple.Redirects.IsDefaultOrEmpty ? [] : simple.Redirects.ToList())
+            .Concat(simple.HereDocs.IsDefaultOrEmpty ? [] : simple.HereDocs.Select(h => new Redirect("<<<", h.Fd, new CompoundWord([]), h.FdVar, Here: h)))
+            .ToList();
+        var r = Assert.Single(all);
+        Assert.Equal(op, r.Op);
+        Assert.Null(r.FdVar);
+    }
+
+    [Theory]
+    [InlineData("echo {a}>f")]
+    [InlineData("echo {a}<<<x")]
+    [InlineData("echo {a}>&-")]
+    public void Parse_NamedFdWordAdjacentToOperator_IsTheDescriptorVariable(string src)
+    {
+        var simple = Assert.IsType<Command.Simple>(Parse(src));
+
+        Assert.Equal(["echo"], GetWordValues(simple));
+        Assert.Equal("a", Assert.Single(simple.Redirects).FdVar);
+    }
+
+    // An assignment-only command keeps its assignments whatever its redirects (bash 5.2: `x=1 3<<<y; echo "[$x]"` prints
+    // `[1]`). REGRESSION: a here-text made it a temp binding of no command, and `x` was lost.
+    [Theory]
+    [InlineData("x=1 3<<<y")]
+    [InlineData("x=1 <<<y")]
+    [InlineData("x=1 <<EOF\nb\nEOF\n")]
+    [InlineData("x=1 {v}<<<y")]
+    [InlineData("x=1 >f")]
+    public void Parse_AssignmentOnlyWithAnyRedirect_IsAnAssignment(string src)
+    {
+        var assignment = Assert.IsType<Command.ShAssignment>(Parse(src));
+
+        Assert.Equal("x", Assert.Single(assignment.Pairs).Name);
+    }
+
     // toysh "{abc}<<< walrus": a named-fd here-string after a compound command opens a descriptor of its own; it was a
     // parse error (the {abc} word was taken for a command after the group).
     [Fact]

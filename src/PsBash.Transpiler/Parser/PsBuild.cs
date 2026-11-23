@@ -1481,6 +1481,14 @@ public static class PsBuild
     public static string TouchRedirectTarget(string target, bool append, bool force = false) =>
         "@() | Invoke-BashRedirect -Path " + target + (append ? " -Append" : "") + (force ? " -Force" : "");
 
+    /// <summary>
+    /// <c>cmd 0&lt;&gt; f</c> / <c>{ ...; } 0&lt;&gt; f</c>: f is opened for reading and writing BEFORE <paramref name="ok"/> reads
+    /// it - created when missing, never truncated. When it cannot be opened (<c>/nodir/f</c>) that open's report is the
+    /// only one (status 1) and <paramref name="ok"/> never runs: it read the file again and reported a second time.
+    /// </summary>
+    public static string ReadWriteInputOpen(string target, string ok) =>
+        "$global:LASTEXITCODE = 0; " + TouchRedirectTarget(target, append: true) + "; if ($global:LASTEXITCODE -eq 0) { " + ok + " }";
+
     // ───────────────────────── Descriptor table steps ──────────────────────────
 
     /// <summary>
@@ -1510,7 +1518,7 @@ public static class PsBuild
     public static string RedirectStage(
         string? stdoutPath, bool append, string? errorPath, bool errorAppend, bool passErrors,
         IReadOnlyList<string> truncate, IReadOnlyList<string> touch,
-        bool force = false, bool errorForce = false, string? openPlan = null, bool readWrite = false)
+        bool force = false, bool errorForce = false, string? openPlan = null, bool readWrite = false, bool errorReadWrite = false)
     {
         var sb = new System.Text.StringBuilder(" | Invoke-BashRedirect");
         if (stdoutPath is not null)
@@ -1525,6 +1533,7 @@ public static class PsBuild
             sb.Append(" -ErrorPath ").Append(errorPath);
             if (errorAppend) sb.Append(" -ErrorAppend");
             if (errorForce) sb.Append(" -ErrorForce");
+            if (errorReadWrite) sb.Append(" -ErrorReadWrite");
         }
         if (passErrors) sb.Append(" -PassErrors");
         if (truncate.Count > 0) sb.Append(" -Truncate ").Append(ArgWordArray(truncate));
@@ -2238,6 +2247,14 @@ public static class PsBuild
     /// records (so the producer is not refused) and runs <paramref name="body"/> once, as bash does.
     /// </summary>
     public static string DrainStageInput(string body) => "& { $null = @(" + StageInput + "); " + body + " }";
+
+    /// <summary>
+    /// A here-text on a command that reads no stdin (<c>echo hi &lt;&lt;&lt; x</c>, <c>true &lt;&lt;EOF</c>): the body
+    /// <paramref name="hereText"/> is evaluated (bash expands it) and discarded, then <paramref name="command"/> runs on its
+    /// own. Piped into the command, PowerShell refused the records (no pipeline-input parameter) or rejected the script
+    /// (an expression is no pipe element).
+    /// </summary>
+    public static string DiscardHereText(string hereText, string command) => "$null = " + hereText + "; " + command;
 
     /// <summary>
     /// A pipeline source that yields what is LEFT of the compound command's shared stdin

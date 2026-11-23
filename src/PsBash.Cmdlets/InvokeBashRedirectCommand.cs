@@ -56,6 +56,10 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
     [Parameter]
     public SwitchParameter ReadWrite { get; set; }
 
+    /// <summary><c>2&lt;&gt; f</c>: -ErrorPath opened as <see cref="ReadWrite"/> opens -Path (created, never truncated).</summary>
+    [Parameter]
+    public SwitchParameter ErrorReadWrite { get; set; }
+
     /// <summary><c>2&gt;|</c>: the stderr target's noclobber override.</summary>
     [Parameter]
     public SwitchParameter ErrorForce { get; set; }
@@ -167,7 +171,7 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
         }
         if (ErrorPath is not null)
         {
-            if (!TryOpen(ErrorPath, ErrorAppend, ErrorForce, out var s)) return;
+            if (!TryOpen(ErrorPath, ErrorAppend, ErrorForce, out var s, readWrite: ErrorReadWrite)) return;
             _errorStream = s;
         }
     }
@@ -196,7 +200,7 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
             foreach (var step in plan)
             {
                 var (raw, append, force) = RoleTarget(step.Role);
-                if (!TryOpen(raw, append, force, out var s, message => ReportTo(step.Report, message, held), readWrite: step.Role == "p" && ReadWrite)) return;
+                if (!TryOpen(raw, append, force, out var s, message => ReportTo(step.Report, message, held), readWrite: step.Role switch { "p" => ReadWrite, "e" => ErrorReadWrite, _ => false })) return;
                 held[step.Role] = (raw, s);
             }
             if (held.Remove("p", out var p)) _stream = p.Stream;
