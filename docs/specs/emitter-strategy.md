@@ -1084,7 +1084,13 @@ runs as its own static form, transpiled at run time from its words in the caller
 (`PsBuild.BuiltinAsSourceScript`, the same runner as `eval`); the call-stack builtins (`return`, `break`, `continue`,
 `:`, `true`, `false`, `builtin`) are handled in `Resolve-BashCommand`; every other builtin is the run-time command the
 static emitter reaches (`Invoke-Bash<Name>`). Before, the run-time lookup knew only the run-time commands, so
-`run() { "$@"; }; run eval 'echo E'` was 127. A run-time name with only redirections (`c=exec; $c 3>f`) emits both
+`run() { "$@"; }; run eval 'echo E'` was 127. A command the static table maps under another command's name (`egrep`
+is `Invoke-BashGrep -E`, `gawk` `Invoke-BashAwk`, `sh`, `tracert`) runs as that static form
+(`PsEmitter.RunTimeMappedCommand` → `PsBuild.MappedCommandStandIn`). Only a bash function (`PsBuild.FunctionPrologue`)
+comes before the table: a PowerShell function of the name (Windows' own `mkdir`, `more`, `help`) never shadows a
+builtin or a ps-bash command. Returned by its bare name, `c=mkdir; echo x | $c d` was taken for a function, which reads
+stdin, and piped the record into Invoke-BashMkdir (Windows, status 1). Guard: Host.Tests `DynamicCommandTableGuardTests`,
+which defines a PowerShell function for every mapped name. A run-time name with only redirections (`c=exec; $c 3>f`) emits both
 forms behind `PsBuild.RunTimeNameBranch` (`exec` makes them permanent), except in a pipe-target stage: a subshell,
 whose input reaches only the stage's own block. **A run-time name as a pipe stage** (`echo x | $c`) is resolved with
 `-Piped`: it gets the pipe only when it reads stdin (`StdinReaders.ShouldFeed`, the rule a literal name gets), otherwise the

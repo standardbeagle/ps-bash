@@ -2570,6 +2570,17 @@ public static class PsBuild
     /// <summary>The splat of <see cref="ArgvLiterals"/>.</summary>
     public const string ArgvSplat = "@__psbash_argv";
 
+    /// <summary>
+    /// The script block a command name the emitter maps under another command's name runs as when it is named at run time
+    /// (PsEmitter.RunTimeMappedCommand: <c>c=egrep; $c x</c> is <c>Invoke-BashGrep '-E' x</c>): the static
+    /// <paramref name="head"/> with the words it is given as literal strings (<see cref="ArgvLiterals"/>). A pipe stage
+    /// hands it its records; called with no pipeline, the command gets none, so it reads the shell's stdin as the literal
+    /// command does (not an empty pipe, which <see cref="ForwardStageInputIfAny(string)"/> cannot tell from no pipe).
+    /// </summary>
+    public static string MappedCommandStandIn(string head) =>
+        ArgvLiterals + "; if ($MyInvocation.ExpectingInput) { " + ForwardStageInput(head + " " + ArgvSplat) + " } else { "
+        + head + " " + ArgvSplat + " }";
+
     public static string ForwardStageInputIfAny(string command) => ForwardStageInputIfAny(command, "");
 
     /// <summary>

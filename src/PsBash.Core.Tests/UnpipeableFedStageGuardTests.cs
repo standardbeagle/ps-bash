@@ -91,6 +91,22 @@ public class UnpipeableFedStageGuardTests
     }
 
     /// <summary>
+    /// A command with a descriptor opened for it alone (<c>cat 7&lt; d</c>, <c>cat {fd}&lt; d</c>) runs inside the block that
+    /// opens and restores the descriptor, which is no pipe element: the reader inside it is fed from the scope
+    /// (PsEmitter.HighFdCommandFed). REGRESSION: <c>echo stdin-text | cat 7&lt; d</c> printed nothing (ExecFdTests).
+    /// Behavior vs bash: Differential <c>ExecFdTests.ExecFd_ADescriptorDoesNotFeedTheCommandAsStdin</c> and
+    /// <c>ShellLanguageGapDifferentialTests.DescriptorScopedReader_ReadsItsStdin</c>.
+    /// </summary>
+    [Theory]
+    [InlineData("echo q | cat 7< f")]
+    [InlineData("echo q | cat {fd}< f")]
+    [InlineData("echo q | { cat 7< f; }")]
+    [InlineData("echo q | cat 3>&1")]
+    [InlineData("while read -r l; do cat 7< f; done < g")]
+    public void Transpile_DescriptorScopedReader_ReadsThroughTheStdinScope(string script)
+        => Assert.Contains(FedCat, PsEmitter.Transpile(script)!);
+
+    /// <summary>
     /// An expression fed a file (<c>true &lt; f</c>, a return) is no pipe element either: it runs in the scope, never after
     /// a bare <c>|</c> (the whole script failed to parse, ec198f16).
     /// </summary>

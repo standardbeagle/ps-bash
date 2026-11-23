@@ -6234,14 +6234,15 @@ public static partial class PsEmitter
             }
             var rest = cmd with { Redirects = [.. cmd.Redirects.Where(r => r.FdVar is null)] };
             bool restReports = HasOpenableRedirect(rest.Redirects);
-            return RedirectGroup(EmitSimple(rest), body => ". { " + PsBuild.FdOpensGated(opens, body, clearsNested: !restReports) + " }");
+            // Fed inside the block (HighFdCommandFed): the block is no pipe element EmitSimpleFed would feed.
+            return RedirectGroup(HighFdCommandFed(rest), body => ". { " + PsBuild.FdOpensGated(opens, body, clearsNested: !restReports) + " }");
         }
         // `w9 9>&1`, `echo hi 9>f.txt`, `read -u 7 l 7<f`: a numbered descriptor opened for this command only.
         if (ScopedHighFdRedirects(cmd) is { Count: > 0 } highFds)
         {
             // The tail sees the descriptors in order with the rest (3>&1 1>&2 2>&3): WithFdPrelude.
             string scoped = WithFdPrelude(cmd.Redirects, _redirectCommandName,
-                () => EmitSimple(cmd with { Redirects = [.. cmd.Redirects.Where(r => !highFds.Contains(r))] }));
+                () => HighFdCommandFed(cmd with { Redirects = [.. cmd.Redirects.Where(r => !highFds.Contains(r))] }));
             bool restReports = HasOpenableRedirect([.. cmd.Redirects.Where(r => !highFds.Contains(r))]);
             return RedirectGroup(scoped, body => WithScopedHighFds(body, highFds, cmd.Redirects, clearsNested: !restReports));
         }

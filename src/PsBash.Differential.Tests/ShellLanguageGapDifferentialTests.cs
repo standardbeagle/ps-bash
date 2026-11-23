@@ -660,6 +660,24 @@ public class ShellLanguageGapDifferentialTests
         """);
 
     /// <summary>
+    /// A command with a descriptor opened for it alone (<c>cat 7&lt; d</c>, <c>{fd}&lt; d</c>, <c>3&gt;&amp;1</c>) reads its own
+    /// stdin: the pipe, a group's or a loop's. The descriptor is only open. REGRESSION: the block that opens it hid the
+    /// reader from the stdin scope, and <c>echo stdin-text | cat 7&lt; d</c> printed nothing (ExecFdTests, Linux and Windows).
+    /// </summary>
+    [SkippableFact]
+    public Task DescriptorScopedReader_ReadsItsStdin() => SameAsScript(
+        """
+        printf 'FROM-FILE\n' > d
+        echo "1:$(echo stdin-text | cat 7< d)"
+        echo "2:$(echo q | cat {fd}< d)"
+        echo "3:$(echo q | { cat 7< d; })"
+        echo "4:$(printf 'a\nb\n' | { read -r l; cat 7< d; echo "l=$l"; } | tr '\n' ' ')"
+        echo "5:$(echo q | cat 3>&1)"
+        echo "6:$(echo low | tr a-z A-Z 7< d)"
+        echo "7:$(while read -r l; do echo "r=$l"; cat 7< d; done <<< $'x\ny' | tr '\n' ' ')"
+        """);
+
+    /// <summary>
     /// <c>break</c> / <c>continue</c> / <c>return</c> / <c>exit</c> / <c>shift</c> / <c>history</c> with a bad operand report
     /// with the shell prefix and the line they are on: "numeric argument required" (break/continue end the shell with 128;
     /// return and exit 2; shift 1, the line goes on), a loop jump with no loop warns. REGRESSION: no prefix, an earlier

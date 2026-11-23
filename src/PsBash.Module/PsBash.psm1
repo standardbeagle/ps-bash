@@ -398,8 +398,11 @@ function Resolve-BashCommand {
         # function itself. By name, `&` takes a PowerShell alias first, so `ls() {...}; f=ls; "$f"` and `"ls"` ran
         # Invoke-BashLs; and the old marker test never matched, so `cd() {...}; f=cd; $f` ran the cd builtin.
         if ($__fn.Definition -and $__fn.Definition.StartsWith([PsBash.Core.Parser.PsBuild, PsBash.Transpiler]::FunctionPrologue, [StringComparison]::Ordinal)) { return $__fn }
-        # PowerShell's own function of a bash builtin's name (`help`) is not a bash function: `c=help; $c cd` ran PowerShell's help.
-        if (-not [PsBash.Core.Parser.BashBuiltins, PsBash.Transpiler]::Names.Contains($Name)) { return $Name }
+        # Any other function of the name is PowerShell's, not a bash function, and never shadows a builtin or a ps-bash
+        # command: with none of those it is what `return $Name` below reaches. REGRESSIONS: `c=help; $c cd` ran PowerShell's
+        # help; on Windows, whose PowerShell has `mkdir` and `more` functions, `c=mkdir; echo x | $c d` returned the bare
+        # name, the run-time body took it for a function, which reads stdin, and piped the record into Invoke-BashMkdir
+        # ("The input object cannot be bound", status 1). Guard: Host.Tests DynamicCommandTableGuardTests.
     }
     # A builtin the emitter implements (`eval`, `.`, `set`, `exec`, `local`, `exit`, ...; BashBuiltins.RunAsSource, the one
     # table): run as the static command `NAME 'op'...`, transpiled and run here, so `c=eval; $c 'x=1'` is `eval 'x=1'`.
@@ -443,6 +446,9 @@ function Resolve-BashCommand {
     }
     $cmd = Get-Command -Name ('Invoke-Bash' + [WildcardPattern]::Escape($Name)) -CommandType Cmdlet, Function -ErrorAction Ignore
     if ($cmd) { return $cmd.Name }
+    # A name the emitter maps under another command's name (`egrep` is Invoke-BashGrep -E, `gawk` Invoke-BashAwk): the
+    # static table's command (PsEmitter.RunTimeMappedCommand), not a program of that name or "command not found".
+    if ($__mapped = [PsBash.Core.Parser.PsEmitter, PsBash.Transpiler]::RunTimeMappedCommand($Name)) { return [scriptblock]::Create($__mapped) }
     if ($isAlias) {
         $app = Get-Command -Name ([WildcardPattern]::Escape($Name)) -CommandType Application -ErrorAction Ignore | Select-Object -First 1
         if ($app) { return $app.Source }

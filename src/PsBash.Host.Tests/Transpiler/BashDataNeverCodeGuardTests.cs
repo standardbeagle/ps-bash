@@ -410,6 +410,7 @@ public class BashDataNeverCodeGuardTests
         ("[scriptblock]::Create('$__bw = @(' + ($pre -join ', ')", "words via PsBuild.SingleQuote; LoopMode is [int]"),
         ("[scriptblock]::Create([PsBash.Core.Parser.PsBuild, PsBash.Transpiler]::BuiltinAsSourceScript($Name))", "constant per builtin"),
         ("[scriptblock]::Create($__lc)", "PsBuild.RunTimeLoopControl / LoopModeSet: constant code"),
+        ("[scriptblock]::Create($__mapped)", "PsEmitter.RunTimeMappedCommand: constant code per name of the static table (null for any other name)"),
         ("$Command = [scriptblock]::Create($__bgPrefix", "names and values via PsBuild.SingleQuote"),
         ("Invoke-Expression $BrowseCommand", "the browse TUI's own PowerShell command, typed by the user as PowerShell"),
     ];
