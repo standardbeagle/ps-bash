@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Diagnostics;
 using PsBash.Core;
 
@@ -18,8 +17,8 @@ namespace PsBash.Cmdlets;
 /// <c>docs/specs/host-lifecycle-contract.md</c> §"the process environment is NOT
 /// per-invocation". Routing every bash-variable access through one seam is what
 /// makes a per-invocation store implementable later without hunting ~100 call
-/// sites; today it is a faithful pass-through to <see cref="Environment"/>, so
-/// behavior is unchanged.</para>
+/// sites; today it is the process environment (<see cref="ProcessScalars"/>, which
+/// also keeps a value the environment cannot hold: an invalid byte on Linux).</para>
 ///
 /// <para><b>Exported or not.</b> Being in the process environment does not make a variable exported: the export
 /// attribute is a separate table (<see cref="PsBash.Core.ShellExports"/>), and a child process gets the exported
@@ -42,7 +41,7 @@ public static class BashVariableStore
     public static string? Get(string name)
     {
         name = BashNameCase.ToStore(name);
-        return ScalarOverlay.Current is { } job ? job.Get(name) : Environment.GetEnvironmentVariable(name);
+        return ScalarOverlay.Current is { } job ? job.Get(name) : ProcessScalars.Get(name);
     }
 
     /// <summary>
@@ -53,7 +52,7 @@ public static class BashVariableStore
     {
         name = BashNameCase.ToStore(name);
         if (ScalarOverlay.Current is { } job) job.Set(name, value);
-        else Environment.SetEnvironmentVariable(name, value);
+        else ProcessScalars.Set(name, value);
     }
 
     /// <summary>
@@ -80,12 +79,8 @@ public static class BashVariableStore
                 yield return new KeyValuePair<string, string>(BashNameCase.FromEnvironment(kv.Key), kv.Value);
             yield break;
         }
-        foreach (DictionaryEntry e in Environment.GetEnvironmentVariables())
-        {
-            var key = e.Key as string;
-            if (key is null) continue;
-            yield return new KeyValuePair<string, string>(BashNameCase.FromEnvironment(key), e.Value as string ?? string.Empty);
-        }
+        foreach (var (key, value) in ProcessScalars.Entries())
+            yield return new KeyValuePair<string, string>(BashNameCase.FromEnvironment(key), value);
     }
 
     /// <summary>

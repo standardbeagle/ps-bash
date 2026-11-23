@@ -1,5 +1,6 @@
 using System.Management.Automation;
 using System.Management.Automation.Language;
+using System.Management.Automation.Provider;
 using System.Management.Automation.Runspaces;
 
 namespace PsBash.Host.Runtime;
@@ -136,12 +137,34 @@ internal sealed class RunspaceTemplate
                 iss.Commands.Add(new SessionStateCmdletEntry($"{attr.VerbName}-{attr.NounName}", type, null));
                 registered++;
             }
+            if (registered > 0) InstallShellEnvironmentDrive(iss, asm);
             return registered > 0;
         }
         catch
         {
             return false; // the setup script's Import-Module probe is the fallback
         }
+    }
+
+    /// <summary>
+    /// Where the process environment cannot hold every value (<see cref="PsBash.Core.ProcessScalars.EnvironmentHoldsEveryString"/>:
+    /// on Linux it turns an invalid byte's marker into U+FFFD), the shell's <c>Env:</c> drive is the ps-bash provider that
+    /// reads and writes scalars through <c>BashVariableStore</c> (<c>PsBash.Cmdlets.JobEnvironmentProvider</c>, a job
+    /// runspace's drive), so emitted <c>$env:NAME</c> gives back the exact value. REGRESSION: <c>s=$'\xff'; printf %s "$s"</c>
+    /// wrote <c>ef bf bd</c>. Elsewhere PowerShell's own provider stays: it loses nothing there.
+    /// </summary>
+    internal static void InstallShellEnvironmentDrive(InitialSessionState iss, System.Reflection.Assembly cmdlets)
+    {
+        if (PsBash.Core.ProcessScalars.EnvironmentHoldsEveryString) return;
+        var provider = cmdlets.GetType("PsBash.Cmdlets.JobEnvironmentProvider");
+        var name = provider?.GetCustomAttributes(typeof(CmdletProviderAttribute), false) is [CmdletProviderAttribute attr, ..]
+            ? attr.ProviderName
+            : null;
+        if (provider is null || name is null) return;
+        // By index: CreateDefault2's entries come from the core snap-in, and Remove(name, type) leaves them in place.
+        for (int i = iss.Providers.Count - 1; i >= 0; i--)
+            if (iss.Providers[i].Name == "Environment") iss.Providers.RemoveItem(i);
+        iss.Providers.Add(new SessionStateProviderEntry(name, provider, null));
     }
 
     internal sealed record FunctionDef(string Name, string Definition);

@@ -42,8 +42,17 @@ internal static class GetVerbFallbackGuard
         invoke.PostCommandLookupAction = (sender, e) =>
         {
             RecordHashed(e);
-            if (e.Command is not ApplicationInfo app || ProgramFile.Plan(app.Path) is not { } launch) return;
-            e.CommandScriptBlock = ScriptBlock.Create(launch.StandInScript(ProgramFile.Shown(e.CommandName, app.Path)));
+            if (e.Command is not ApplicationInfo app) return;
+            if (ProgramFile.Plan(app.Path) is { } launch)
+            {
+                e.CommandScriptBlock = ScriptBlock.Create(launch.StandInScript(ProgramFile.Shown(e.CommandName, app.Path)));
+                return;
+            }
+            // A scalar holds a value the process environment cannot (Linux: an invalid byte): PowerShell's launcher would
+            // give the program U+FFFD for it, in its environment and its argv. Invoke-BashNative starts it with the exact
+            // bytes (NativeRunner). Only then: every other program keeps PowerShell's launcher.
+            if (ProcessScalars.KeepsAny && !NativeRunner.LookingUpRaw)
+                e.CommandScriptBlock = ScriptBlock.Create(NativeRunner.StandIn(app.Path));
         };
     }
 

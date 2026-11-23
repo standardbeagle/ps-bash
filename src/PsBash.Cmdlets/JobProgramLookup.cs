@@ -22,50 +22,23 @@ namespace PsBash.Cmdlets;
 /// </summary>
 internal static class JobProgramLookup
 {
-    /// <summary>
-    /// Set while <c>Invoke-BashNative</c> looks a name up itself: it needs the program, not its stand-in, and starts
-    /// it through <see cref="ChildStdio"/> anyway.
-    /// </summary>
-    [ThreadStatic] private static bool t_raw;
 
     public static void Install(CommandInvocationIntrinsics invoke)
     {
         ArgumentNullException.ThrowIfNull(invoke);
         invoke.PostCommandLookupAction = static (_, e) =>
         {
-            if (t_raw || e.Command is not ApplicationInfo app) return;
+            if (NativeRunner.LookingUpRaw || e.Command is not ApplicationInfo app) return;
             if (ProgramFile.Plan(app.Path) is { } launch)
             {
                 e.CommandScriptBlock = ScriptBlock.Create(launch.StandInScript(ProgramFile.Shown(e.CommandName, app.Path)));
                 return;
             }
             if (ScalarOverlay.Current is null || InvokeBashNativeCommand.IsBatchFile(app.Path)) return;
-            e.CommandScriptBlock = ScriptBlock.Create(StandIn(app.Path));
+            e.CommandScriptBlock = ScriptBlock.Create(NativeRunner.StandIn(app.Path));
         };
     }
 
-    /// <summary>
-    /// The program at <paramref name="path"/> through <c>Invoke-BashNative</c>, with the arguments and the pipeline
-    /// input the command word was given. Input is passed record by record (a steppable pipeline), so the program reads
-    /// it while it is produced; without input the program keeps the inherited stdin, as PowerShell would give it.
-    /// </summary>
-    internal static string StandIn(string path)
-    {
-        var p = PsBash.Core.Parser.PsBuild.SingleQuote(path);
-        const string argv = PsBash.Core.Parser.PsBuild.ArgvSplat;
-        return "begin { " + PsBash.Core.Parser.PsBuild.ArgvLiterals
-               + "; if ($MyInvocation.ExpectingInput) { $__psbjS = { Invoke-BashNative -- " + p
-               + " " + argv + " }.GetSteppablePipeline(); $__psbjS.Begin($true) } }\n"
-               + "process { if ($__psbjS) { $__psbjS.Process($_) } }\n"
-               + "end { if ($__psbjS) { $__psbjS.End() } else { Invoke-BashNative -- " + p + " " + argv + " } }";
-    }
-
-    /// <summary><paramref name="lookup"/> with this hook off (the caller gets the program itself).</summary>
-    internal static T Raw<T>(Func<T> lookup)
-    {
-        bool was = t_raw;
-        t_raw = true;
-        try { return lookup(); }
-        finally { t_raw = was; }
-    }
+    /// <summary><paramref name="lookup"/> with the stand-in off, in this hook and the shell's (<see cref="NativeRunner.Raw{T}"/>).</summary>
+    internal static T Raw<T>(Func<T> lookup) => NativeRunner.Raw(lookup);
 }

@@ -1,6 +1,5 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using System.Text;
 
 namespace PsBash.Shell.Pty;
 
@@ -188,7 +187,7 @@ internal sealed partial class PosixPtySpawner : PtySpawner
 
     private static IntPtr MarshalNullTerm(string s)
     {
-        var bytes = Encoding.UTF8.GetBytes(s);
+        var bytes = PsBash.Core.RawBytes.GetBytes(s); // exact bytes: an invalid byte stays itself
         IntPtr p = Marshal.AllocHGlobal(bytes.Length + 1);
         Marshal.Copy(bytes, 0, p, bytes.Length);
         Marshal.WriteByte(p, bytes.Length, 0);
@@ -197,7 +196,7 @@ internal sealed partial class PosixPtySpawner : PtySpawner
 
     private static IntPtr MarshalPinNullTerm(string s, List<GCHandle> pins)
     {
-        var bytes = Encoding.UTF8.GetBytes(s);
+        var bytes = PsBash.Core.RawBytes.GetBytes(s); // exact bytes: an invalid byte stays itself
         var buf = new byte[bytes.Length + 1];
         Buffer.BlockCopy(bytes, 0, buf, 0, bytes.Length);
         buf[bytes.Length] = 0;

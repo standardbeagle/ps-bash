@@ -62,12 +62,72 @@ public class RawBytesDifferentialTests
     [SkippableFact] public Task EchoE_InvalidByte_IsOneByteAndNewline() =>
         AssertOracle.EqualAsync(@"echo -e '\xe9' | wc -c");
 
-    [SkippableFact] public Task CommandSubstitution_KeepsTheInvalidByte()
+    // REGRESSION (Linux): skipped there as a platform limit; the scalar store now keeps the exact value (ProcessScalars).
+    [SkippableFact] public Task CommandSubstitution_KeepsTheInvalidByte() =>
+        AssertOracle.EqualAsync(@"x=$(printf '\351'); printf '%s' ""$x"" | wc -c");
+
+    // ───────────── a scalar keeps its invalid bytes, however it got them ─────────────
+
+    /// <summary>The bytes of stdin as hex, after a label: ASCII output the canonicalizer cannot blur.</summary>
+    private const string Hex = "x() { printf '%s:' \"$1\"; od -An -tx1 | tr -s ' \\n' ' '; echo; }\n";
+
+    // REGRESSION (Linux): every scalar went through the process environment, which turned the marker into U+FFFD
+    // (`ef bf bd` for `ff`). Primitive: PsBash.Core.ProcessScalars; the shell's Env: drive reads through it.
+    [SkippableFact] public Task Scalars_KeepTheInvalidByte() => AssertOracle.EqualAsync(Hex + """
+        s=$'\xff'
+        printf '%s' "$s" | x var
+        t=$s; printf '%s' "$t" | x copy
+        u="a${s}b"; printf '%s' "$u" | x interp
+        c=$(printf '\xff'); printf '%s' "$c" | x cmdsub
+        c2="$(printf 'a\xfeb')"; printf '%s' "$c2" | x cmdsubq
+        printf '\xfd\n' > f; read -r r2 < f; printf '%s' "$r2" | x readfile
+        printf '\xfd\n' | { read -r r3; printf '%s' "$r3" | x readpipe; }
+        read -r r4 <<< "$s"; printf '%s' "$r4" | x readhs
+        a=($'\xff' x); a+=("$s"); printf '%s' "${a[0]}${a[2]}" | x array
+        declare -A m; m[k]=$s; printf '%s' "${m[k]}" | x assoc
+        cat <<< "$s" | x herestring
+        cat <<EOF | x heredoc
+        $s
+        EOF
+        f() { local l=$1; printf '%s' "$l" | x local; }; f "$s"
+        printf -v pv '%s' "$s"; printf '%s' "$pv" | x printfv
+        echo -n "$s" | x echo
+        v=${s}z; printf '%s' "${v%z}" "${#s}" | x strip-len
+        printf '%s\n' "$s" > g; od -An -tx1 g | tr -s ' \n' ' '; echo ":redirect"
+        printf '%q\n' "$s" "a${s}b"
+        { t=$s; printf '%s' "$t" | x job; } & wait
+        """ + "\n");
+
+    // REGRESSION (Linux): PowerShell's launcher copies the process environment and marshals argv with plain UTF-8, so a
+    // program got U+FFFD. While a scalar holds such a value the shell starts programs itself (PsBash.Core.NativeRunner).
+    // The programs are named by path: `sh` / `bash` are ps-bash itself (Export_ToANestedShell_KeepsTheInvalidByte).
+    // Windows has no byte environment or argv: a child gets UTF-16, where an invalid byte has no form.
+    [SkippableFact] public Task Export_ToAProgram_KeepsTheInvalidByte()
     {
-        // Known platform limit: shell variables live in $env:, and on Unix .NET sanitizes the lone-surrogate
-        // marker to U+FFFD (3 bytes) when it stores an environment value; Windows keeps UTF-16 verbatim.
-        Skip.IfNot(OperatingSystem.IsWindows(), "env-backed variables cannot carry escaped-byte markers on Unix");
-        return AssertOracle.EqualAsync(@"x=$(printf '\351'); printf '%s' ""$x"" | wc -c");
+        Skip.If(OperatingSystem.IsWindows(), "a Windows child gets its environment and argv as UTF-16: an invalid byte has no UTF-16 form");
+        return AssertOracle.EqualAsync(Hex + """
+            s=$'\xff'
+            export E=$s; /usr/bin/printenv E | x export
+            E2=$'\xfc' /usr/bin/printenv E2 | x prefix
+            /usr/bin/printf '%s' "$s" | x argv
+            /usr/bin/printf '%s' "$s" 2>&1 | x merged
+            { /usr/bin/printf '%s' "$s" | x job; } & wait
+            """ + "\n");
+    }
+
+    // REGRESSION (Linux): `sh` / `bash` start ps-bash itself, and .NET decodes a process's argv and environment with
+    // UTF-8 before any code runs; the launcher now takes such a value from /proc/self (PsBash.Core.Platform.LaunchBytes).
+    // macOS has no /proc: a known gap there.
+    [SkippableFact] public Task Export_ToANestedShell_KeepsTheInvalidByte()
+    {
+        Skip.IfNot(OperatingSystem.IsLinux(), "the exact argv / environment of a process is read from /proc/self (Linux only; Windows has UTF-16)");
+        return AssertOracle.EqualAsync(Hex + """
+            s=$'\xff'
+            export E=$s; sh -c 'printf %s "$E"' | x export
+            E2=$'\xfc' bash -c 'printf %s "$E2"' | x prefix
+            sh -c 'printf %s "$1"' _ "$s" | x argv
+            bash -c 'printf %s "$0"' $'\xfb' | x name
+            """ + "\n");
     }
 
     [SkippableFact] public Task PrintfAppendRedirect_InvalidBytes() =>

@@ -975,10 +975,14 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         // stale, and the sweep below then deletes the value just set.
         var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         var keep = new HashSet<string>(comparer);
+        // An exact value kept beside the environment (ProcessScalars) belongs to the previous command. The block's own
+        // values go in through it: a background job's host gets the shell's scalars this way (BashStateSnapshot), and
+        // `s=$'\xff'; { t=$s; ...; } &` read U+FFFD for t's value there.
+        PsBash.Core.ProcessScalars.Forget();
         foreach (var entry in environment)
         {
             keep.Add(entry.Key);
-            Environment.SetEnvironmentVariable(entry.Key, entry.Value);
+            PsBash.Core.ProcessScalars.Set(entry.Key, entry.Value);
         }
 
 

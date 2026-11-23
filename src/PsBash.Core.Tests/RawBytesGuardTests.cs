@@ -86,6 +86,63 @@ public class RawBytesGuardTests
         Assert.True(offenders.Count == 0, "HostProtocol payloads must use RawBytes. Offenders:\n  " + string.Join("\n  ", offenders));
     }
 
+    /// <summary>file name -> why its remaining use is not data a script holds.</summary>
+    private static readonly Dictionary<string, string> AllowedInSpawns = new(StringComparer.Ordinal)
+    {
+        ["UnixPtyAdapter.cs"] = "the pty slave's device name from ptsname(3): a path the kernel makes",
+    };
+
+    /// <summary>
+    /// The argv, envp and paths a child process is started with are data too: a script's <c>"$s"</c> holding an invalid
+    /// byte reaches the program as that byte. REGRESSION: <c>JobProcess.Posix</c> marshalled them with plain UTF-8,
+    /// outside the cmdlet scan above, so <c>sh -c 'printf %s "$E"'</c> printed <c>ef bf bd</c> for <c>E=$'\xff'</c>.
+    /// </summary>
+    [Fact]
+    public void ChildSpawns_MarshalArgumentsAndEnvironmentWithTheRawCodec()
+    {
+        var offenders = new List<string>();
+        foreach (var rel in new[] { Path.Combine("src", "PsBash.Transpiler", "Processes"), Path.Combine("src", "PsBash.Shell", "Pty") })
+        {
+            foreach (var file in Directory.EnumerateFiles(Path.Combine(RepoRoot(), rel), "*.cs", SearchOption.AllDirectories))
+            {
+                var name = Path.GetFileName(file);
+                if (AllowedInSpawns.ContainsKey(name)) continue;
+                var lines = File.ReadAllLines(file);
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    var t = lines[i].TrimStart();
+                    if (t.StartsWith("//", StringComparison.Ordinal)) continue;
+                    if (Forbidden.IsMatch(lines[i]) || t.Contains("UnmanagedType.LPUTF8Str", StringComparison.Ordinal))
+                        offenders.Add($"{name}:{i + 1}: {t}");
+                }
+            }
+        }
+        Assert.True(offenders.Count == 0,
+            "A child's argv / envp / path must be marshalled with PsBash.Core.RawBytes.GetBytes. Offenders:\n  " +
+            string.Join("\n  ", offenders));
+        foreach (var name in AllowedInSpawns.Keys)
+            Assert.True(File.Exists(Path.Combine(RepoRoot(), "src", "PsBash.Shell", "Pty", name)), $"{name} is gone: drop it from the allow-list");
+    }
+
+    /// <summary>
+    /// A foreground scalar is read and written through <see cref="ProcessScalars"/>, never the environment directly:
+    /// .NET's environment on Linux turns a marker into U+FFFD, so <c>s=$'\xff'; printf %s "$s"</c> wrote <c>ef bf bd</c>.
+    /// </summary>
+    [Theory]
+    [InlineData("src/PsBash.Cmdlets/BashVariableStore.cs")]
+    [InlineData("src/PsBash.Transpiler/ScalarOverlay.cs")]
+    [InlineData("src/PsBash.Cmdlets/JobEnvironmentProvider.cs")]
+    public void ForegroundScalars_GoThroughProcessScalars(string relativePath)
+    {
+        var offenders = File.ReadAllLines(Path.Combine(RepoRoot(), relativePath))
+            .Select((l, i) => (l, i))
+            .Where(x => !x.l.TrimStart().StartsWith("//", StringComparison.Ordinal))
+            .Where(x => Regex.IsMatch(x.l, @"Environment\.(Get|Set)EnvironmentVariables?\("))
+            .Select(x => $"{x.i + 1}: {x.l.Trim()}")
+            .ToList();
+        Assert.True(offenders.Count == 0, "Use ProcessScalars.Get / Set / Entries. Offenders:\n  " + string.Join("\n  ", offenders));
+    }
+
     [Fact]
     public void TheAllowList_OnlyNamesFilesThatStillExist()
     {

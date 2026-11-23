@@ -56,10 +56,12 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
             ? ScriptBlock.Create(launch.StandInScript(PsBash.Core.ProgramFile.Shown(Name, file.Path)))
             : null;
         // In a background job a program is always started here: PowerShell would give it the process environment,
-        // the foreground's scalars, not the job's (ScalarOverlay, background-jobs.md section 3).
+        // the foreground's scalars, not the job's (ScalarOverlay, background-jobs.md section 3). Likewise where its
+        // environment or argv has a value PowerShell's launcher would turn into U+FFFD (Linux: an invalid byte,
+        // NativeRunner).
         bool merge = StderrMerge.JoinsStdout(this);
         if (standIn is null && info is ApplicationInfo app && !IsBatchFile(app.Path)
-            && (merge || PsBash.Core.ScalarOverlay.Current is not null))
+            && (merge || PsBash.Core.ScalarOverlay.Current is not null || PsBash.Core.ProcessScalars.ChildNeedsExactBytes(args)))
         {
             StartProgram(app.Path, args, merge);
             return;

@@ -12,6 +12,11 @@ namespace PsBash.Cmdlets;
 /// job's own store (<see cref="PsBash.Core.ScalarOverlay"/>, taken at its <c>&amp;</c>) while the runspace runs a job, from the
 /// process environment otherwise (the module's import, an idle runspace).
 /// <para>
+/// The shell's own runspace uses it too where the process environment cannot hold every value
+/// (<see cref="PsBash.Core.ProcessScalars"/>: on Linux an invalid byte became U+FFFD in <c>$env:NAME</c>); the host
+/// installs it then (<c>RunspaceTemplate.InstallShellEnvironmentDrive</c>).
+/// </para>
+/// <para>
 /// Same behavior as the provider it replaces: <c>$env:X</c> / <c>${env:X}</c> (content), <c>$env:X = v</c> (an empty
 /// value is a set variable), <c>$env:X = $null</c> and <c>Remove-Item Env:X</c> (unset), <c>Test-Path Env:X</c>,
 /// <c>Get-ChildItem Env:</c> (DictionaryEntry items). See <c>docs/specs/background-jobs.md</c> section 3.
@@ -35,7 +40,7 @@ public sealed class JobEnvironmentProvider : ContainerCmdletProvider, IContentCm
             if (SessionState.Provider.GetAll().Any(p => p.Name == "Environment")) return [];
         }
         catch (Exception) { /* no provider table yet: a job runspace's initial state */ }
-        return [new PSDriveInfo("Env", ProviderInfo, "", "The shell variables of this runspace's background job", null)];
+        return [new PSDriveInfo("Env", ProviderInfo, "", "The shell variables", null)];
     }
 
     // The store resolves the job's ScalarOverlay or the process environment per call.

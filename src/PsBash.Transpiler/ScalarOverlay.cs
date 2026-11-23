@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Runtime.CompilerServices;
 
 namespace PsBash.Core;
@@ -63,8 +62,7 @@ public sealed class ScalarOverlay
         if (from is null)
         {
             values = new Dictionary<string, string>(ShellExports.NameComparer);
-            foreach (DictionaryEntry e in Environment.GetEnvironmentVariables())
-                if (e.Key is string name) values[name] = e.Value as string ?? "";
+            foreach (var (name, value) in ProcessScalars.Entries()) values[name] = value;
         }
         else
         {

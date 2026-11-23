@@ -70,7 +70,8 @@ if (SessionCommands.IsSessionCommand(args))
     return await SessionCommands.RunAsync(args);
 }
 
-var shellArgs = ShellArgs.Parse(args);
+// An argument with an invalid byte keeps it (`bash -c 'printf %s "$1"' _ $'\xff'`): .NET decoded it to U+FFFD (LaunchBytes).
+var shellArgs = ShellArgs.Parse(PsBash.Core.Platform.LaunchBytes.Arguments(args));
 if (shellArgs.Error is not null)
 {
     Console.Error.WriteLine($"ps-bash: {shellArgs.Error}");
@@ -679,7 +680,8 @@ static IReadOnlyList<KeyValuePair<string, string>> CaptureLauncherEnvironment(bo
     {
         if (e.Key is string name && name != "PSBASH_DASH_C" && name != "PSBASH_STDIN_SHELL"
             && name != PsBash.Core.ShellVariables.LauncherParentPidVariable)
-            entries.Add(new KeyValuePair<string, string>(name, e.Value as string ?? string.Empty));
+            entries.Add(new KeyValuePair<string, string>(name,
+                PsBash.Core.Platform.LaunchBytes.EnvironmentValue(name, e.Value as string ?? string.Empty)));
     }
     if (dashC) entries.Add(new KeyValuePair<string, string>("PSBASH_DASH_C", "1"));
     if (readsStdin) entries.Add(new KeyValuePair<string, string>("PSBASH_STDIN_SHELL", "1"));

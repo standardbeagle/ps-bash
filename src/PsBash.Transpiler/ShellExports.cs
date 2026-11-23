@@ -75,7 +75,7 @@ public static class ShellExports
         public Scope(ScalarOverlay? overlay) { Overlay = overlay; Table = overlay?.Exports ?? s_process; }
         public object Gate => (object?)Overlay?.Gate ?? ShellExports.Gate;
 
-        public string? Value(string name) => Overlay is null ? Environment.GetEnvironmentVariable(name) : Overlay.Get(name);
+        public string? Value(string name) => Overlay is null ? ProcessScalars.Get(name) : Overlay.Get(name);
 
         public IEnumerable<KeyValuePair<string, string>> Values()
         {
@@ -84,8 +84,7 @@ public static class ShellExports
                 foreach (var kv in Overlay.Entries()) yield return kv;
                 yield break;
             }
-            foreach (DictionaryEntry e in Environment.GetEnvironmentVariables())
-                if (e.Key is string name) yield return new KeyValuePair<string, string>(name, e.Value as string ?? "");
+            foreach (var kv in ProcessScalars.Entries()) yield return kv;
         }
     }
 
@@ -280,17 +279,28 @@ public static class ShellExports
             return;
         }
         List<string>? drop = null;
+        List<KeyValuePair<string, string?>>? exact = null;
         lock (scope.Gate)
         {
             SyncLocked(scope);
             foreach (var kv in childEnvironment)
             {
-                if (scope.Table.Exported.Contains(kv.Key)) continue;
+                if (scope.Table.Exported.Contains(kv.Key))
+                {
+                    // Copied from the process environment, which cannot hold every value (an invalid byte on Linux):
+                    // the child gets the variable's exact value (ProcessScalars).
+                    if (kv.Value is { } copied && ProcessScalars.ExactIfStored(kv.Key, copied) is var value
+                        && !ReferenceEquals(value, copied))
+                        (exact ??= new List<KeyValuePair<string, string?>>()).Add(new(kv.Key, value));
+                    continue;
+                }
                 var ours = Environment.GetEnvironmentVariable(kv.Key);
                 if (ours is null || !string.Equals(ours, kv.Value, StringComparison.Ordinal)) continue;
                 (drop ??= new List<string>()).Add(kv.Key);
             }
         }
+        if (exact is not null)
+            foreach (var kv in exact) childEnvironment[kv.Key] = kv.Value;
         if (drop is null) return;
         foreach (var name in drop) childEnvironment.Remove(name);
     }

@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using System.Text;
 using PsBash.Core.Platform;
 using PsBash.Core.Runtime.Ipc;
 
@@ -216,9 +215,11 @@ public sealed partial class JobProcess
         return PsBash.Core.Platform.ProcessInfo.GroupMembers(Pid);
     }
 
+    // An argument, an environment entry or a path as the C string the child gets: its exact bytes (RawBytes), so an
+    // invalid byte a script holds reaches the program as itself. Plain UTF-8 wrote ef bf bd for it.
     private static IntPtr Utf8(string s)
     {
-        var bytes = Encoding.UTF8.GetBytes(s);
+        var bytes = PsBash.Core.RawBytes.GetBytes(s);
         var p = Marshal.AllocHGlobal(bytes.Length + 1);
         Marshal.Copy(bytes, 0, p, bytes.Length);
         Marshal.WriteByte(p, bytes.Length, 0);
