@@ -197,6 +197,30 @@ public class AffixWordSplitTests
             < ps.IndexOf("$env:IFS = ", System.StringComparison.Ordinal));
     }
 
+    // `IFS=: printf '<%s>' $(IFS=,; printf '[%s]' $x)`: the substitution is a subshell of the shell from BEFORE the binding.
+    // It starts by putting the parked IFS back and splits its own words on the IFS it then has (the comma it set); it
+    // read the parked IFS, so the inner $x ignored the comma.
+    [Theory]
+    [InlineData("IFS=: printf '<%s>' $(IFS=,; printf '[%s]' $x)")]
+    [InlineData("IFS=: printf '<%s>' \"$(IFS=,; printf '[%s]' $x)\"")]
+    [InlineData("IFS=: cat <(IFS=,; printf '[%s]' $x)")]
+    public void Transpile_SubstitutionInATempIfsBinding_StartsWithTheIfsFromBefore(string bash)
+    {
+        var ps = T(bash);
+        string unpark = PsBuild.UnparkShellVariable("IFS", "__psbash_ea_IFS");
+        Assert.Contains(unpark, ps);
+        Assert.Contains(PsBuild.WordSplitArray("$env:x"), ps);
+        Assert.DoesNotContain(PsBuild.WordSplitArray("$env:x", "__psbash_ea_IFS"), ps);
+        // The park happens before the binding, the unpark inside the substitution.
+        Assert.True(ps.IndexOf(PsBuild.ParkShellVariable("__psbash_ea_IFS", "IFS"), System.StringComparison.Ordinal)
+            < ps.IndexOf(unpark, System.StringComparison.Ordinal));
+    }
+
+    // Outside any binding a substitution is emitted as before (no unpark, no forced scope).
+    [Fact]
+    public void Transpile_SubstitutionWithoutABinding_HasNoUnpark()
+        => Assert.DoesNotContain("__psbash_ea_", T("printf '<%s>' $(printf '[%s]' $x)"));
+
     [Fact]
     public void Transpile_SplitWordWithoutTempIfs_ReadsIfs()
         => Assert.DoesNotContain("__psbash_ea_IFS", T("v=1 printf '<%s>' $x"));
