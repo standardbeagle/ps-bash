@@ -152,7 +152,6 @@ public class DevicePathGuardTests
     private static readonly Dictionary<string, string> Allowed = new(StringComparer.Ordinal)
     {
         ["DevicePath.cs"] = "the primitive itself",
-        ["DetachedProcess.cs"] = "text of a /bin/sh script run by the real sh on Linux/macOS (nohup)",
         ["PipedInteractive.cs"] = "bash source text fed to the shell (`history -r 2>/dev/null`)",
     };
 
