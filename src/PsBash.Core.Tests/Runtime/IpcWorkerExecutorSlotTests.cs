@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using PsBash.Core.Runtime;
 using PsBash.Core.Runtime.Ipc;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Core.Tests.Runtime;
@@ -13,7 +14,9 @@ namespace PsBash.Core.Tests.Runtime;
 /// Executor-slot spill (docs/specs/executor-slots.md): a host that is running another command refuses a new
 /// one with <see cref="HostProtocol.ExecBusyExitCode"/> before STARTED, and the launcher re-sends the command to
 /// the next slot endpoint. Scripted hosts speak the real wire protocol; nothing here spawns a process.
+/// Runs alone: the spill delay and session knobs are process environment.
 /// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
 public sealed class IpcWorkerExecutorSlotTests
 {
     private sealed class SlotHost : IAsyncDisposable
@@ -90,10 +93,8 @@ public sealed class IpcWorkerExecutorSlotTests
 
     private static async Task<T> WithSpillDelay<T>(string ms, Func<Task<T>> body)
     {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_EXEC_SPILL_MS");
-        Environment.SetEnvironmentVariable("PSBASH_EXEC_SPILL_MS", ms);
-        try { return await body(); }
-        finally { Environment.SetEnvironmentVariable("PSBASH_EXEC_SPILL_MS", prior); }
+        using var env = ProcessEnv.Set("PSBASH_EXEC_SPILL_MS", ms);
+        return await body();
     }
 
     [Fact]
@@ -166,10 +167,8 @@ public sealed class IpcWorkerExecutorSlotTests
 
     private static async Task<T> WithEnv<T>((string Name, string Value)[] vars, Func<Task<T>> body)
     {
-        var prior = vars.Select(v => (v.Name, Environment.GetEnvironmentVariable(v.Name))).ToArray();
-        foreach (var (name, value) in vars) Environment.SetEnvironmentVariable(name, value);
-        try { return await body(); }
-        finally { foreach (var (name, value) in prior) Environment.SetEnvironmentVariable(name, value); }
+        using var env = ProcessEnv.Set(vars.Select(v => (v.Name, (string?)v.Value)).ToArray());
+        return await body();
     }
 
     /// <summary>Every slot of a fresh session busy, plus a free scripted host standing in for the overflow host.</summary>

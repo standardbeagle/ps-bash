@@ -21,8 +21,8 @@ namespace PsBash.Cmdlets.Tests;
 /// process-global — mutating them mid-run is inherently racy, which is exactly what
 /// this avoids.
 ///
-/// A test that needs the OPPOSITE (asserting the NO_COLOR path is honored) must set
-/// the variable itself inside a try/finally; none do today.
+/// A test that needs the OPPOSITE (asserting the NO_COLOR path is honored) sets the
+/// variable through <c>PsBash.Testing.ProcessEnv</c> in <see cref="ProcessEnvironmentCollection"/>.
 /// </summary>
 internal static class CanonicalTestEnvironment
 {
@@ -42,6 +42,10 @@ internal static class CanonicalTestEnvironment
 
         // Unset, not "0": the cmdlets treat any non-empty value as opt-out.
         Environment.SetEnvironmentVariable("NO_COLOR", null);
+
+        // grep's colour tests assert GNU's default SGR sequences; an inherited palette would change every one.
+        Environment.SetEnvironmentVariable("GREP_COLORS", null);
+        Environment.SetEnvironmentVariable("GREP_COLOR", null);
 
         // Tests must never read the real console: run from a terminal, an `rm -i` whose answer a test
         // did not supply would block on the keyboard (under tman stdin is not a console, so it hid).

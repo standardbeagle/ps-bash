@@ -14,8 +14,12 @@ namespace PsBash.Cmdlets.Tests;
 ///
 /// Directive 5 (Platform matrix): fnm tests skip on platforms where fnm
 /// is unavailable. direnv tests skip similarly.
+///
+/// direnv's export writes the process environment (the marker and its own <c>DIRENV_*</c> state), so the class
+/// runs alone in <see cref="ProcessEnvironmentCollection"/>; that also keeps its prompt ticks away from every other
+/// class's hooks, the reason for <see cref="HookRegistryCollection"/>.
 /// </summary>
-[Collection(HookRegistryCollection.Name)]
+[Collection(ProcessEnvironmentCollection.Name)]
 public class OnCdIntegrationTests : IDisposable
 {
     private readonly string _prefix = $"oncd-{Guid.NewGuid():N}";
@@ -262,6 +266,7 @@ public class OnCdIntegrationTests : IDisposable
         Skip.If(!allowed, "direnv allow failed — possibly sandboxed or direnv config blocked");
         Skip.If(!DirenvSupportsPwshExport(tempC), "installed direnv lacks `direnv export pwsh` support (added after 2.32)");
 
+        using var env = PsBash.Testing.ProcessEnv.PreserveAll(); // direnv exports the marker and its DIRENV_* state
         using var pwsh = PwshTestFixture.Create();
         var hookName = N("direnv-load");
 
@@ -299,7 +304,6 @@ public class OnCdIntegrationTests : IDisposable
             pwsh.Commands.Clear();
             pwsh.AddScript("Disable-BashHookPrompt").Invoke();
             pwsh.Commands.Clear();
-            Environment.SetEnvironmentVariable(markerVar, null);
         }
     }
 
@@ -323,6 +327,7 @@ public class OnCdIntegrationTests : IDisposable
         var allowed = AllowDirenv(tempD);
         Skip.If(!allowed, "direnv allow failed — possibly sandboxed or direnv config blocked");
 
+        using var env = PsBash.Testing.ProcessEnv.PreserveAll(); // direnv exports the marker and its DIRENV_* state
         using var pwsh = PwshTestFixture.Create();
         var hookName = N("direnv-unload");
 
@@ -374,7 +379,6 @@ public class OnCdIntegrationTests : IDisposable
             pwsh.Commands.Clear();
             pwsh.AddScript("Disable-BashHookPrompt").Invoke();
             pwsh.Commands.Clear();
-            Environment.SetEnvironmentVariable(markerVar, null);
         }
     }
 

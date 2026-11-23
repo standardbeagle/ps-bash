@@ -2,6 +2,7 @@ using System.Diagnostics;
 using PsBash.Core.Runtime;
 using PsBash.Core.Runtime.Ipc;
 using PsBash.Host.Server;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Host.Tests.Server;
@@ -12,7 +13,7 @@ namespace PsBash.Host.Tests.Server;
 /// per-call shell became the anchor left one idle ~65 MB daemon per call for 600 s.
 /// Oracle note (Directive 1): no bash oracle — ps-bash host lifecycle surface.
 /// </summary>
-[Collection("SdkHost")]
+[Collection(ProcessEnvironmentCollection.Name)] // Daemon_* sets the endpoint/idle vars; runs alone, so off the SdkHost lane too
 public sealed class SessionAnchorWatcherTests
 {
     [Fact]
@@ -78,12 +79,10 @@ public sealed class SessionAnchorWatcherTests
         using var anchorProc = StartLongLivedProcess();
         var anchor = new ProcessIdentity(anchorProc.Id, ProcessIdentity.StartTicksOf(anchorProc));
 
-        var priorEndpoint = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
-        var priorSession = Environment.GetEnvironmentVariable(IpcTransportFactory.SessionEnvVar);
-        var priorIdle = Environment.GetEnvironmentVariable("PSBASH_HOST_IDLE_SECS");
-        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, null);
-        Environment.SetEnvironmentVariable(IpcTransportFactory.SessionEnvVar, null);
-        Environment.SetEnvironmentVariable("PSBASH_HOST_IDLE_SECS", "600");
+        using var env = ProcessEnv.Set(
+            (IpcTransportFactory.EndpointEnvVar, null),
+            (IpcTransportFactory.SessionEnvVar, null),
+            ("PSBASH_HOST_IDLE_SECS", "600"));
         // The endpoint is keyed by the stand-in's pid+start time, so it is unique to this test.
         IpcTransportFactory.SessionAnchorOverride = () => anchor;
         var (scheme, endpoint) = IpcTransportFactory.ResolveEndpoint();
@@ -114,9 +113,6 @@ public sealed class SessionAnchorWatcherTests
             if (hostPid is { } pid && IsAlive(pid))
                 try { using var p = Process.GetProcessById(pid); p.Kill(entireProcessTree: true); } catch { }
             IpcTransportFactory.SessionAnchorOverride = null;
-            Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, priorEndpoint);
-            Environment.SetEnvironmentVariable(IpcTransportFactory.SessionEnvVar, priorSession);
-            Environment.SetEnvironmentVariable("PSBASH_HOST_IDLE_SECS", priorIdle);
             try { HostMetadata.Remove(scheme, endpoint); } catch { }
             try { IpcTransportFactory.RetireEndpoint(scheme, endpoint); } catch { }
         }

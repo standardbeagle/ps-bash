@@ -2,6 +2,7 @@ using System.Diagnostics;
 using PsBash.Core.Runtime.Ipc;
 using PsBash.Host.Runtime;
 using PsBash.Host.Server;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Host.Tests.Server;
@@ -14,7 +15,7 @@ namespace PsBash.Host.Tests.Server;
 /// request read and a cap on concurrent connection tasks close the two unbounded
 /// waits around the same connection lifecycle.
 /// </summary>
-[Collection("SdkHost")]
+[Collection(ProcessEnvironmentCollection.Name)] // the PSBASH_* knobs; runs alone, so off the SdkHost lane too
 public sealed class ConnectionBackPressureTests
 {
     private const string StallTimeoutEnv = "PSBASH_IPC_OUTPUT_STALL_TIMEOUT_MS";
@@ -31,41 +32,33 @@ public sealed class ConnectionBackPressureTests
     [Fact]
     public async Task SlowReader_HeldBeyondStallThreshold_CommandCompletesWithFullOutput()
     {
-        var prior = Environment.GetEnvironmentVariable(StallTimeoutEnv);
-        Environment.SetEnvironmentVariable(StallTimeoutEnv, "250");
-        try
-        {
-            await using var pool = new WorkerPool<SdkWorker>(warmTarget: 0, max: 1, SdkWorker.Create);
-            await using var stream = new GatedSlowReaderStream();
-            await stream.QueueRequestAsync(new Mode.Command(
-                "1..4200 | ForEach-Object { Write-BashHostStderr \"line $_\" }"));
+        using var env = ProcessEnv.Set(StallTimeoutEnv, "250");
+        await using var pool = new WorkerPool<SdkWorker>(warmTarget: 0, max: 1, SdkWorker.Create);
+        await using var stream = new GatedSlowReaderStream();
+        await stream.QueueRequestAsync(new Mode.Command(
+            "1..4200 | ForEach-Object { Write-BashHostStderr \"line $_\" }"));
 
-            var connection = new Connection(stream, pool);
-            var handling = connection.HandleAsync(CancellationToken.None);
+        var connection = new Connection(stream, pool);
+        var handling = connection.HandleAsync(CancellationToken.None);
 
-            // The drain has dequeued a frame and is blocked writing it, so the
-            // producer is now filling the queue behind it.
-            Assert.True(await stream.FirstWriteBlocked.Task.WaitAsync(TimeSpan.FromSeconds(30)));
+        // The drain has dequeued a frame and is blocked writing it, so the
+        // producer is now filling the queue behind it.
+        Assert.True(await stream.FirstWriteBlocked.Task.WaitAsync(TimeSpan.FromSeconds(30)));
 
-            // Hold the reader past the old 250 ms stall threshold. A liveness-based
-            // implementation keeps blocking; the old one would already have thrown.
-            await Task.Delay(1500);
+        // Hold the reader past the old 250 ms stall threshold. A liveness-based
+        // implementation keeps blocking; the old one would already have thrown.
+        await Task.Delay(1500);
 
-            stream.OpenGate();
+        stream.OpenGate();
 
-            await handling.WaitAsync(TimeSpan.FromSeconds(60));
+        await handling.WaitAsync(TimeSpan.FromSeconds(60));
 
-            var frames = new List<(string Line, StreamTag Tag)>();
-            var exitCode = await stream.ReadResponseAsync((line, tag) => frames.Add((line, tag)));
+        var frames = new List<(string Line, StreamTag Tag)>();
+        var exitCode = await stream.ReadResponseAsync((line, tag) => frames.Add((line, tag)));
 
-            Assert.Equal(0, exitCode);
-            // STDERR frames carry exact bytes (StderrRecord.Payload): a line arrives with its LF.
-            Assert.Contains(frames, f => f.Tag == StreamTag.Stderr && f.Line == "line 4200\n");
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(StallTimeoutEnv, prior);
-        }
+        Assert.Equal(0, exitCode);
+        // STDERR frames carry exact bytes (StderrRecord.Payload): a line arrives with its LF.
+        Assert.Contains(frames, f => f.Tag == StreamTag.Stderr && f.Line == "line 4200\n");
     }
 
     /// <summary>
@@ -75,27 +68,19 @@ public sealed class ConnectionBackPressureTests
     [Fact]
     public async Task IdleClient_RequestReadTimesOut_ConnectionDoesNotHangForever()
     {
-        var prior = Environment.GetEnvironmentVariable(RequestTimeoutEnv);
-        Environment.SetEnvironmentVariable(RequestTimeoutEnv, "300");
-        try
-        {
-            await using var pool = new WorkerPool<SdkWorker>(warmTarget: 0, max: 1, SdkWorker.Create);
-            await using var stream = new SilentStream();
+        using var env = ProcessEnv.Set(RequestTimeoutEnv, "300");
+        await using var pool = new WorkerPool<SdkWorker>(warmTarget: 0, max: 1, SdkWorker.Create);
+        await using var stream = new SilentStream();
 
-            var connection = new Connection(stream, pool);
-            var sw = Stopwatch.StartNew();
+        var connection = new Connection(stream, pool);
+        var sw = Stopwatch.StartNew();
 
-            // Old code blocked inside ReadRequestAsync with no bound at all; this
-            // WaitAsync is the RED assertion that it returned.
-            await connection.HandleAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
-            sw.Stop();
+        // Old code blocked inside ReadRequestAsync with no bound at all; this
+        // WaitAsync is the RED assertion that it returned.
+        await connection.HandleAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+        sw.Stop();
 
-            Assert.True(sw.ElapsedMilliseconds < 5000, $"connection took {sw.ElapsedMilliseconds} ms");
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(RequestTimeoutEnv, prior);
-        }
+        Assert.True(sw.ElapsedMilliseconds < 5000, $"connection took {sw.ElapsedMilliseconds} ms");
     }
 
     /// <summary>
@@ -107,44 +92,36 @@ public sealed class ConnectionBackPressureTests
     [Fact]
     public async Task ConcurrentConnections_AreCapped()
     {
-        var prior = Environment.GetEnvironmentVariable(MaxConnectionsEnv);
-        Environment.SetEnvironmentVariable(MaxConnectionsEnv, "2");
+        using var env = ProcessEnv.Set(MaxConnectionsEnv, "2");
         using var cts = new CancellationTokenSource();
-        try
+        await using var pool = new WorkerPool<SdkWorker>(warmTarget: 0, max: 1,
+            () => throw new InvalidOperationException("no worker may be built for an idle client"));
+        var transport = new CountingTransport();
+        var streams = new ProbeStream[5];
+        for (int i = 0; i < streams.Length; i++)
         {
-            await using var pool = new WorkerPool<SdkWorker>(warmTarget: 0, max: 1,
-                () => throw new InvalidOperationException("no worker may be built for an idle client"));
-            var transport = new CountingTransport();
-            var streams = new ProbeStream[5];
-            for (int i = 0; i < streams.Length; i++)
-            {
-                streams[i] = new ProbeStream(transport);
-                transport.Enqueue(streams[i]);
-            }
-
-            await using var server = new HostServer(transport, pool);
-            var runTask = server.RunAsync(cts.Token);
-            await server.WhenListening.WaitAsync(TimeSpan.FromSeconds(10));
-
-            // Wait until the accept loop has accepted more connections than the cap.
-            await WaitForAsync(() => transport.AcceptedCount >= 3, TimeSpan.FromSeconds(10));
-            await WaitForAsync(() => transport.ReadingCount >= 2, TimeSpan.FromSeconds(10));
-
-            // Hold briefly: with a cap the third handler must NOT start reading.
-            await Task.Delay(500);
-            Assert.Equal(2, transport.ReadingCount);
-
-            // Freeing one slot lets the next accepted connection start.
-            streams[0].CloseStream();
-            await WaitForAsync(() => transport.ReadingCount >= 3, TimeSpan.FromSeconds(10));
-
-            cts.Cancel();
-            try { await runTask.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
+            streams[i] = new ProbeStream(transport);
+            transport.Enqueue(streams[i]);
         }
-        finally
-        {
-            Environment.SetEnvironmentVariable(MaxConnectionsEnv, prior);
-        }
+
+        await using var server = new HostServer(transport, pool);
+        var runTask = server.RunAsync(cts.Token);
+        await server.WhenListening.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Wait until the accept loop has accepted more connections than the cap.
+        await WaitForAsync(() => transport.AcceptedCount >= 3, TimeSpan.FromSeconds(10));
+        await WaitForAsync(() => transport.ReadingCount >= 2, TimeSpan.FromSeconds(10));
+
+        // Hold briefly: with a cap the third handler must NOT start reading.
+        await Task.Delay(500);
+        Assert.Equal(2, transport.ReadingCount);
+
+        // Freeing one slot lets the next accepted connection start.
+        streams[0].CloseStream();
+        await WaitForAsync(() => transport.ReadingCount >= 3, TimeSpan.FromSeconds(10));
+
+        cts.Cancel();
+        try { await runTask.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
     }
 
     private static async Task WaitForAsync(Func<bool> condition, TimeSpan timeout)

@@ -1,4 +1,5 @@
 using PsBash.Host;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Host.Tests.Server;
@@ -7,7 +8,7 @@ namespace PsBash.Host.Tests.Server;
 /// Tests for non-interactive launcher PID wiring. Oracle note (Directive 1):
 /// no bash oracle — ps-bash-specific host lifecycle contract.
 /// </summary>
-[Collection("SdkHost")]
+[Collection(ProcessEnvironmentCollection.Name)] // PSBASH_HOST_PARENT_PID; runs alone
 public sealed class LauncherPidContractTests
 {
     [Theory]
@@ -80,15 +81,7 @@ public sealed class LauncherPidContractTests
 
     private static void WithParentPidEnv(string? value, Action action)
     {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_HOST_PARENT_PID");
-        Environment.SetEnvironmentVariable("PSBASH_HOST_PARENT_PID", value);
-        try
-        {
-            action();
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("PSBASH_HOST_PARENT_PID", prior);
-        }
+        using var env = ProcessEnv.Set("PSBASH_HOST_PARENT_PID", value);
+        action();
     }
 }

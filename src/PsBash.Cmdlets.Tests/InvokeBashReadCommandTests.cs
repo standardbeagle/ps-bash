@@ -10,16 +10,21 @@ namespace PsBash.Cmdlets.Tests;
 /// branch: pipeline collection, default REPLY destination, single + multi
 /// variable splits (last variable gets remainder), -p prompt prefix, -a
 /// array, -n max-chars, -r raw (no-op for parity), Directive 12
-/// identifier-name rejection.
+/// identifier-name rejection. Read's variables and the scripts' <c>$env:IFS</c>/<c>$env:REPLY</c> land in the
+/// process environment, so the class runs alone and each test puts the whole environment back.
 /// </summary>
-public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
+[Collection(ProcessEnvironmentCollection.Name)]
+public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
     private readonly SharedPwshFixture _fixture;
+    private readonly PsBash.Testing.ProcessEnv _env = PsBash.Testing.ProcessEnv.PreserveAll();
 
     public InvokeBashReadCommandTests(SharedPwshFixture fixture)
     {
         _fixture = fixture;
     }
+
+    public void Dispose() => _env.Dispose();
 
     private string ReadVariable(string script, string varName)
     {

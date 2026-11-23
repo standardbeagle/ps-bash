@@ -26,7 +26,9 @@ public class HookRegistryCollectionGuardTests
             if (file.Contains($"{sep}bin{sep}") || file.Contains($"{sep}obj{sep}")) continue;
             if (Path.GetFileName(file) is nameof(HookRegistryCollection) + ".cs" or nameof(HookRegistryCollectionGuardTests) + ".cs") continue;
             var text = File.ReadAllText(file);
-            if (RegistryUse.IsMatch(text) && !text.Contains("[Collection(HookRegistryCollection.Name)]", StringComparison.Ordinal))
+            // ProcessEnvironmentCollection runs alone, so its members are serialized against every class, hooks included.
+            if (RegistryUse.IsMatch(text) && !text.Contains("[Collection(HookRegistryCollection.Name)]", StringComparison.Ordinal)
+                && !text.Contains("[Collection(ProcessEnvironmentCollection.Name)]", StringComparison.Ordinal))
                 offenders.Add(Path.GetFileName(file));
         }
         Assert.True(offenders.Count == 0,

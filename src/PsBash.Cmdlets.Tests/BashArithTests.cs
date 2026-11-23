@@ -346,6 +346,8 @@ public class BashArithTests
         => Assert.Throws<BashArith.BashArithException>(() => Eval("2 ** -1"));
 }
 
+/// <summary>The scripts set <c>$env:x</c> in the process environment, so the class runs alone and restores it.</summary>
+[Collection(ProcessEnvironmentCollection.Name)]
 public class InvokeBashArithmeticRawReaderTests : IClassFixture<SharedPwshFixture>
 {
     private readonly SharedPwshFixture _fixture;
@@ -357,6 +359,8 @@ public class InvokeBashArithmeticRawReaderTests : IClassFixture<SharedPwshFixtur
     [Fact]
     public void InvokeBashArith_APowerShellScalarOfTheSameName_NeverShadowsTheShellVariable()
     {
+        // y must be unset as a shell variable (a class that ran earlier can leave a store write such as y=1 behind).
+        using var env = PsBash.Testing.ProcessEnv.Set(("x", null), ("y", null));
         var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(
             "$env:x = '9'; $x = ''; $y = '5'; try { Invoke-BashArith '$x'; Invoke-BashArith 'x + y' } finally { $env:x = $null }").Invoke();
@@ -368,6 +372,7 @@ public class InvokeBashArithmeticRawReaderTests : IClassFixture<SharedPwshFixtur
     [Fact]
     public void InvokeBashArith_DollarVariableIsSubstitutedTextually()
     {
+        using var env = PsBash.Testing.ProcessEnv.Preserve("x");
         var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript("$env:x = '1 + 2'; Invoke-BashArith '$x * 3'").Invoke();
 

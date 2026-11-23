@@ -22,7 +22,7 @@ namespace PsBash.Host.Tests.Runtime;
 /// <para>Oracle note (qa-rubric Directive 1): "never runs as PowerShell" is ps-bash-specific (bash has no PowerShell to
 /// fall back to); the bash-visible status/messages are left to the differential suite.</para>
 /// </summary>
-[Collection("SdkHost")]
+[Collection(ProcessEnvironmentCollection.Name)] // NestedShell_* sets PSBASH_NESTED_EXE; runs alone, so off the SdkHost lane too
 public class BashTextNeverRunsAsPowerShellTests : IAsyncLifetime
 {
     private const string Payload = "Write-Output ('SENT'+'INEL')";
@@ -95,24 +95,13 @@ public class BashTextNeverRunsAsPowerShellTests : IAsyncLifetime
     {
         var launcher = PsBashLocator.Resolve();
         Skip.If(launcher is null, "the ps-bash launcher is not built");
-        var priorExe = Environment.GetEnvironmentVariable("PSBASH_NESTED_EXE");
-        var priorPerInvocation = Environment.GetEnvironmentVariable("PSBASH_PER_INVOCATION");
-        Environment.SetEnvironmentVariable("PSBASH_NESTED_EXE", launcher);
-        Environment.SetEnvironmentVariable("PSBASH_PER_INVOCATION", "1");
-        try
+        using var env = ProcessEnv.Set(("PSBASH_NESTED_EXE", launcher), ("PSBASH_PER_INVOCATION", "1"));
+        foreach (var shell in new[] { "bash", "sh" })
         {
-            foreach (var shell in new[] { "bash", "sh" })
-            {
-                var bash = assign + "\n" + shell + " -c \"$x\" 2>/dev/null\necho done";
-                var output = await RunBashAsync(_fixture.CreateWorker(), bash);
-                Assert.True(output.Contains("done", StringComparison.Ordinal), $"{shell} -c / {kind}: the script did not finish:\n{output}");
-                Assert.False(output.Contains(Sentinel, StringComparison.Ordinal), $"{shell} -c / {kind} ran bash data as PowerShell:\n{output}");
-            }
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("PSBASH_NESTED_EXE", priorExe);
-            Environment.SetEnvironmentVariable("PSBASH_PER_INVOCATION", priorPerInvocation);
+            var bash = assign + "\n" + shell + " -c \"$x\" 2>/dev/null\necho done";
+            var output = await RunBashAsync(_fixture.CreateWorker(), bash);
+            Assert.True(output.Contains("done", StringComparison.Ordinal), $"{shell} -c / {kind}: the script did not finish:\n{output}");
+            Assert.False(output.Contains(Sentinel, StringComparison.Ordinal), $"{shell} -c / {kind} ran bash data as PowerShell:\n{output}");
         }
     }
 

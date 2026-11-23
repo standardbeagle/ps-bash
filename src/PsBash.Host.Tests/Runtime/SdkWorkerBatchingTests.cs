@@ -1,4 +1,5 @@
 using PsBash.Host.Runtime;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Host.Tests.Runtime;
@@ -17,7 +18,7 @@ namespace PsBash.Host.Tests.Runtime;
 /// The byte-identity property IS oracle-checked, against the unbatched lane itself:
 /// every test asserts batched output equals what <c>PSBASH_NO_BATCH=1</c> produces.</para>
 /// </summary>
-[Collection("SdkHost")]
+[Collection(ProcessEnvironmentCollection.Name)] // PSBASH_NO_BATCH; runs alone, so off the SdkHost lane too
 public class SdkWorkerBatchingTests : IAsyncLifetime
 {
     private readonly HostWorkerFixture _fixture = new();
@@ -31,27 +32,19 @@ public class SdkWorkerBatchingTests : IAsyncLifetime
     /// batching either on or off.</summary>
     private async Task<Streams> RunAsync(string command, bool noBatch)
     {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_NO_BATCH");
-        Environment.SetEnvironmentVariable("PSBASH_NO_BATCH", noBatch ? "1" : null);
-        try
-        {
-            var worker = _fixture.CreateWorker();
-            var outSb = new System.Text.StringBuilder();
-            var errSb = new System.Text.StringBuilder();
-            var order = new List<string>();
-            var gate = new object();
+        using var env = ProcessEnv.Set("PSBASH_NO_BATCH", noBatch ? "1" : null);
+        var worker = _fixture.CreateWorker();
+        var outSb = new System.Text.StringBuilder();
+        var errSb = new System.Text.StringBuilder();
+        var order = new List<string>();
+        var gate = new object();
 
-            var exit = await worker.ExecuteWithOutputAsync(
-                command,
-                s => { lock (gate) { outSb.Append(s); order.Add("O:" + s.TrimEnd('\r', '\n')); } },
-                s => { lock (gate) { errSb.Append(s); order.Add("E:" + s.TrimEnd('\r', '\n')); } });
+        var exit = await worker.ExecuteWithOutputAsync(
+            command,
+            s => { lock (gate) { outSb.Append(s); order.Add("O:" + s.TrimEnd('\r', '\n')); } },
+            s => { lock (gate) { errSb.Append(s); order.Add("E:" + s.TrimEnd('\r', '\n')); } });
 
-            return new Streams(outSb.ToString(), errSb.ToString(), order, exit);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("PSBASH_NO_BATCH", prior);
-        }
+        return new Streams(outSb.ToString(), errSb.ToString(), order, exit);
     }
 
     // ------------------------------------------------------------ byte identity

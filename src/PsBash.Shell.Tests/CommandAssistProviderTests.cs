@@ -1,4 +1,5 @@
 using PsBash.Host.Shell;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Shell.Tests;
@@ -67,73 +68,6 @@ public sealed class CommandAssistProviderTests
 
         Assert.Contains("missing", ex.Message);
         Assert.Contains("definitely-not-a-ps-bash-ai-provider", ex.Message);
-    }
-
-    [Fact]
-    public void Load_ReadsMultipleProvidersFromConfigFile()
-    {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_AI_CONFIG");
-        var path = Path.Combine(Path.GetTempPath(), "psbash-ai-" + Guid.NewGuid().ToString("N") + ".json");
-        try
-        {
-            File.WriteAllText(path, """
-                {
-                  "defaultProvider": "mock",
-                  "providers": [
-                    {
-                      "name": "claude",
-                      "executable": "claude",
-                      "args": ["-p", "{{prompt}}"]
-                    },
-                    {
-                      "name": "mock",
-                      "executable": "mock-ai",
-                      "args": ["--ask", "{{prompt}}"],
-                      "timeoutMs": 5000,
-                      "outputLimit": 2048
-                    }
-                  ]
-                }
-                """);
-            Environment.SetEnvironmentVariable("PSBASH_AI_CONFIG", path);
-
-            var config = CommandAssistConfig.Load();
-            var provider = config.ResolveDefault();
-
-            Assert.Equal(2, config.Providers.Count);
-            Assert.Equal("mock", provider.Name);
-            Assert.Equal("mock-ai", provider.Executable);
-            Assert.Equal(["--ask", "{{prompt}}"], provider.Args);
-            Assert.Equal(5000, provider.TimeoutMs);
-            Assert.Equal(2048, provider.OutputLimit);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("PSBASH_AI_CONFIG", prior);
-            try { File.Delete(path); } catch { }
-        }
-    }
-
-    [Fact]
-    public void Load_OversizedConfigFileReportsActionableError()
-    {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_AI_CONFIG");
-        var path = Path.Combine(Path.GetTempPath(), "psbash-ai-" + Guid.NewGuid().ToString("N") + ".json");
-        try
-        {
-            File.WriteAllText(path, new string(' ', 1024 * 1024 + 1));
-            Environment.SetEnvironmentVariable("PSBASH_AI_CONFIG", path);
-
-            var ex = Assert.Throws<CommandAssistProviderException>(CommandAssistConfig.Load);
-
-            Assert.Contains("could not read AI provider config", ex.Message);
-            Assert.Contains(path, ex.Message);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("PSBASH_AI_CONFIG", prior);
-            try { File.Delete(path); } catch { }
-        }
     }
 
     [Fact]
@@ -210,26 +144,6 @@ public sealed class CommandAssistProviderTests
             "line={{buffer}}", new CommandAssistRequest(buffer, 0), @"C:\repo");
         Assert.DoesNotContain(secret, rendered);
         Assert.Contains("redacted", rendered);
-    }
-
-    [Fact]
-    public void ToReviewRequest_DefaultDeny_NotExecutableUnlessOptedIn()
-    {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_AI_ALLOW_EXEC");
-        try
-        {
-            var result = new CommandAssistProviderResult("mock", "git status", "", IsExecutable: true);
-
-            Environment.SetEnvironmentVariable("PSBASH_AI_ALLOW_EXEC", null);
-            Assert.False(result.ToReviewRequest(@"C:\repo").IsExecutable); // insert-only by default
-
-            Environment.SetEnvironmentVariable("PSBASH_AI_ALLOW_EXEC", "1");
-            Assert.True(result.ToReviewRequest(@"C:\repo").IsExecutable);  // explicit opt-in
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("PSBASH_AI_ALLOW_EXEC", prior);
-        }
     }
 
     [Fact]
@@ -612,4 +526,89 @@ public sealed class CommandAssistReviewTests
 
     private static CommandAssistReviewRequest ReviewRequest(string command, bool isExecutable = true)
         => new("mock", command, "", @"C:\repo", isExecutable, CommandAssistSafety.Classify(command));
+}
+
+/// <summary>
+/// <see cref="CommandAssistProviderTests"/>' environment-gated cases: <c>PSBASH_AI_CONFIG</c> and
+/// <c>PSBASH_AI_ALLOW_EXEC</c> are process environment, so they run alone (<see cref="ProcessEnvironmentCollection"/>)
+/// and restore both.
+/// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
+public sealed class CommandAssistEnvironmentTests
+{
+    [Fact]
+    public void Load_ReadsMultipleProvidersFromConfigFile()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "psbash-ai-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "defaultProvider": "mock",
+                  "providers": [
+                    {
+                      "name": "claude",
+                      "executable": "claude",
+                      "args": ["-p", "{{prompt}}"]
+                    },
+                    {
+                      "name": "mock",
+                      "executable": "mock-ai",
+                      "args": ["--ask", "{{prompt}}"],
+                      "timeoutMs": 5000,
+                      "outputLimit": 2048
+                    }
+                  ]
+                }
+                """);
+            using var env = ProcessEnv.Set("PSBASH_AI_CONFIG", path);
+
+            var config = CommandAssistConfig.Load();
+            var provider = config.ResolveDefault();
+
+            Assert.Equal(2, config.Providers.Count);
+            Assert.Equal("mock", provider.Name);
+            Assert.Equal("mock-ai", provider.Executable);
+            Assert.Equal(["--ask", "{{prompt}}"], provider.Args);
+            Assert.Equal(5000, provider.TimeoutMs);
+            Assert.Equal(2048, provider.OutputLimit);
+        }
+        finally
+        {
+            try { File.Delete(path); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Load_OversizedConfigFileReportsActionableError()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "psbash-ai-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(path, new string(' ', 1024 * 1024 + 1));
+            using var env = ProcessEnv.Set("PSBASH_AI_CONFIG", path);
+
+            var ex = Assert.Throws<CommandAssistProviderException>(CommandAssistConfig.Load);
+
+            Assert.Contains("could not read AI provider config", ex.Message);
+            Assert.Contains(path, ex.Message);
+        }
+        finally
+        {
+            try { File.Delete(path); } catch { }
+        }
+    }
+
+    [Fact]
+    public void ToReviewRequest_DefaultDeny_NotExecutableUnlessOptedIn()
+    {
+        using var env = ProcessEnv.Preserve("PSBASH_AI_ALLOW_EXEC");
+        var result = new CommandAssistProviderResult("mock", "git status", "", IsExecutable: true);
+
+        env.Change("PSBASH_AI_ALLOW_EXEC", null);
+        Assert.False(result.ToReviewRequest(@"C:\repo").IsExecutable); // insert-only by default
+
+        env.Change("PSBASH_AI_ALLOW_EXEC", "1");
+        Assert.True(result.ToReviewRequest(@"C:\repo").IsExecutable);  // explicit opt-in
+    }
 }

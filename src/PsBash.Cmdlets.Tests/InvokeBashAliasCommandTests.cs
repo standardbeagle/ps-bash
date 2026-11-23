@@ -204,11 +204,25 @@ public class InvokeBashAliasCommandTests : IClassFixture<SharedPwshFixture>
         var lines = RunLines("Invoke-BashAlias '$(throw \"pwn\");evil'");
         Assert.Empty(lines);
     }
+}
+
+/// <summary>Alias cases that set the process environment (<c>$env:aq_x</c>), so they run alone and restore it.</summary>
+[Collection(ProcessEnvironmentCollection.Name)]
+public class InvokeBashAliasEnvironmentTests : IClassFixture<SharedPwshFixture>
+{
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashAliasEnvironmentTests(SharedPwshFixture fixture) => _fixture = fixture;
 
     [Fact]
     public void Alias_BodyIsBash_VariableExpandsAtCallTimeAndArgsStayQuoted()
     {
-        var lines = RunLines("$env:aq_x = 'late'; Invoke-BashAlias 'aq=echo $aq_x'; aq \"it's\" 'a b'");
+        using var env = PsBash.Testing.ProcessEnv.Preserve("aq_x");
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("Invoke-BashAlias -u -a").Invoke();
+        pwsh.Commands.Clear();
+        var lines = pwsh.AddScript("$env:aq_x = 'late'; Invoke-BashAlias 'aq=echo $aq_x'; aq \"it's\" 'a b'").Invoke()
+            .Select(o => o?.ToString() ?? "");
         Assert.Equal("late it's a b", string.Join("\n", lines).Trim());
     }
 }

@@ -1,5 +1,6 @@
 using PsBash.Core.Runtime;
 using PsBash.Core.Runtime.Ipc;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Core.Tests.Runtime.Ipc;
@@ -7,21 +8,17 @@ namespace PsBash.Core.Tests.Runtime.Ipc;
 /// <summary>
 /// Coverage for endpoint override resolution: CLI flag, PSBASH_IPC_ENDPOINT
 /// env var, malformed/empty input, unknown scheme, and precedence between the
-/// three layers. Mutates the real env var; runs in a serial collection so
-/// parallel tests do not race on process-wide state.
+/// three layers. Mutates the real env var, so it runs alone
+/// (<see cref="ProcessEnvironmentCollection"/>) and restores the prior values.
 /// </summary>
-[Collection("EnvVar")]
+[Collection(ProcessEnvironmentCollection.Name)]
 public class IpcTransportFactoryTests : IDisposable
 {
-    private readonly string? _priorEnv;
-    private readonly string? _priorSession;
+    private readonly ProcessEnv _env;
 
     public IpcTransportFactoryTests()
     {
-        _priorEnv = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
-        _priorSession = Environment.GetEnvironmentVariable(IpcTransportFactory.SessionEnvVar);
-        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, null);
-        Environment.SetEnvironmentVariable(IpcTransportFactory.SessionEnvVar, null);
+        _env = ProcessEnv.Set((IpcTransportFactory.EndpointEnvVar, null), (IpcTransportFactory.SessionEnvVar, null));
         // Pin the automatic session token off by default so the canonical-fallback
         // tests are deterministic regardless of the test runner's real parent
         // ancestry; per-session tests set this seam (or PSBASH_SESSION) explicitly.
@@ -31,8 +28,7 @@ public class IpcTransportFactoryTests : IDisposable
 
     public void Dispose()
     {
-        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, _priorEnv);
-        Environment.SetEnvironmentVariable(IpcTransportFactory.SessionEnvVar, _priorSession);
+        _env.Dispose();
         IpcTransportFactory.SessionAnchorOverride = null;
         IpcTransportFactory.EnclosingHostOverride = null;
     }
@@ -59,11 +55,9 @@ public class IpcTransportFactoryTests : IDisposable
     private static ProcessIdentity Anchor(int pid, long startTicks)
         => new(pid, startTicks);
 
-    private static void SetEnv(string? value)
-        => Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, value);
+    private void SetEnv(string? value) => _env.Change(IpcTransportFactory.EndpointEnvVar, value);
 
-    private static void SetSession(string? value)
-        => Environment.SetEnvironmentVariable(IpcTransportFactory.SessionEnvVar, value);
+    private void SetSession(string? value) => _env.Change(IpcTransportFactory.SessionEnvVar, value);
 
     [Fact]
     public void ResolveSlotEndpoint_Slot0IsTheBase_HigherSlotsAreDistinctSiblings()
@@ -258,7 +252,7 @@ public class IpcTransportFactoryTests : IDisposable
         IpcTransportFactory.SessionAnchorOverride = () => Anchor(9999, 111);
         IpcTransportFactory.ResolveEndpoint("unix:/custom.sock", out var fromCli);
         Assert.Null(fromCli);
-        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, "unix:/custom.sock");
+        SetEnv("unix:/custom.sock");
         IpcTransportFactory.ResolveEndpoint(null, out var fromEnv);
         Assert.Null(fromEnv);
     }

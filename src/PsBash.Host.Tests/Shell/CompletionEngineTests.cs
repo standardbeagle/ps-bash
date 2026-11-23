@@ -1,6 +1,7 @@
 using PsBash.Core.Runtime;
 using PsBash.Host.Runtime;
 using PsBash.Host.Shell;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Host.Tests.Shell;
@@ -210,30 +211,6 @@ public class CompletionEngineTests
         var item = Assert.Single(result);
         Assert.Equal("-Des", item.InsertText);
         Assert.Equal("-Destination <String>", item.DisplayText);
-    }
-
-    [Fact]
-    public void BuildParameterNameItems_CanBeConfiguredToInsertCanonicalNames()
-    {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_PS_PARAMETER_INSERT");
-        try
-        {
-            Environment.SetEnvironmentVariable("PSBASH_PS_PARAMETER_INSERT", "full");
-            var candidates = new[]
-            {
-                new PowerShellParameterCandidate("PathType", "String", []),
-            };
-
-            var result = CompletionEngine.BuildParameterNameItems(candidates, "-Pa");
-
-            var item = Assert.Single(result);
-            Assert.Equal("-PathType", item.InsertText);
-            Assert.Equal("-PathType <String>", item.DisplayText);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("PSBASH_PS_PARAMETER_INSERT", prior);
-        }
     }
 
     [Fact]
@@ -451,5 +428,29 @@ public class CompletionEngineTests
         var item = Assert.Single(result);
         Assert.Equal("a|b", item.InsertText);
         Assert.Equal("a|b  - ValidateSet value for -Mode <String>", item.DisplayText);
+    }
+}
+
+/// <summary>
+/// <see cref="CompletionEngineTests"/>' environment-gated case: <c>PSBASH_PS_PARAMETER_INSERT</c> is process
+/// environment, so it runs alone (<see cref="ProcessEnvironmentCollection"/>) and restores it.
+/// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
+public class CompletionEngineParameterInsertTests
+{
+    [Fact]
+    public void BuildParameterNameItems_CanBeConfiguredToInsertCanonicalNames()
+    {
+        using var env = ProcessEnv.Set("PSBASH_PS_PARAMETER_INSERT", "full");
+        var candidates = new[]
+        {
+            new PowerShellParameterCandidate("PathType", "String", []),
+        };
+
+        var result = CompletionEngine.BuildParameterNameItems(candidates, "-Pa");
+
+        var item = Assert.Single(result);
+        Assert.Equal("-PathType", item.InsertText);
+        Assert.Equal("-PathType <String>", item.DisplayText);
     }
 }

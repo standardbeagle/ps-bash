@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Management.Automation;
 using PsBash.Host.Runtime;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Host.Tests.Runtime;
@@ -14,24 +15,23 @@ namespace PsBash.Host.Tests.Runtime;
 ///
 /// <para>Oracle note (qa-rubric Directive 1): SDK-runspace lifetime is ps-bash-specific, no bash oracle.</para>
 /// </summary>
-[Collection("SdkHost")]
+[Collection(ProcessEnvironmentCollection.Name)] // PSBASH_BG_MODE; runs alone, so off the SdkHost lane too
 public class BackgroundJobPoolLifetimeTests : IAsyncLifetime
 {
     private readonly HostWorkerFixture _fixture = new();
 
-    private string? _bgMode;
+    private ProcessEnv? _env;
 
     // These tests cover in-process jobs; the default (process) mode has no job runspace to tear down.
     public async Task InitializeAsync()
     {
-        _bgMode = Environment.GetEnvironmentVariable("PSBASH_BG_MODE");
-        Environment.SetEnvironmentVariable("PSBASH_BG_MODE", "inproc");
+        _env = ProcessEnv.Set("PSBASH_BG_MODE", "inproc");
         await _fixture.InitializeAsync();
     }
 
     public async Task DisposeAsync()
     {
-        Environment.SetEnvironmentVariable("PSBASH_BG_MODE", _bgMode);
+        _env?.Dispose();
         await _fixture.DisposeAsync();
     }
 

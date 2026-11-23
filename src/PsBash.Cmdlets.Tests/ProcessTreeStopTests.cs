@@ -307,29 +307,39 @@ public class ProcessTreeStopTests : IClassFixture<SharedPwshFixture>
         finally { EndOurGrandchild(pid[0]); }
     }
 
-    // `timeout 2>&1`: the program runs through Invoke-BashNative, i.e. the primitive; the budget ends the tree.
-    [Fact]
-    public void Timeout_BudgetEnds_TheOrphanedGrandchildIsGone()
+    /// <summary>
+    /// <c>timeout</c> hands the grandchild its pid file through the process environment (<c>PIDFILE</c>), so this
+    /// case runs alone; the rest of the class stays parallel.
+    /// </summary>
+    [Collection(ProcessEnvironmentCollection.Name)]
+    public class TimeoutEnvironmentTests : IClassFixture<SharedPwshFixture>
     {
-        using var s = new Scenario(Shape.Orphan);
-        string Quote(string a) => "'" + a.Replace("'", "''") + "'";
-        var words = new List<string> { Quote(s.StartInfo.FileName) };
-        foreach (var a in s.StartInfo.ArgumentList) words.Add(Quote(a));
-        int budget = BudgetSeconds;
-        var pwsh = _fixture.AcquireFresh();
-        var previous = Environment.GetEnvironmentVariable("PIDFILE");
-        Environment.SetEnvironmentVariable("PIDFILE", s.PidFile);
-        CmdResult result;
-        var sw = Stopwatch.StartNew();
-        try { result = CmdResult.Run(pwsh, $"Invoke-BashTimeout {budget} {string.Join(" ", words)} 2>&1"); }
-        finally { Environment.SetEnvironmentVariable("PIDFILE", previous is null ? null : previous); }
-        sw.Stop();
+        private readonly SharedPwshFixture _fixture;
 
-        string? recorded = PsBash.Testing.PublishedFile.ReadWhenReady(s.PidFile, ReturnLimit);
-        Assert.True(recorded is not null, "the grandchild did not start inside the budget; nothing was tested");
-        result.AssertFailed(124, "");
-        AssertGone(int.Parse(recorded!.Trim()), "the orphaned grandchild of a timed-out command");
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(budget) + ReturnLimit, $"timeout must return at its budget; took {sw.ElapsedMilliseconds}ms");
+        public TimeoutEnvironmentTests(SharedPwshFixture fixture) => _fixture = fixture;
+
+        // `timeout 2>&1`: the program runs through Invoke-BashNative, i.e. the primitive; the budget ends the tree.
+        [Fact]
+        public void Timeout_BudgetEnds_TheOrphanedGrandchildIsGone()
+        {
+            using var s = new Scenario(Shape.Orphan);
+            string Quote(string a) => "'" + a.Replace("'", "''") + "'";
+            var words = new List<string> { Quote(s.StartInfo.FileName) };
+            foreach (var a in s.StartInfo.ArgumentList) words.Add(Quote(a));
+            int budget = BudgetSeconds;
+            var pwsh = _fixture.AcquireFresh();
+            CmdResult result;
+            var sw = Stopwatch.StartNew();
+            using (PsBash.Testing.ProcessEnv.Set("PIDFILE", s.PidFile))
+                result = CmdResult.Run(pwsh, $"Invoke-BashTimeout {budget} {string.Join(" ", words)} 2>&1");
+            sw.Stop();
+
+            string? recorded = PsBash.Testing.PublishedFile.ReadWhenReady(s.PidFile, ReturnLimit);
+            Assert.True(recorded is not null, "the grandchild did not start inside the budget; nothing was tested");
+            result.AssertFailed(124, "");
+            AssertGone(int.Parse(recorded!.Trim()), "the orphaned grandchild of a timed-out command");
+            Assert.True(sw.Elapsed < TimeSpan.FromSeconds(budget) + ReturnLimit, $"timeout must return at its budget; took {sw.ElapsedMilliseconds}ms");
+        }
     }
 
     // A bound that detects a hang must sit far short of the hang: the bug waits a whole hold, a loaded machine only

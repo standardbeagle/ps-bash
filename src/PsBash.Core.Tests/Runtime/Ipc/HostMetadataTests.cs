@@ -10,7 +10,7 @@ namespace PsBash.Core.Tests.Runtime.Ipc;
 /// "stale endpoint without process" and "named-pipe path has a real
 /// replacement strategy" acceptance bullets of SNlQPegASmvs.
 /// </summary>
-[Collection("EnvVar")]
+[Collection(ProcessEnvironmentCollection.Name)]
 public class HostMetadataTests : IDisposable
 {
     private readonly string _tempRoot;

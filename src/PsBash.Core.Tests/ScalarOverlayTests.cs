@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Core.Tests;
@@ -11,17 +12,21 @@ namespace PsBash.Core.Tests;
 /// Oracle note (qa-rubric Directive 1): the store has no bash equivalent; the behavior it gives a script is pinned
 /// against bash by <c>BackgroundJobLaunchValuesDifferentialTests</c>. These pin the store's own contract.
 /// The "job" here is the test thread (<see cref="ScalarOverlay.CurrentOwner"/> answers an owner only on it), so tests
-/// running beside these on other threads keep seeing the process environment.
+/// running beside these on other threads keep seeing the process environment. The shell-side values these write are
+/// process environment, so the class runs alone and restores them.
 /// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
 public sealed class ScalarOverlayTests : IDisposable
 {
     [ThreadStatic] private static object? t_owner;
     private readonly Func<object?>? _was;
     private readonly object _job = new();
     private readonly string _name = "PSB_OVL_" + Guid.NewGuid().ToString("N")[..8];
+    private readonly ProcessEnv _env;
 
     public ScalarOverlayTests()
     {
+        _env = ProcessEnv.Preserve(_name);
         _was = ScalarOverlay.CurrentOwner;
         var previous = _was;
         ScalarOverlay.CurrentOwner = () => t_owner ?? previous?.Invoke();
@@ -32,7 +37,7 @@ public sealed class ScalarOverlayTests : IDisposable
         t_owner = null;
         ScalarOverlay.Detach(_job);
         ShellExports.Forget(_name);
-        Environment.SetEnvironmentVariable(_name, null);
+        _env.Dispose();
         ScalarOverlay.CurrentOwner = _was;
     }
 
@@ -47,16 +52,16 @@ public sealed class ScalarOverlayTests : IDisposable
     [Fact]
     public void TheJob_SeesTheValueAtItsLaunch_NotALaterWriteOfTheShell()
     {
-        Environment.SetEnvironmentVariable(_name, "a");
+        _env.Change(_name, "a");
         var job = Launch();
-        Environment.SetEnvironmentVariable(_name, "b");
+        _env.Change(_name, "b");
         Assert.Equal("a", job.Get(_name));
     }
 
     [Fact]
     public void WhatTheJobWrites_NeverReachesTheProcessEnvironment()
     {
-        Environment.SetEnvironmentVariable(_name, "a");
+        _env.Change(_name, "a");
         var job = Launch();
         job.Set(_name, "inside");
         Assert.Equal("a", Environment.GetEnvironmentVariable(_name));
@@ -86,7 +91,7 @@ public sealed class ScalarOverlayTests : IDisposable
     [Fact]
     public void AJobsChild_GetsTheJobsExportedValues_AndTheCallersOwnEntries()
     {
-        Environment.SetEnvironmentVariable(_name, "shell");
+        _env.Change(_name, "shell");
         var job = Launch();
         job.Set(_name, "job");
         ShellExports.Export(_name);
@@ -105,7 +110,7 @@ public sealed class ScalarOverlayTests : IDisposable
     [Fact]
     public void AnEntryTheCallerRemoved_StaysOutOfAJobsChild()
     {
-        Environment.SetEnvironmentVariable(_name, "shell");
+        _env.Change(_name, "shell");
         ShellExports.Export(_name); // exported in the shell, so in the job's copy too
         Launch();
         var psi = new ProcessStartInfo("x");
@@ -117,7 +122,7 @@ public sealed class ScalarOverlayTests : IDisposable
     [Fact]
     public void AJobLaunchedInAJob_CopiesTheOuterJobsStore()
     {
-        Environment.SetEnvironmentVariable(_name, "shell");
+        _env.Change(_name, "shell");
         var outer = Launch();
         outer.Set(_name, "outer");
         var inner = ScalarOverlay.Capture();
@@ -155,7 +160,7 @@ public sealed class ScalarOverlayTests : IDisposable
     [Fact]
     public void ACommandsEnvironment_StartsFromTheExportedVariables_MinusUnset()
     {
-        Environment.SetEnvironmentVariable(_name, "a");
+        _env.Change(_name, "a");
         ShellExports.Export(_name);
         var command = ScalarOverlay.ForCommand(ignoreEnvironment: false, ["PATH"], []);
         Assert.Equal("a", command.Get(_name));

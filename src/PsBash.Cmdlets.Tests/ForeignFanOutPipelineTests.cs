@@ -15,7 +15,6 @@ namespace PsBash.Cmdlets.Tests;
 /// exception list: PowerShell pipeline object preservation has no bash
 /// equivalent.
 /// </summary>
-[Collection("PsBashSearchEnv")]
 public class ForeignFanOutPipelineTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
     private readonly SharedPwshFixture _fixture;

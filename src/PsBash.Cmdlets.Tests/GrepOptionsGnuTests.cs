@@ -1,3 +1,4 @@
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Cmdlets.Tests;
@@ -9,74 +10,9 @@ namespace PsBash.Cmdlets.Tests;
 /// expected value below was read from it. Records are compared as BashText (an unterminated
 /// <c>-z</c> record keeps its NUL).
 /// </summary>
-[Collection("PsBashSearchEnv")]
-public class GrepOptionsGnuTests : IClassFixture<SharedPwshFixture>, IDisposable
+public class GrepOptionsGnuTests : GrepOptionsGnuHarness, IClassFixture<SharedPwshFixture>
 {
-    private const string Esc = "\u001b";
-    private static string Sgr(string c) => $"{Esc}[{c}m{Esc}[K";
-    private const string End = Esc + "[m" + Esc + "[K";
-    private static string Col(string c, string t) => Sgr(c) + t + End;
-    private static string Match(string t) => Col("01;31", t);
-    private static string Sep(string t) => Col("36", t);
-
-    private readonly SharedPwshFixture _fixture;
-    private readonly string _dir;
-
-    public GrepOptionsGnuTests(SharedPwshFixture fixture)
-    {
-        _fixture = fixture;
-        _dir = Path.Combine(Path.GetTempPath(), "psbash-grepo-" + Guid.NewGuid().ToString("N").Substring(0, 12));
-        Directory.CreateDirectory(_dir);
-    }
-
-    public void Dispose()
-    {
-        try { Directory.Delete(_dir, recursive: true); } catch { /* best-effort */ }
-        Environment.SetEnvironmentVariable("GREP_COLORS", null);
-        Environment.SetEnvironmentVariable("GREP_COLOR", null);
-        Environment.SetEnvironmentVariable("PSBASH_GREP_TTY", null);
-        Environment.SetEnvironmentVariable("TERM", null);
-    }
-
-    private sealed record R(string[] Lines, string Stderr, int Exit);
-
-    private R Run(string script)
-    {
-        var pwsh = _fixture.AcquireFresh();
-        pwsh.Commands.Clear();
-        pwsh.Streams.ClearStreams();
-        pwsh.AddScript("$global:LASTEXITCODE = $null").Invoke();
-        pwsh.Commands.Clear();
-        var output = pwsh.AddScript(script).Invoke();
-        pwsh.Commands.Clear();
-        var errors = pwsh.Streams.Error.Select(e => e.ToString()).ToArray();
-        pwsh.Streams.ClearStreams();
-        var exit = pwsh.AddScript("$global:LASTEXITCODE").Invoke();
-        pwsh.Commands.Clear();
-        int code = exit.Count > 0 && exit[0]?.BaseObject is { } o ? Convert.ToInt32(o) : 0;
-        var lines = output.Select(x => x?.Properties["BashText"]?.Value as string ?? x?.ToString() ?? "").ToArray();
-        return new R(lines, string.Join("\n", errors), code);
-    }
-
-    private string Path_(string name) => Path.Combine(_dir, name);
-
-    private string F(string name, string content)
-    {
-        File.WriteAllText(Path_(name), content);
-        return "'" + Path_(name).Replace("'", "''") + "'";
-    }
-
-    private string FB(string name, params byte[] bytes)
-    {
-        File.WriteAllBytes(Path_(name), bytes);
-        return "'" + Path_(name).Replace("'", "''") + "'";
-    }
-
-    private static byte[] B(string s) => System.Text.Encoding.Latin1.GetBytes(s);
-
-    private string BinFile() => FB("bin.dat", B("abc\nfoo\0bar\nfoo2\n"));
-
-    private R G(string args, string files) => Run($"Invoke-BashGrep {args} {files}");
+    public GrepOptionsGnuTests(SharedPwshFixture fixture) : base(fixture) { }
 
     // ---- binary files -------------------------------------------------------------------------
 
@@ -443,9 +379,7 @@ public class GrepOptionsGnuTests : IClassFixture<SharedPwshFixture>, IDisposable
         Assert.Empty(G("'-l' '-m0' 'hello'", t).Lines);
     }
 
-    // ---- colour --------------------------------------------------------------------------------
-
-    private string S() => F("s.txt", "hello\nworld\nhello again\n");
+    // ---- colour (the cases that set TERM / GREP_COLORS are in GrepColorEnvironmentTests) ----------------------------
 
     [Fact]
     public void Color_Always_DefaultSgrSequences()
@@ -516,91 +450,6 @@ public class GrepOptionsGnuTests : IClassFixture<SharedPwshFixture>, IDisposable
         Assert.Equal(new[] { "hello", "hello again" }, G("'--color=auto' 'hello'", s).Lines);
         Assert.Equal(new[] { "hello", "hello again" }, G("'--color=never' 'hello'", s).Lines);
         Assert.Equal(new[] { "hello", "hello again" }, G("'--color' 'hello'", s).Lines);
-    }
-
-    [Fact]
-    public void Color_Auto_ColoursWhenTheTerminalSignalIsSet()
-    {
-        var s = S();
-        Environment.SetEnvironmentVariable("PSBASH_GREP_TTY", "1");
-        Environment.SetEnvironmentVariable("TERM", "xterm-256color");
-        try
-        {
-            Assert.Equal(new[] { Match("hello"), Match("hello") + " again" }, G("'--color=auto' 'hello'", s).Lines);
-            Environment.SetEnvironmentVariable("TERM", "dumb");
-            Assert.Equal(new[] { "hello", "hello again" }, G("'--color=auto' 'hello'", s).Lines);   // TERM=dumb: GNU stays plain
-            Assert.Equal(new[] { Match("hello"), Match("hello") + " again" }, G("'--color=always' 'hello'", s).Lines);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("PSBASH_GREP_TTY", null);
-            Environment.SetEnvironmentVariable("TERM", null);
-        }
-    }
-
-    [Fact]
-    public void Color_GrepColors_Capabilities()
-    {
-        var s = S();
-        var name = Path_("s.txt");
-        void With(string colors, Action body)
-        {
-            Environment.SetEnvironmentVariable("GREP_COLORS", colors);
-            try { body(); } finally { Environment.SetEnvironmentVariable("GREP_COLORS", null); }
-        }
-
-        With("mt=4", () => Assert.Equal(new[] { Col("4", "hello"), Col("4", "hello") + " again" }, G("'--color=always' 'hello'", s).Lines));
-        With("bogus=1:mt=7", () => Assert.Equal(Col("7", "hello"), G("'--color=always' 'hello'", s).Lines[0]));
-        With("mt=7:", () => Assert.Equal(Col("7", "hello"), G("'--color=always' 'hello'", s).Lines[0]));
-        With("ne", () => Assert.Equal(new[] { $"{Esc}[32m1{Esc}[m{Esc}[36m:{Esc}[m{Esc}[01;31mhello{Esc}[m", $"{Esc}[32m3{Esc}[m{Esc}[36m:{Esc}[m{Esc}[01;31mhello{Esc}[m again" },
-            G("'--color=always' '-n' 'hello'", s).Lines));
-        With("fn=:ln=:se=", () => Assert.Equal(new[] { name + ":1:" + Match("hello"), name + ":3:" + Match("hello") + " again" },
-            G("'--color=always' '-n' '-H' 'hello'", s).Lines));
-        With("sl=1:cx=2", () => Assert.Equal(new[]
-        {
-            Col("32", "1") + Sep(":") + Sgr("1") + Match("hello"),
-            Col("32", "2") + Sep("-") + Col("2", "world"),
-            Col("32", "3") + Sep(":") + Sgr("1") + Match("hello") + Col("1", " again"),
-        }, G("'--color=always' '-n' '-A1' 'hello'", s).Lines));
-        With("sl=1:cx=2", () => Assert.Equal(new[]
-        {
-            Col("1", "world"),
-            Sgr("2") + Match("hello") + Col("2", " again"),
-        }, G("'--color=always' '-v' '-A1' 'hello'", s).Lines));
-        With("sl=1:cx=2:rv", () => Assert.Equal(new[]
-        {
-            Col("2", "world"),
-            Sgr("1") + Match("hello") + Col("1", " again"),
-        }, G("'--color=always' '-v' '-A1' 'hello'", s).Lines));
-        With("ms=4:mc=5", () => Assert.Equal(new[] { "world", Col("5", "hello") + " again" }, G("'--color=always' '-v' '-A1' 'hello'", s).Lines));
-        With("fn=33:ln=34:bn=35:se=36", () => Assert.Equal(new[]
-        {
-            Col("33", name) + Sep(":") + Col("34", "1") + Sep(":") + Col("35", "0") + Sep(":") + Match("hello"),
-            Col("33", name) + Sep("-") + Col("34", "2") + Sep("-") + Col("35", "6") + Sep("-") + "world",
-            Col("33", name) + Sep(":") + Col("34", "3") + Sep(":") + Col("35", "12") + Sep(":") + Match("hello") + " again",
-        }, G("'--color=always' '-n' '-b' '-H' '-A1' 'hello'", s).Lines));
-    }
-
-    [Fact]
-    public void Color_DeprecatedGrepColor_WarnsAndSetsTheMatchColour()
-    {
-        var s = S();
-        Environment.SetEnvironmentVariable("GREP_COLOR", "4;5");
-        try
-        {
-            var r = G("'--color=always' 'hello'", s);
-            Assert.Equal(Col("4;5", "hello"), r.Lines[0]);
-            Assert.Contains("grep: warning: GREP_COLOR='4;5' is deprecated; use GREP_COLORS='mt=4;5'", r.Stderr);
-            Environment.SetEnvironmentVariable("GREP_COLORS", "mt=7");   // GREP_COLORS overrides: no warning
-            var r2 = G("'--color=always' 'hello'", s);
-            Assert.Equal(Col("7", "hello"), r2.Lines[0]);
-            Assert.Equal("", r2.Stderr);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("GREP_COLOR", null);
-            Environment.SetEnvironmentVariable("GREP_COLORS", null);
-        }
     }
 
     // ---- -P ------------------------------------------------------------------------------------
@@ -698,4 +547,153 @@ public class GrepOptionsGnuTests : IClassFixture<SharedPwshFixture>, IDisposable
         Assert.Equal(new[] { "1:0:hello", "2-6-world", "3:12:hello again" }, viaFile);
         Assert.Equal(viaFile, viaPipe);
     }
+}
+
+/// <summary>
+/// The colour cases that set <c>TERM</c>, <c>GREP_COLORS</c>, <c>GREP_COLOR</c> or <c>PSBASH_GREP_TTY</c>. They run
+/// alone (<see cref="ProcessEnvironmentCollection"/>) and restore each value from before the test: set in parallel and
+/// cleared to null after every test, they changed native <c>tput</c>'s output and grep's colours in other classes.
+/// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
+public class GrepColorEnvironmentTests : GrepOptionsGnuHarness, IClassFixture<SharedPwshFixture>
+{
+    public GrepColorEnvironmentTests(SharedPwshFixture fixture) : base(fixture) { }
+
+    [Fact]
+    public void Color_Auto_ColoursWhenTheTerminalSignalIsSet()
+    {
+        var s = S();
+        using var env = ProcessEnv.Set(("PSBASH_GREP_TTY", "1"), ("TERM", "xterm-256color"));
+        Assert.Equal(new[] { Match("hello"), Match("hello") + " again" }, G("'--color=auto' 'hello'", s).Lines);
+        env.Change("TERM", "dumb");
+        Assert.Equal(new[] { "hello", "hello again" }, G("'--color=auto' 'hello'", s).Lines);   // TERM=dumb: GNU stays plain
+        Assert.Equal(new[] { Match("hello"), Match("hello") + " again" }, G("'--color=always' 'hello'", s).Lines);
+    }
+
+    [Fact]
+    public void Color_GrepColors_Capabilities()
+    {
+        var s = S();
+        var name = Path_("s.txt");
+        void With(string colors, Action body)
+        {
+            using var env = ProcessEnv.Set("GREP_COLORS", colors);
+            body();
+        }
+
+        With("mt=4", () => Assert.Equal(new[] { Col("4", "hello"), Col("4", "hello") + " again" }, G("'--color=always' 'hello'", s).Lines));
+        With("bogus=1:mt=7", () => Assert.Equal(Col("7", "hello"), G("'--color=always' 'hello'", s).Lines[0]));
+        With("mt=7:", () => Assert.Equal(Col("7", "hello"), G("'--color=always' 'hello'", s).Lines[0]));
+        With("ne", () => Assert.Equal(new[] { $"{Esc}[32m1{Esc}[m{Esc}[36m:{Esc}[m{Esc}[01;31mhello{Esc}[m", $"{Esc}[32m3{Esc}[m{Esc}[36m:{Esc}[m{Esc}[01;31mhello{Esc}[m again" },
+            G("'--color=always' '-n' 'hello'", s).Lines));
+        With("fn=:ln=:se=", () => Assert.Equal(new[] { name + ":1:" + Match("hello"), name + ":3:" + Match("hello") + " again" },
+            G("'--color=always' '-n' '-H' 'hello'", s).Lines));
+        With("sl=1:cx=2", () => Assert.Equal(new[]
+        {
+            Col("32", "1") + Sep(":") + Sgr("1") + Match("hello"),
+            Col("32", "2") + Sep("-") + Col("2", "world"),
+            Col("32", "3") + Sep(":") + Sgr("1") + Match("hello") + Col("1", " again"),
+        }, G("'--color=always' '-n' '-A1' 'hello'", s).Lines));
+        With("sl=1:cx=2", () => Assert.Equal(new[]
+        {
+            Col("1", "world"),
+            Sgr("2") + Match("hello") + Col("2", " again"),
+        }, G("'--color=always' '-v' '-A1' 'hello'", s).Lines));
+        With("sl=1:cx=2:rv", () => Assert.Equal(new[]
+        {
+            Col("2", "world"),
+            Sgr("1") + Match("hello") + Col("1", " again"),
+        }, G("'--color=always' '-v' '-A1' 'hello'", s).Lines));
+        With("ms=4:mc=5", () => Assert.Equal(new[] { "world", Col("5", "hello") + " again" }, G("'--color=always' '-v' '-A1' 'hello'", s).Lines));
+        With("fn=33:ln=34:bn=35:se=36", () => Assert.Equal(new[]
+        {
+            Col("33", name) + Sep(":") + Col("34", "1") + Sep(":") + Col("35", "0") + Sep(":") + Match("hello"),
+            Col("33", name) + Sep("-") + Col("34", "2") + Sep("-") + Col("35", "6") + Sep("-") + "world",
+            Col("33", name) + Sep(":") + Col("34", "3") + Sep(":") + Col("35", "12") + Sep(":") + Match("hello") + " again",
+        }, G("'--color=always' '-n' '-b' '-H' '-A1' 'hello'", s).Lines));
+    }
+
+    [Fact]
+    public void Color_DeprecatedGrepColor_WarnsAndSetsTheMatchColour()
+    {
+        var s = S();
+        using var env = ProcessEnv.Set("GREP_COLOR", "4;5");
+        var r = G("'--color=always' 'hello'", s);
+        Assert.Equal(Col("4;5", "hello"), r.Lines[0]);
+        Assert.Contains("grep: warning: GREP_COLOR='4;5' is deprecated; use GREP_COLORS='mt=4;5'", r.Stderr);
+        env.Change("GREP_COLORS", "mt=7");   // GREP_COLORS overrides: no warning
+        var r2 = G("'--color=always' 'hello'", s);
+        Assert.Equal(Col("7", "hello"), r2.Lines[0]);
+        Assert.Equal("", r2.Stderr);
+    }
+}
+
+/// <summary>The temp directory, runner and SGR helpers shared by <see cref="GrepOptionsGnuTests"/> and
+/// <see cref="GrepColorEnvironmentTests"/>.</summary>
+public abstract class GrepOptionsGnuHarness : IDisposable
+{
+    protected const string Esc = "\u001b";
+    protected static string Sgr(string c) => $"{Esc}[{c}m{Esc}[K";
+    protected const string End = Esc + "[m" + Esc + "[K";
+    protected static string Col(string c, string t) => Sgr(c) + t + End;
+    protected static string Match(string t) => Col("01;31", t);
+    protected static string Sep(string t) => Col("36", t);
+
+    private readonly SharedPwshFixture _fixture;
+    private readonly string _dir;
+
+    protected GrepOptionsGnuHarness(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+        _dir = Path.Combine(Path.GetTempPath(), "psbash-grepo-" + Guid.NewGuid().ToString("N").Substring(0, 12));
+        Directory.CreateDirectory(_dir);
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_dir, recursive: true); } catch { /* best-effort */ }
+        GC.SuppressFinalize(this);
+    }
+
+    protected sealed record R(string[] Lines, string Stderr, int Exit);
+
+    protected R Run(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.Commands.Clear();
+        pwsh.Streams.ClearStreams();
+        pwsh.AddScript("$global:LASTEXITCODE = $null").Invoke();
+        pwsh.Commands.Clear();
+        var output = pwsh.AddScript(script).Invoke();
+        pwsh.Commands.Clear();
+        var errors = pwsh.Streams.Error.Select(e => e.ToString()).ToArray();
+        pwsh.Streams.ClearStreams();
+        var exit = pwsh.AddScript("$global:LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        int code = exit.Count > 0 && exit[0]?.BaseObject is { } o ? Convert.ToInt32(o) : 0;
+        var lines = output.Select(x => x?.Properties["BashText"]?.Value as string ?? x?.ToString() ?? "").ToArray();
+        return new R(lines, string.Join("\n", errors), code);
+    }
+
+    protected string Path_(string name) => Path.Combine(_dir, name);
+
+    protected string F(string name, string content)
+    {
+        File.WriteAllText(Path_(name), content);
+        return "'" + Path_(name).Replace("'", "''") + "'";
+    }
+
+    protected string FB(string name, params byte[] bytes)
+    {
+        File.WriteAllBytes(Path_(name), bytes);
+        return "'" + Path_(name).Replace("'", "''") + "'";
+    }
+
+    protected static byte[] B(string s) => System.Text.Encoding.Latin1.GetBytes(s);
+
+    protected string BinFile() => FB("bin.dat", B("abc\nfoo\0bar\nfoo2\n"));
+
+    protected R G(string args, string files) => Run($"Invoke-BashGrep {args} {files}");
+
+    protected string S() => F("s.txt", "hello\nworld\nhello again\n");
 }
