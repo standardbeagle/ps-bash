@@ -10949,7 +10949,7 @@ public static partial class PsEmitter
         if (runtimeNameref && bvs.Suffix == "!indirect")
             return PsBuild.IndirectThroughNameref(bvs.Name);
         if (bvs.Suffix is null)
-            return EmitSimpleVar(bvs.Name, strict: true);
+            return EmitSimpleVar(bvs.Name, inDoubleQuote: inDoubleQuote && bvs.Name == "*", strict: true); // "${*}" joins with IFS[0], as "$*" does
 
         // A bad substitution fails the expansion: the command is abandoned with status 1 and a script goes on
         // (`x=${ echo hi;}` is bash 5.3 syntax); under `bash -c` the rest of the command string is discarded.
@@ -10964,7 +10964,8 @@ public static partial class PsEmitter
         if (bvs.Name is "@" or "*" && bvs.Suffix.StartsWith(':')
             && EmitPositionalSlice(bvs.Suffix, inDoubleQuote, bvs.Name) is { } posSlice)
         {
-            return posSlice;
+            // `"${*:2}"`: the parameters joined with IFS[0], as `"$*"` is (the slice is an array, a string joins it with a space).
+            return inDoubleQuote && bvs.Name == "*" ? "$(@(" + posSlice + ") -join " + PsBuild.IfsJoinSeparator + ")" : posSlice;
         }
 
         // `${v@a}` / `${a[0]@a}`: the attribute letters of the variable (array kind, then i/r/x).
@@ -11035,7 +11036,8 @@ public static partial class PsEmitter
                 // a PowerShell range index; other ops degrade to the whole array.
                 if (subscript is "@" or "*")
                 {
-                    if (EmitArraySlice(arrayVar, subOp, inDoubleQuote, label: bvs.Name + "[" + subscript + "]") is { } slice) return slice;
+                    if (EmitArraySlice(arrayVar, subOp, inDoubleQuote, label: bvs.Name + "[" + subscript + "]") is { } slice)
+                        return inDoubleQuote && subscript == "*" ? "$(@(" + slice + ") -join " + PsBuild.IfsJoinSeparator + ")" : slice;
                     // `${a[@]@Q}` / `${a[@]@a}` / `${A[@]@P}` / `${a[@]@E}`: the transform applies to EACH element (the values
                     // of an associative array).
                     if (subOp is "@Q" or "@a" or "@P" or "@E")
@@ -11084,7 +11086,7 @@ public static partial class PsEmitter
                             : $"{src}.Count -gt 0";
                         return alt
                             ? $"$(if ({has}) {{ {arm} }} else {{ '' }})"
-                            : $"$(if ({has}) {{ {src} }} else {{ {arm} }})";
+                            : $"$(if ({has}) {{ {(subscript == "*" && inDoubleQuote ? "(" + src + " -join " + PsBuild.IfsJoinSeparator + ")" : src)} }} else {{ {arm} }})";
                     }
                     return arrayVar;
                 }
