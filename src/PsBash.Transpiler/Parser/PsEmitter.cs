@@ -1581,16 +1581,25 @@ public static partial class PsEmitter
         var prior = _context;
         var priorErrexit = _errexitMode; var priorErrtrace = _errtraceMode; var priorErrexitSet = _errexitSetMode;
         var priorExempt = _errexitExemptDepth;
+        // A static eval's text emitted in place (EmitEval) shares the caller's attribute sets: what it declares holds for the
+        // code after the eval (`eval 'declare -i n'; n=1+1` stores 2). REGRESSION: they were the text's own, and were lost.
+        bool inlineEval = _inlineEvalText;
+        _inlineEvalText = false;
         var priorIntVars = _intVars;
         var priorAssocVars = _assocVars;
-        _assocVars = new HashSet<string>(StringComparer.Ordinal);
         var priorArrayVars = _arrayVars;
-        // BASH_REMATCH is an array `=~` fills: a bare `$BASH_REMATCH` is its element 0.
-        _arrayVars = new HashSet<string>(StringComparer.Ordinal) { "BASH_REMATCH" };
         var priorCaseVars = _caseVars;
-        _caseVars = new Dictionary<string, bool>(VarNameKeys);
-        _intVars = new HashSet<string>(VarNameKeys);
-        _globalAttrsInFunctions = null;
+        bool freshSets = !inlineEval || _intVars is null || _assocVars is null || _arrayVars is null || _caseVars is null;
+        if (freshSets)
+        {
+            _assocVars = new HashSet<string>(StringComparer.Ordinal);
+            // BASH_REMATCH is an array `=~` fills: a bare `$BASH_REMATCH` is its element 0.
+            _arrayVars = new HashSet<string>(StringComparer.Ordinal) { "BASH_REMATCH" };
+            _caseVars = new Dictionary<string, bool>(VarNameKeys);
+            _intVars = new HashSet<string>(VarNameKeys);
+            _globalAttrsInFunctions = null;
+        }
+        var priorRunTimeAttrs = _runTimeAttrs;
         var priorReadsStatus = _scriptReadsStatus;
         var priorFinalAssignment = _finalAssignment;
         var priorReadsLastArg = _scriptReadsLastArg;
@@ -1607,10 +1616,14 @@ public static partial class PsEmitter
         _readonlyVars = new HashSet<string>(VarNameKeys);
         _readonlyVars.Add("SHELLOPTS"); _readonlyVars.Add("BASHOPTS");
         var priorNamerefs = _namerefs;
-        _namerefs = new Dictionary<string, string>(VarNameKeys);
         var priorLitAssigned = _litAssigned; var priorPendingNamerefs = _pendingNamerefs; var priorRuntimeNamerefs = _runtimeNamerefs;
-        _litAssigned = new Dictionary<string, string>(VarNameKeys); _pendingNamerefs = new HashSet<string>(VarNameKeys);
-        _runtimeNamerefs = new HashSet<string>(VarNameKeys);
+        // The references too: `f() { eval 'local -n r=x'; r=1; }` writes x.
+        if (!inlineEval || _namerefs is null || _litAssigned is null || _pendingNamerefs is null || _runtimeNamerefs is null)
+        {
+            _namerefs = new Dictionary<string, string>(VarNameKeys);
+            _litAssigned = new Dictionary<string, string>(VarNameKeys); _pendingNamerefs = new HashSet<string>(VarNameKeys);
+            _runtimeNamerefs = new HashSet<string>(VarNameKeys);
+        }
         _context = context;
         // Only a script that itself turns errexit on gets the checks (a sourced file running under
         // its caller's `set -e` does not — see intentional-differences.md).
@@ -1675,17 +1688,19 @@ public static partial class PsEmitter
             BashParser.SawBadSubstitution = false;
             // An alias holding part of a compound command (`alias LEFT={`): bash reads the alias text in its place.
             string? spliced = SpliceAliases(bash, out bool partialAlias);
+            // A static eval's text in a function is the function's own code: its `declare` is a local (BashParser.Parse).
+            bool inFunctionBody = inlineEval && _functionDepth > 0;
             if (spliced is not null && partialAlias)
             {
-                try { cmd = BashParser.Parse(spliced); aliasesSpliced = true; }
-                catch (ParseException) { cmd = BashParser.Parse(bash); }
+                try { cmd = BashParser.Parse(spliced, inFunctionBody); aliasesSpliced = true; }
+                catch (ParseException) { cmd = BashParser.Parse(bash, inFunctionBody); }
             }
             else
             {
-                try { cmd = BashParser.Parse(bash); }
+                try { cmd = BashParser.Parse(bash, inFunctionBody); }
                 catch (ParseException original) when (spliced is not null)
                 {
-                    try { cmd = BashParser.Parse(spliced); }
+                    try { cmd = BashParser.Parse(spliced, inFunctionBody); }
                     catch (ParseException) { System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(original).Throw(); throw; }
                     aliasesSpliced = true;
                 }
@@ -1694,6 +1709,7 @@ public static partial class PsEmitter
                 return null;
             // A lone statement starts from status 0 anyway.
             _finalAssignment = (cmd is Command.CommandList { Commands.Length: > 1 } top ? top.Commands[^1] : null) as Command.ShAssignment;
+            _runTimeAttrs = priorRunTimeAttrs || RunsRunTimeDeclarations(cmd);
             CollectCallSites(cmd);
             CollectArrayAssignments(cmd);
             CollectAliasDefs(cmd, bash);
@@ -1728,6 +1744,7 @@ public static partial class PsEmitter
             _groupReturnMark = priorGroupMark;
             _context = prior;
             _intVars = priorIntVars;
+            _runTimeAttrs = priorRunTimeAttrs;
             _assocVars = priorAssocVars;
             _arrayVars = priorArrayVars;
             _caseVars = priorCaseVars;
@@ -1790,6 +1807,7 @@ public static partial class PsEmitter
         _scriptReadsStatus = false; _scriptReadsLastArg = false; _scriptPosix = false; _posixSplitNode = null;
         _inheritErrexitMode = false; _scriptLastpipe = false;
         _namerefs = null; _litAssigned = null; _pendingNamerefs = null; _runtimeNamerefs = null; _subshellFunctionDepth = 0;
+        _inlineEvalText = false; _runTimeAttrs = false; _evalLocalArrays = false; _runTimeLocalSplit = false;
         _emptyStdinDepth = 0; _context = default; _captureDepth = 0; _subshellDepth = 0; _andOrChainDepth = 0;
         _errexitMode = false; _errexitSetMode = false; _errexitExemptDepth = 0; _negatedDepth = 0; _negationGuardedAtRuntime = false;
         _errtraceMode = false; _lineBase = 0; _priorTrapLine = 0; _redirectLine = 0; _scriptRoot = false;
@@ -3050,7 +3068,7 @@ public static partial class PsEmitter
         ResolveNameref(name) is var resolved && resolved != name ? ArrayWriteTarget(resolved) :
         // eval'd text runs in the calling function's scope: an array it assigns is the shell's own unless that function declared it `local`.
         _context == TranspileContext.Eval && _functionDepth == 0 && _subshellDepth == 0
-            ? (EvalLocalNames?.Contains(name) == true ? "$" + name : "$global:" + name) :
+            ? (_evalLocalArrays || EvalLocalNames?.Contains(name) == true ? "$" + name : "$global:" + name) :
         // Not this function's local: a calling function's local array of the name, else the global (bash's dynamic scope);
         // in a function defined inside a subshell, the subshell's own array (a subshell body's `$name` is its copy already).
         _functionDepth > _subshellFunctionDepth && _functionLocalNames is { } locals && !locals.Contains(name)
@@ -3063,6 +3081,29 @@ public static partial class PsEmitter
 
     /// <summary>Above 0 while the last stage of a pipeline is emitted under <c>shopt -s lastpipe</c>.</summary>
     [ThreadStatic] private static int _lastpipeStageDepth;
+
+    /// <summary>
+    /// Set by <see cref="EmitEval"/> just before it transpiles a static eval's text in place. That Transpile shares the
+    /// caller's attribute and nameref sets (`eval 'declare -i n'; n=1+1` stores 2) and, in a function, parses the text as
+    /// the function's (its `declare` is local). Read and cleared at the start of that Transpile.
+    /// </summary>
+    [ThreadStatic] private static bool _inlineEvalText;
+
+    /// <summary>
+    /// The unit runs declaration text built at run time (<see cref="RunsRunTimeDeclarations"/>): a scalar write whose
+    /// attributes the emitter does not know goes through the run-time attribute table (<see cref="PsBuild.AssignAttributed"/>).
+    /// </summary>
+    [ThreadStatic] private static bool _runTimeAttrs;
+
+    /// <summary>While the in-function form of a run-time array declaration is emitted (<see cref="EmitRunTimeArrayLocals"/>):
+    /// the array is the running function's (`$name`), not the shell's global.</summary>
+    [ThreadStatic] private static bool _evalLocalArrays;
+
+    /// <summary>A run-time array declaration is being split into its two forms (<see cref="EmitRunTimeArrayLocals"/>).</summary>
+    [ThreadStatic] private static bool _runTimeLocalSplit;
+
+    /// <summary>Eval text at its own top (no function, no subshell of its own): a function may be running it.</summary>
+    private static bool EvalTextAtTop => _context == TranspileContext.Eval && _functionDepth == 0 && _subshellDepth == 0;
 
     private static string EmitFunction(Command.ShFunction func)
     {
@@ -3308,7 +3349,7 @@ public static partial class PsEmitter
                 break;
             // `eval 'local x=1; .'`: a literal eval body is inlined into the function, so its `local`s are the function's.
             case Command.Simple { Words.Length: > 1 } ev when EvalLiteralBody(ev) is { } evalBody:
-                try { if (BashParser.Parse(evalBody) is { } parsedEval) CollectLocalVars(parsedEval, result); }
+                try { if (BashParser.Parse(evalBody, inFunctionBody: true) is { } parsedEval) CollectLocalVars(parsedEval, result); }
                 catch (ParseException) { }
                 break;            case Command.ShFunction fn:
                 CollectLocalVars(fn.Body, result);
@@ -4892,7 +4933,47 @@ public static partial class PsEmitter
     /// in a function: there `declare` makes a new local.
     /// </summary>
     private static bool NeedsArrayKindGuard(Command.ShAssignment cmd) =>
-        !_inArrayKindGuard && cmd.IsDeclare && !cmd.IsLocal && (cmd.IsAssoc || cmd.IsIndexed) && _functionDepth == 0;
+        !_inArrayKindGuard && !_evalLocalArrays && cmd.IsDeclare && !cmd.IsLocal && (cmd.IsAssoc || cmd.IsIndexed) && _functionDepth == 0;
+
+    /// <summary>
+    /// The arrays a declaration in eval or sourced text at its top declares (<c>local -a a=(1 2)</c>, <c>local -A m</c>,
+    /// <c>declare -A m=(...)</c>; not <c>-g</c>, not <c>readonly</c>): the text cannot know whether a function runs it, and
+    /// while one does each is that function's local, as in bash. Null when there is none.
+    /// </summary>
+    private static List<string>? RunTimeArrayLocals(Command.ShAssignment cmd)
+    {
+        if (!EvalTextAtTop || _dynLocals is not null || cmd.IsNameref || cmd.IsGlobal || !(cmd.IsLocal || cmd.IsDeclare)) return null;
+        List<string>? names = null;
+        foreach (var p in cmd.Pairs)
+            if (!p.Name.Contains('[') && IsValidVarName(p.Name) && !PowerShellOwnedVariables.Contains(p.Name)
+                && (p.ArrayValue is not null || p.Value is null && (cmd.IsAssoc || cmd.IsIndexed)))
+                (names ??= new List<string>()).Add(p.Name);
+        return names;
+    }
+
+    /// <summary>
+    /// <see cref="RunTimeArrayLocals"/>: both forms, the one that runs chosen then (<see cref="PsBuild.WhenInFunction"/>). In
+    /// a function each array is a PowerShell variable of the scope the text runs in (the function's: eval text runs
+    /// there), listed as its local array (a callee's write reaches it, VarFrameStack.ArraySlot), its attributes put aside
+    /// until the function returns. At the top level it is the shell's global, as before.
+    /// REGRESSION: <c>f() { local -a "$1"; }; f 'a=(1 2)'</c> left a global a after f returned.
+    /// </summary>
+    private static string EmitRunTimeArrayLocals(Command.ShAssignment cmd, List<string> names)
+    {
+        _runTimeLocalSplit = true;
+        try
+        {
+            string atTop = EmitShAssignment(cmd);
+            var inFunction = new StringBuilder(PsBuild.SetStatus(0)).Append("; ").Append(PsBuild.LocalArrays(names));
+            foreach (var n in names)
+                inFunction.Append("[PsBash.Cmdlets.VarFrameStack]::LocalAttributes(").Append(PsBuild.SingleQuote(n)).Append("); ");
+            _evalLocalArrays = true;
+            try { inFunction.Append(EmitShAssignment(cmd)); }
+            finally { _evalLocalArrays = false; }
+            return PsBuild.WhenInFunction(inFunction.ToString(), atTop);
+        }
+        finally { _runTimeLocalSplit = false; }
+    }
 
     private static string EmitShAssignment(Command.ShAssignment cmd)
     {
@@ -4903,6 +4984,8 @@ public static partial class PsEmitter
             var prefix = cmd.TempPrefix.Select(a => new EnvPair(a.Name, a.Value)).ToImmutableArray();
             return PsBuild.PosixElse(EmitPersistentPrefix(prefix, () => EmitShAssignment(plain)), EmitShAssignment(plain));
         }
+        if (!_runTimeLocalSplit && RunTimeArrayLocals(cmd) is { } arrayLocals)
+            return EmitRunTimeArrayLocals(cmd, arrayLocals);
         if (!NeedsArrayKindGuard(cmd)) return EmitShAssignmentCore(cmd);
         _inArrayKindGuard = true;
         try
@@ -4942,6 +5025,19 @@ public static partial class PsEmitter
         }
     }
 
+    /// <summary>
+    /// A plain scalar write (<c>x=v</c>, <c>x+=v</c>) to a name the emitter knows no attribute or reference for, which in a
+    /// unit with run-time declaration text goes through <see cref="PsBuild.AssignAttributed"/>. Declarations, array writes,
+    /// special and shell-managed names (PATH, HOME, IFS) keep their own forms.
+    /// </summary>
+    private static bool UsesRunTimeAttributeWriter(Command.ShAssignment cmd, Assignment pair, string varPrefix, bool toArray0) =>
+        !toArray0 && pair.Value is not null && pair.Op is AssignOp.Equal or AssignOp.PlusEqual && varPrefix == "$env:"
+        && !(cmd.IsLocal || cmd.IsExport || cmd.IsDeclare || cmd.IsReadonly || cmd.IsNameref || cmd.IsAssoc || cmd.IsIndexed)
+        && IsValidVarName(pair.Name) && ResolveNameref(pair.Name) is var target && IsValidVarName(target)
+        && _intVars?.Contains(target) != true && _caseVars?.ContainsKey(target) != true && _arrayVars?.Contains(target) != true
+        && target is not ("PATH" or "HOME" or "IFS") && PsBuild.TryMapSpecialVar(target, braced: false, false) is null
+        && EnvShadowName(pair.Name) is null && EnvShadowName(target) is null;
+
     private static string EmitShAssignmentCore(Command.ShAssignment cmd)
     {
         var sb = new StringBuilder();
@@ -4953,7 +5049,8 @@ public static partial class PsEmitter
                 sb.Append("; ");
 
             var pair = cmd.Pairs[i];
-            if (cmd.IsLocal && _functionDepth > 0 && pair.ArrayValue is null && IsValidVarName(pair.Name))
+            // In eval text at its top too: `eval "local -i n=1+1"` stores 2 (the text's own sets; the run-time mark is emitted below).
+            if (cmd.IsLocal && (_functionDepth > 0 || EvalTextAtTop) && pair.ArrayValue is null && IsValidVarName(pair.Name))
                 ScopeLocalAttributes(pair.Name, cmd.Attrs);
             // `declare -n g=y; f() { local g=9; }`: f's g is a plain variable from here on, not the nameref (EmitFunction puts
             // the outer one back; at run time VarFrameStack.Local takes the nameref aside). REGRESSION: `g=9` wrote y.
@@ -5041,7 +5138,7 @@ public static partial class PsEmitter
             // `local -n r=t` / `declare -n r='a[2]'` in a function: a nameref local to it (EmitFunction restores the set). In a
             // function bash only warns about `local -n s=s` (status 0); a target that is no name is refused (status 1).
             // REGRESSION: a literal target was never recorded, so `r=6` wrote r, not t.
-            if (cmd.IsLocal && cmd.IsNameref && _functionDepth > 0 && _namerefs is not null
+            if (cmd.IsLocal && cmd.IsNameref && (_functionDepth > 0 || EvalTextAtTop) && _namerefs is not null
                 && pair.ArrayValue is null && pair.Op == AssignOp.Equal && IsValidVarName(pair.Name)
                 && pair.Value is not null && ExtractSingleQuotedOrLiteralValue(pair.Value) is { } localTarget)
             {
@@ -5071,7 +5168,7 @@ public static partial class PsEmitter
             // `local -n r` with no target, in a function: a nameref local to it, whose target the next literal assignment
             // names (`r=x` then reads and writes x); until then it hides an outer reference of that name and r is unset.
             // EmitFunction puts the static sets back when the body ends. REGRESSION: it was a plain local, so `r=x` set r.
-            if (cmd.IsLocal && cmd.IsNameref && _functionDepth > 0 && _namerefs is not null
+            if (cmd.IsLocal && cmd.IsNameref && (_functionDepth > 0 || EvalTextAtTop) && _namerefs is not null
                 && pair.ArrayValue is null && pair.Value is null && IsValidVarName(pair.Name))
             {
                 _namerefs.Remove(pair.Name); _runtimeNamerefs?.Remove(pair.Name);
@@ -5092,7 +5189,7 @@ public static partial class PsEmitter
             // `local -n r=$1` / `local -n r="$name"`: a reference local to the function whose target is known only at run
             // time (PsBuild.DeclareNameref); every expansion and write of r then goes through the run time. REGRESSION: it
             // was a plain local holding the value, so `r=x`, `${r[@]}` and `r+=(z)` used r, not the variable it names.
-            if (cmd.IsLocal && cmd.IsNameref && _functionDepth > 0 && _namerefs is not null
+            if (cmd.IsLocal && cmd.IsNameref && (_functionDepth > 0 || EvalTextAtTop) && _namerefs is not null
                 && pair.ArrayValue is null && pair.Op == AssignOp.Equal && pair.Value is not null && IsValidVarName(pair.Name))
             {
                 _namerefs.Remove(pair.Name); _pendingNamerefs?.Remove(pair.Name); _litAssigned?.Remove(pair.Name);
@@ -5150,7 +5247,7 @@ public static partial class PsEmitter
 
             // `local -A m` / `local -a q` with no value, in a function: a local array of that kind (PsBuild.DeclareLocalArray).
             // REGRESSION: it was a scalar local, so `m[x]=1` evaluated x as arithmetic and wrote m[0].
-            if (cmd.IsLocal && (cmd.IsAssoc || cmd.IsIndexed) && _functionDepth > 0 && pair.ArrayValue is null && pair.Value is null
+            if (cmd.IsLocal && (cmd.IsAssoc || cmd.IsIndexed) && (_functionDepth > 0 || _evalLocalArrays) && pair.ArrayValue is null && pair.Value is null
                 && IsValidVarName(pair.Name) && ResolveNameref(pair.Name) == pair.Name)
             {
                 if (cmd.IsAssoc) _assocVars?.Add(pair.Name);
@@ -5320,6 +5417,15 @@ public static partial class PsEmitter
             int scalarStart = sb.Length;
             bool toArray0 = !cmd.IsLocal && !cmd.IsExport && pair.Value is not null && _arrayVars?.Contains(pair.Name) == true
                             && _intVars?.Contains(pair.Name) != true && IsValidVarName(pair.Name) && ResolveNameref(pair.Name) == pair.Name;
+            // A unit that runs declarations built at run time (`declare "$1"`, `eval "$c"`, `$d x`): a write whose attributes
+            // the emitter does not know consults the run-time table such text fills (PsBuild.AssignAttributed).
+            // REGRESSION: `f() { local -i "$1"; n=2*3; }; f n` stored "2*3" (bash: 6).
+            if (_runTimeAttrs && UsesRunTimeAttributeWriter(cmd, pair, varPrefix, toArray0))
+            {
+                bool resetStatus = (_scriptReadsStatus || ReferenceEquals(cmd, _finalAssignment)) && !ContainsCommandSub(cmd);
+                sb.Append(PsBuild.AssignAttributed(ResolveNameref(pair.Name), EmitAssignmentValue(pair.Value), pair.Op == AssignOp.PlusEqual, resetStatus));
+                continue;
+            }
             sb.Append(varPrefix);
             sb.Append(ResolveNameref(pair.Name));
             if (pair.Value is null)
@@ -5338,15 +5444,21 @@ public static partial class PsEmitter
             }
             else
             {
-                bool intPlus = pair.Op == AssignOp.PlusEqual && _intVars?.Contains(pair.Name) == true;
-                sb.Append(pair.Op == AssignOp.PlusEqual && !intPlus ? " += " : " = ");
+                // The attributes are the written variable's: through a nameref, its target's (`declare -i v; declare -n r=v;
+                // r=3*3` stores 9). REGRESSION: the reference's own name was looked up, so the value was stored as written.
+                string attrName = ResolveNameref(pair.Name);
+                bool intPlus = pair.Op == AssignOp.PlusEqual && _intVars?.Contains(attrName) == true;
+                // `declare -l s=ab; s+=CD`: the whole value is converted (abcd), not left as the old value plus the new text.
+                bool casePlus = pair.Op == AssignOp.PlusEqual && !intPlus && !toArray0 && _caseVars?.ContainsKey(attrName) == true;
+                sb.Append(pair.Op == AssignOp.PlusEqual && !intPlus && !casePlus ? " += " : " = ");
                 string assigned = EmitAssignmentValue(pair.Value);
                 // A `declare -i` variable evaluates its value as arithmetic: `n=5; n+=2` adds (7), not appends (52).
                 sb.Append(intPlus
-                    ? "[string](Invoke-BashArith (" + PsBuild.SingleQuote(pair.Name + "+(") + " + [string](" + assigned + ") + ')'))"
-                    : pair.Op == AssignOp.Equal && _intVars?.Contains(pair.Name) == true
+                    ? "[string](Invoke-BashArith (" + PsBuild.SingleQuote(attrName + "+(") + " + [string](" + assigned + ") + ')'))"
+                    : pair.Op == AssignOp.Equal && _intVars?.Contains(attrName) == true
                         ? "[string](Invoke-BashArith ([string](" + assigned + ")))"
-                        : pair.Op == AssignOp.Equal ? CaseAttr(pair.Name, assigned) : assigned);
+                        : pair.Op == AssignOp.Equal ? CaseAttr(attrName, assigned)
+                        : casePlus ? CaseAttr(attrName, varPrefix + attrName + " + (" + assigned + ")") : assigned);
                 if (toArray0)
                 {
                     string scalarWrite = sb.ToString(scalarStart, sb.Length - scalarStart);
@@ -5553,25 +5665,38 @@ public static partial class PsEmitter
         bool declares = name is "declare" or "typeset" && _context == TranspileContext.Eval;
         if (!(name == "local" || declares) || !cmd.EnvPairs.IsDefaultOrEmpty || !cmd.HereDocs.IsDefaultOrEmpty) return false;
         var text = new StringBuilder(name);
-        bool anyQuotedPair = false;
+        bool anyQuotedPair = false, arrayFlag = false, anyCompound = false;
+        int pairWords = 0;
         foreach (var w in cmd.Words.Skip(1))
         {
             if (TryGetStaticArgValue(w) is not { } s) return false;
             bool bare = w.Parts.All(p => p is WordPart.Literal);
             if (bare && s.Length > 1 && s[0] is '-' or '+' && s.Skip(1).All(char.IsAsciiLetter))
             {
+                if (s[0] == '-') arrayFlag |= s.Contains('a') || s.Contains('A');
                 text.Append(' ').Append(s);
                 continue;
             }
             int eq = s.IndexOf('=');
             string varName = eq < 0 ? s : eq > 0 && s[eq - 1] == '+' ? s[..(eq - 1)] : s[..eq];
             if (!IsValidVarName(varName)) return false;
-            text.Append(' ').Append(eq < 0 ? s : s[..(eq + 1)] + PsBuild.BashSingleQuote(s[(eq + 1)..]));
+            pairWords++;
+            // `local -a 'a=(1 2)'` / `declare -A "$1"` holding m=([k]=v): with -a or -A the expanded word is an array
+            // assignment, whose value bash parses as the compound (expanding inside it), not the scalar "(1 2)".
+            string value = eq < 0 ? "" : s[(eq + 1)..];
+            bool compound = arrayFlag && eq >= 0 && value.Length >= 2 && value[0] == '(' && value[^1] == ')';
+            anyCompound |= compound;
+            text.Append(' ').Append(eq < 0 ? s : s[..(eq + 1)] + (compound ? value : PsBuild.BashSingleQuote(value)));
             // The rebuilt `declare v='1'` keeps NAME= bare, so it is not taken for a quoted pair again.
             anyQuotedPair |= eq >= 0 && !bare && !(declares && w.Parts[0] is WordPart.Literal first && first.Value.Contains('='));
         }
         if (!anyQuotedPair) return false;
-        var parsed = BashParser.Parse(text.ToString());
+        Command? parsed;
+        try { parsed = BashParser.Parse(text.ToString()); }
+        catch (ParseException) when (anyCompound) { return false; }
+        // A compound value is the declaration's own words only: one that closes the list early (`(1); cmd)`) or adds a
+        // pair is not rebuilt (bash reads it as words of the array, never as commands).
+        if (anyCompound && !(parsed is Command.ShAssignment { } whole && whole.Pairs.Length == pairWords)) return false;
         if (parsed is Command.ShAssignment declaration)
             result = EmitCommand(cmd.Redirects.IsDefaultOrEmpty ? declaration : declaration with { Redirects = cmd.Redirects });
         else if (declares && parsed is Command.Simple written)
@@ -6337,6 +6462,17 @@ public static partial class PsEmitter
         if (_context != TranspileContext.Eval || _functionDepth != 0 || _dynLocals is not null) return declaration;
         if (GetLiteralValue(cmd.Words[0]) is not ("declare" or "typeset")) return declaration;
         var scope = new StringBuilder();
+        bool assoc = false, indexed = false;
+        foreach (var w in cmd.Words.Skip(1))
+            if (GetLiteralValue(w) is { Length: > 1 } flag && flag[0] == '-' && flag != "--")
+            {
+                assoc |= flag.Contains('A');
+                indexed |= flag.Contains('a');
+            }
+        // `declare -A m` / `declare -a e` (no value): while a function runs, its own array (PsBuild.DeclareLocalArray).
+        var arrays = new StringBuilder();
+        bool bareNames = true;
+        string builtin = GetLiteralValue(cmd.Words[0]) ?? "declare";
         foreach (var w in cmd.Words.Skip(1))
         {
             string? lit = GetLiteralValue(w);
@@ -6356,18 +6492,60 @@ public static partial class PsEmitter
                 bool append = name.EndsWith('+');
                 if (append) name = name[..^1];
                 keepsValue = eq > 0 && !append;
+                bareNames &= eq < 0;
             }
-            else if (TrySplitAppendInitializer(w, out var appendName, out _)) { name = appendName; keepsValue = false; }
-            else if (TrySplitInitializer(w, out var initName, out _)) { name = initName; keepsValue = true; }
+            else if (TrySplitAppendInitializer(w, out var appendName, out _)) { name = appendName; keepsValue = false; bareNames = false; }
+            else if (TrySplitInitializer(w, out var initName, out _)) { name = initName; keepsValue = true; bareNames = false; }
             else return declaration;
             if (!IsValidVarName(name) || !IsDynamicLocalName(name)) continue;
             scope.Append(PsBuild.LocalWhenInFunction(name, keepsValue)).Append("; ");
+            if (!PowerShellOwnedVariables.Contains(name))
+                arrays.Append(PsBuild.LocalArrays([name])).Append(PsBuild.DeclareLocalArray(builtin, name, assoc)).Append("; ");
         }
+        if (assoc || indexed)
+            return bareNames && arrays.Length > 0 ? PsBuild.WhenInFunction(arrays.ToString(0, arrays.Length - 2), declaration) : declaration;
         return scope.Length == 0 ? declaration : scope + declaration;
     }
 
-    /// <summary>The attribute letters a run-time <c>declare</c> may carry and still declare a scalar local (no -a/-A/-n, no -g).</summary>
-    private const string RunTimeLocalDeclareFlags = "ilrux";
+    /// <summary>
+    /// The attribute letters a run-time <c>declare</c> may carry and still declare the running function's local (no -g, no
+    /// print form). With -a/-A the local is an array (<see cref="PsBuild.DeclareLocalArray"/>); with -n a reference, whose
+    /// frame (<see cref="PsBuild.LocalWhenInFunction"/>) puts the caller's attributes and reference back at the return.
+    /// </summary>
+    private const string RunTimeLocalDeclareFlags = "aAilnrux";
+
+    /// <summary>
+    /// Whether <paramref name="root"/> runs declaration text built at run time, whose attributes the emitter cannot see: a
+    /// command named at run time (<c>$d x=1</c>), an eval of text known only then (text known now is judged by itself),
+    /// <c>source</c> / <c>.</c>, or a declaration builtin with an operand whose name is an expansion (<c>declare "$1"</c>,
+    /// <c>local -i "$n"</c>). A command substitution is a subshell: what it declares does not reach this unit.
+    /// </summary>
+    private static bool RunsRunTimeDeclarations(Command? root)
+    {
+        bool found = false;
+        VisitCommands(root, c =>
+        {
+            if (found || c is not Command.Simple { Words.Length: > 0 } s) return;
+            switch (StaticCommandName(s, out int at))
+            {
+                case null:
+                    found = true;
+                    break;
+                case "eval":
+                    found = StaticEvalText(s, at) is not { } text || ParsedTextMatches(text, RunsRunTimeDeclarations);
+                    break;
+                case "source" or ".":
+                    found = true;
+                    break;
+                case "declare" or "typeset" or "local":
+                    for (int i = at + 1; i < s.Words.Length && !found; i++)
+                        found = TryGetStaticArgValue(s.Words[i]) is null
+                                && !TrySplitInitializer(s.Words[i], out _, out _) && !TrySplitAppendInitializer(s.Words[i], out _, out _);
+                    break;
+            }
+        });
+        return found;
+    }
 
     // declare/typeset -A map -> $map = @{} (associative array / hashtable declaration)
     // declare/typeset -a arr -> $arr = @() (indexed array declaration)
@@ -15173,8 +15351,8 @@ public static partial class PsEmitter
                 int priorLineBase = _lineBase;
                 if (_statementLine > 0) _lineBase = _statementLine - 1;
                 string? inner;
-                try { inner = Transpile(joined, TranspileContext.Eval); }
-                finally { _envPrefixShadow = shadow; _loopBarrier = priorBarrier; _evalAtScriptTop = priorTop; _lineBase = priorLineBase; }
+                try { _inlineEvalText = true; inner = Transpile(joined, TranspileContext.Eval); }
+                finally { _inlineEvalText = false; _envPrefixShadow = shadow; _loopBarrier = priorBarrier; _evalAtScriptTop = priorTop; _lineBase = priorLineBase; }
                 if (inner is not null)
                     return inner;
             }

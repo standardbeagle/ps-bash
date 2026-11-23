@@ -86,12 +86,113 @@ public class VarFrameEmitTests
     [InlineData("declare -g g=1")]          // global by request
     [InlineData("declare -gx g=1")]
     [InlineData("declare -p g")]            // a listing declares nothing
-    [InlineData("declare -a g=(1 2)")]      // arrays stay global, as a run-time local array does
-    [InlineData("declare -A g")]
-    [InlineData("declare -n g=x")]
+    [InlineData("declare -ga g=(1 2)")]
+    [InlineData("readonly -a g=(1 2)")]
+    [InlineData("declare -gA g")]
     [InlineData("export g=1")]
     public void Transpile_EvalTextGlobalDeclaration_TakesNoFrame(string bash)
         => Assert.DoesNotContain("VarFrameStack]::Current.Depth -gt 0", Eval(bash));
+
+    // Oracle: `f(){ local -a "$1"; declare -A "$2"; declare -n "$3"; }; f 'a=(1 2)' m 'r=x'; declare -p a m r` finds none
+    // of them. The text cannot know whether a function runs it, so both forms are emitted and the run-time depth picks one
+    // (PsBuild.WhenInFunction): in a function the array is that scope's PowerShell variable, listed as its local array.
+    // REGRESSION: arrays and references declared by such text were global.
+    [Theory]
+    [InlineData("declare -a g=(1 2)", "g")]
+    [InlineData("local -a g=(1 2)", "g")]
+    [InlineData("declare -A g=([k]=v)", "g")]
+    [InlineData("declare -A g", "g")]
+    [InlineData("local -a g", "g")]
+    [InlineData("local -a 'g=(1 2)'", "g")]   // quoted, as a run-time `local -a "$1"` hands it over
+    public void Transpile_EvalTextArrayDeclaration_IsTheRunningFunctionsLocalArray(string bash, string name)
+    {
+        var ps = Eval(bash);
+        Assert.Contains("if ([PsBash.Cmdlets.VarFrameStack]::Current.Depth -gt 0) { ", ps);
+        Assert.Contains(PsBuild.LocalArrays([name]), ps);
+        Assert.Contains("} else { ", ps);
+        if (bash.StartsWith("declare")) Assert.Contains("$global:" + name, ps);   // the top-level form (`local` there is an error)
+    }
+
+    [Theory]
+    [InlineData("declare -n g=x")]
+    [InlineData("local -n g=x")]
+    public void Transpile_EvalTextNameref_TakesTheRunningFunctionsFrame(string bash)
+        => Assert.Contains("[PsBash.Cmdlets.VarFrameStack]::", Eval(bash));
+
+    // Oracle: `f(){ declare -a "$1"; }; f 'a=(1 2)'` declares the array a=(1 2): with -a/-A the expanded word is an array
+    // assignment. REGRESSION: the quoted value was the scalar "(1 2)".
+    [Fact]
+    public void Transpile_EvalTextQuotedArrayValue_IsACompoundAssignment()
+    {
+        var ps = Eval("declare -a 'a=(1 2)'");
+        Assert.Contains(PsBuild.LocalArrays(["a"]), ps);
+        Assert.DoesNotContain("'(1 2)'", ps);
+    }
+
+    // Oracle: `f(){ local -a 'b=(3 4)'; declare -p b; }; f` prints declare -a b=([0]="3" [1]="4"); `declare e='(1 2)'`
+    // (no -a) stays the scalar. The parser reads the quoted operand as the compound (BashParser.QuotedCompoundArray).
+    [Theory]
+    [InlineData("f(){ local -a 'b=(3 4)'; }")]
+    [InlineData("f(){ declare -a \"b=(3 4)\"; }")]
+    [InlineData("declare -a b='(3 4)'")]
+    [InlineData("f(){ typeset -A 'b=([3]=4)'; }")]
+    public void Transpile_QuotedCompoundWithAnArrayFlag_IsTheArray(string bash)
+    {
+        var ps = T(bash);
+        Assert.DoesNotContain("'(3 4)'", ps);     // the scalar form
+        Assert.DoesNotContain("'([3]=4)'", ps);
+    }
+
+    [Fact]
+    public void Transpile_QuotedCompoundWithoutAnArrayFlag_StaysTheScalar()
+        => Assert.Contains("'(1 2)'", T("f(){ declare 'e=(1 2)'; }"));
+
+    [Fact]
+    public void Transpile_QuotedArrayValueClosingTheList_IsNotRebuilt()
+        // `declare -a 'a=(1); echo pwned)'`: bash reads the value as words of the array, never as commands.
+        => Assert.DoesNotContain("Invoke-BashEcho", Eval("declare -a 'a=(1); echo pwned)'"));
+
+    // Oracle: `f(){ eval 'declare -i iv=2*3'; iv+=1; echo $iv; }; f` prints 7: a static eval's text in a function is the
+    // function's own code (its declare is local) and shares the attributes it sets with the code after it.
+    // REGRESSION: the text's declarations were its own (iv+=1 appended: 61) and global.
+    [Fact]
+    public void Transpile_StaticEvalInAFunction_SharesItsAttributesWithTheBody()
+    {
+        var ps = T("f(){ eval 'declare -i iv=2*3'; iv+=1; echo $iv; }");
+        Assert.Contains("Invoke-BashArith ('iv+(' + ", ps);
+        Assert.DoesNotContain("$env:iv += ", ps);
+    }
+
+    // Oracle: `f(){ declare -i v; declare -n r=v; r=3*3; echo $v; }; f` prints 9: a write through a nameref takes its
+    // target's attributes. REGRESSION: the reference's own name was looked up, so 3*3 was stored as written.
+    [Fact]
+    public void Transpile_WriteThroughANameref_UsesTheTargetsAttributes()
+        => Assert.Contains("$env:v = [string](Invoke-BashArith", T("f(){ declare -i v; declare -n r=v; r=3*3; }"));
+
+    // Oracle: `declare -l s=AB; s+=CD; echo $s` prints abcd: the appended whole is converted.
+    [Fact]
+    public void Transpile_CaseAttributeAppend_ConvertsTheWholeValue()
+        => Assert.Contains("([string]($env:s + (", T("declare -l s=AB; s+=CD"));
+
+    // Oracle: `f(){ local -i "$1"; n=2*3; echo $n; }; f n` prints 6. The emitter cannot see an attribute set by text built
+    // at run time, so in a unit that runs such text a plain write consults the run-time table (PsBuild.AssignAttributed).
+    [Theory]
+    [InlineData("f(){ local -i \"$1\"; n=2*3; }")]
+    [InlineData("f(){ eval \"$1\"; n=2*3; }")]
+    [InlineData("d=declare; $d -i n; n=2*3")]
+    [InlineData("source ./lib; n=2*3")]
+    [InlineData("eval 'eval \"$c\"'; n=2*3")]
+    public void Transpile_UnitWithRunTimeDeclarations_WritesThroughTheAttributeTable(string bash)
+        => Assert.Contains("[PsBash.Cmdlets.BashShellState]::AssignScalar('n', ", T(bash));
+
+    // The hot path: a unit whose declarations are all known now keeps the plain write.
+    [Theory]
+    [InlineData("n=2*3; m+=x")]
+    [InlineData("f(){ local -i k; n=2*3; }")]
+    [InlineData("eval 'declare -i k=1'; n=2*3")]
+    [InlineData("declare -i k; n=$(eval \"$c\")")]   // a substitution's declarations stay in its subshell
+    public void Transpile_UnitWithOnlyStaticDeclarations_KeepsThePlainWrite(string bash)
+        => Assert.DoesNotContain("AssignScalar", T(bash));
 
     [Fact]
     public void Transpile_DeclareInAFunctionOutsideEval_StaysTheParsersLocal()

@@ -1728,7 +1728,18 @@ public static class PsBuild
     /// declaration that follows is global. Emitted before the declaration's write.
     /// </summary>
     public static string LocalWhenInFunction(string name, bool keepsValue) =>
-        "if ([PsBash.Cmdlets.VarFrameStack]::Current.Depth -gt 0) { " + RunTimeLocal(name, keepsValue, inWrittenFunction: false) + " }";
+        InFunctionAtRunTime + RunTimeLocal(name, keepsValue, inWrittenFunction: false) + " }";
+
+    /// <summary>
+    /// A declaration in text that cannot know whether a function runs it, whose two forms differ in more than a frame:
+    /// <paramref name="inFunction"/> while one runs (<c>local -a a=(1 2)</c>, <c>declare -A m</c>: the function's own
+    /// array, PsBuild.DeclareLocalArray), else <paramref name="atTop"/> (the shell's global).
+    /// </summary>
+    public static string WhenInFunction(string inFunction, string atTop) =>
+        InFunctionAtRunTime + inFunction + " } else { " + atTop + " }";
+
+    /// <summary>The opening of a block that runs only while a bash function runs (<see cref="LocalWhenInFunction"/>).</summary>
+    private const string InFunctionAtRunTime = "if ([PsBash.Cmdlets.VarFrameStack]::Current.Depth -gt 0) { ";
 
     /// <summary>
     /// A function call's temp binding frame (<c>name=v f</c>, owned by the called function), pushed once the binding is
@@ -1778,6 +1789,26 @@ public static class PsBuild
     /// </summary>
     public static string SetShellScalar(string name, string valueExpr)
         => "[PsBash.Cmdlets.BashVariableStore]::Set(" + SingleQuote(name) + ", [string](" + valueExpr + "))";
+
+    /// <summary>
+    /// <c>name=value</c> / <c>name+=value</c> (<paramref name="append"/>) whose attributes may have been set by text built at
+    /// run time (<c>declare "$1"</c>, <c>eval "$c"</c>, <c>$d x</c>), which the emitter cannot see: the write consults the
+    /// run-time attribute table (<c>BashShellState.AssignScalar</c>: nameref target, <c>-u</c>/<c>-l</c>); for an <c>-i</c>
+    /// target the value is evaluated as arithmetic here (the sum, for <c>+=</c>) and stored with <c>AssignEvaluated</c>.
+    /// <paramref name="resetStatus"/>: the statement's status is 0 (a plain write; the arithmetic path keeps what the
+    /// evaluation left, as a static <c>declare -i</c> write does). Emitted only in a unit that runs such text
+    /// (PsEmitter._runTimeAttrs); every other unit keeps the plain write.
+    /// </summary>
+    public static string AssignAttributed(string name, string valueExpr, bool append, bool resetStatus)
+    {
+        string quoted = SingleQuote(name);
+        string arith = append
+            ? "Invoke-BashArith (" + SingleQuote(name + "+(") + " + $__psbAv + ')')"
+            : "Invoke-BashArith $__psbAv";
+        return "if ([PsBash.Cmdlets.BashShellState]::AssignScalar(" + quoted + ", ($__psbAv = [string](" + valueExpr + ")), "
+            + (append ? "$true" : "$false") + ")) { " + (resetStatus ? "$global:LASTEXITCODE = 0" : "") + " } "
+            + "else { [PsBash.Cmdlets.BashShellState]::AssignEvaluated(" + quoted + ", [string](" + arith + ")) }";
+    }
 
     /// <summary>
     /// <c>name=value</c> / <c>name+=value</c> where <paramref name="name"/> is a nameref whose target is known only at run

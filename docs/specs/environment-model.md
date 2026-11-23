@@ -180,9 +180,26 @@ back what the local hid.**
   An inner function's declaration is local to it (dynamic scope): such text looks for its park slot in its own
   PowerShell scope only (`PsBuild.NotParked`), since dynamic scope would show it the caller's. The quoted field a
   run-time call hands over (`declare 'v=1'`) is the written declaration `declare v='1'`
-  (`PsEmitter.TryEmitQuotedStaticDeclaration`). `-g`, the print forms, `-a`/`-A` and `-n` keep the
-  declaration global, as a run-time `local` array is. REGRESSION: `f(){ declare "$2"; }; f a e=b` left e set after f.
+  (`PsEmitter.TryEmitQuotedStaticDeclaration`); with `-a`/`-A` a quoted `NAME=(…)` is the compound assignment
+  (bash expands inside it), unless it would close the list early. `-g`, `readonly` and the print forms keep the
+  declaration global. REGRESSION: `f(){ declare "$2"; }; f a e=b` left e set after f.
   Behavior: `Differential.Tests/RunTimeDeclareScopeDifferentialTests`.
+- **Arrays and namerefs in such text** (`local -a "$1"`, `declare -A "$2"`, `eval 'declare -a a=(1)'`) are emitted in
+  both forms, the run-time depth choosing (`PsBuild.WhenInFunction`, `PsEmitter.EmitRunTimeArrayLocals`): in a
+  function the array is a PowerShell variable of the scope the text runs in, listed as its local array
+  (`PsBuild.LocalArrays`) with its attributes put aside (`VarFrameStack.LocalAttributes`); at the top level the
+  shell's global. A nameref (`declare -n "$3"`, `local -n r=x`) takes the run-time local's frame, which puts the
+  caller's reference back. A static eval's text in a function is the function's own code: it parses as the body does
+  (`BashParser.Parse(text, inFunctionBody: true)`, its `declare` local) and shares the body's attribute and nameref
+  sets. REGRESSION: `f(){ local -a "$1"; }; f 'a=(1 2)'` left a global a. Behavior:
+  `Differential.Tests/RunTimeArrayAttributeDifferentialTests`.
+- **Attributes set by such text hold for the writes after it** (`eval 'declare -i n'; n=2*3` stores 6; `-u`/`-l`
+  convert, `+=` too). The emitter cannot see them, so in a unit that runs run-time declaration text
+  (`PsEmitter.RunsRunTimeDeclarations`: a command named at run time, `eval` of text known only then, `source`, a
+  declaration builtin with an expanded name) a plain scalar write to a name with no static attribute goes through
+  `PsBuild.AssignAttributed` → `BashShellState.AssignScalar` (the one attribute table: nameref target, `-u`/`-l`;
+  an `-i` target is evaluated as arithmetic and stored by `AssignEvaluated`). Every other unit keeps the plain
+  `$env:` write. Not covered: `for`/`read` into such a variable, `+i` removal, a run-time nameref's reads.
 - **A callee's array write** reaches the nearest caller's local of that name, else the global (bash's dynamic
   scope). The function's prologue lists its local arrays (`PsBuild.LocalArrays` → `VarFrameStack.LocalArrays`), and
   every array write target goes through `PsBuild.ArraySlot` → `VarFrameStack.ArraySlot`. That covers element writes,

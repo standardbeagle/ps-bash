@@ -192,7 +192,7 @@ public sealed partial class BashParser
         if (Peek().Kind == BashTokenKind.Word
             && CommandWordName(Peek()) is "declare" or "typeset" or "readonly"
             && !QuotedDeclarationStaysACommand()
-            && DeclarationHasArrayInitializer())
+            && (DeclarationHasArrayInitializer() || DeclarationHasQuotedCompound()))
         {
             int saved = _pos;
             bool isReadonlyKw = CommandWordName(Peek()) == "readonly";
@@ -202,7 +202,7 @@ public sealed partial class BashParser
             // path, whose identifier check reports it.
             if (ParseDeclarationPairs() is { } declPairs && !(isReadonlyKw && declPairs.Any(p => p.Name.Contains('['))))
                 return new Command.ShAssignment(declPairs, IsReadonly: isReadonlyKw || _declSawReadonly, IsAssoc: _declSawAssoc, IsDeclare: true, IsIndexed: _declSawIndexed && !_declSawAssoc,
-                    Redirects: _declRedirects.Count == 0 ? default : [.. _declRedirects]);
+                    Redirects: _declRedirects.Count == 0 ? default : [.. _declRedirects], IsGlobal: isReadonlyKw || _declSawGlobal);
 
             _pos = saved;
         }
@@ -566,6 +566,7 @@ public sealed partial class BashParser
     private bool _declSawInteger;
     private bool _declSawLower;
     private bool _declSawUpper;
+    private bool _declSawGlobal;
     /// <summary>Set by <see cref="ParseDeclarationPairs"/>: +1 after a flag with <c>x</c> (<c>-x</c>), -1 after <c>+x</c>, else 0.</summary>
     private int _declExport;
     /// <summary>The redirects <see cref="ParseDeclarationPairs"/> consumed (the builtin's own).</summary>
@@ -675,6 +676,7 @@ public sealed partial class BashParser
         _declSawInteger = false;
         _declSawLower = false;
         _declSawUpper = false;
+        _declSawGlobal = false;
         _declExport = 0;
         _declRedirects.Clear();
         var pairs = ImmutableArray.CreateBuilder<Assignment>();
@@ -698,7 +700,8 @@ public sealed partial class BashParser
 
             if (Peek().Kind == BashTokenKind.AssignmentWord)
             {
-                pairs.Add(ParseAssignmentWordWithArray());
+                string raw = Peek().Value;
+                pairs.Add(QuotedCompoundArray(ParseAssignmentWordWithArray(), raw));
                 continue;
             }
 
@@ -716,6 +719,7 @@ public sealed partial class BashParser
                 if (value[1] != '-' && value.Contains('l')) _declSawLower = true;
                 if (value[1] != '-' && value.Contains('u')) _declSawUpper = true;
                 if (value[1] != '-' && value.Contains('x')) _declExport = 1;
+                if (value[1] != '-' && value.Contains('g')) _declSawGlobal = true;
                 Advance();
                 continue;
             }
@@ -749,7 +753,7 @@ public sealed partial class BashParser
                 if (QuotedDeclarationAssignment(value) is { } quotedPair)
                 {
                     Advance();
-                    pairs.Add(quotedPair);
+                    pairs.Add(QuotedCompoundArray(quotedPair, value));
                     continue;
                 }
                 return null;
@@ -760,6 +764,30 @@ public sealed partial class BashParser
         }
 
         return pairs.Count > 0 ? pairs.ToImmutable() : null;
+    }
+
+    /// <summary>
+    /// <c>local -a 'b=(3 4)'</c>, <c>declare -a a='(1 2)'</c>, <c>typeset -A "m=([k]=v)"</c>: with <c>-a</c> or <c>-A</c> an
+    /// operand whose quote-removed text is <c>NAME=(…)</c> is the compound assignment (bash parses the value as the array
+    /// literal, expanding inside it), not the scalar <c>(3 4)</c>. Only static text (<paramref name="raw"/>, the operand as
+    /// written); a value that does not parse as one whole literal (<c>'a=(1); echo x)'</c>) stays the scalar.
+    /// REGRESSION: <c>f(){ local -a 'b=(3 4)'; echo ${b[1]}; }</c> printed nothing (bash: 4).
+    /// </summary>
+    private Assignment QuotedCompoundArray(Assignment pair, string raw)
+    {
+        if (!(_declSawIndexed || _declSawAssoc) || pair.ArrayValue is not null || pair.Value is null || StaticWordText(raw) is not { } text)
+            return pair;
+        int eq = text.IndexOf('=');
+        if (eq < 0 || text.Length - eq < 3 || text[eq + 1] != '(' || text[^1] != ')') return pair;
+        string source = pair.Name + (pair.Op == AssignOp.PlusEqual ? "+=" : "=") + text[(eq + 1)..];
+        try
+        {
+            var inner = new BashParser(BashLexer.Tokenize(source), source);
+            if (inner.Peek().Kind != BashTokenKind.AssignmentWord) return pair;
+            var compound = inner.ParseAssignmentWordWithArray();
+            return compound.ArrayValue is not null && compound.Name == pair.Name && inner.Peek().Kind == BashTokenKind.Eof ? compound : pair;
+        }
+        catch (ParseException) { return pair; }
     }
 
     /// <summary>
@@ -779,6 +807,32 @@ public sealed partial class BashParser
                     && _tokens[i + 1].Kind == BashTokenKind.LParen;
             }
             if (kind != BashTokenKind.Word) return false;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// <c>declare -a a='(1 2)'</c>, <c>declare -ga "g=(1 2)"</c>: a declaration with an <c>-a</c>/<c>-A</c> flag and an
+    /// operand whose quote-removed text is <c>NAME=(…)</c>, the compound assignment <see cref="QuotedCompoundArray"/> reads.
+    /// It takes the array-initializer production, so the global declaration gets the array as a written one does.
+    /// REGRESSION: <c>declare -a a='(1 2)'</c> stored the scalar <c>(1 2)</c>.
+    /// </summary>
+    private bool DeclarationHasQuotedCompound()
+    {
+        bool arrayFlag = false;
+        for (int i = _pos + 1; i < _tokens.Count && _tokens[i].Kind is BashTokenKind.Word or BashTokenKind.AssignmentWord; i++)
+        {
+            string raw = _tokens[i].Value;
+            if (_tokens[i].Kind == BashTokenKind.Word && raw.Length > 1 && raw[0] == '-' && raw[1] != '-')
+            {
+                arrayFlag |= raw.Contains('a') || raw.Contains('A');
+                continue;
+            }
+            if (!arrayFlag || StaticWordText(raw) is not { } text) continue;
+            int eq = text.IndexOf('=');
+            if (eq > 0 && text.Length - eq >= 3 && text[eq + 1] == '(' && text[^1] == ')'
+                && IsValidVariableName(text[eq - 1] == '+' ? text[..(eq - 1)] : text[..eq]))
+                return true;
         }
         return false;
     }

@@ -283,7 +283,8 @@ Guard: `RedirectGroupGuardTests.Transpile_ErrexitFinalOperand*`; behavior
 
 **The emitter's thread state is per unit and per scope.** The emitter's `[ThreadStatic]` fields go back to their first
 values at the start of every top-level `Transpile` (`PsEmitter.ResetUnitState`; a nested one, for static eval text, keeps
-them), except the caller's inputs to it (`InheritedPipefail`, `EvalLocalNames`, ...). Every nested emission scope (`$( )`,
+them, and shares the caller's attribute and nameref sets so what the text declares holds after it: `_inlineEvalText`;
+in a function that text parses as the body does, `BashParser.Parse(text, inFunctionBody: true)`), except the caller's inputs to it (`InheritedPipefail`, `EvalLocalNames`, ...). Every nested emission scope (`$( )`,
 `<( )`/`>( )`, a pipe stage, a `&` job, a subshell, a function body) saves and restores the scoped fields through ONE
 struct, `PsEmitter.EmitterScope` (`Enter()` ... `Restore()` in a finally), never ad-hoc locals. Name sequences that must
 stay distinct across units nesting at run time (`__psbash_evin_prev`, `__psbash_pso`) carry a salt from the unit's text,

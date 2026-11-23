@@ -135,8 +135,9 @@ public class PsEmitterTests
     public void Transpile_EnvPrefixBeforeEmptyExpandingCommandWord_PersistsTheAssignment()
     {
         var result = PsEmitter.Transpile("foo=alive! $unset");
-        // Empty expansion → plain assignment (no save/restore); otherwise the temporary binding.
-        Assert.Contains("Count -eq 0) { $env:foo = ", result);
+        // Empty expansion → plain assignment (no save/restore); otherwise the temporary binding. A command named at run
+        // time may be a declaration, so the unit's plain writes consult the run-time attribute table (PsBuild.AssignAttributed).
+        Assert.Contains("Count -eq 0) { if ([PsBash.Cmdlets.BashShellState]::AssignScalar('foo', ", result);
         Assert.Contains("finally", result);
     }
 

@@ -80,6 +80,23 @@ public sealed partial class BashParser
     }
 
     /// <summary>
+    /// <see cref="Parse(string)"/> of text that runs inside a function body: a static <c>eval</c>'s text there, which the
+    /// emitter inlines into the body. A <c>declare</c>/<c>typeset</c> in it is then the function's local, as one written
+    /// in the body is (<c>f() { eval 'declare -a a=(1)'; }</c> leaves no a). REGRESSION: the text parsed as top-level
+    /// code, so the declaration was global and outlived the function.
+    /// </summary>
+    public static Command? Parse(string input, bool inFunctionBody)
+    {
+        if (!inFunctionBody) return Parse(input);
+        return NormalizeArithmeticErrors(() =>
+        {
+            var tokens = BashLexer.Tokenize(input);
+            var parser = new BashParser(tokens, input) { _functionDepth = 1 };
+            return parser.ParseCommand();
+        });
+    }
+
+    /// <summary>
     /// Parse the given bash input into a sequence of top-level statements,
     /// each annotated with the character offset of its first token. Top-level
     /// statements are the elements of a <see cref="Command.CommandList"/>;
