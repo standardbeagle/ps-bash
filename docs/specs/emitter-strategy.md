@@ -1262,6 +1262,53 @@ empty string skipped the operator entirely and `x=; echo ${x:-d}` printed nothin
 - `${arr[n]}` -> `$arr[n]`, `${arr[@]}` -> `$arr`, `${#arr[@]}` -> `$arr.Count`
 - `${!arr[@]}` -> `$arr.Keys`
 
+### One arithmetic evaluator
+
+**Invariant.** Every bash arithmetic context is evaluated by ONE evaluator: `BashArithmeticParser` (parse) plus
+`BashArith.Evaluate` (value), reached from emitted code as `Invoke-BashArith`. The contexts are `$(( ))`, `(( ))`,
+`let`, the `for ((;;))` clauses, a `[[ a -eq b ]]` operand, `declare -i NAME=VALUE`, the offset and length of a
+slice of a string, an array or the positionals (`${s:o:l}`, `${a[@]:o:l}`, `${@:o:l}`), and an indexed subscript
+that is read, written, unset or named indirectly (`${a[i]}`, `${a[$k]}`, `a[i]=x`, `unset 'a[i]'`, `ref='a[i]'; ${!ref}`).
+
+**The one shortcut.** `BashArithmeticParser.TryPlainDecimal` decides when the evaluator can be skipped: only for a
+canonical decimal literal (`0`, `7`, `-12`; no leading `0`, no `+`, no blanks, within 64 bits). Every evaluator reads
+such text as that number, so skipping it cannot change a result. Everything else goes to the evaluator: `010` is
+octal 8, `08` is an error, `-010` is -8, and `1+1`, `i`, `$j` (j=`1+1`) are expressions. In emitted PowerShell, the
+same test is `PsBuild.ArithPlainDecimal` (`[PsBash.Core.Parser.BashArithmeticParser]::PlainDecimal`, a number or
+`$null`), and an evaluated operand used as a number is `PsBuild.ArithValue` (`[long]$(Invoke-BashArith …)`). It is a
+WORD, so a failed operand abandons the command like `$(( 08 ))`. A slice bound goes through
+`PsEmitter.EmitArithOperandValue`, which labels its error with the expansion (`s: 08: value too great for base
+(error token is "08")`, `a[@]: …`, `@: …`).
+
+**The bug class.** Each context had its own shortcut: `int.TryParse` (slices, literal subscripts), `long.TryParse`
+(`declare -i`, `unset`), `[long]` after `-match '^-?[0-9]+$'` (`${a[$k]}`, the indirect element, `Set-BashElement`),
+`value[0] != '0'` (element operands, which let `-010` through). They read `010` as 10 and `08` as 8. A variable
+slice bound (`${a[@]:$j}`) was cast with `[int]` instead of being evaluated, and a bound such as `1+1` or `i`
+degraded to the whole array. The evaluator itself also pasted a `$x` value with blanks around it, so `16#$h` became
+`16# ff`. bash pastes the text verbatim: `h=ff; $((16#$h))` is 255 and `x=2; $((1$x))` is 12.
+
+**Evaluator semantics (bash 5.2, expr.c).**
+
+- A compound assignment reads its target BEFORE the right side runs: `x=1; $((x += (x=10)))` is 11.
+- `**` is exponentiation by squaring with a wrapping multiply. A negative exponent is an error.
+- `-2**63 / -1` wraps to -2**63, and `% -1` is 0. This also holds for `/=`, `%=`, `let` and `(( ))`.
+- No .NET exception leaves the evaluator. A fault is a `BashArithException` of that expression.
+- `++` / `--` is an increment only after a name or before one (blanks allowed). Anywhere else it is two signs:
+  `++5` is 5, `1--1` is 2, and `5++` is "operand expected".
+- `BASE#DIGITS` up to base 36 reads letters of either case as 10-35. Above base 36, a-z are 10-35, A-Z 36-61,
+  `@` 62 and `_` 63.
+- An assignment operator after anything but a name is "attempted assignment to non-variable". This covers `1=2`,
+  and `0 ? 1 : x = 5`, because the false branch is a conditional. A missing operand after `?` or `:` is
+  "expression expected".
+- The recursion limit names the expression that went one level too deep: `r1=r2 r2=r1; $((r1+1))` is
+  `r2: expression recursion level exceeded (error token is "r2")`.
+
+**Guard.** `Core.Tests/ArithmeticOperandGuardTests`: no C# `int`/`long` `.Parse`/`.TryParse` of an arithmetic operand
+in `PsEmitter*.cs`, `PsBuild.cs` or the cmdlets that evaluate arithmetic. No emitted `[int]`/`[long]` cast except of
+the evaluator's value or of a non-arithmetic number (an fd, a status, the uid). No `[int]::TryParse` / `-match
+'^-?[0-9]+$'` number test in the emitter or the module except an inventoried non-arithmetic one. Behaviour against
+bash: `Differential.Tests/ArithOneEvaluatorDifferentialTests`, `Cmdlets.Tests/ArithOneEvaluatorTests`.
+
 ### Arithmetic operands the evaluator cannot resolve (`BuildArithFragments`)
 
 `$(( … ))` / `(( … ))` / the `for ((;;))` clauses all funnel through

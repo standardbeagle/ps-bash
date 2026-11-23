@@ -6878,7 +6878,7 @@ public static partial class PsEmitter
                 // integer literal is emitted directly; any expression routes through
                 // the shared arithmetic evaluator instead of silently collapsing to 0.
                 string intVal = appends ? $"[string](Invoke-BashArith {PsBuild.SingleQuote(declName + "+(" + rawVal + ")")})"
-                    : long.TryParse(rawVal, out _)
+                    : BashArithmeticParser.TryPlainDecimal(rawVal, out _)
                     ? PsBuild.SingleQuote(rawVal)
                     : $"[string](Invoke-BashArith {PsBuild.SingleQuote(rawVal)})";
                 result = "$env:" + declName + " = " + intVal;
@@ -11860,7 +11860,7 @@ public static partial class PsEmitter
         // which broke the whole file. `${@: -1}` (the last argument) is the common
         // real-world spelling; it is how zoxide's shell hook reads its target dir.
         if (bvs.Name is "@" or "*" && bvs.Suffix.StartsWith(':')
-            && EmitPositionalSlice(bvs.Suffix, inDoubleQuote) is { } posSlice)
+            && EmitPositionalSlice(bvs.Suffix, inDoubleQuote, bvs.Name) is { } posSlice)
         {
             return posSlice;
         }
@@ -11920,7 +11920,7 @@ public static partial class PsEmitter
                         return PsBuild.NullSafeElement(arrayVar, EmitVarSubscript(arrayVar, EmitSimpleVar(sv.Groups[1].Value)));
                     }
                     // An element of an unset array is empty (indexing $null threw "Cannot index into a null array").
-                    if (int.TryParse(subscript, out _))
+                    if (IsPlainIndex(subscript, out _))
                     {
                         // $Matches (BASH_REMATCH) is keyed by int; every other array reads by the string key.
                         string key = bvs.Name == "BASH_REMATCH" ? subscript : $"'{subscript}'";
@@ -11933,7 +11933,7 @@ public static partial class PsEmitter
                 // a PowerShell range index; other ops degrade to the whole array.
                 if (subscript is "@" or "*")
                 {
-                    if (EmitArraySlice(arrayVar, subOp, inDoubleQuote) is { } slice) return slice;
+                    if (EmitArraySlice(arrayVar, subOp, inDoubleQuote, label: bvs.Name + "[" + subscript + "]") is { } slice) return slice;
                     // `${a[@]@Q}` / `${a[@]@a}` / `${A[@]@P}` / `${a[@]@E}`: the transform applies to EACH element (the values
                     // of an associative array).
                     if (subOp is "@Q" or "@a" or "@P" or "@E")
@@ -11989,7 +11989,7 @@ public static partial class PsEmitter
 
                 // Single element: the indexed value is a scalar string — apply the same
                 // scalar suffix operator the plain-variable path uses.
-                string elemRef = int.TryParse(subscript, out _)
+                string elemRef = IsPlainIndex(subscript, out _)
                     ? $"{arrayVar}[{subscript}]"
                     // ${m[$k]:-0}: a variable subscript is the variable's value, as in the operator-less form above.
                     : System.Text.RegularExpressions.Regex.Match(subscript, @"^\$\{?(\w+)\}?$") is { Success: true } subVar
@@ -11999,11 +11999,11 @@ public static partial class PsEmitter
                 // array"). bash treats it as a one-element array: ${s[0]-w} is pq, ${s[1]-w} is w. The assigning forms
                 // keep the plain element reference AssignDefault parses.
                 if (arrayVar == "$" + bvs.Name && subOp.Length > 0 && subOp[0] != '=' && !subOp.StartsWith(":=", StringComparison.Ordinal))
-                    elemRef = int.TryParse(subscript, out int scalarIdx)
+                    elemRef = IsPlainIndex(subscript, out int scalarIdx)
                         ? $"$(if ($null -eq {arrayVar}) {{ {(scalarIdx == 0 ? EmitSimpleVar(bvs.Name) : "$null")} }} else {{ {elemRef} }})"
                         // `${u[i]:-d}` / `${u[$k]-d}` of an unset array: unset, not an indexing error.
                         : $"$(if ($null -eq {arrayVar}) {{ $null }} else {{ {elemRef} }})";
-                return EmitScalarSuffix(elemRef, subOp, inDoubleQuote, bvs.ArgWord)
+                return EmitScalarSuffix(elemRef, subOp, inDoubleQuote, bvs.ArgWord, bvs.Name + "[" + subscript + "]")
                     ?? (inDoubleQuote ? $"$({elemRef})" : elemRef);
             }
         }
@@ -12139,7 +12139,7 @@ public static partial class PsEmitter
             string each = $"@(@({list}) | ForEach-Object {{ $__psbpe = [string]$_; {elem} }})";
             return !inDoubleQuote ? each : bvs.Name == "*" ? $"$((@({list}) | ForEach-Object {{ $__psbpe = [string]$_; {elem} }}) -join {PsBuild.IfsJoinSeparator})" : "$" + each[1..];
         }
-        return EmitScalarSuffix(varRef, bvs.Suffix, inDoubleQuote, bvs.ArgWord) ?? varRef;
+        return EmitScalarSuffix(varRef, bvs.Suffix, inDoubleQuote, bvs.ArgWord, bvs.Name) ?? varRef;
     }
 
     // `${@-w}` `${@:+w}` `${*:-w}` …: the operand is the positional LIST, not a string. `-` / `+` test only whether
@@ -12198,7 +12198,7 @@ public static partial class PsEmitter
     }
 
     private static string? EmitScalarSuffix(string varRef, string suffix, bool inDoubleQuote,
-        ImmutableArray<WordPart>? argWord = null)
+        ImmutableArray<WordPart>? argWord = null, string? label = null)
     {
         string open = inDoubleQuote ? "$(" : "(";
 
@@ -12399,26 +12399,22 @@ public static partial class PsEmitter
         if (suffix.StartsWith(":") && suffix.Length > 1)
         {
             var sliceBody = suffix[1..].Trim();
-            bool looksNumeric = sliceBody.Length > 0 && (char.IsDigit(sliceBody[0])
-                || (sliceBody[0] == '-' && sliceBody.Length > 1 && char.IsDigit(sliceBody[1])));
-            if (looksNumeric)
+            var sliceParts = SplitSlice(sliceBody);
+            // Plain decimal bounds (`${s:2}`, `${s: -3:2}`) are a direct, clamped Substring. Any other bound -- `010` (octal
+            // 8), `08` (an error), `i+1`, `$i` -- is an arithmetic expression for the one evaluator, below.
+            int fastLength = -1;
+            if (IsPlainIndex(sliceParts[0].Trim(), out int offset)
+                && (sliceParts.Length == 1 || (IsPlainIndex(sliceParts[1].Trim(), out fastLength) && fastLength >= 0)))
             {
-                var sliceParts = SplitSlice(sliceBody);
-                if (int.TryParse(sliceParts[0].Trim(), out int offset))
-                {
-                    string sv = "([string]" + varRef + ")";   // an unset variable slices as the empty string
-                    string len = $"{sv}.Length";
-                    string start = offset >= 0
-                        ? $"[Math]::Min({offset}, {len})"
-                        : $"[Math]::Max(0, {len} - {-offset})";
-                    string? expr = null;
-                    if (sliceParts.Length == 1)
-                        expr = $"{sv}.Substring({start})";
-                    else if (int.TryParse(sliceParts[1].Trim(), out int length) && length >= 0)
-                        expr = $"{sv}.Substring({start}, [Math]::Min({length}, {len} - ({start})))";
-                    if (expr is not null)
-                        return inDoubleQuote ? $"$({expr})" : expr;
-                }
+                string sv = "([string]" + varRef + ")";   // an unset variable slices as the empty string
+                string len = $"{sv}.Length";
+                string start = offset >= 0
+                    ? $"[Math]::Min({offset}, {len})"
+                    : $"[Math]::Max(0, {len} - {-offset})";
+                string expr = sliceParts.Length == 1
+                    ? $"{sv}.Substring({start})"
+                    : $"{sv}.Substring({start}, [Math]::Min({fastLength}, {len} - ({start})))";
+                return inDoubleQuote ? $"$({expr})" : expr;
             }
 
             // Non-literal offset/length (e.g. ${x:$i}, ${x:$i:$n}, ${x:i+1}). Bash
@@ -12428,19 +12424,17 @@ public static partial class PsEmitter
             // runtime. Without this, ${x:$i} failed the digit test above and silently
             // fell through to the bare variable — dropping the slice entirely.
             {
-                var sliceParts = SplitSlice(sliceBody);
-                string offArith = $"[int](Invoke-BashArith {PsBuild.SingleQuote(sliceParts[0].Trim())})";
                 var sb = new StringBuilder("& { $__psbS = [string](");
                 sb.Append(varRef);
-                sb.Append("); $__psbO = ").Append(offArith).Append("; ");
+                sb.Append("); $__psbO = ").Append(EmitArithOperandValue(sliceParts[0], label)).Append("; ");
                 sb.Append("if ($__psbO -lt 0) { $__psbO = [Math]::Max(0, $__psbS.Length + $__psbO) } ");
                 sb.Append("else { $__psbO = [Math]::Min($__psbO, $__psbS.Length) }; ");
-                if (sliceParts.Length == 2 && sliceParts[1].Trim().Length > 0)
+                if (sliceParts.Length == 2)
                 {
-                    string lenArith = $"[int](Invoke-BashArith {PsBuild.SingleQuote(sliceParts[1].Trim())})";
-                    sb.Append("$__psbL = ").Append(lenArith).Append("; ");
-                    // bash: negative length ends |length| chars from the string end.
-                    sb.Append("$__psbE = if ($__psbL -ge 0) { $__psbO + $__psbL } else { $__psbS.Length + $__psbL }; ");
+                    // An empty length is an empty expression, 0 (`${s:1:}` is empty).
+                    sb.Append("$__psbL = ").Append(EmitArithOperandValue(sliceParts[1], label)).Append("; ");
+                    // bash: negative length ends |length| chars from the string end. A huge one is clamped first.
+                    sb.Append("$__psbE = if ($__psbL -ge 0) { $__psbO + [Math]::Min($__psbL, $__psbS.Length) } else { $__psbS.Length + $__psbL }; ");
                     sb.Append("$__psbC = [Math]::Max(0, [Math]::Min($__psbE, $__psbS.Length) - $__psbO); ");
                     sb.Append("$__psbS.Substring($__psbO, $__psbC) }");
                 }
@@ -12506,15 +12500,39 @@ public static partial class PsEmitter
     /// in front when <c>positional</c> is set; a negative offset counts from the end (<c>${@: -1}</c> = last).
     /// </para>
     /// </summary>
-    private static string? EmitPositionalSlice(string suffix, bool inDoubleQuote)
-        => EmitArraySlice(PsBuild.BuildPositionalExpansion("@"), suffix, inDoubleQuote, positional: true);
+    private static string? EmitPositionalSlice(string suffix, bool inDoubleQuote, string name)
+        => EmitArraySlice(PsBuild.BuildPositionalExpansion("@"), suffix, inDoubleQuote, positional: true, label: name);
 
     // `${a[$i]}`: an associative array uses the value as the key; an indexed array evaluates it as an arithmetic
-    // expression (`code='1+2'; ${a[$code]}` is a[3]). A plain integer skips the evaluator. The evaluator is written as a
+    // expression (`code='1+2'; ${a[$code]}` is a[3], k=010 is a[8], i=08 an error). Only a plain decimal skips the
+    // evaluator (BashArithmeticParser.PlainDecimal; `-match '^-?[0-9]+$'` read 010 as 10). The evaluator is written as a
     // WORD (`$(Invoke-BashArith`): a subscript error discards the rest of the line in bash, as `$((1/0))` does
     // (InvokeBashArithmeticCommand.IsWordExpansion, PsBuild.CanDiscardLine).
     private static string EmitVarSubscript(string arrayVar, string valueRef)
-        => $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {valueRef} }} elseif ([string]{valueRef} -match '^-?[0-9]+$') {{ [long]{valueRef} }} else {{ [long]$(Invoke-BashArith ([string]{valueRef}) -Subscript) }})";
+        => $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {valueRef} }} else {{ {PsBuild.ArithPlainDecimal("[string]" + valueRef)} ?? {PsBuild.ArithValue($"Invoke-BashArith ([string]{valueRef}) -Subscript")} }})";
+
+    /// <summary>
+    /// A slice bound that bash evaluates as ARITHMETIC, as a PowerShell number: an empty one is 0, a plain decimal its
+    /// literal (BashArithmeticParser.TryPlainDecimal, the one fast path), anything else the one evaluator's value
+    /// (`010` is 8; `08` is an error that abandons the command; `i+1`; `$j` with j='1+1'). <paramref name="label"/> names
+    /// the expansion in an error: `s: 08: value too great for base (error token is "08")`.
+    /// </summary>
+    private static string EmitArithOperandValue(string text, string? label)
+    {
+        string expr = text.TrimStart();
+        if (expr.Trim().Length == 0) return "0";
+        if (BashArithmeticParser.TryPlainDecimal(expr.TrimEnd(), out long n))
+            return n.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return PsBuild.ArithValue(EmitArithmeticInvocation(BashArithmeticParser.ParseOrDefer(expr), label));
+    }
+
+    /// <summary>A literal subscript or slice bound that needs no evaluator: BashArithmeticParser.TryPlainDecimal, within int.</summary>
+    private static bool IsPlainIndex(string text, out int value)
+    {
+        bool plain = BashArithmeticParser.TryPlainDecimal(text, out long n) && n is >= int.MinValue and <= int.MaxValue;
+        value = plain ? (int)n : 0;
+        return plain;
+    }
 
     // `${a[i]}` / `${a[i+1]}`: on an indexed array the subscript is an arithmetic expression (bare names are
     // variables); on an associative array it is the literal key. The array kind is known only at run time.
@@ -12562,36 +12580,19 @@ public static partial class PsEmitter
         return new[] { body };
     }
 
-    // Emit a bash array slice ${arr[@]:offset[:length]} as a PowerShell range index.
-    // Returns null when `op` is not a `:`-prefixed numeric slice (caller degrades to the
-    // whole array). bash element indices map directly: offset..(offset+length-1), and
-    // negative offsets index from the end (PowerShell supports negative range bounds).
-    private static string? EmitArraySlice(string arrayVar, string op, bool inDoubleQuote, bool positional = false)
+    // Emit a bash array slice ${arr[@]:offset[:length]} (and ${@:offset[:length]}) as a run-time clamped scriptblock.
+    // Returns null when `op` is not a slice (`${a[@]:-w}` / `:+` / `:=` / `:?` are the caller's). Each bound is an
+    // ARITHMETIC expression of the one evaluator (EmitArithOperandValue): `${a[@]:i}`, `${a[@]:1+1:2}`, `${a[@]:$j}` with
+    // j='1+1', `${a[@]:010}` (from element 8), `${@:08}` (an error). Only a plain decimal is written as a literal.
+    private static string? EmitArraySlice(string arrayVar, string op, bool inDoubleQuote, bool positional = false,
+        string? label = null)
     {
-        if (!op.StartsWith(":"))
+        if (!op.StartsWith(':') || (op.Length > 1 && !IsSliceSuffix(op)))
             return null;
-        var body = op[1..].Trim();
-        var parts = SplitSlice(body);
-        // A bound is an integer or a variable (`${a[@]:$i}`, `${@:$#}`, `${a[@]:$i:$n}`): its value is read at run time.
-        // An empty one is an empty arithmetic expression, 0 (`${a[@]: : }` is the empty slice).
-        static string? Bound(string text)
-        {
-            text = text.Trim();
-            if (text.Length == 0) return "0";
-            if (int.TryParse(text, out int n)) return n.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            var m = System.Text.RegularExpressions.Regex.Match(text, @"^\$(?:\{(\w+|#)\}|(\w+|#))$");
-            return m.Success ? "[int](" + ZeroDefault(EmitSimpleVar(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value, strict: true)) + ")" : null;
-        }
-        if (Bound(parts[0]) is not { } offset)
-            return null;
-
-        string? length = null;
-        if (parts.Length == 2)
-        {
-            if (Bound(parts[1]) is not { } len)
-                return null;
-            length = len;
-        }
+        var parts = SplitSlice(op[1..].Trim());
+        // An empty bound is an empty arithmetic expression, 0 (`${a[@]: : }` is the empty slice).
+        string offset = EmitArithOperandValue(parts[0], label);
+        string? length = parts.Length == 2 ? EmitArithOperandValue(parts[1], label) : null;
 
         // ${arr[@]:offset[:length]} with bash clamping, computed at RUNTIME because
         // the element count is not known until execution. The old code emitted a raw

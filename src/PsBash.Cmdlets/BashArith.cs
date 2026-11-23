@@ -41,6 +41,10 @@ public static class BashArith
             // The parser's message already ends with the error token.
             throw new BashArithException(ex.Message, ex) { Expression = ex.Expression ?? expression };
         }
+        catch (Exception ex) when (IsEvaluatorFault(ex))
+        {
+            throw new BashArithException(ex.Message, ex) { Expression = expression };
+        }
     }
 
     private static long EvaluateCore(ArithmeticSyntax syntax, Dictionary<ArithmeticExpr, int>? tokens,
@@ -66,7 +70,21 @@ public static class BashArith
             if (ex.Node is not null && tokens is not null && tokens.TryGetValue(ex.Node, out int at)) ex.Token = source[at..];
             throw;
         }
+        catch (Exception ex) when (IsEvaluatorFault(ex))
+        {
+            // No .NET failure leaves the evaluator (an uncaught OverflowException aborted the enclosing function and,
+            // in a command, the host's statement): it is an arithmetic error of this expression like any other.
+            throw new BashArithException(ex.Message, ex) { Expression = source };
+        }
     }
+
+    /// <summary>
+    /// A failure of the evaluator's own arithmetic or bookkeeping (overflow, a bad cast, an index), as opposed to a
+    /// read or write callback's signal (an unbound variable, the recursion limit, a stopped pipeline), which passes on.
+    /// </summary>
+    private static bool IsEvaluatorFault(Exception ex)
+        => ex is ArithmeticException or InvalidCastException or IndexOutOfRangeException or FormatException
+            or ArgumentException or NullReferenceException or KeyNotFoundException;
 
     private static string ExpandUnbracedDigitSuffixes(string source, Func<string, long> read,
         Func<string, string?>? readRaw)
@@ -161,8 +179,10 @@ public static class BashArith
             }
             case ArithmeticExpr.Assignment assignment:
             {
-                long rhs = Eval(assignment.Value, read, write, readRaw);
+                // A compound assignment reads its target BEFORE the right side runs (expr.c expassign): `x=1; x += (x=10)`
+                // is 11, `x += x++` is 2, `x=3; x += x *= 2` is 9.
                 long current = assignment.Op == ArithmeticAssignmentOp.Assign ? 0 : read(assignment.Name);
+                long rhs = Eval(assignment.Value, read, write, readRaw);
                 long value = assignment.Op switch
                 {
                     ArithmeticAssignmentOp.Assign => rhs,
@@ -226,23 +246,32 @@ public static class BashArith
         };
     }
 
+    // `/` `%` `/=` `%=` all divide here. The one quotient that does not fit, -2**63 / -1, wraps as in bash (expr.c checks
+    // for it): -9223372036854775808, remainder 0. .NET raised OverflowException for both.
     private static long Divide(long left, long right, ArithmeticExpr node)
     {
         if (right == 0) throw new BashArithException("division by 0") { Node = node };
-        return left / right;
+        return right == -1 ? unchecked(-left) : left / right;
     }
 
     private static long Modulo(long left, long right, ArithmeticExpr node)
     {
         if (right == 0) throw new BashArithException("division by 0") { Node = node };
-        return left % right;
+        return right == -1 ? 0 : left % right;
     }
 
+    // Exponentiation by squaring with a wrapping multiply (bash's ipow): `(-1)**9223372036854775807` is one 63-step
+    // loop, not 2**63 multiplications (the linear loop hung the host).
     private static long Power(long value, long exponent, ArithmeticExpr node)
     {
         if (exponent < 0) throw new BashArithException("exponent less than 0") { Node = node };
         long result = 1;
-        for (long i = 0; i < exponent; i++) result *= value;
+        while (exponent != 0)
+        {
+            if ((exponent & 1) != 0) result = unchecked(result * value);
+            exponent >>= 1;
+            value = unchecked(value * value);
+        }
         return result;
     }
 

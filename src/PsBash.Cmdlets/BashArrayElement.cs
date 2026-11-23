@@ -35,9 +35,8 @@ public static class BashArrayElement
         {
             string? value = Raw(name)?.Trim();
             if (string.IsNullOrEmpty(value)) return 0;
-            // A leading 0 is octal (010 is 8, 08 an error), so only a plain decimal is read directly.
-            if (value[0] != '0' && long.TryParse(value, System.Globalization.NumberStyles.AllowLeadingSign,
-                    System.Globalization.CultureInfo.InvariantCulture, out var direct))
+            // A leading 0 is octal (010 and -010 are 8 and -8, 08 an error), so only a plain decimal is read directly.
+            if (PsBash.Core.Parser.BashArithmeticParser.TryPlainDecimal(value, out var direct))
                 return direct;
             if (depth >= MaxRecursionDepth)
                 throw new BashArith.BashArithException("expression recursion level exceeded") { Expression = name, Token = name };

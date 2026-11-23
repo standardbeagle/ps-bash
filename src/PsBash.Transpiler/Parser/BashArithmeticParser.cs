@@ -155,18 +155,26 @@ public sealed class BashArithmeticParser
                 ? NoteErrorToken(assignment, LastTokenStart())
                 : assignment;
         }
-        return ParseConditional();
+        var value = ParseConditional();
+        // bash (expr.c expassign): an assignment operator after anything but a bare name -- `1=2`, `0 ? 1 : x = 5`, whose
+        // left side is the whole conditional -- is "attempted assignment to non-variable (error token is "= 5")".
+        if (TryAssignmentOp(Current.Kind, out _)) Error("attempted assignment to non-variable");
+        return value;
     }
 
     private ArithmeticExpr ParseConditional()
     {
         var condition = ParseLogicalOr();
         if (!Accept(T.Question)) return condition;
+        // bash (expr.c expcond): nothing, or a `:`, after the `?` and nothing after the `:` is "expression expected".
+        if (Current.Kind is T.End or T.Colon) Error("expression expected");
         // Bash follows C here: the middle operand is a full expression, so a
         // comma belongs to the true branch rather than the surrounding level.
         var whenTrue = ParseComma();
         Expect(T.Colon);
-        return new ArithmeticExpr.Conditional(condition, whenTrue, ParseAssignment());
+        if (Current.Kind == T.End) Error("expression expected");
+        // The false branch is a conditional, not an assignment: `0 ? 1 : x = 5` assigns to the conditional (an error).
+        return new ArithmeticExpr.Conditional(condition, whenTrue, ParseConditional());
     }
 
     private ArithmeticExpr ParseLogicalOr() => ParseLeft(ParseLogicalAnd, (T.OrOr, ArithmeticBinaryOp.LogicalOr));
@@ -394,6 +402,13 @@ public sealed class BashArithmeticParser
                 }
                 throw new BashArithmeticParseException($"invalid arithmetic parameter near '{source[start..]}'");
             }
+            // bash (expr.c readtok): `++` / `--` is an increment only after a name (`x++`) or before one (`++x`, `-- x`);
+            // anywhere else it is two signs: `++5` and `--5` are 5, `1--1` is 2, `5++` is `5 + +` (operand expected).
+            if (c is '+' or '-' && i + 1 < source.Length && source[i + 1] == c
+                && !(result.Count > 0 && result[^1].Kind == T.Ident) && !NameFollows(source, i + 2))
+            {
+                result.Add(new Tok(c == '+' ? T.Plus : T.Minus)); i++; continue;
+            }
             if (i + 3 <= source.Length && TryOperator(source.Substring(i, 3), out var three)) { result.Add(new Tok(three)); i += 3; continue; }
             if (i + 2 <= source.Length && TryOperator(source.Substring(i, 2), out var two)) { result.Add(new Tok(two)); i += 2; continue; }
             T single = c switch
@@ -411,6 +426,13 @@ public sealed class BashArithmeticParser
         result.Add(new Tok(T.End));
         starts.Add(source.Length);
         return result;
+    }
+
+    /// <summary>Whether a name starts at <paramref name="at"/> after optional blanks (bash's <c>legal_variable_starter</c>).</summary>
+    private static bool NameFollows(string source, int at)
+    {
+        while (at < source.Length && char.IsWhiteSpace(source[at])) at++;
+        return at < source.Length && (source[at] == '_' || char.IsLetter(source[at]));
     }
 
     /// <summary>
@@ -498,7 +520,7 @@ public sealed class BashArithmeticParser
         long value = 0;
         foreach (char digit in digits)
         {
-            int d = bashDigits ? BashDigit(digit) : HexDigit(digit);
+            int d = bashDigits ? BashDigit(digit, radix) : HexDigit(digit);
             if (d < 0 || d >= radix) throw new BashArithmeticParseException("value too great for base");
             value = unchecked(value * radix + d);
         }
@@ -506,7 +528,48 @@ public sealed class BashArithmeticParser
     }
 
     private static int HexDigit(char c) => c is >= '0' and <= '9' ? c - '0' : c is >= 'a' and <= 'f' ? c - 'a' + 10 : c is >= 'A' and <= 'F' ? c - 'A' + 10 : -1;
-    private static int BashDigit(char c) => c is >= '0' and <= '9' ? c - '0' : c is >= 'a' and <= 'z' ? c - 'a' + 10 : c is >= 'A' and <= 'Z' ? c - 'A' + 36 : c == '@' ? 62 : c == '_' ? 63 : -1;
+
+    /// <summary>
+    /// A digit of <c>BASE#DIGITS</c> (expr.c <c>strlong</c>): up to base 36 a letter of either case is 10-35
+    /// (<c>16#FF</c> = <c>16#ff</c> = 255, <c>36#Z</c> = 35); above it a-z are 10-35, A-Z 36-61, <c>@</c> 62, <c>_</c> 63.
+    /// </summary>
+    private static int BashDigit(char c, int radix) => c switch
+    {
+        >= '0' and <= '9' => c - '0',
+        >= 'a' and <= 'z' => c - 'a' + 10,
+        >= 'A' and <= 'Z' => c - 'A' + (radix <= 36 ? 10 : 36),
+        '@' => 62,
+        '_' => 63,
+        _ => -1,
+    };
+
+    /// <summary>
+    /// The ONE place an arithmetic operand may skip the evaluator: text that is a canonical decimal literal
+    /// (<c>0</c>, <c>7</c>, <c>-12</c>; 19 digits at most and within 64 bits), which every evaluator reads as exactly
+    /// that number. Anything else -- <c>010</c> (octal 8), <c>08</c> (an error), <c>-010</c>, <c>+5</c>, <c>-0</c>,
+    /// blanks, <c>1+1</c>, a name -- is the evaluator's (<c>Invoke-BashArith</c> / <c>BashArith.Evaluate</c>).
+    /// <para>
+    /// The bug class: each context (a slice bound, an indexed subscript, <c>unset 'a[i]'</c>, <c>declare -i</c>) decided
+    /// for itself with <c>int.TryParse</c> / <c>[long]</c> / <c>-match '^-?[0-9]+$'</c>, which read <c>010</c> as 10 and
+    /// <c>08</c> as 8, and a variable bound (<c>${a[@]:$j}</c>, j='1+1') as a PowerShell cast that threw. Guard:
+    /// <c>Core.Tests/ArithmeticOperandGuardTests</c>; spec <c>docs/specs/emitter-strategy.md</c> "One arithmetic evaluator".
+    /// </para>
+    /// </summary>
+    public static bool TryPlainDecimal(ReadOnlySpan<char> text, out long value)
+    {
+        value = 0;
+        int sign = text.Length > 0 && text[0] == '-' ? 1 : 0;
+        int digits = text.Length - sign;
+        if (digits is < 1 or > 19) return false;
+        // A leading 0 is octal (`010` is 8, `08` an error), and `-0` is not canonical.
+        if (text[sign] == '0' && (digits > 1 || sign == 1)) return false;
+        foreach (char c in text[sign..])
+            if (c is < '0' or > '9') return false;
+        return long.TryParse(text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out value);
+    }
+
+    /// <summary><see cref="TryPlainDecimal"/> for emitted PowerShell: the number, or null for the evaluator to decide.</summary>
+    public static long? PlainDecimal(string? text) => text is not null && TryPlainDecimal(text, out long value) ? value : null;
 }
 
 public sealed class BashArithmeticParseException : Exception
