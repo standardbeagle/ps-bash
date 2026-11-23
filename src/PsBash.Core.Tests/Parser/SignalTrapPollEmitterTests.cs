@@ -93,7 +93,8 @@ public class SignalTrapPollEmitterTests
         foreach (var file in Directory.EnumerateFiles(parser, "PsEmitter*.cs"))
             foreach (var line in File.ReadAllLines(file))
                 if (System.Text.RegularExpressions.Regex.IsMatch(line, @"\b_canSetTrap\s*=[^=]"))
-                    Assert.Matches(@"_canSetTrap\s*=\s*(priorCanSetTrap\s*\|\|\s*)?CanSetTrap\(\w+\)|_canSetTrap\s*=\s*priorCanSetTrap;", line);
+                    // `= false` is the per-unit reset (PsEmitter.ResetUnitState), before any unit sets it.
+                    Assert.Matches(@"_canSetTrap\s*=\s*(priorCanSetTrap\s*\|\|\s*)?CanSetTrap\(\w+\)|_canSetTrap\s*=\s*priorCanSetTrap;|_canSetTrap\s*=\s*false;", line);
     }
 
     [Fact]

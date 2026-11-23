@@ -9,8 +9,8 @@ namespace PsBash.Differential.Tests;
 /// <c>-g</c> keeps it global, an inner function's declaration is local to the inner one (dynamic scope), and at the
 /// top level it is global. REGRESSION: such text was emitted without its function, so every declaration was global
 /// and outlived the call (<c>declare -p dd e t</c> found all three). Primitive: <c>PsBuild.LocalWhenInFunction</c> over
-/// <c>PsBuild.RunTimeLocal</c>, the run-time <c>local</c>'s own frame. Arrays stay out (a run-time local array is
-/// global too).
+/// <c>PsBuild.RunTimeLocal</c>, the run-time <c>local</c>'s own frame. Arrays and namerefs:
+/// <c>RunTimeArrayAttributeDifferentialTests</c>.
 /// </summary>
 public class RunTimeDeclareScopeDifferentialTests
 {

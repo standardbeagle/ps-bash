@@ -406,4 +406,74 @@ public class BashShellStateTests : IClassFixture<SharedPwshFixture>
         }
         finally { BashShellState.UnmarkReadonly("psbt_lr_w"); }
     }
+
+    // The run-time attribute writer (PsBuild.AssignAttributed) over the one attribute table. End to end (bash oracle):
+    // RunTimeArrayAttributeDifferentialTests.AttributesSetAtRunTime_HoldForTheWritesAfterThem.
+    [Fact]
+    public void AssignScalar_ConvertsCaseAttributesAndRefusesAnInteger()
+    {
+        try
+        {
+            BashShellState.MarkAttribute("psbt_as_u", "u");
+            Assert.True(BashShellState.AssignScalar("psbt_as_u", "ab", append: false));
+            Assert.True(BashShellState.AssignScalar("psbt_as_u", "cd", append: true));
+            Assert.Equal("ABCD", BashVariableStore.Get("psbt_as_u"));
+
+            BashShellState.MarkAttribute("psbt_as_l", "l");
+            BashVariableStore.Set("psbt_as_l", "x");
+            Assert.True(BashShellState.AssignScalar("psbt_as_l", "YZ", append: true));
+            Assert.Equal("xyz", BashVariableStore.Get("psbt_as_l"));
+
+            // -i: nothing written, the caller evaluates the arithmetic.
+            BashShellState.MarkAttribute("psbt_as_i", "i");
+            BashVariableStore.Set("psbt_as_i", "5");
+            Assert.False(BashShellState.AssignScalar("psbt_as_i", "2*3", append: false));
+            Assert.Equal("5", BashVariableStore.Get("psbt_as_i"));
+
+            // No attributes: the plain write, append included.
+            BashVariableStore.Set("psbt_as_p", "a");
+            Assert.True(BashShellState.AssignScalar("psbt_as_p", "B", append: true));
+            Assert.Equal("aB", BashVariableStore.Get("psbt_as_p"));
+        }
+        finally
+        {
+            foreach (var n in new[] { "psbt_as_u", "psbt_as_l", "psbt_as_i", "psbt_as_p" })
+            {
+                BashShellState.TakeAttributes(n);
+                BashVariableStore.Set(n, null);
+            }
+        }
+    }
+
+    [Fact]
+    public void AssignScalar_WritesThroughANameref()
+    {
+        try
+        {
+            BashShellState.SetNameref("psbt_as_r", "psbt_as_t");
+            BashShellState.MarkAttribute("psbt_as_t", "u");
+            Assert.True(BashShellState.AssignScalar("psbt_as_r", "via", append: false));
+            Assert.Equal("VIA", BashVariableStore.Get("psbt_as_t"));
+            Assert.Null(BashVariableStore.Get("psbt_as_r"));
+
+            // An integer target: AssignEvaluated stores the caller's result in the target too.
+            BashShellState.MarkAttribute("psbt_as_t", "i");
+            Assert.False(BashShellState.AssignScalar("psbt_as_r", "1+1", append: false));
+            BashShellState.AssignEvaluated("psbt_as_r", "2");
+            Assert.Equal("2", BashVariableStore.Get("psbt_as_t"));
+
+            // A nameref with no target yet: the value names the target, nothing is stored.
+            BashShellState.SetNameref("psbt_as_e", "");
+            Assert.True(BashShellState.AssignScalar("psbt_as_e", "psbt_as_t", append: false));
+            Assert.Equal("psbt_as_t", BashShellState.NamerefTarget("psbt_as_e"));
+            Assert.Equal("2", BashVariableStore.Get("psbt_as_t"));
+        }
+        finally
+        {
+            BashShellState.TakeNameref("psbt_as_r");
+            BashShellState.TakeNameref("psbt_as_e");
+            BashShellState.TakeAttributes("psbt_as_t");
+            BashVariableStore.Set("psbt_as_t", null);
+        }
+    }
 }

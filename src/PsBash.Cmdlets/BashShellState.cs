@@ -168,6 +168,40 @@ public static class BashShellState
         }
     }
 
+    /// <summary>
+    /// <c>NAME=VALUE</c> / <c>NAME+=VALUE</c> written in a unit that also runs declarations built at run time
+    /// (<c>declare "$1"</c>, <c>eval "$c"</c>, <c>$d x</c>): the emitter cannot know NAME's attributes, so the write
+    /// consults this table (PsBuild.AssignAttributed). It goes to NAME's nameref target; <c>-u</c>/<c>-l</c> convert the
+    /// value (the appended whole, for <c>+=</c>). False, writing nothing, when the target is <c>-i</c>: the caller then
+    /// evaluates the value as arithmetic and stores it with <see cref="AssignEvaluated"/>. A write that names a target-less
+    /// nameref's target is made here (<see cref="WriteTarget"/>) and is true.
+    /// </summary>
+    public static bool AssignScalar(string name, string? value, bool append)
+    {
+        string? target = WriteTarget(name, value, out _);
+        if (target is null) return true;
+        if (target.IndexOf('[') >= 0) target = name;   // an element target: the name's own variable, as before
+        string? letters = null;
+        lock (Attributes)
+            if (Attributes.Count > 0) Attributes.TryGetValue(Key(target), out letters);
+        if (letters is not null && letters.Contains('i')) return false;
+        string written = append ? (BashVariableStore.Get(target) ?? "") + (value ?? "") : value ?? "";
+        if (letters is not null)
+        {
+            if (letters.Contains('u')) written = written.ToUpperInvariant();
+            else if (letters.Contains('l')) written = written.ToLowerInvariant();
+        }
+        BashVariableStore.Set(target, written);
+        return true;
+    }
+
+    /// <summary>The value an integer <see cref="AssignScalar"/> refused, evaluated by the caller: stored in NAME's target.</summary>
+    public static void AssignEvaluated(string name, string? value)
+    {
+        string target = ResolveNameref(name);
+        BashVariableStore.Set(target.IndexOf('[') >= 0 ? name : target, value ?? "");
+    }
+
     /// <summary>True when NAME has declare attribute letters (it was declared, if only with no value).</summary>
     internal static bool HasAttributes(string name) { lock (Attributes) return Attributes.ContainsKey(Key(name)); }
 

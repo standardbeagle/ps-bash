@@ -79,7 +79,10 @@ public abstract record Command : BashNode
         // null for none). REGRESSION: they were parsed and dropped, so `local -i k=1+1` held "1+1".
         string? Attrs = null,
         // The builtin a local declaration was made with (`local`, `declare`, `typeset`): its diagnostics name it.
-        string? Builtin = null) : Command;
+        string? Builtin = null,
+        // `declare -g a=(…)` / `readonly a=(…)`: a declaration that is global even when a function runs it (eval text,
+        // which cannot know whether one does, keeps any other `declare`'s array local to the running function).
+        bool IsGlobal = false) : Command;
 
     /// <summary>
     /// An if/elif/else statement.
