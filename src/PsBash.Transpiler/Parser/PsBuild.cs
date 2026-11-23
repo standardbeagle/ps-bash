@@ -449,6 +449,20 @@ public static class PsBuild
     /// <summary>Ends <see cref="TempExportBegin"/>: each name has the attribute it had before the command.</summary>
     public const string TempExportEnd = "[PsBash.Cmdlets.BashVariableStore]::EndTempExport()";
 
+    /// <summary>
+    /// The 64-bit value of an <c>Invoke-BashArith</c> invocation used as a number (a slice bound): written as a WORD
+    /// (<c>$(</c> right before it, InvokeBashArithmeticCommand.IsWordExpansion), so a failed operand abandons the command
+    /// as <c>$(( 08 ))</c> does. A failed evaluation yields no value, which casts to 0.
+    /// </summary>
+    public static string ArithValue(string invocation) => "[long]$(" + invocation + ")";
+
+    /// <summary>
+    /// The run-time twin of <c>BashArithmeticParser.TryPlainDecimal</c>: the number when <paramref name="textExpr"/> is a
+    /// canonical decimal, else <c>$null</c> (the caller then hands the text to <c>Invoke-BashArith</c>).
+    /// </summary>
+    public static string ArithPlainDecimal(string textExpr)
+        => "[PsBash.Core.Parser.BashArithmeticParser, PsBash.Transpiler]::PlainDecimal(" + textExpr + ")";
+
     public static string ArithNounsetGuard(string invocation) =>
         "$($__psbash_av = " + invocation + "; if ($global:__BashUnbound) { $__psbash_un = $global:__BashUnbound; $global:__BashUnbound = $null; "
         + "throw [PsBash.Cmdlets.BashParamErrorException]::Reported($__psbash_un + ': ', 'unbound variable') }; $__psbash_av)";

@@ -222,7 +222,8 @@ function Get-BashIndirectValue {
         }
         if ($sub -eq '@' -or $sub -eq '*') { return (@($v) -join ' ') }
         # An indexed subscript is arithmetic (`ref='a[i+1]'`); one that does not parse (`a[~+]`) fails the expansion.
-        if ($sub -match '^-?[0-9]+$') { $i = [long]$sub }
+        # Only a plain decimal skips the evaluator (`ref='a[010]'` is element 8): BashArithmeticParser.PlainDecimal.
+        if ($null -ne ($i = [PsBash.Core.Parser.BashArithmeticParser, PsBash.Transpiler]::PlainDecimal($sub))) { }
         else {
             $global:LASTEXITCODE = 0
             $iv = Invoke-BashArith $rawSub
@@ -1051,7 +1052,9 @@ function Set-BashElement {
     $__psbashIdx = 0L
     # Evaluated as a WORD (`$(`): a failed subscript discards the rest of the line, as in bash (`a[1/0]=x; echo no`
     # prints nothing); outside a line scope it marks the expansion failed and nothing is assigned.
-    if (-not [long]::TryParse($__psbashKey, [ref]$__psbashIdx)) {
+    # Only a plain decimal skips the evaluator (`a[010]=x` is element 8): BashArithmeticParser.PlainDecimal.
+    if ($null -ne ($__psbashPlain = [PsBash.Core.Parser.BashArithmeticParser, PsBash.Transpiler]::PlainDecimal($__psbashKey))) { $__psbashIdx = $__psbashPlain }
+    else {
         $global:__BashExpansionFailed = $false
         $__psbashIdx = [long]$(Invoke-BashArith $__psbashKey -Subscript)
         if ($global:__BashExpansionFailed) { return $__psbashTarget }

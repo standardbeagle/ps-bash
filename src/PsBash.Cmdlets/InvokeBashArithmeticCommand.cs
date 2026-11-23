@@ -71,9 +71,11 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
         // Set directly, not through SetLastExitCode: that would clear the mark an EARLIER word of the same
         // command left (`echo $((1/0)) $((1+1))` is still abandoned).
         FileSystemHelpers.SetLastExitCode(this, 0);
+        string expanded = expr;
         try
         {
-            long result = BashArith.Evaluate(SubstituteExpressionVariables(expr), ReadVar, WriteVar, ReadRawVar);
+            expanded = SubstituteExpressionVariables(expr);
+            long result = BashArith.Evaluate(expanded, ReadVar, WriteVar, ReadRawVar);
             WriteObject(result);
         }
         catch (UnboundVariableException)
@@ -82,7 +84,10 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
         }
         catch (ArithRecursionException ex)
         {
-            ReportError($"{ex.Token}: expression recursion level exceeded (error token is \"{ex.Token}\")");
+            // bash names the expression whose operand went one level too deep, and the error token from that operand on.
+            string named = ex.Expression ?? expanded;
+            string token = ex.Token ?? OperandOnward(named, ex.Name);
+            ReportError($"{named}: expression recursion level exceeded (error token is \"{token}\")");
             if (IsWordExpansion()) FileSystemHelpers.MarkExpansionFailed(this);
         }
         catch (BashArith.BashArithException ex)
@@ -119,36 +124,61 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
     private sealed class UnboundVariableException : Exception { }
 
     /// <summary>
-    /// bash expands <c>$x</c> / <c>${x}</c> TEXTUALLY before parsing, so x='1 + 2' gives <c>$(( $x * 3 ))</c> = 7,
-    /// not 9. Only a value that is more than one plain integer needs this; a plain integer reads the same either way.
+    /// bash expands <c>$x</c> / <c>${x}</c> TEXTUALLY before parsing: the value takes the reference's place verbatim, so
+    /// x='1 + 2' gives <c>$(( $x * 3 ))</c> = 7, h=ff gives <c>$(( 16#$h ))</c> = 255 and x=2 gives <c>$(( 1$x ))</c> = 12.
+    /// It pasted " value " with blanks around it, which split the token beside it (<c>16# ff</c>: "invalid integer
+    /// constant"). An unset or empty variable keeps its reference, which reads as 0 (and is unbound under <c>set -u</c>).
     /// </summary>
     private string SubstituteExpressionVariables(string expr)
     {
         if (expr.IndexOf('$') < 0) return expr;
-        return System.Text.RegularExpressions.Regex.Replace(expr, @"\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))(?![\w\[])", m =>
+        string expanded = System.Text.RegularExpressions.Regex.Replace(expr, @"\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))(?![\w\[])", m =>
         {
             string name = m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value;
             string? raw = ReadRawVar(name);
-            if (string.IsNullOrEmpty(raw) || System.Text.RegularExpressions.Regex.IsMatch(raw, @"^\s*-?\d+\s*$")) return m.Value;
-            return " " + raw + " ";
-        });
+            return string.IsNullOrEmpty(raw) ? m.Value : raw;
+        }).TrimStart();
+        // A value of blanks leaves no expression, which is 0 (`x=' '; $(( $x ))`).
+        return expanded.Length == 0 ? "0" : expanded;
     }
 
     /// <summary>bash's MAX_EXPR_RECURSION_LEVEL: a value that is an expression naming itself (<c>loop='i<=100&&(s+=i,i++,loop)'</c>)
-    /// recurses until this depth, then the expansion fails (<c>a=b b=a; $((a))</c>: "expression recursion level exceeded").</summary>
+    /// recurses until this depth, then the expansion fails (<c>a=b b=a; $((a))</c>: "expression recursion level exceeded").
+    /// The top-level expression is the first level, so the read at depth <c>MaxRecursionDepth - 1</c> is the one that fails.</summary>
     private const int MaxRecursionDepth = 1024;
 
-    /// <summary>A variable's value nested past <see cref="MaxRecursionDepth"/> (or past what the stack holds).</summary>
-    private sealed class ArithRecursionException(string token) : Exception(token)
+    /// <summary>
+    /// A variable's value nested past <see cref="MaxRecursionDepth"/> (or past what the stack holds). bash reports the
+    /// expression that named <see cref="Name"/> and the error token from that name on (expr.c <c>pushexp</c> fails
+    /// before the value replaces the expression): <c>r1=r2 r2=r1</c> is <c>r2: ... (error token is "r2")</c>,
+    /// <c>r1='r2+1' r2='r1+1'</c> is <c>r2+1: ... (error token is "r2+1")</c>.
+    /// </summary>
+    private sealed class ArithRecursionException(string name) : Exception(name)
     {
-        public string Token { get; } = token;
+        public string Name { get; } = name;
+        public string? Expression { get; set; }
+        public string? Token { get; set; }
+    }
+
+    /// <summary>The text of <paramref name="expression"/> from operand <paramref name="name"/> on (all of it when absent).</summary>
+    private static string OperandOnward(string expression, string name)
+    {
+        for (int at = expression.IndexOf(name, StringComparison.Ordinal); at >= 0;
+             at = expression.IndexOf(name, at + 1, StringComparison.Ordinal))
+        {
+            bool startsName = at == 0 || !(char.IsLetterOrDigit(expression[at - 1]) || expression[at - 1] == '_');
+            int end = at + name.Length;
+            bool endsName = end >= expression.Length || !(char.IsLetterOrDigit(expression[end]) || expression[end] == '_');
+            if (startsName && endsName) return expression[at..];
+        }
+        return expression;
     }
 
     private long ReadVar(string name) => ReadVar(name, 0);
 
     private long ReadVar(string name, int depth)
     {
-        if (depth >= MaxRecursionDepth || !System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack())
+        if (depth >= MaxRecursionDepth - 1 || !System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack())
             throw new ArithRecursionException(name);
 
         string? raw = ReadRawVar(name);
@@ -166,23 +196,23 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
         var trimmed = raw?.Trim();
         if (string.IsNullOrEmpty(trimmed)) return 0;
         // A leading 0 is octal (x=010 is 8, x=08 is an error), so only a plain decimal is read directly.
-        if (!HasLeadingZero(trimmed)
-            && long.TryParse(trimmed, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var direct))
+        if (PsBash.Core.Parser.BashArithmeticParser.TryPlainDecimal(trimmed, out var direct))
             return direct;
 
         // Otherwise evaluate the value itself as an arithmetic expression. A value that is not one (x='a b',
         // x='a[<(echo)]=1') fails the whole expansion, as in bash ("syntax error in expression", status 1); it read as 0.
         // bash names the value's expression with its trailing blanks (x=' 5 / 0  ': `5 / 0  : division by 0`).
-        return BashArith.Evaluate(raw!.TrimStart(),
-            n => ReadVar(n, depth + 1),
-            WriteVar,
-            ReadRawVar);
-    }
-
-    private static bool HasLeadingZero(string s)
-    {
-        int i = s.Length > 0 && s[0] is '-' or '+' ? 1 : 0;
-        return s.Length > i + 1 && s[i] == '0';
+        string text = raw!.TrimStart();
+        try
+        {
+            return BashArith.Evaluate(text, n => ReadVar(n, depth + 1), WriteVar, ReadRawVar);
+        }
+        catch (ArithRecursionException ex) when (ex.Expression is null)
+        {
+            ex.Expression = text;
+            ex.Token = OperandOnward(text, ex.Name);
+            throw;
+        }
     }
 
     /// <summary>`name[subscript]` as the evaluator passes an array element.</summary>

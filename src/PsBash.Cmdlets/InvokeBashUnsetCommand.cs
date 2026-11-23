@@ -141,7 +141,8 @@ public sealed class InvokeBashUnsetCommand : BashCmdlet
     /// </summary>
     private bool TryIndex(string key, out long result)
     {
-        if (long.TryParse(key, out result)) return true;
+        // Only a plain decimal skips the evaluator: `unset 'a[010]'` is element 8.
+        if (PsBash.Core.Parser.BashArithmeticParser.TryPlainDecimal(key, out result)) return true;
         var vars = BashArrayElement.ReadOnly(SessionState);
         try { result = BashArith.Evaluate(key, vars.Read, vars.Write, vars.ReadRaw); return true; }
         catch (BashArith.BashArithException ex) { BashArrayElement.FailSubscript(this, key, ex); return false; }
