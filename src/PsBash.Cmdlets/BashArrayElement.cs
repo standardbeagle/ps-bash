@@ -108,8 +108,7 @@ public static class BashArrayElement
         var items = new List<object?>();
         if (holder is System.Collections.IEnumerable seq && holder is not string)
             foreach (var item in seq) items.Add(item);
-        bool wasScalar = false;
-        if (holder is null && BashVariableLookup.Scalar(state, baseName) is { } scalar) { items.Add(scalar); wasScalar = true; }
+        if (holder is null && BashVariableLookup.Scalar(state, baseName) is { } scalar) items.Add(scalar);
         long index = Index(subscript, items.Count, vars);
         if (index < 0) return false;
         object array;
@@ -131,9 +130,8 @@ public static class BashArrayElement
             return true;
         }
         // A new array (or a scalar turned into one) is bash's global, and a scalar lives only in the store, an array
-        // only as a PowerShell variable (environment-model.md section 8).
+        // only as a PowerShell variable (environment-model.md section 8): SetArray drops the scalar.
         BashVariableLookup.SetArray(state, baseName, array);
-        if (wasScalar) BashVariableStore.Set(baseName, null);
         return true;
     }
 

@@ -5341,7 +5341,7 @@ public static partial class PsEmitter
                     if (_pendingNamerefs?.Remove(pair.Name) == true) (_runtimeNamerefs ??= new HashSet<string>(VarNameKeys)).Add(pair.Name);
                 }
                 if (cmd.IsAssoc) _assocVars?.Add(pair.Name);
-                if (IsValidVarName(pair.Name)) _arrayVars?.Add(pair.Name);
+                MarkArrayVar(pair.Name);
                 bool knownAssoc = cmd.IsAssoc || _assocVars?.Contains(pair.Name) == true;
                 // `a=([k]=-{a,b}-)` on an array that is not associative: bash brace-expands the element first, and the
                 // words it makes (`[k]=-a-` `[k]=-b-`) are plain values, not subscripted ones.
@@ -5424,14 +5424,16 @@ public static partial class PsEmitter
                 // `a[$i]=v` / `a[i+1]+=v` / `m[key]=v`: the subscript is a WORD (expanded here) and, for an indexed
                 // array, then evaluated as arithmetic at run time; Set-BashElement pads/keys and returns the container.
                 // A leading `~` is not a tilde prefix in a subscript (`m[~]=v` keys `~`, not $HOME).
-                string target = BindArrayTarget(sb, ArrayWriteTarget(ResolveNameref(baseName)));
+                string arrayName = ResolveNameref(baseName);
+                string target = BindArrayTarget(sb, ArrayWriteTarget(arrayName));
                 if (IsValidVarName(baseName))
                 {
-                    _arrayVars?.Add(baseName); // a bare `$a` now reads `${a[0]}`
-                    // `c=s; c[1]=t`: a scalar becomes element 0 of the array.
-                    if ((target.StartsWith('$') || PsBuild.IsArraySlot(target)) && _assocVars?.Contains(baseName) != true && EnvShadowName(baseName) is null
-                        && PsBuild.TryMapSpecialVar(baseName, braced: false, false) is null)
-                        sb.Append(PsBuild.SeedArrayFromScalar(target, ScalarValueOf(baseName, braced: false))).Append("; ");
+                    MarkArrayVar(baseName); // a bare `$a` now reads `${a[0]}`, and so does a nameref's target
+                    // `c=s; c[1]=t`: a scalar becomes element 0 of the array; through a nameref, the target's scalar
+                    // (`declare -n r=x; x=X; r[1]=z` is `X z`; REGRESSION: r's own, none, was read, and X was lost).
+                    if (IsValidVarName(arrayName) && (target.StartsWith('$') || PsBuild.IsArraySlot(target)) && _assocVars?.Contains(arrayName) != true
+                        && EnvShadowName(arrayName) is null && PsBuild.TryMapSpecialVar(arrayName, braced: false, false) is null)
+                        sb.Append(PsBuild.SeedArrayFromScalar(target, ScalarValueOf(arrayName, braced: false))).Append("; ");
                 }
                 string key = FlattenPartsToDoubleQuotedString(BashParser.DecomposeWord(subscript.StartsWith('~') ? "\\" + subscript : subscript));
                 // `a[a[0]=1]=X`: a subscript that assigns runs first, here, so the array read below already has its
@@ -7548,7 +7550,11 @@ public static partial class PsEmitter
 
         // read [-r] [-p "prompt"] VAR -> Invoke-BashRead [-p "prompt"] VAR
         else if (cmd0 == "read")
+        {
+            // `read -a NAME`: NAME (a nameref's target too) is an array from here on.
+            if (BuiltinArrayOperand(cmd) is { } readArray) MarkArrayVar(readArray);
             specialResult = EmitPassthrough("Invoke-BashRead", cmd.Words.RemoveAt(0));
+        }
 
         // eval "cmd" -> inline-transpile the reconstructed bash source
         // of the args at parse time. Command/arith/process substitutions
@@ -14904,10 +14910,13 @@ public static partial class PsEmitter
                 result = EmitPassthrough("Invoke-BashBg", args);
                 return true;
             case "mapfile":
+                // Its array (a nameref's target too) is one from here on.
+                if (BuiltinArrayOperand(cmd) is { } mapfileArray) MarkArrayVar(mapfileArray);
                 result = EmitPassthrough("Invoke-BashMapfile", args);
                 return true;
             case "readarray":
                 // One builtin under two names; its diagnostics name the one typed (`readarray: --: invalid option`).
+                if (BuiltinArrayOperand(cmd) is { } readarrayArray) MarkArrayVar(readarrayArray);
                 result = EmitPassthrough("Invoke-BashMapfile", args, cmdletSwitch: " -BashName readarray");
                 return true;
             case "alias" when _aliasStaticOnly:

@@ -209,8 +209,11 @@ back what the local hid.**
   scope). The function's prologue lists its local arrays (`PsBuild.LocalArrays` → `VarFrameStack.LocalArrays`), and
   every array write target goes through `PsBuild.ArraySlot` → `VarFrameStack.ArraySlot`. That covers element writes,
   `+=`, `mapfile`, `read -a`, `unset 'a[i]'` and `printf -v 'a[i]'`. As an argument the slot is wrapped by
-  `PsBuild.TargetArg`. `read -a` / `mapfile` also make element 0 the shell variable, for the global array only
-  (`BashVariableLookup.SetWholeArray`): a local array leaves no global behind.
+  `PsBuild.TargetArg`. `read -a` / `mapfile` (and a write through a nameref) remove the name's global scalar when the
+  array written is the global (`BashVariableLookup.SetArray`); `$r` reads element 0 because the emitter marks a literal
+  `read -a NAME` / `mapfile NAME` operand, and a nameref's target, as an array (`PsEmitter.MarkArrayVar`). No copy of
+  element 0 goes to the store: it would go stale on the next element write and be exported, and a local array leaves
+  no global behind.
 - **Attributes** (`-i`, `-l`, `-u`, `-r`, `-x`, `-n`) of a local are its frame's. `VarFrameStack.TakeAttributes`
   saves the caller's attribute letters, its read-only state and its nameref target when a local of that name is
   made. `Exit` restores them: the attributes come back, a read-only mark the function added is removed, and the outer

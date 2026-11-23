@@ -77,9 +77,55 @@ public static partial class PsEmitter
         VisitCommands(root, c =>
         {
             if (c is Command.ShAssignment { IsLocal: false } a)
+            {
                 foreach (var pair in a.Pairs)
                     if (pair.ArrayValue is not null && IsValidVarName(pair.Name)) _arrayVars.Add(pair.Name);
+            }
+            else if (c is Command.Simple s && BuiltinArrayOperand(s) is { } operand && IsValidVarName(operand)) _arrayVars.Add(operand);
         });
+    }
+
+    /// <summary>
+    /// <paramref name="name"/> holds an array from here on: a bare <c>$name</c> reads element 0 (<see cref="EmitSimpleVar"/>).
+    /// Through a nameref the emitter resolves, its target does too: the array is the target's, and the scalar the target
+    /// held is no longer its value (bash: <c>declare -n ref=x; x=X; ref=(p q); echo "$ref $x"</c> prints <c>p p</c>).
+    /// REGRESSION: only <c>ref</c> was marked, so <c>$x</c> (and <c>$ref</c>, which reads <c>$x</c>) still read X.
+    /// </summary>
+    private static void MarkArrayVar(string name)
+    {
+        if (_arrayVars is null || !IsValidVarName(name)) return;
+        _arrayVars.Add(name);
+        string target = ResolveNameref(name);
+        if (target != name && IsValidVarName(target)) _arrayVars.Add(target);
+    }
+
+    /// <summary>
+    /// The array a <c>read -a NAME</c> / <c>mapfile NAME</c> / <c>readarray NAME</c> writes, when the words name it
+    /// literally (<c>MAPFILE</c> when mapfile names none); null otherwise. Only finds the name, so a bare <c>$NAME</c>
+    /// reads element 0 (<see cref="MarkArrayVar"/>): the flags still go to the cmdlet as written.
+    /// </summary>
+    private static string? BuiltinArrayOperand(Command.Simple s)
+    {
+        if (s.Words.Length < 2 || GetLiteralValue(s.Words[0]) is not { } command) return null;
+        bool read = command == "read";
+        if (!read && command is not ("mapfile" or "readarray")) return null;
+        string takesValue = read ? "dinNptu" : "dnOsuCc";
+        for (int i = 1; i < s.Words.Length; i++)
+        {
+            if (GetLiteralValue(s.Words[i]) is not { } word) return null;   // known only at run time
+            if (word == "--")
+                return read ? null : i + 1 < s.Words.Length ? GetLiteralValue(s.Words[i + 1]) : "MAPFILE";
+            if (word.Length < 2 || word[0] != '-') return read ? null : word;
+            for (int k = 1; k < word.Length; k++)
+            {
+                if (read && word[k] == 'a')
+                    return k + 1 < word.Length ? word[(k + 1)..] : i + 1 < s.Words.Length ? GetLiteralValue(s.Words[i + 1]) : null;
+                if (takesValue.IndexOf(word[k]) < 0) continue;
+                if (k + 1 == word.Length) i++;   // the value is the next word, whatever it is
+                break;
+            }
+        }
+        return read ? null : "MAPFILE";
     }
 
     /// <summary>The first <c>local -n NAME=$N</c> of a function body: the nameref and the positional it takes its target from.</summary>

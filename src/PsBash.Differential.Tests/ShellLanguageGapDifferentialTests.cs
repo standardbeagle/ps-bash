@@ -686,6 +686,70 @@ public class ShellLanguageGapDifferentialTests
         """);
 
     /// <summary>
+    /// An array written through a nameref (<c>ref=(…)</c>, <c>ref+=(…)</c>, <c>ref[1]=…</c>, <c>read -a ref</c>,
+    /// <c>mapfile ref</c>, <c>declare -a ref=(…)</c>) is the target's, whatever scalar the target held: <c>$x</c> and
+    /// <c>$ref</c> are its element 0, and every scalar form reads it. REGRESSION: <c>declare -n ref=x; x=X; ref=(p q);
+    /// echo "$ref $x"</c> printed <c>X X</c> (bash <c>p p</c>); <c>read -a ref</c> / <c>mapfile ref</c> made an array
+    /// named ref and left x alone; <c>ref[1]=z</c> lost the X it should have kept as element 0.
+    /// </summary>
+    [SkippableFact]
+    public Task Nameref_AnArrayWrittenThroughIt_IsTheTargetsValue() => SameAsScript(
+        """
+        {
+        declare -n r1=x1; x1=X; r1=(p q); echo "1 $r1 $x1 ${x1[*]} ${r1[1]}"
+        declare -n r2=x2; x2=X; r2+=(r); echo "2 $r2 $x2 ${x2[*]} ${#r2[@]}"
+        declare -n r3=x3; x3=X; r3[1]=z; echo "3 $r3 $x3 ${x3[*]} ${r3[1]}"
+        declare -n r4=x4; x4=X; read -ra r4 <<< "m n"; echo "4 $r4 $x4 ${x4[*]}"
+        declare -n r5=x5; x5=X; mapfile -t r5 <<< $'a\nb'; echo "5 $r5 $x5 ${x5[*]}"
+        declare -n r6=x6; x6=X; declare -a r6=(s t); echo "6 $r6 $x6 ${x6[*]}"
+        declare -n r7=x7; r7=(p q); echo "7 $r7 $x7 ${x7[*]}"; declare -p x7
+        declare -n r8=x8; x8=X; r8=(p q); echo "8 ${x8:-d} ${x8^^} ${x8/p/P} ${r8%q} ${#x8} ${#r8}"
+        declare -n r9=x9; x9=X; r9=(p q); x9=Z; echo "9 $r9 $x9 ${x9[*]}"
+        declare -n r10=x10; x10=X; ( r10=(p q); echo "10 in $r10 $x10" ); echo "10 $r10 $x10"
+        declare -n r11=x11; x11=X; r11=(p q); unset x11; echo "11 [$r11] [$x11] ${#x11[@]}"; x11=W; echo "11 $r11 $x11"
+        } 2>&1
+        """);
+
+    /// <summary>
+    /// A function's <c>local -n r=$1</c> writing an array writes the caller's variable, which then reads as that array.
+    /// REGRESSION: <c>f() { local -n r=$1; r=(u v); }; y=Y; f y; echo $y</c> printed Y (bash u), in f too; <c>read -ra r</c>
+    /// and <c>mapfile r</c> wrote an array named r.
+    /// </summary>
+    [SkippableFact]
+    public Task Nameref_ALocalOneWritingAnArray_IsTheCallersValue() => SameAsScript(
+        """
+        {
+        f1() { local -n r=$1; r=(u v); echo "1 in $r ${r[1]}"; }; y1=Y; f1 y1; echo "1 $y1 ${y1[*]}"
+        f2() { local -n r=$1; r+=(w); }; y2=Y; f2 y2; echo "2 $y2 ${y2[*]}"
+        f3() { local -n r=$1; read -ra r <<< "c d"; echo "3 in $r"; }; y3=Y; f3 y3; echo "3 $y3 ${y3[*]}"
+        f4() { local -n r=$1; r[2]=e; }; y4=Y; f4 y4; echo "4 $y4 ${y4[*]} ${!y4[*]}"
+        f5() { local -n r=$1; mapfile -t r <<< $'a\nb'; }; y5=Y; f5 y5; echo "5 $y5 ${y5[*]}"
+        declare -n q6; q6=y6; y6=Y; read -ra q6 <<< "c d"; echo "6 $q6 $y6 ${y6[*]}"
+        } 2>&1
+        """);
+
+    /// <summary>
+    /// <c>read -a NAME</c> / <c>mapfile NAME</c> leave an array and no scalar beside it: <c>$NAME</c> is element 0, and a
+    /// child does not see it exported (bash exports no array). REGRESSION: the words joined were stored as the scalar
+    /// (<c>read -ra x &lt;&lt;&lt; "m n"; echo $x</c> printed <c>m n</c>), and mapfile left the old scalar (X).
+    /// </summary>
+    [SkippableFact]
+    public Task ReadAndMapfile_IntoAnArray_LeaveNoScalarBesideIt() => SameAsScript(
+        """
+        {
+        c1=X; read -ra c1 <<< "m n"; echo "1 $c1 ${c1[*]}"
+        c2=X; mapfile -t c2 <<< $'a\nb'; echo "2 $c2 ${c2[*]}"
+        c3=Y; f() { read -ra c3 <<< "c d"; }; f; echo "3 $c3 ${c3[*]}"
+        c4=X; ( read -ra c4 <<< "m n"; echo "4 in $c4" ); echo "4 $c4 ${c4[*]}"
+        c5=X; read -d , -ra c5 <<< "a b,c"; echo "5 $c5 ${c5[*]}"
+        mapfile -t <<< $'a\nb'; echo "6 $MAPFILE ${#MAPFILE[@]}"
+        c7=X; mapfile -t -O 0 c7 <<< $'a\nb'; echo "7 $c7 ${c7[*]}"
+        g() { echo "8 $parts"; }; IFS=: read -ra parts <<< "a:b"; g
+        c9=X; read -ra c9 <<< "m n"; export c9; echo "9 $(env | grep -c '^c9=')"
+        } 2>&1
+        """);
+
+    /// <summary>
     /// <c>exec CMD</c> reads its own here-string / <c>&lt;</c> file when it has one, else the stdin it inherits (a pipe, a
     /// group's redirect, a subshell's), and ends only its subshell. REGRESSION: <c>echo q | exec cat</c> and
     /// <c>{ exec cat; } &lt; f</c> printed nothing; the fix's first cut displaced <c>( exec cat &lt;&lt;&lt; q )</c>'s own input.

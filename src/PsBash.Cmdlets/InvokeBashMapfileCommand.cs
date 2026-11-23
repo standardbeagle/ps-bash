@@ -260,9 +260,8 @@ public sealed class InvokeBashMapfileCommand : BashCmdlet
             result = lines.ToArray();
         }
 
-        // The array variable in the scope that owns it, else a global (BashVariableLookup.SetArray); a whole new global
-        // array's element 0 is the shell variable too (`mapfile -t q <<< x; echo $q`, BashVariableLookup.SetWholeArray).
-        if (result is string[] lines0) BashVariableLookup.SetWholeArray(SessionState, varName, lines0);
-        else BashVariableLookup.SetArray(SessionState, varName, result);
+        // The array variable in the scope that owns it, else a global, with no global scalar beside it: `$q` reads its
+        // element 0 (`mapfile -t q <<< x; echo $q`, BashVariableLookup.SetArray).
+        BashVariableLookup.SetArray(SessionState, varName, result);
     }
 }
