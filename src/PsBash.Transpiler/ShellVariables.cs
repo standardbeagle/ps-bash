@@ -82,7 +82,7 @@ public static class ShellVariables
     public static void SeedShellStart()
     {
         string? launcherParent = Environment.GetEnvironmentVariable(LauncherParentPidVariable);
-        if (launcherParent is not null) Environment.SetEnvironmentVariable(LauncherParentPidVariable, null);
+        if (launcherParent is not null) ProcessScalars.Set(LauncherParentPidVariable, null);
         t_launcherParent = launcherParent;
         try
         {
@@ -90,7 +90,7 @@ public static class ShellVariables
             {
                 string? inherited = Environment.GetEnvironmentVariable(v.Name);
                 if (v.When == Bind.IfUnset && inherited is not null) continue;
-                Environment.SetEnvironmentVariable(v.Name, v.Value(inherited));
+                ProcessScalars.Set(v.Name, v.Value(inherited)); // the shell's store: its one writer of the environment
                 if (v.Exported) ShellExports.Export(v.Name);
                 else ShellExports.Unexport(v.Name);
             }

@@ -9,11 +9,13 @@ using Xunit;
 namespace PsBash.Core.Tests;
 
 /// <summary>
-/// The launcher library (PsBash.Core) and the host (PsBash.Host) write the process environment only where the inventory
-/// below says, each with its reason. The process environment is shared by every thread: IpcWorker once lowered a nested
+/// The launcher library (PsBash.Core), the transpiler / shared runtime (PsBash.Transpiler) and the host (PsBash.Host)
+/// write the process environment only where the inventory below says, each with its reason. The process environment is shared by every thread: IpcWorker once lowered a nested
 /// daemon's idle window by setting <c>PSBASH_HOST_IDLE_SECS</c> around the spawn and restoring it, so a host or child
 /// another thread started meanwhile inherited 60 s, and the restore raced. A setting for one child goes on that child:
-/// its command line (<see cref="HostIdleWindow.Arg"/>) or its <c>ProcessStartInfo.Environment</c>.
+/// its command line (<see cref="HostIdleWindow.Arg"/>) or its <c>ProcessStartInfo.Environment</c>. A shell variable is
+/// written through its store, <see cref="ProcessScalars"/>, the one Transpiler writer: a direct write elsewhere bypasses
+/// the exact value it keeps where the environment cannot hold one (Linux: an invalid byte became U+FFFD).
 /// (The cmdlets have their own rule: BashVariableStoreGuardTests.NoCmdlet_SetsTheProcessEnvironment_ExceptTheStore.)
 ///
 /// Oracle note (qa-rubric Directive 1): a repo-structure invariant with no bash equivalent, so a source check is the
@@ -28,9 +30,13 @@ public class ProcessEnvironmentWriteGuardTests
             "startup, before the host serves anything: $PWD in shell form, PSBASH_INTERACTIVE for the interactive host's "
             + "life, and consuming the stateful-session switch so the commands it runs do not inherit it"),
         ("PsBash.Host/Runtime/SdkRunspace.cs", 1, "startup: the execution policy every runspace of the process uses"),
-        ("PsBash.Host/Runtime/SdkWorker.cs", 3,
-            "the launcher's environment for the command, set while the command holds the host's execution lease "
-            + "(docs/specs/environment-model.md)"),
+        ("PsBash.Host/Runtime/SdkWorker.cs", 2,
+            "the launcher's PSBASH_* control variables, and the sweep that unsets what the launcher's block does not have, "
+            + "while the command holds the host's execution lease (docs/specs/environment-model.md); the block's own values "
+            + "go in through ProcessScalars"),
+        ("PsBash.Transpiler/ProcessScalars.cs", 3,
+            "the shell's scalar store (environment-model.md section 8): an assignment, and the one-time probe of whether "
+            + "the environment gives back every string, which sets and removes its own variable"),
     ];
 
     private static readonly Regex EnvWrite =
@@ -41,7 +47,7 @@ public class ProcessEnvironmentWriteGuardTests
     {
         var root = Path.Combine(RepoRoot(), "src");
         var found = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        foreach (var project in new[] { "PsBash.Core", "PsBash.Host" })
+        foreach (var project in new[] { "PsBash.Core", "PsBash.Transpiler", "PsBash.Host" })
         {
             foreach (var file in Directory.EnumerateFiles(Path.Combine(root, project), "*.cs", SearchOption.AllDirectories))
             {
@@ -73,7 +79,7 @@ public class ProcessEnvironmentWriteGuardTests
             problems.Add($"{entry.File}: in the inventory but writes nothing now; remove the entry");
 
         Assert.True(problems.Count == 0,
-            "PsBash.Core and PsBash.Host write the process environment only at the inventoried places. It is every "
+            "PsBash.Core, PsBash.Transpiler and PsBash.Host write the process environment only at the inventoried places. It is every "
             + "thread's: never set a variable around a spawn and restore it; pass the child its setting on its command "
             + "line or ProcessStartInfo.Environment. Problems:\n  " + string.Join("\n  ", problems));
     }
