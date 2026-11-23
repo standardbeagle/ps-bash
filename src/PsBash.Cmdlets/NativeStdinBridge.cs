@@ -3,6 +3,7 @@ using System.Management.Automation;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 using PsBash.Core;
+using PsBash.Core.Platform;
 
 namespace PsBash.Cmdlets;
 
@@ -117,6 +118,15 @@ public sealed class NativeStdinBridge
         bool inherit = bridge is null && !BashShellState.InBackgroundJob(cmdlet.SessionState);
         return new ChildStdioMode(MergeStderr: mergeStderr, InheritStdin: inherit, Stdin: bridge?.ChildStdin);
     }
+
+    /// <summary>
+    /// <paramref name="stdin"/> for a PROCESS that is not a child ps-bash waits on in place (a job's own host, a
+    /// <c>nohup</c> child): the read end of its pipe, held (<see cref="ForChild"/>) until the lease is disposed once that
+    /// process is done. The process gets the handle itself (a spawn's fd 0, or <see cref="PipeHandoff"/> into one already
+    /// running). Null when <paramref name="stdin"/> cannot be bridged.
+    /// </summary>
+    internal static PipeHandoff.Lease? HoldFor(object? stdin)
+        => ForChild(stdin) is { } bridge ? new PipeHandoff.Lease(bridge.ChildStdin, bridge.Exit) : null;
 
     /// <summary>The read end a <see cref="ForChild"/> bridge's child gets as its stdin.</summary>
     public SafePipeHandle ChildStdin => _pipe?.ReadEnd ?? _writer!.ClientSafePipeHandle;

@@ -1,5 +1,6 @@
 using System.Management.Automation;
 using PsBash.Core;
+using PsBash.Core.Platform;
 
 namespace PsBash.Cmdlets;
 
@@ -206,6 +207,30 @@ public static class BackgroundJobStdin
                 return new StdinCursor();
         }
     }
+
+    /// <summary>
+    /// The stdin a job started now in a process of its OWN (a job host, a <c>nohup</c> child) shares with the shell: the
+    /// read end of the compound stdin's one pipe (<see cref="CursorPipe"/>), held for that process until the lease is
+    /// disposed after it is done, as a program holds it (<see cref="NativeStdinBridge.ForChild"/>). Null when the job reads
+    /// end of input (no compound stdin, or the shell's own: <see cref="Inherit"/>'s rule) or the pipe cannot be had.
+    /// </summary>
+    public static PipeHandoff.Lease? ForProcess(SessionState state)
+    {
+        object? shared = SharedStdin.Get(state) switch
+        {
+            StdinCursor cursor when !cursor.IsShellStdin => cursor,
+            Queue<object> => Inherit(state),
+            _ => null,
+        };
+        return NativeStdinBridge.HoldFor(shared);
+    }
+
+    /// <summary>
+    /// In a job's own host process: the cursor over the pipe the shell offered it (<see cref="PipeHandoff"/>,
+    /// <c>PsBuild.AdoptJobStdin</c>), or end of input when the pipe cannot be opened.
+    /// </summary>
+    public static StdinCursor Adopt(string token)
+        => PipeHandoff.Accept(token) is { } readEnd ? CursorPipe.Adopt(readEnd) : new StdinCursor();
 }
 
 /// <summary>

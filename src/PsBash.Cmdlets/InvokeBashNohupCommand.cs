@@ -1,5 +1,6 @@
 using System.Management.Automation;
 using PsBash.Core;
+using PsBash.Core.Platform;
 using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
@@ -126,18 +127,29 @@ public sealed class InvokeBashNohupCommand : BashCmdlet
             return;
         }
 
+        // CMD's stdin: GNU nohup leaves a stdin that is not a terminal alone, so CMD reads the shell's stdin (a job's: the
+        // compound's, never the shell's own; BackgroundJobStdin). The pipe is held until CMD exits.
+        var stdin = background ? BackgroundJobStdin.ForProcess(SessionState) : NativeStdinBridge.HoldFor(SharedStdin.Get(SessionState));
         if (defaultLog)
-            FileSystemHelpers.WriteStderr(this, "nohup: ignoring input and appending output to 'nohup.out'");
+            FileSystemHelpers.WriteStderr(this, stdin is null
+                ? "nohup: ignoring input and appending output to 'nohup.out'"
+                : "nohup: appending output to 'nohup.out'");
+        DetachedProcess.DetachedChild? child = null;
         try
         {
-            using var child = DetachedProcess.SpawnChild(exe, exeArgs, cwd, outPath, append || defaultLog, errPath, errAppend);
+            child = DetachedProcess.SpawnChild(exe, exeArgs, cwd, outPath, append || defaultLog, errPath, errAppend, stdin?.ReadEnd);
             if (background)
             {
                 InvokeCommand.InvokeScript("param($p) $global:BashBgLastPid = $p", child.Pid);
                 return;
             }
             // Foreground: nohup's status is CMD's. A stop (Ctrl+C) ends the wait, never CMD: it was started to survive.
-            if (child.Wait(_stop.Token) is int status) FileSystemHelpers.SetLastExitCode(this, status);
+            if (child.Wait(_stop.Token) is int status)
+            {
+                FileSystemHelpers.SetLastExitCode(this, status);
+                child.Dispose();
+                child = null;
+            }
             else FileSystemHelpers.SetLastExitCode(this, 130);
         }
         catch (Exception ex)
@@ -146,6 +158,31 @@ public sealed class InvokeBashNohupCommand : BashCmdlet
             Fail($"nohup: failed to run command '{rest[0]}': {ex.Message}", 126,
                 defaultLog ? null : outPath, append: true, errToOut, errPath, errAppend);
         }
+        finally
+        {
+            // A child still running (`nohup x &`, a stopped wait) keeps the shell's pipe until it exits.
+            if (child is not null && stdin is not null) HoldUntilExit(child, stdin);
+            else
+            {
+                child?.Dispose();
+                stdin?.Dispose();
+            }
+        }
+    }
+
+    /// <summary>Let go of <paramref name="stdin"/> (the shell takes back what CMD left) once <paramref name="child"/> exits.</summary>
+    private static void HoldUntilExit(DetachedProcess.DetachedChild child, PipeHandoff.Lease stdin)
+    {
+        new Thread(() =>
+        {
+            try { child.Wait(CancellationToken.None); }
+            finally
+            {
+                child.Dispose();
+                stdin.Dispose();
+            }
+        })
+        { IsBackground = true, Name = "ps-bash nohup stdin hold" }.Start();
     }
 
     /// <summary>

@@ -25,6 +25,11 @@ namespace PsBash.Cmdlets;
 /// that and starts afresh. So the input keeps its order (a second pipe opened during a put-back took the records
 /// behind it first).
 /// </para>
+/// <para>
+/// <b>Adopted.</b> A background job in a host process of its own gets the shell's pipe itself (<see cref="Adopt"/>, the
+/// read end handed over by <c>PipeHandoff</c>): its cursor's pipe has no pump and no records behind it, its reads and its
+/// programs take the bytes the shell's pipe holds, and it never tears down (what the job did not read is the shell's).
+/// </para>
 /// </summary>
 internal sealed class CursorPipe : IStdinTap
 {
@@ -33,10 +38,12 @@ internal sealed class CursorPipe : IStdinTap
     private enum State { Open, Closing, Closed }
 
     private readonly StdinCursor _cursor;
-    private readonly AnonymousPipeServerStream _writer;
+    // Null for an adopted pipe (another process writes it).
+    private readonly AnonymousPipeServerStream? _writer;
+    private readonly SafePipeHandle _readEnd;
     private readonly AnonymousPipeClientStream _reader;
     private readonly CancellationTokenSource _cancel = new();
-    private readonly Thread _pump;
+    private readonly Thread? _pump;
     private readonly object _lock = new();
     // One shell reader at a time takes a whole line (two `read`s, the job's and the shell's, never interleave bytes).
     private readonly object _readLock = new();
@@ -50,16 +57,40 @@ internal sealed class CursorPipe : IStdinTap
     {
         _cursor = cursor;
         _writer = writer;
+        _readEnd = writer.ClientSafePipeHandle;
         // The shell's reads and the final drain; the handle stays the read end programs get (ReadEnd).
-        _reader = new AnonymousPipeClientStream(PipeDirection.In, writer.ClientSafePipeHandle);
+        _reader = new AnonymousPipeClientStream(PipeDirection.In, _readEnd);
         _pump = new Thread(Pump) { IsBackground = true, Name = "ps-bash stdin pipe pump" };
+    }
+
+    // Adopted: the hold this constructor counts (_holders = 1) is the adoption's own and is never released.
+    private CursorPipe(StdinCursor cursor, SafePipeHandle adopted)
+    {
+        _cursor = cursor;
+        _readEnd = adopted;
+        _reader = new AnonymousPipeClientStream(PipeDirection.In, adopted);
     }
 
     /// <summary>
     /// The read end a program gets as its stdin. Inheritable on Windows (an explicit handle list or the process stdin);
     /// POSIX <c>dup2</c>s it onto fd 0, which clears close-on-exec there only.
     /// </summary>
-    public SafePipeHandle ReadEnd => _writer.ClientSafePipeHandle;
+    public SafePipeHandle ReadEnd => _readEnd;
+
+    /// <summary>
+    /// A cursor whose input is <paramref name="readEnd"/>, a pipe another process fills and holds (the shell that started
+    /// this job host, through <c>PipeHandoff</c>): every read and every program takes from that pipe, at the position the
+    /// sender's own readers share. Closing the cursor lets go of the handle.
+    /// </summary>
+    internal static StdinCursor Adopt(SafePipeHandle readEnd)
+    {
+        ArgumentNullException.ThrowIfNull(readEnd);
+        var cursor = new StdinCursor(); // nothing behind the pipe: its bytes are the whole input
+        var pipe = new CursorPipe(cursor, readEnd);
+        cursor.TryAttachTap(pipe);
+        cursor.OnClose = readEnd.Dispose;
+        return cursor;
+    }
 
     /// <summary>
     /// Hold the cursor's pipe for one program, opening it when there is none. Null when the cursor's wait cannot be
@@ -81,7 +112,7 @@ internal sealed class CursorPipe : IStdinTap
                     if (fresh is null) return null;
                     if (cursor.TryAttachTap(fresh))
                     {
-                        fresh._pump.Start();
+                        fresh._pump!.Start();
                         return fresh;
                     }
                     fresh.DisposeUnstarted();
@@ -112,7 +143,7 @@ internal sealed class CursorPipe : IStdinTap
     private void DisposeUnstarted()
     {
         _reader.Dispose();
-        _writer.Dispose();
+        _writer!.Dispose();
         _cancel.Dispose();
     }
 
@@ -250,6 +281,10 @@ internal sealed class CursorPipe : IStdinTap
         {
             // Broken pipe: end of input.
         }
+        catch (ObjectDisposedException)
+        {
+            // An adopted pipe whose cursor was closed: end of input.
+        }
         record = line.Length > 0
             ? BashRuntime.TextRecord(RawBytes.GetString(line.GetBuffer().AsSpan(0, (int)line.Length)), unterminated: true)
             : null;
@@ -267,7 +302,7 @@ internal sealed class CursorPipe : IStdinTap
                 var bytes = NativeStdinBridge.RecordBytes(record);
                 if (bytes.Length > 0)
                 {
-                    _writer.Write(bytes, 0, bytes.Length);
+                    _writer!.Write(bytes, 0, bytes.Length);
                     _writer.Flush();
                 }
                 if (ct.IsCancellationRequested) break;
@@ -286,7 +321,7 @@ internal sealed class CursorPipe : IStdinTap
         finally
         {
             // End of input (or teardown): close the write end, so a reader sees end of input and the drain completes.
-            try { _writer.Dispose(); } catch { /* already closed */ }
+            try { _writer!.Dispose(); } catch { /* already closed */ }
         }
     }
 
@@ -307,9 +342,9 @@ internal sealed class CursorPipe : IStdinTap
         {
             // Broken pipe: nothing more to read.
         }
-        _pump.Join();
+        _pump!.Join();
         _reader.Dispose();
-        _writer.Dispose();
+        _writer!.Dispose();
         _cancel.Dispose();
 
         var back = new List<object>();

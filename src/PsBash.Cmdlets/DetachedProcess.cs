@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using PsBash.Core.Runtime.Processes;
 
 namespace PsBash.Cmdlets;
 
@@ -9,9 +10,14 @@ namespace PsBash.Cmdlets;
 /// console close / Ctrl+C, holding none of the caller's pipes. The one place that knows how, per OS.
 /// <para>Windows: <c>CreateProcessW</c> with DETACHED_PROCESS (no console), CREATE_NEW_PROCESS_GROUP, and
 /// CREATE_BREAKAWAY_FROM_JOB (so the host's Job Object does not take it down; retried without when the job forbids
-/// breakaway). It inherits EXACTLY three handles via PROC_THREAD_ATTRIBUTE_HANDLE_LIST - NUL as stdin and the log
-/// file as stdout/stderr - because .NET's own Process.Start would copy every inheritable handle of the caller,
-/// including the pipe a waiting agent is reading. Unix: <c>sh</c> ignoring SIGHUP, then <c>exec</c>.</para>
+/// breakaway). It inherits EXACTLY its three handles via PROC_THREAD_ATTRIBUTE_HANDLE_LIST - its stdin (NUL, or the
+/// shell's stdin pipe) and the log file as stdout/stderr - because .NET's own Process.Start would copy every inheritable
+/// handle of the caller, including the pipe a waiting agent is reading. Unix: <c>sh</c> ignoring SIGHUP, then
+/// <c>exec</c>, started by <see cref="JobProcess"/> (its own process group, released at once) so its fd 0 is exactly
+/// the stdin given: the null device, or the shell's stdin pipe.</para>
+/// <para>stdin: GNU nohup leaves a stdin that is not a terminal alone, so CMD reads the shell's stdin where it has one
+/// (<c>echo in | { nohup cat &gt; o &amp; wait; }</c> writes in): the caller passes the read end of the cursor's pipe
+/// (<see cref="NativeStdinBridge.HoldFor"/>) and holds it until the child exits.</para>
 /// <para>A redirect file is opened for WRITING (GENERIC_WRITE) and an append moves to its end, as cmd.exe's <c>&gt;&gt;</c>
 /// does, never with FILE_APPEND_DATA alone: the MSYS2/Cygwin runtime (Git for Windows' ls.exe, sh.exe) derives an
 /// inherited handle's open mode from its granted access, reads append-only as not writable, and wrote nothing
@@ -40,26 +46,55 @@ public static class DetachedProcess
     /// <summary>As <see cref="Spawn"/>, keeping hold of the process so a foreground <c>nohup CMD</c> can wait for its
     /// status (<see cref="DetachedChild.Wait"/>). Disposing the result lets go of it; the process keeps running.</summary>
     public static DetachedChild SpawnChild(string exe, IReadOnlyList<string> args, string workingDirectory, string outPath, bool append, string? errPath, bool errAppend = false)
-        => OperatingSystem.IsWindows()
-            ? StartWindows(exe, args, workingDirectory, outPath, append, errPath, errAppend)
-            : StartUnix(exe, args, workingDirectory, outPath, append, errPath, errAppend);
+        => SpawnChild(exe, args, workingDirectory, outPath, append, errPath, errAppend, stdin: null);
 
-    private static DetachedChild StartUnix(string exe, IReadOnlyList<string> args, string cwd, string outPath, bool append, string? errPath, bool errAppend)
+    /// <summary>As above, with <paramref name="stdin"/> (a pipe's read end the caller holds until the child exits) as the
+    /// child's stdin instead of the null device.</summary>
+    public static DetachedChild SpawnChild(string exe, IReadOnlyList<string> args, string workingDirectory, string outPath, bool append, string? errPath, bool errAppend,
+        SafeHandle? stdin)
+    {
+        bool added = false;
+        try
+        {
+            stdin?.DangerousAddRef(ref added);
+            IntPtr? stdinHandle = added ? stdin!.DangerousGetHandle() : null;
+            return OperatingSystem.IsWindows()
+                ? StartWindows(exe, args, workingDirectory, outPath, append, errPath, errAppend, stdinHandle)
+                : StartUnix(exe, args, workingDirectory, outPath, append, errPath, errAppend, stdinHandle);
+        }
+        finally
+        {
+            if (added) stdin!.DangerousRelease();
+        }
+    }
+
+    private static DetachedChild StartUnix(string exe, IReadOnlyList<string> args, string cwd, string outPath, bool append, string? errPath, bool errAppend,
+        IntPtr? stdin)
     {
         var psi = new ProcessStartInfo(PsBash.Core.Platform.SystemTools.PosixShell) { WorkingDirectory = cwd, UseShellExecute = false };
         var op = append ? ">>" : ">";
         psi.ArgumentList.Add("-c");
+        // fd 0 is set by the spawn: the null device, or the shell's stdin pipe.
         psi.ArgumentList.Add(string.IsNullOrEmpty(errPath)
-            ? $"trap '' HUP; o=\"$OUT\"; unset OUT; exec \"$@\" </dev/null {op}\"$o\" 2>&1"
-            : $"trap '' HUP; o=\"$OUT\"; e=\"$ERR\"; unset OUT ERR; exec \"$@\" </dev/null {op}\"$o\" 2{(errAppend ? ">>" : ">")}\"$e\"");
+            ? $"trap '' HUP; o=\"$OUT\"; unset OUT; exec \"$@\" {op}\"$o\" 2>&1"
+            : $"trap '' HUP; o=\"$OUT\"; e=\"$ERR\"; unset OUT ERR; exec \"$@\" {op}\"$o\" 2{(errAppend ? ">>" : ">")}\"$e\"");
         psi.ArgumentList.Add("nohup");
         psi.ArgumentList.Add(exe);
         foreach (var a in args) psi.ArgumentList.Add(a);
         psi.Environment["OUT"] = outPath;
         if (!string.IsNullOrEmpty(errPath)) psi.Environment["ERR"] = errPath;
         BashVariableStore.ApplyTo(psi); // the exported variables only
-        var p = Process.Start(psi) ?? throw new InvalidOperationException("could not start " + exe);
-        return new DetachedChild(p.Id, p, IntPtr.Zero);
+        var environment = new Dictionary<string, string?>(psi.Environment.Count, StringComparer.Ordinal);
+        foreach (var kv in psi.Environment) environment[kv.Key] = kv.Value;
+        var job = JobProcess.Start(new JobProcessStart(psi.FileName, [.. psi.ArgumentList], environment)
+        {
+            EnvironmentIsComplete = true,
+            WorkingDirectory = cwd,
+            OwnProcessGroup = true,
+            Stdio = new JobStdio(stdin, null, null),
+        });
+        job.Release(); // started not to die with this shell
+        return new DetachedChild(job.Pid, job, IntPtr.Zero);
     }
 
     // ---- Windows ----
@@ -119,10 +154,10 @@ public static class DetachedProcess
     /// <summary>A started detached process, held only to learn its status: <see cref="Wait"/> never kills it.</summary>
     public sealed class DetachedChild : IDisposable
     {
-        private readonly Process? _unix;
+        private readonly JobProcess? _unix;
         private IntPtr _process;
 
-        internal DetachedChild(int pid, Process? unix, IntPtr process) { Pid = pid; _unix = unix; _process = process; }
+        internal DetachedChild(int pid, JobProcess? unix, IntPtr process) { Pid = pid; _unix = unix; _process = process; }
 
         /// <summary>The OS process id (<c>$!</c>).</summary>
         public int Pid { get; }
@@ -138,7 +173,7 @@ public static class DetachedProcess
             {
                 if (_unix is not null)
                 {
-                    if (_unix.WaitForExit(Slice)) return _unix.ExitCode;
+                    if (_unix.WaitForExit(Slice, stop)) return _unix.ExitCode;
                 }
                 else if (_process != IntPtr.Zero)
                 {
@@ -156,7 +191,8 @@ public static class DetachedProcess
             if (_process != IntPtr.Zero) { CloseHandle(_process); _process = IntPtr.Zero; }
         }
     }
-    private static DetachedChild StartWindows(string exe, IReadOnlyList<string> args, string cwd, string outPath, bool append, string? errPath, bool errAppend)
+    private static DetachedChild StartWindows(string exe, IReadOnlyList<string> args, string cwd, string outPath, bool append, string? errPath, bool errAppend,
+        IntPtr? stdin)
     {
         var cmd = new StringBuilder();
         AppendQuoted(cmd, exe);
@@ -172,8 +208,13 @@ public static class DetachedProcess
             envBlock = Marshal.AllocHGlobal(env.Length * sizeof(char));
             Marshal.Copy(env, 0, envBlock, env.Length);
             var sa = new SecurityAttributes { nLength = Marshal.SizeOf<SecurityAttributes>(), bInheritHandle = 1 };
-            nul = CreateFileW("NUL", GenericRead | GenericWrite, ShareRW, ref sa, OpenExisting, 0, IntPtr.Zero);
-            if (nul == InvalidHandle) throw Failure("open NUL");
+            if (stdin is null)
+            {
+                nul = CreateFileW("NUL", GenericRead | GenericWrite, ShareRW, ref sa, OpenExisting, 0, IntPtr.Zero);
+                if (nul == InvalidHandle) throw Failure("open NUL");
+            }
+            // The shell's stdin pipe (inheritable: CursorPipe's read end), else NUL.
+            var stdinH = stdin ?? nul;
             outH = OpenRedirectTarget(outPath, append, ref sa);
             if (!string.IsNullOrEmpty(errPath)) errH = OpenRedirectTarget(errPath, errAppend, ref sa);
             var stderrH = errH == InvalidHandle ? outH : errH;
@@ -184,7 +225,7 @@ public static class DetachedProcess
             if (!InitializeProcThreadAttributeList(attrList, 1, 0, ref size)) { Marshal.FreeHGlobal(attrList); attrList = IntPtr.Zero; throw Failure("InitializeProcThreadAttributeList"); }
 
             // The list may not repeat a handle; stdout and stderr are usually the same file.
-            var handles = stderrH == outH ? new[] { nul, outH } : new[] { nul, outH, stderrH };
+            var handles = stderrH == outH ? new[] { stdinH, outH } : new[] { stdinH, outH, stderrH };
             handleArray = Marshal.AllocHGlobal(IntPtr.Size * handles.Length);
             for (int i = 0; i < handles.Length; i++) Marshal.WriteIntPtr(handleArray, i * IntPtr.Size, handles[i]);
             if (!UpdateProcThreadAttribute(attrList, 0, ProcThreadAttributeHandleList, handleArray, new IntPtr(IntPtr.Size * handles.Length), IntPtr.Zero, IntPtr.Zero))
@@ -193,7 +234,7 @@ public static class DetachedProcess
             var si = new StartupInfoEx { lpAttributeList = attrList };
             si.StartupInfo.cb = Marshal.SizeOf<StartupInfoEx>();
             si.StartupInfo.dwFlags = StartfUseStdHandles;
-            si.StartupInfo.hStdInput = nul; si.StartupInfo.hStdOutput = outH; si.StartupInfo.hStdError = stderrH;
+            si.StartupInfo.hStdInput = stdinH; si.StartupInfo.hStdOutput = outH; si.StartupInfo.hStdError = stderrH;
 
             uint baseFlags = DetachedProcessFlag | NewProcessGroup | ExtendedStartupInfoPresent | UnicodeEnvironment;
             // Breakaway fails with ACCESS_DENIED when the host's job forbids it: run inside the job rather than not at all.

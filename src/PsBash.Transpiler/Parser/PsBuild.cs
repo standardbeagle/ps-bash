@@ -2631,6 +2631,14 @@ public static class PsBuild
     /// </summary>
     public const string SharedStdinNextLine = "[PsBash.Cmdlets.SharedStdinLine]::Next($global:__BashStdIn)";
 
+    /// <summary>
+    /// The first statement of a background job run in a host process of its own whose shell offered it the compound's
+    /// stdin: the job's stdin is that pipe (<c>BackgroundJobStdin.Adopt</c>; <paramref name="token"/> from
+    /// <c>PipeHandoff</c>).
+    /// </summary>
+    public static string AdoptJobStdin(string token)
+        => "$global:__BashStdIn = [PsBash.Cmdlets.BackgroundJobStdin]::Adopt(" + SingleQuote(token) + ")";
+
     private static readonly System.Text.RegularExpressions.Regex SharedStdinReaderPattern = new(
         @"__BashStdIn|\bInvoke-Bash(?:Read|Mapfile)\b(?!-)|\bResolve-BashCommand -Fed\b",
         System.Text.RegularExpressions.RegexOptions.CultureInvariant);

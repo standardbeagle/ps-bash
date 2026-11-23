@@ -3351,8 +3351,10 @@ function Start-BashBgProcessJob {
         an -Isolated job unless PSBASH_BG_MODE=inproc (docs/specs/background-jobs.md section 11). Called by
         Invoke-BashBackground, only where the host exposes the launcher type.
     #>
-    param([Parameter(Mandatory)][scriptblock]$Command, [hashtable]$Vars, $Mux, [string]$Text)
+    param([Parameter(Mandatory)][scriptblock]$Command, [hashtable]$Vars, $Mux, [string]$Text, $Stdin)
     $__bgMux = $Mux
+    # The compound's stdin as a held pipe (BackgroundJobStdin.ForProcess) or $null; BashJobProcess::Start owns it.
+    $__bgStdin = $Stdin
     if ($Vars -and $Vars.Count) {
         # Names and values are data: both are literals made by PsBuild.SingleQuote (the one quoting primitive), never
         # spliced as code (`-replace "'", "''"` missed U+2018-U+201B, which also end a PowerShell string).
@@ -3374,7 +3376,7 @@ function Start-BashBgProcessJob {
         try { $this.PowerShell.Stop() } catch { }
         $this.Done = $true
     } -Force
-    Start-BashBgJob -BgJob $job -Process -StartJob { [PsBash.Host.Runtime.BashJobProcess]::Start($prelude, $__bgBody, $__bgEnv, $__bgMux) }
+    Start-BashBgJob -BgJob $job -Process -StartJob { [PsBash.Host.Runtime.BashJobProcess]::Start($prelude, $__bgBody, $__bgEnv, $__bgMux, $__bgStdin) }
 }
 
 function Start-BashBgJob {

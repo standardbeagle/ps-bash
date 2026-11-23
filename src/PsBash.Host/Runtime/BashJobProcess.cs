@@ -1,4 +1,6 @@
 using PsBash.Core;
+using PsBash.Core.Parser;
+using PsBash.Core.Platform;
 using PsBash.Core.Runtime;
 using PsBash.Core.Stdio;
 
@@ -23,6 +25,8 @@ public sealed class BashJobProcess : IDisposable
     private readonly Handle _handle = new();
     private readonly CancellationTokenSource _cancel = new();
     private int _disposed;
+    // The compound's stdin this job's host reads (the shell's pipe, held for it): let go of when the job is done.
+    private PipeHandoff.Lease? _stdin;
     private volatile int _signal; // non-zero once stopped by `kill`; the job's status is then 128 + signal
 
     private BashJobProcess(IpcWorker worker)
@@ -53,6 +57,29 @@ public sealed class BashJobProcess : IDisposable
     /// blocks, so the job host blocks on its socket) instead of being held until the job is collected.
     /// </summary>
     public static BashJobProcess Start(string prelude, string body, KeyValuePair<string, string>[] environment, OutputMux? liveOutput)
+        => Start(prelude, body, environment, liveOutput, null);
+
+    /// <summary>
+    /// As above; <paramref name="stdin"/> is the compound stdin the job reads (<c>BackgroundJobStdin.ForProcess</c>: the
+    /// read end of the shell's pipe, held), or null for end of input. The job's host gets the pipe itself
+    /// (<see cref="PipeHandoff"/>) and reads it at the shell's position, as bash's job reads the shell's open pipe:
+    /// <c>seq 3 | { cd / &amp;&amp; read a &amp; wait; read b; }</c> gives b=2. This job owns the lease from here, failure
+    /// included, and disposes it once the job is done, BEFORE the job reports done, so the shell's next read finds what the
+    /// job left. Where the pipe cannot be handed over (macOS) the job reads end of input.
+    /// </summary>
+    public static BashJobProcess Start(string prelude, string body, KeyValuePair<string, string>[] environment, OutputMux? liveOutput,
+        PipeHandoff.Lease? stdin)
+    {
+        try { return StartOwning(prelude, body, environment, liveOutput, stdin); }
+        catch
+        {
+            stdin?.Dispose();
+            throw;
+        }
+    }
+
+    private static BashJobProcess StartOwning(string prelude, string body, KeyValuePair<string, string>[] environment, OutputMux? liveOutput,
+        PipeHandoff.Lease? stdin)
     {
         int max = int.TryParse(Environment.GetEnvironmentVariable("PSBASH_JOBS_MAX"), out var m) && m > 0 ? m : 32;
         if (BackgroundJobTable.Count >= max)
@@ -61,6 +88,16 @@ public sealed class BashJobProcess : IDisposable
             ?? throw new HostUnavailableException("cannot locate ps-bash-host to run a background job");
         var worker = JobHostSpares.Take(hostPath);
         var job = new BashJobProcess(worker);
+        var command = prelude + "\n" + body;
+        if (stdin is not null)
+        {
+            if (stdin.OfferTo(job.Pid) is { } token)
+            {
+                job._stdin = stdin;
+                command = prelude + "\n" + PsBuild.AdoptJobStdin(token) + "\n" + body;
+            }
+            else stdin.Dispose();
+        }
         if (liveOutput is not null)
         {
             var channel = liveOutput.Open("job " + job.Pid);
@@ -75,7 +112,7 @@ public sealed class BashJobProcess : IDisposable
             worker.ErrorCallback = line => { lock (job._stderr) job._stderr.Add(line); };
         }
         BackgroundJobTable.Register(job.Pid, job.Stop);
-        _ = job.RunAsync(prelude + "\n" + body, environment);
+        _ = job.RunAsync(command, environment);
         job._channel?.MarkStarted();
         return job;
     }
@@ -96,6 +133,7 @@ public sealed class BashJobProcess : IDisposable
         }
         finally
         {
+            ReleaseStdin();
             _channel?.Close();
             _handle.Complete();
         }
@@ -141,8 +179,12 @@ public sealed class BashJobProcess : IDisposable
         BackgroundJobTable.Unregister(Pid);
         try { _cancel.Cancel(); } catch (ObjectDisposedException) { }
         try { _worker.DisposeAsync().AsTask().GetAwaiter().GetResult(); } catch { /* best effort */ }
+        ReleaseStdin();
         _handle.Complete();
     }
+
+    // The job is done with the shell's pipe: the shell takes back what it left (CursorPipe's teardown). Once.
+    private void ReleaseStdin() => Interlocked.Exchange(ref _stdin, null)?.Dispose();
 
     public sealed class StreamSet
     {

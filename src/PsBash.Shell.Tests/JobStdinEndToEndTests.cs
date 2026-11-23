@@ -83,4 +83,30 @@ public class JobStdinEndToEndTests
     public async Task EnvsAndCommandsProgram_ReadsTheCompoundsStdin()
         => Assert.Equal("in1\nin2\nin3", await RunAsync(
             $"echo in1 | {{ env X=1 {Reader}; }}; echo in2 | {{ env X=1 {Reader} & wait; }}; echo in3 | {{ command {Reader} & wait; }}", null));
+
+    // REGRESSION (gap 1): a job that runs in a host process of its own (`cd` makes it one) read none of the compound's
+    // stdin: b=1 (bash: the job's read takes 1, the shell's 2). The pipe is handed to the running job host.
+    [SkippableFact]
+    public async Task AJobInItsOwnHost_ReadsOneLine_AndTheShellTheNext()
+        => Assert.Equal(Expected("b=2"), await RunAsync(
+            Repeat("seq 3 | { cd / && read a & wait; read b; echo \"b=$b\"; }"), null));
+
+    // The job host's program reads the handed pipe as its own stdin (bash: x).
+    [SkippableFact]
+    public async Task AJobInItsOwnHost_ItsProgramReadsTheCompoundsStdin()
+        => Assert.Equal(Expected("x"), await RunAsync(Repeat($"echo x | {{ {{ cd /; {Reader}; }} & wait; }}"), null));
+
+    // REGRESSION (gap 2): `nohup prog &` read /dev/null (bash: in, as GNU nohup leaves a stdin that is not a terminal).
+    // The child is awaited by its output file: `wait` does not wait for a nohup child here (a separate gap).
+    [SkippableFact]
+    public async Task Nohup_InTheBackground_ReadsTheCompoundsStdin()
+        => Assert.Equal(Expected("in"), await RunAsync(
+            "cd \"$(mktemp -d)\"; " + Repeat(
+                $"echo in | {{ nohup {Reader} > o 2>/dev/null & for i in $(seq 100); do [ -s o ] && break; sleep 0.1; done; }}; cat o; rm -f o"), null));
+
+    // A foreground nohup in a compound reads the compound's stdin too, and waits for its program (bash: in).
+    [SkippableFact]
+    public async Task Nohup_InTheForeground_ReadsTheCompoundsStdin()
+        => Assert.Equal(Expected("in"), await RunAsync(
+            "cd \"$(mktemp -d)\"; " + Repeat($"echo in | {{ nohup {Reader} > o 2>/dev/null; }}; cat o; rm -f o"), null));
 }

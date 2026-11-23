@@ -478,6 +478,9 @@ waits and returns CMD's status: with its output redirected (or stdout a terminal
 still runs detached and nohup waits for it; with stdout a pipe or a capture (`nohup CMD | cat`,
 `$(nohup CMD)`) CMD runs in place through the runner and no `nohup.out` is made, as GNU nohup leaves
 a non-terminal stdout alone.
+Its stdin, likewise, is the shell's when there is one (`echo in | { nohup cat > o & wait; }`
+writes `in`; a background `nohup` reads the compound's stdin, never the shell's own), held for the child until it exits
+(`stdio-messaging.md` §4.7); otherwise the null device. The message says `ignoring input` only for the null device.
 
 INVARIANT: the detached child's redirect files are opened as the shell would open them (`DetachedProcess`):
 `>`/`2>` truncate, `>>`/`2>>` append (the emitter's `--psbash-append` / `--psbash-err-append`), and on

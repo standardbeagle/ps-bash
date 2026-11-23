@@ -81,4 +81,34 @@ public class DetachedProcessRedirectTests : IDisposable
         Assert.Equal(0, Run(sh!, new[] { "-c", "echo E2 >&2" }, P("m2"), append: false, P("m3"), errAppend: false));
         Assert.Equal("E2\n", Text(P("m3")));
     }
+
+    /// <summary>A program that copies its stdin to its stdout: sort.exe on Windows, cat elsewhere.</summary>
+    private static (string Exe, string[] Args) Copy() => OperatingSystem.IsWindows()
+        ? (Path.Combine(Environment.SystemDirectory, "sort.exe"), Array.Empty<string>())
+        : ("/bin/cat", Array.Empty<string>());
+
+    // REGRESSION (gap 2): `echo in | { nohup cat > o & wait; }` wrote nothing: the child's stdin was always the null
+    // device. GNU nohup leaves a stdin that is not a terminal alone; the child reads the pipe it is given.
+    [Fact]
+    public void GivenStdin_IsWhatTheChildReads()
+    {
+        var pipe = new System.IO.Pipes.AnonymousPipeServerStream(System.IO.Pipes.PipeDirection.Out,
+            OperatingSystem.IsWindows() ? HandleInheritability.Inheritable : HandleInheritability.None);
+        using var readEnd = pipe.ClientSafePipeHandle; // exposed: disposing the writer leaves it open
+        pipe.Write("in\n"u8);
+        pipe.Dispose(); // end of input once the child has read it
+        var (exe, args) = Copy();
+        using var child = DetachedProcess.SpawnChild(exe, args, _dir, P("o"), append: false, errPath: null, errAppend: false, stdin: readEnd);
+        using var stop = new CancellationTokenSource(Bound);
+        Assert.Equal(0, child.Wait(stop.Token));
+        Assert.Equal("in\n", Text(P("o")));
+    }
+
+    [Fact]
+    public void NoStdin_IsEndOfInput()
+    {
+        var (exe, args) = Copy();
+        Assert.Equal(0, Run(exe, args, P("o"), append: false, errPath: null, errAppend: false));
+        Assert.Equal("", Text(P("o")));
+    }
 }

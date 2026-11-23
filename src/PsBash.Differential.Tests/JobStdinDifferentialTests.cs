@@ -54,4 +54,33 @@ public class JobStdinDifferentialTests
             echo in7 | { command -p command /usr/bin/cat & wait; }
             """ + "\n");
     }
+
+    // REGRESSION (gap 1): a job that runs in a host process of its own (it changes the cwd, defines or calls a function,
+    // runs eval) read none of the compound's stdin: `b=1` where bash says `b=2`, `x=` where bash says `x=1`.
+    [SkippableFact] public Task AJobInAHostOfItsOwn_ReadsTheCompoundsStdin()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "the programs are named by their Unix path");
+        return AssertOracle.EqualAsync("""
+            seq 3 | { read a & wait; read b; echo "a=$a b=$b"; }
+            seq 3 | { cd / && read a & wait; read b; echo "b=$b"; }
+            seq 3 | { f() { read x; echo "x=$x"; }; f & wait; read b; echo "b=$b"; }
+            seq 3 | { { cd /; read x; echo "x=$x"; } & wait; /usr/bin/cat; }
+            echo hi | { eval 'read q; echo "q=$q"' & wait; }
+            seq 3 | { cd / && /usr/bin/sleep 0.2 & read b; wait; echo "b=$b"; }
+            seq 3 | { { cd /; /usr/bin/head -n1; } & wait; echo end; }
+            """ + "\n");
+    }
+
+    // REGRESSION (gap 2): `nohup prog &` read /dev/null, not the compound's stdin. GNU nohup leaves a stdin that is not a
+    // terminal alone. The background child is awaited by its output file: ps-bash's `wait` does not wait for a nohup
+    // child (it is no job of the shell's; a separate gap).
+    [SkippableFact] public Task Nohup_ReadsTheCompoundsStdin()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "the programs are named by their Unix path");
+        return AssertOracle.EqualAsync("""
+            echo in | { nohup /usr/bin/cat > o.txt & for i in $(seq 100); do [ -s o.txt ] && break; sleep 0.1; done; }; /usr/bin/cat o.txt
+            echo in2 | nohup /usr/bin/cat > o2.txt; /usr/bin/cat o2.txt
+            echo in3 | { nohup /usr/bin/cat > o3.txt; read r; echo "r=$r"; }; /usr/bin/cat o3.txt
+            """ + "\n");
+    }
 }

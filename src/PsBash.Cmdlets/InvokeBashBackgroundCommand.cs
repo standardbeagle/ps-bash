@@ -52,7 +52,15 @@ public sealed class InvokeBashBackgroundCommand : BashCmdlet
         var mux = Live ? Unwrap(SessionState.PSVariable.GetValue("global:__BashJobOutput")) as OutputMux : null;
         if (table.StartProcessJob is { } startProcess && BashBgJobTable.RunsInOwnProcess(Isolated))
         {
-            Emit(InvokeCommand.InvokeScript(true, startProcess, null, Command, Vars, mux, Text));
+            // The compound's stdin goes with the job: its host reads the shell's pipe (BashJobProcess.Start owns the lease
+            // from here and lets go of it when the job is done).
+            var stdin = BackgroundJobStdin.ForProcess(SessionState);
+            try { Emit(InvokeCommand.InvokeScript(true, startProcess, null, Command, Vars, mux, Text, stdin)); }
+            catch
+            {
+                stdin?.Dispose();
+                throw;
+            }
             return;
         }
         table.LaunchInProcess(this, Command, Vars, mux, Text, Isolated);

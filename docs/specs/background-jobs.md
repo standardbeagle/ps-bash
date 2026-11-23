@@ -790,9 +790,10 @@ shell.** That is:
   definition, `select`, a job in a job.
 
 `command NAME` and `builtin NAME` are judged by NAME (`command cat &` stays in-process, `command cd x &` does not):
-a job host does not read the compound's stdin (`stdio-messaging.md` §4.7), so `echo in | { command cat & wait; }`
-printed nothing. **Known gap:** a job that must go to a host (`seq 3 | { read a & wait; }`) still reads none of the
-compound's stdin.
+sending `command cat &` to a job host made it read none of the compound's stdin (`echo in | { command cat & wait; }`
+printed nothing). A job that must go to a host now gets the compound's stdin pipe handed to the running host
+(`PipeHandoff`, `stdio-messaging.md` §4.7): `seq 3 | { cd / && read a & wait; read b; }` gives b=2, as bash. Still a
+gap on macOS (no handoff there: the job reads end of input).
 
 Writing a scalar or an array is not on the list. An in-process job's scalars are its own copy (§3, `ScalarOverlay`)
 and its arrays are globals of its own runspace, so an assignment, `FOO=1 prog`, a loop variable, `${x=1}`,

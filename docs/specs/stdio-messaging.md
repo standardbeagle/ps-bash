@@ -297,6 +297,30 @@ with no holder left tears down first.
 `NativeStdinBridge.Enter` (a program PowerShell starts itself, `& prog`) also swaps the process stdin to the pipe for
 the call, only in the foreground and one at a time (`SetStdHandle` / `dup2(fd, 0)`). A job never swaps it.
 
+**A process that is not a child ps-bash waits on in place** holds the pipe as a LEASE (`NativeStdinBridge.HoldFor`,
+`PipeHandoff.Lease`: a holder released once, when the process is done):
+
+| Process | How it gets the read end | Lease released |
+|---|---|---|
+| a job in a host process of its own (§12.6 of `background-jobs.md`) | `BackgroundJobStdin.ForProcess` takes it; `BashJobProcess.Start` offers it to the running job host (`PipeHandoff`), whose first line is `PsBuild.AdoptJobStdin`: `$global:__BashStdIn = [BackgroundJobStdin]::Adopt(token)` | when the job ends, BEFORE its handle completes, so the unread rest is the shell's again when `wait` returns |
+| `nohup prog &` | `BackgroundJobStdin.ForProcess`; the spawn's fd 0 (`DetachedProcess.SpawnChild(..., stdin)`) | when the child exits (a waiter thread) |
+| foreground `nohup prog` (detached form) | `HoldFor(SharedStdin.Get)` | after the wait |
+
+`PipeHandoff` (`Transpiler/Platform/PipeHandoff.cs`) is the only way a pipe goes into a process already running:
+Windows `DuplicateHandle` into the receiver (inheritable there, token `w:<handle>`); Linux the receiver opens
+`/proc/<sender>/fd/<fd>` (token `p:<pid>:<fd>`) NON-BLOCKING, since a FIFO open waits for a writer and the pump has
+closed its writer once the input ended, then clears `O_NONBLOCK`. The receiver's cursor is ADOPTED (`CursorPipe.Adopt`):
+no pump, never torn down, every read and every program (`ForChild` hands the adopted handle itself) reads the shell's
+pipe at the shared position. A job that cannot get the pipe reads end of input.
+
+**Known gap (macOS).** No `/proc`; a handoff would need `SCM_RIGHTS` over a socket. `OfferTo` is null there and a job in
+its own host reads end of input, as before. `nohup prog &` is not affected (a spawn's fd 0).
+
+**nohup and stdout.** GNU nohup leaves a non-terminal stdin alone, so `nohup` passes the shell's stdin when there is
+one (message `nohup: appending output to 'nohup.out'` without "ignoring input"). A background `nohup prog &` whose
+stdout is not redirected still writes `nohup.out` where bash would write the inherited stdout (`runtime-functions.md`
+§nohup: the detached child must not hold an agent's output pipe).
+
 **Why.** Each program had its own pump. The foreground program of `while read x; do /usr/bin/true & /usr/bin/echo $x;
 done` joined a pipe the background one held, the rest of the input sat in it when both exited, and `read` found the
 cursor empty (`a end`). A background program that reads nothing (`sleep 1 &`) starved the shell's reads the same way
@@ -308,6 +332,9 @@ in-process record read through it becomes a text line. The pump can wait behind 
 source; that delays a reader, it does not deadlock. The queue path keeps a pipe per program.
 
 **Guards.** `Core.Tests/StdinOwnershipGuardTests` (`InheritStdin` is set only by the bridge and the primitives; only
-`CursorPipe` reads past the tap; only the bridge swaps the process stdin), `Cmdlets.Tests/CursorPipeTests` (a shell read
+`CursorPipe` reads past the tap; only the bridge swaps the process stdin; a lease comes from `HoldFor`; only
+`BashJobProcess`/`BackgroundJobStdin` offer and adopt a pipe; a job-host launch carries the stdin),
+`Cmdlets.Tests/PipeHandoffTests` (handoff, adopt after the writer closed, a job's line and the shell's rest),
+`Cmdlets.Tests/DetachedProcessRedirectTests` (a given stdin), `Cmdlets.Tests/CursorPipeTests` (a shell read
 through the pipe, pushback order, holders coming and going on 8 threads keep the order, two programs share one pipe),
 `Shell.Tests/JobStdinEndToEndTests` (each race repeated 20 times in one script), `Differential.Tests/JobStdinDifferentialTests`.
