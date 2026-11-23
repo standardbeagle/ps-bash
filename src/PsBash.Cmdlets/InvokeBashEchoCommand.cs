@@ -81,10 +81,13 @@ public sealed class InvokeBashEchoCommand : BashCmdlet
         if (!scan.NoNewline && !stopped)
             text += "\n";
 
+        int closedWrites = BashFdTable.ClosedStdoutWrites;
         foreach (var obj in BashRuntime.EmitBashLines(text, "echo"))
             WriteObject(obj);
 
-        FileSystemHelpers.SetLastExitCode(this, 0);
+        // `exec >&-; echo x`: the write reached the shell's closed fd 1.
+        if (!InvokeBashFdRouteCommand.FailClosedStdout(this, "echo", closedWrites))
+            FileSystemHelpers.SetLastExitCode(this, 0);
         // $_ in the next command resolves to the last operand of this one.
         SessionState.PSVariable.Set("global:BashLastArg",
             operands.Length > 0 ? operands[^1] : "");

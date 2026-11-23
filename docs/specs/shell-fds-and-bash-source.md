@@ -85,8 +85,10 @@ ONE table per shell, fds 0..N, as bash has one per process (`Cmdlets/BashFdTable
   command kind x exec context against bash), `Cmdlets.Tests/BashFdTableTests`.
 
 Gaps (each a known difference, not a model):
-- `( exec >&- ; echo x )`: a closed fd 1 set by exec drops the shell's later output silently, status 0 (bash: write error,
-  status 1); only a closed stdout on the command itself (`echo x >&-`) fails.
+- After `exec >&-`, only `echo` and `printf` fail their write (`echo: write error: Bad file descriptor`, status 1: the
+  host's divert counts a dropped write on the writer's thread, `BashFdTable.ClosedStdoutWrites`, and the builtin checks
+  it around its writes). Other commands' output is dropped with their own status (bash: `cat: write error`, status 1).
+  A builtin upstream of an unregistered pipe stage is charged for that stage's dropped write.
 - A background job's output does not pass through the table (`JobOutput` writes the host's streams): a job started after
   an `exec >log` that was not at the top level (`fx() { exec >log; }; fx; cmd &`) prints to the terminal. At the top level
   the rewrite covers it.

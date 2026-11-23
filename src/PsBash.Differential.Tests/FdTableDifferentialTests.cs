@@ -68,6 +68,8 @@ public class FdTableDifferentialTests
     [InlineData("( printf 'p\\n' 1>&- ) 2>e13\necho \"s=$?\"\nerr e13")]
     [InlineData("exec 3>&-\n( echo x >&3 ) 2>e14\necho \"s=$?\"\nerr e14")]
     [InlineData("echo q 2>&-\necho \"s=$?\"")]
+    [InlineData("( exec 1>&-; echo x ) 2>e09\necho \"s=$?\"\nerr e09")]
+    [InlineData("( exec >&-; printf 'p\\n'; echo \"s=$?\" >&2; printf ''; echo \"s=$?\" >&2 ) 2>e09p\nerr e09p")]
     public Task Closed_DescriptorFailsTheWrite(string script)
         => AssertOracle.EqualAsync(Prelude + script);
 }

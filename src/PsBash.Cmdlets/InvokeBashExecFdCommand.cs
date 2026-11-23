@@ -260,6 +260,20 @@ public sealed class InvokeBashFdRouteCommand : BashCmdlet, IStatusTransparentSta
         }
     }
 
+    /// <summary>
+    /// <c>exec &gt;&amp;-; echo x</c>: when a write by <paramref name="cmdlet"/> since <paramref name="closedWritesBefore"/>
+    /// (<see cref="BashFdTable.ClosedStdoutWrites"/>) reached the shell's closed fd 1, the builtin's write failed: bash's
+    /// <c>NAME: write error: Bad file descriptor</c> on stderr, once, and true (the caller's status is 1).
+    /// </summary>
+    internal static bool FailClosedStdout(PSCmdlet cmdlet, string name, int closedWritesBefore)
+    {
+        if (BashFdTable.ClosedStdoutWrites == closedWritesBefore) return false;
+        FileSystemHelpers.WriteStderrBytes(cmdlet,
+            ShellDiagnostic.Prefix(cmdlet.SessionState) + name + ": write error: Bad file descriptor\n");
+        FileSystemHelpers.SetLastExitCode(cmdlet, 1);
+        return true;
+    }
+
     private static bool IsTableFd(string dest, out int fd)
         => int.TryParse(dest, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out fd);
 

@@ -520,8 +520,11 @@ public sealed class InvokeBashPrintfCommand : BashCmdlet
             return;
         }
 
+        int closedWrites = BashFdTable.ClosedStdoutWrites;
         WriteObject(BashRuntime.NewBashObject(
             result, "PsBash.TextOutput", noTrailingNewline: true, command: "printf"));
+        // `exec >&-; printf x`: the write reached the shell's closed fd 1.
+        InvokeBashFdRouteCommand.FailClosedStdout(this, "printf", closedWrites);
         if (badFormat is not null)
             FileSystemHelpers.WriteBashError(this, $"printf: `{badSpec}': {badFormat}");
         if (badFormat is not null || numErr) FileSystemHelpers.SetLastExitCode(this, 1);
