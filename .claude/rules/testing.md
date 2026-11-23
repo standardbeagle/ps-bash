@@ -10,6 +10,7 @@ paths:
 
 ## RUN
 `tman build | tman test | tman test-proj src/X.Tests --filter "..." | tman pester` — never bare dotnet. Don't run the full Cmdlets.Tests to verify a targeted change; `--filter` the affected classes.
+Linux: `scripts/remote-test.sh build3 -- '<dotnet test …>'` (tman queue on the box; run_in_background, no sleeps or loadavg checks; `scripts/remote-test.sh done build3` when finished). See CLAUDE.md.
 
 ## ORACLE FIRST
 Bash is the oracle. Prefer differential tests (real bash vs ps-bash: stdout+stderr+exit; goldens under `CanonicalEnv` via `AssertOracle.GoldenAsync`, regenerate with `UPDATE_GOLDENS=1`). Hand-written asserts only for ps-bash-specific surface; say why in one line.

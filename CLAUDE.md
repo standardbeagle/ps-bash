@@ -45,6 +45,29 @@ Don't pass `-x:y`-style MSBuild switches through tman. Never trust results gathe
 another build ran. Kill only DEV-BUILD `ps-bash-host`/`ps-bash` processes (under repo `bin`)
 on MSB3021 — never the `~/.local/bin` ones.
 
+## Linux builds / tests: fleet boxes, through tman's queue
+
+Linux runs go to **build3** (32 cores) first and **build2** (= beagle-inspiron, 8 cores) second, always through
+`scripts/remote-test.sh` (`--help`; no pwsh there, so `<cmd>` is plain bash, not a tman alias):
+
+```bash
+scripts/remote-test.sh build3 -- 'dotnet test src/PsBash.Core.Tests -c Debug --filter "FullyQualifiedName~Sed"'
+scripts/remote-test.sh --dirty build3 -- 'dotnet build ps-bash.sln -c Debug'   # ship uncommitted work
+scripts/remote-test.sh done build3        # LAST step of every agent's work: removes its remote worktree
+scripts/remote-test.sh ls build3 | scripts/remote-test.sh prune [--dry-run] build3   # idle >= 24h, never live
+```
+
+- `<cmd>` runs as `~/.local/bin/tman run --queue default --label agent=<name>` in `~/work/scratch/ps-bash/<name>`,
+  a worktree off one shared bare repo per host fed by `git push`. tman admits by measured cores and memory and
+  queues the rest: never read `/proc/loadavg`, sleep, or hop hosts to find a quiet moment.
+- Start it with the Bash tool's `run_in_background` and wait for the completion notification. No `sleep` loops,
+  no polling marker files or logs. Exit = `<cmd>`'s status; 75 = tman stopped it (queue timeout, `tman kill`): re-run.
+- No clones, rsyncs, tarballs or bundles into your own `~/work/agent-*`. One worktree per agent (`--name`, default
+  this checkout's directory name), reused across runs so builds stay incremental; `--rm` for a one-off.
+- Any other ssh work on a fleet box goes under `~/.local/bin/tman run --queue default --label agent=<name> -- …`
+  (full path: `~/.local/bin` is not on a non-interactive ssh PATH).
+- Windows-only gates (Pester, spec, Shell/Host) stay on beagle-ab via `docs/spikes/xfail-tools/fleet/fleet-gate.ps1`.
+
 ## CI push discipline
 
 Each push fires ~9 CI jobs. Batch commits; don't push fixup loops. `**/*.md`, `docs/spikes/**`,
