@@ -44,6 +44,13 @@ public class WordFieldsDifferentialTests
     [InlineData(P + "touch m1 m2; p ${u:-m*}; p ${u:-'m*'}; p ${u:-\"m\"*}")]
     public Task DefaultOperatorWords_KeepTheirQuoting(string script) => AssertOracle.EqualAsync(script);
 
+    // R8: every quoted `*` form joins with the first IFS character.
+    [SkippableTheory]
+    [InlineData(P + "set -- a b c; IFS=-; p \"${*:2}\" \"$*\" \"${*}\" \"${*^^}\" \"${*/a/X}\" \"${*:-d}\" $*")]
+    [InlineData(P + "a=(a b c); IFS=-; p \"${a[*]}\" \"${a[*]:1}\" \"${a[*]:-d}\" \"${a[*]/a/X}\" \"${a[*]@Q}\"")]
+    [InlineData(P + "set -- a b c; IFS=; p \"${*:2}\" \"$*\" \"${*}\"; a=(a b); p \"${a[*]}\" \"${a[*]:-d}\"")]
+    public Task QuotedStarForms_JoinWithTheFirstIfsCharacter(string script) => AssertOracle.EqualAsync(script);
+
     // R4: a brace expansion's words each expand and split.
     [SkippableFact]
     public Task BraceWordsWithExpansions_SplitEachWord() => AssertOracle.EqualAsync(

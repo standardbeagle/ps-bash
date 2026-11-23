@@ -125,4 +125,13 @@ public class AffixWordSplitTests
     public void Transpile_QuotedDeclarePrintFlag_StillPrints()
         => Assert.Contains("Invoke-BashDeclare", T("declare '-p' b"));
 
+    // bash: in double quotes every `*` form joins its values with IFS's first character (IFS=-: `"${*:2}"` is b-c,
+    // `"${a[*]:1}"` b-c, `"${a[*]:-d}"` a-b-c); these joined with a space. Behavior: WordFieldsDifferentialTests.
+    [Theory]
+    [InlineData("echo \"${*}\"")]
+    [InlineData("echo \"${*:2}\"")]
+    [InlineData("echo \"${a[*]:1}\"")]
+    [InlineData("echo \"${a[*]:-d}\"")]
+    public void Transpile_QuotedStarForm_JoinsWithTheFirstIfsCharacter(string bash)
+        => Assert.Contains(PsBuild.IfsJoinSeparator, T(bash));
 }
