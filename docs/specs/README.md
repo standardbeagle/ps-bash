@@ -38,6 +38,7 @@ Nav starts at /CODE_MAP.md. Keep this index complete — a guard test fails on a
 - [on-cd-hooks.md](on-cd-hooks.md) — On-CD Hook Cmdlet API Specification
 - [parser-grammar.md](parser-grammar.md) — Parser Grammar Specification (v2 AST)
 - [paths.md](paths.md) — Paths: forward-slash `C:/x` out (`BashPath.ToShell`), one inbound mapper (`RuntimePath`/`WindowsPath`); producer inventory, PATH policy
+- [regex-ere.md](regex-ere.md) — `[[ s =~ re ]]`: THE POSIX ERE engine (`BashEre`, glibc port), BASH_REMATCH, bounds, other ERE consumers
 - [program-files.md](program-files.md) — how a resolved program file starts (`ProgramFile`: `#!` dispatch, PATHEXT, execute bit) at every site
 - [plugin-architecture.md](plugin-architecture.md) — Plugin Architecture Specification
 - [pty.md](pty.md) — PTY Architecture Specification

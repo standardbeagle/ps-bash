@@ -64,7 +64,7 @@ public class BashTranspilerTests
     public void Transpile_RegexMatchPatternWithQuote_EscapesSingleQuote()
     {
         var result = BashTranspiler.Transpile("[[ $x =~ \"a'b\" ]]");
-        Assert.Contains("[regex]::Escape", result);
+        Assert.Contains("[PsBash.Cmdlets.BashPatternMatch]::EreQuote(", result);
         Assert.Contains("a'b", result);
     }
 

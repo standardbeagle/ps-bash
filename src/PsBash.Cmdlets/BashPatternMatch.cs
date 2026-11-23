@@ -19,50 +19,27 @@ public static class BashPatternMatch
 {
     // Regex.IsMatch's static cache holds 15 patterns; a script's case statements easily exceed it.
     private static readonly ConcurrentDictionary<(string, bool), Regex> Cache = new();
-    // The host is long-lived and a run-time pattern can differ every iteration: bound both caches.
+    // The host is long-lived and a run-time pattern can differ every iteration: bound the caches.
     private const int MaxCached = 512;
 
     /// <summary>True when <c>shopt -s nocasematch</c> is set in the calling runspace.</summary>
     public static bool NoCase => InvokeBashShoptCommand.IsEnabled("nocasematch");
 
     /// <summary>
-    /// BASH_REMATCH after a successful <c>[[ s =~ re ]]</c>, from PowerShell's <c>$Matches</c>: an indexed array of the
-    /// whole match and then every group in order, a group that took no part being "" (bash). <c>$Matches</c> itself is a
-    /// hashtable: it enumerates in hash order (<c>${BASH_REMATCH[@]}</c> was "c b bc"), leaves non-participating groups
-    /// out, and is keyed by int where every other array reads by a string index.
+    /// <c>[[ s =~ re ]]</c>: <paramref name="input"/> against the <c>=~</c> word <paramref name="word"/>, built by the
+    /// emitter from <see cref="EreQuote"/> (quoted parts) and <see cref="EreRaw"/> (unquoted parts), run by THE POSIX
+    /// ERE primitive (<see cref="PsBash.Core.Parser.BashEre"/>, glibc regcomp/regexec semantics, never .NET regex).
+    /// <c>Status</c> is the test's status (2 = a regex regcomp rejects: bash prints nothing and leaves BASH_REMATCH
+    /// alone); <c>Groups</c> is what BASH_REMATCH becomes otherwise (empty after a failed match).
     /// </summary>
-    public static string[] Rematch(System.Collections.IDictionary matches, string pattern)
-    {
-        int count = 0;
-        foreach (var key in matches.Keys)
-            if (key is int i && i >= count) count = i + 1;
-        if (Cache.Count > MaxCached) Cache.Clear();
-        try
-        {
-            var rx = Cache.GetOrAdd((pattern, false), static k => new Regex(k.Item1, RegexOptions.CultureInvariant));
-            count = Math.Max(count, rx.GetGroupNumbers().Length);
-        }
-        catch (ArgumentException) { }
-        var result = new string[count];
-        for (int g = 0; g < count; g++)
-            result[g] = matches.Contains(g) ? Text(matches[g]) : "";
-        return result;
-    }
+    public static PsBash.Core.Parser.BashEreResult EreTest(object? input, string word) =>
+        PsBash.Core.Parser.BashEre.Match(PsBash.Core.Parser.BashEre.WordToRegex(word), NoCase, Text(input));
 
-    private static readonly ConcurrentDictionary<string, string> EreCache = new();
+    /// <summary>A QUOTED part of the <c>=~</c> word: matches its characters literally.</summary>
+    public static string EreQuote(object? value) => PsBash.Core.Parser.BashEre.MarkQuoted(Text(value));
 
-    /// <summary>The run-time regex of <c>[[ s =~ $re ]]</c> in .NET syntax (<see cref="PsBash.Core.Parser.BashEre"/>);
-    /// throws <see cref="ArgumentException"/> for a regex bash's regcomp rejects (status 2).</summary>
-    public static string Ere(object? pattern)
-    {
-        string p = Text(pattern);
-        if (p.IndexOf('{') < 0 && !p.Contains("[:", StringComparison.Ordinal)) return p;
-        if (EreCache.TryGetValue(p, out var hit)) return hit;
-        string result = PsBash.Core.Parser.BashEre.ToDotNet(p);
-        if (EreCache.Count > MaxCached) EreCache.Clear();
-        EreCache[p] = result;
-        return result;
-    }
+    /// <summary>An UNQUOTED part of the <c>=~</c> word (a literal or an unquoted expansion): regex text.</summary>
+    public static string EreRaw(object? value) => PsBash.Core.Parser.BashEre.MarkUnquoted(Text(value));
 
     /// <summary>Does <paramref name="input"/> match the bash <paramref name="pattern"/> (canonical text, built by the
     /// transpiler: quoted parts escaped, an unquoted expansion's value active)? <c>case</c>, <c>[[ == != ]]</c> and

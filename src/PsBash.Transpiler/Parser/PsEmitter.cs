@@ -4310,28 +4310,14 @@ public static partial class PsEmitter
             // stripped literal; everything else compares two quoted operands.
             if (op == "=~")
             {
-                // `re='^a.b$'; [[ $x =~ $re ]]` is THE idiomatic way to write a bash
-                // regex (it avoids bash's own quoting pitfalls). Single-quoting the
-                // emitted `$env:re` would match the literal text "$env:re" instead of
-                // the pattern it holds, so pass a lone expansion through bare.
-                string patExpr = IsSoleExpansionWord(words[2])
-                    ? EmitWord(words[2])
-                    : TryBuildRegexPattern(words[2], out var builtPattern)
-                        ? builtPattern
-                        : $"'{SqEsc(StripQuotes(EmitWord(words[2])))}'";
-                // POSIX ERE -> .NET: `{,n}`, classes in a run-time value, and a stray `{` (a regcomp error, status 2).
-                patExpr = PsBuild.EreRegex(patExpr);
-                // =~ is case-sensitive (PowerShell's -match is not) unless `shopt -s nocasematch`.
-                string matchExpr = $"$(if ([PsBash.Cmdlets.BashPatternMatch]::NoCase) {{ {lhs} -match {patExpr} }} else {{ {lhs} -cmatch {patExpr} }})";
-                // Bash's `=~` also fills BASH_REMATCH with the whole match and each
-                // capture group. `-match` fills the automatic $Matches hashtable, so
-                // copy it across ($Matches[0] is the whole match, same as bash).
-                // The subexpression keeps the result ONE expression usable in an
-                // `if ( ( … ) )` condition while the assignment is a side effect.
-                // A malformed regex is status 2 (the standalone-statement wrapper turns __BashTestBad into it).
-                return "$( try { $__psbash_m = " + matchExpr + " } catch [System.ArgumentException] { $__psbash_m = $false; $global:__BashTestBad = $true; Write-Error 'syntax error in regular expression' -ErrorAction Continue }" +
-                       "; if ($__psbash_m) { $global:BASH_REMATCH = [PsBash.Cmdlets.BashPatternMatch]::Rematch($Matches, " + patExpr + ") } " +
-                       "else { $global:BASH_REMATCH = $null }; $__psbash_m )";
+                // bash builds regcomp's text from the word: unquoted text and an unquoted expansion's value
+                // (`re='^a.b$'; [[ $x =~ $re ]]`) are regex syntax, every quoted part matches itself. The match
+                // runs in THE POSIX ERE primitive (BashEre: leftmost-longest, glibc's captures) — never .NET
+                // regex, whose semantics differ (guard EreNoDotNetRegexGuardTests). The subexpression keeps the
+                // result ONE expression usable in an `if ( ( … ) )` condition while BASH_REMATCH is a side
+                // effect; a regex regcomp rejects is status 2 (the standalone-statement wrapper turns
+                // __BashTestBad into it).
+                return PsBuild.EreTest(lhs, BuildEreWord(words[2]));
             }
 
             // `==` / `=` / `!=`: bash PATTERN-matches the right-hand word, case-sensitively unless
@@ -4536,93 +4522,75 @@ public static partial class PsEmitter
     }
 
     /// <summary>
-    /// True when the word is exactly ONE parameter/command expansion and nothing else
-    /// (<c>$re</c>, <c>${re}</c>, <c>$(cmd)</c>) — so its emitted text is already a
-    /// PowerShell expression and must not be wrapped in a single-quoted literal.
-    /// A mixed word (<c>^${p}[0-9]+$</c>) is not sole and keeps the literal path.
+    /// The <c>=~</c> word as bash hands it to <c>quote_string_for_globbing</c>: every QUOTED part (<c>'a.c'</c>,
+    /// <c>"$v"</c>, <c>\.</c>, <c>$'|'</c>, a tilde's expansion) marked to match itself, unquoted text and the value of
+    /// an unquoted expansion left as regex text — so <c>a"."c</c> is a, a literal dot, c. A literal part is its
+    /// source text, not its emitted argument form (a leading <c>@</c>, PowerShell's splat sigil, stays <c>@</c>).
     /// </summary>
-    /// <summary>
-    /// The regex of <c>[[ x =~ WORD ]]</c> assembled part by part, as bash does: UNQUOTED text (and an unquoted
-    /// <c>$var</c>) is regex syntax, while every QUOTED part (<c>'a.c'</c>, <c>"$v"</c>, <c>\.</c>) matches
-    /// itself — so <c>a"."c</c> is a, a literal dot, c. Returns false for a word with no quoted/escaped/dynamic
-    /// part (the plain text path handles it) or with a part this builder does not model.
-    /// </summary>
-    private static bool TryBuildRegexPattern(CompoundWord word, out string patExpr)
+    private static string BuildEreWord(CompoundWord word)
     {
-        patExpr = "";
-        bool needsBuilder = false;
-        foreach (var part in word.Parts)
+        var pieces = new List<string>(word.Parts.Length);
+        var text = new StringBuilder();
+        bool textQuoted = false;
+
+        void FlushText()
         {
-            switch (part)
-            {
-                case WordPart.Literal or WordPart.GlobPart:
-                    break;
-                case WordPart.SingleQuoted or WordPart.EscapedLiteral or WordPart.DoubleQuoted or WordPart.AnsiCQuoted
-                    or WordPart.SimpleVarSub or WordPart.BracedVarSub or WordPart.TildeSub:
-                    needsBuilder = true;
-                    break;
-                default:
-                    return false;
-            }
-        }
-        if (!needsBuilder)
-        {
-            // An unquoted literal regex is its source text. Its emitted argument form is not: a leading @ (PowerShell's
-            // splat sigil) is backtick-escaped there, so [[ @fx =~ @f(x) ]] matched the regex "`@f(x)".
-            var text = new StringBuilder();
-            foreach (var part in word.Parts)
-                text.Append(part is WordPart.Literal l ? l.Value : ((WordPart.GlobPart)part).Pattern);
-            patExpr = PsBuild.SingleQuote(text.ToString());
-            return true;
+            if (text.Length == 0) return;
+            pieces.Add(PsBuild.EreLiteral(text.ToString(), textQuoted));
+            text.Clear();
         }
 
-        var pieces = new List<string>(word.Parts.Length);
+        void AddText(string value, bool quoted)
+        {
+            if (value.Length == 0) return;
+            if (text.Length > 0 && textQuoted != quoted) FlushText();
+            textQuoted = quoted;
+            text.Append(value);
+        }
+
+        void AddExpr(string piece)
+        {
+            FlushText();
+            pieces.Add(piece);
+        }
+
         foreach (var part in word.Parts)
         {
             switch (part)
             {
                 case WordPart.Literal l:
-                    pieces.Add(PsBuild.SingleQuote(l.Value));
+                    AddText(l.Value, quoted: false);
                     break;
                 case WordPart.GlobPart g:
-                    pieces.Add(PsBuild.SingleQuote(g.Pattern));
+                    AddText(g.Pattern, quoted: false);
                     break;
                 case WordPart.SingleQuoted sq:
-                    pieces.Add(PsBuild.SingleQuote(System.Text.RegularExpressions.Regex.Escape(sq.Value)));
+                    AddText(sq.Value, quoted: true);
                     break;
                 case WordPart.EscapedLiteral el:
-                    pieces.Add(PsBuild.SingleQuote(System.Text.RegularExpressions.Regex.Escape(el.Value)));
+                    AddText(el.Value, quoted: true);
                     break;
                 case WordPart.AnsiCQuoted aq: // `$'|'` matches a literal |
-                    pieces.Add(PsBuild.SingleQuote(System.Text.RegularExpressions.Regex.Escape(ExpandAnsiCEscapes(aq.Value))));
+                    AddText(ExpandAnsiCEscapes(aq.Value), quoted: true);
                     break;
                 case WordPart.DoubleQuoted dq:
                     if (dq.Parts.IsDefaultOrEmpty) break;
-                    pieces.Add("[regex]::Escape([string](" + EmitWord(new CompoundWord(ImmutableArray.Create<WordPart>(dq))) + "))");
+                    AddExpr(PsBuild.EreQuoted("[string](" + EmitWord(new CompoundWord(ImmutableArray.Create<WordPart>(dq))) + ")"));
                     break;
                 case WordPart.TildeSub ts:
                     // `[[ $HOME =~ ~ ]]`: the tilde expands to the home directory, matched as text (HOME='^a$' matches itself).
-                    pieces.Add(ts.User is null or "+" or "-"
-                        ? "[regex]::Escape([string]" + EmitWordPart(ts) + ")"
-                        : PsBuild.SingleQuote(System.Text.RegularExpressions.Regex.Escape("~" + ts.User)));
-                    if (ts.SlashConsumed) pieces.Add("'/'");
+                    if (ts.User is null or "+" or "-") AddExpr(PsBuild.EreQuoted("[string](" + EmitWordPart(ts) + ")"));
+                    else AddText("~" + ts.User, quoted: true);
+                    if (ts.SlashConsumed) AddText("/", quoted: false);
                     break;
                 default: // an unquoted expansion: its VALUE is regex text
-                    pieces.Add("[string](" + EmitWord(new CompoundWord(ImmutableArray.Create(part))) + ")");
+                    AddExpr(PsBuild.EreUnquoted("[string](" + EmitWord(new CompoundWord(ImmutableArray.Create(part))) + ")"));
                     break;
             }
         }
-        if (pieces.Count == 0) { patExpr = "''"; return true; }
-        patExpr = "(" + string.Join(" + ", pieces) + ")";
-        return true;
+        FlushText();
+        return PsBuild.EreWord(pieces);
     }
-
-    private static bool IsSoleExpansionWord(CompoundWord word)
-        => word.Parts.Length == 1
-        && word.Parts[0] is WordPart.SimpleVarSub
-            or WordPart.BracedVarSub
-            or WordPart.CommandSub;
-
     private static string QuoteIfBareLiteral(string emitted)
     {
         if (emitted.Length == 0) return "''";

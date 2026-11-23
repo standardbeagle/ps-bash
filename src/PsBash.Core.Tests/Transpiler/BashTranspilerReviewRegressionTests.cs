@@ -1495,8 +1495,10 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_DoubleBracketBadRegexInChain_IsStatus2()
     {
         var ps = BashTranspiler.Transpile("[[ foo.py =~ * ]] && echo true");
-        Assert.Contains("catch [System.ArgumentException]", ps);
+        // The ERE engine reports regcomp's REG_BADRPT as status 2 (no exception to catch).
+        Assert.Contains("if ($__psbash_ere.Status -eq 2) { $global:__BashTestBad = $true }", ps);
         Assert.Contains("$global:__BashTestBad) { 2 }", ps);
+        Assert.Equal(2, PsBash.Core.Parser.BashEre.Match(PsBash.Core.Parser.BashEre.WordToRegex("*"), false, "foo.py").Status);
     }
 
     // A /tmp/... command word is emitted as the quoted TempPath string; without the call operator
