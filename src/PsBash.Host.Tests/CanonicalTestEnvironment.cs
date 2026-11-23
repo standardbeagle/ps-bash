@@ -11,6 +11,11 @@ namespace PsBash.Host.Tests;
 /// summary line to every result, <c>PSBASH_SESSION</c> moves the endpoint. Everything is cleared except what
 /// the test harness itself passes in; a test that needs a setting sets it in a <c>ProcessEnv</c> scope
 /// (<see cref="ProcessEnvironmentCollection"/>).
+/// <para>
+/// Host logging goes to a file of the run's own (<c>PSBASH_HOST_LOG</c>), which every host the suite spawns inherits.
+/// REGRESSION: tests that drive a watcher or host against made-up anchors and endpoints appended to the user's real
+/// <c>~/.psbash/host.log</c>, the log read to diagnose live hosts.
+/// </para>
 /// </summary>
 internal static class CanonicalTestEnvironment
 {
@@ -26,5 +31,18 @@ internal static class CanonicalTestEnvironment
             if (Preserved.Any(p => name.StartsWith(p, StringComparison.OrdinalIgnoreCase))) continue;
             Environment.SetEnvironmentVariable(name, null);
         }
+        Environment.SetEnvironmentVariable("PSBASH_HOST_LOG", SuiteHostLog);
+        // Earlier runs' logs, kept for a day to read after a failure, then dropped so the directory stays bounded.
+        try
+        {
+            foreach (var old in Directory.EnumerateFiles(Path.GetDirectoryName(SuiteHostLog)!))
+                if (File.GetLastWriteTimeUtc(old) < DateTime.UtcNow.AddDays(-1)) File.Delete(old);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
+
+    /// <summary>This run's host log, under the temp directory.</summary>
+    internal static readonly string SuiteHostLog =
+        Path.Combine(Path.GetTempPath(), "ps-bash", "test-host-logs", $"host-{Environment.ProcessId}-{DateTime.UtcNow:yyyyMMddHHmmss}.log");
 }
