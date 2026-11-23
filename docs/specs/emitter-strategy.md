@@ -512,7 +512,8 @@ expansions escaped at run time through `[PsBash.Cmdlets.BashGlobText]::Escape`, 
 spliced in active, `/tmp/` and a drive prefix mapped like any path word (forward slashes), and the `/` the
 parser eats after `~` re-added. A word with no unquoted glob part is unchanged (`echo "*"`, `echo \*`).
 
-The engine (`Cmdlets/BashGlob.cs`, `ConvertTo-BashGlob`, fnmatch core shared with `ls -I` as `LsGlob`):
+The engine (`Cmdlets/BashGlob.cs`, `ConvertTo-BashGlob`; each component matched by `LsGlob.Match`, i.e. the
+one pattern compiler, see "Bash patterns: one compiler"):
 `/`-separated components matched directory by directory (`*` `?` `[set]` `[!set]` `[^set]` ranges
 `[[:class:]]`); a name that starts with `.` is matched only by a component with a literal leading `.`
 (or `shopt -s dotglob`); `.` and `..` are never matched by a glob (bash 5.2 `globskipdots`); matches are
@@ -746,6 +747,53 @@ from a PIPE, which is what ps-bash models (`printf '1\n2\n3\n' | { head -n1; cat
 commands emitted as a statement list (env prefix, `& { …splat… }`) are never FED the scope (a
 function or eval text behind one still reads the cursor at run time); `bash -c 'read z'` in a
 scope is not fed (only `bash` with no script operand is), so the nested shell reads nothing.
+
+### Bash patterns: one compiler
+
+Every place bash matches a PATTERN (§3.5.8.1) uses ONE compiler, `Transpiler/Parser/BashPattern.cs`
+(`BashPattern.Compile(text, options)` → `BashPatternProgram`), with one semantics:
+
+| Context | Emitted / called as | Options |
+|---|---|---|
+| pathname component (`echo a*`) | `ConvertTo-BashGlob` → `BashGlob` → `LsGlob.Match` | `Pathname`-style rules on top: per component, leading `.`, nocaseglob, extglob |
+| `case`, `[[ == != ]]` | `PsBuild.PatternTest` → `BashPatternMatch.MatchesPattern` | nocasematch |
+| `# ## % %%` | `PsBuild.PatternRemove` → `BashPatternMatch.Remove` | never nocasematch (bash) |
+| `/ // /# /%` | `PsBuild.PatternSubstitute` → `BashPatternMatch.Substitute` | nocasematch, patsub_replacement |
+| `^ ^^ , ,,` | `PsBuild.PatternCaseModify` → `BashPatternMatch.ModifyCase` | — |
+| GLOBIGNORE, `compgen -X`, `ls -I` | `BashGlob.IsIgnored`, `BashPatternMatch.MatchesPattern` (`&` = the word, via `EscapeLiteral`), `LsGlob.Match` | `Pathname` (GLOBIGNORE) |
+
+**The interface is canonical pattern TEXT**: quotes removed, every quoted or escaped character written `\c`
+(`BashPattern.EscapeLiteral` escapes `* ? [ ] \ ( ) |`). The emitter builds it with `EmitGlobPatternExpr`
+(static parts at transpile time, a quoted expansion through `BashGlobText.Escape` at run time, an UNQUOTED
+expansion's value spliced in active — `pre='*/'; ${p##$pre}` is a pattern, `"$pre"` literal). The operator
+(`#`, `%`, `/#`, `/%`) is passed as an argument, never folded into the pattern text, so a quoted or escaped
+pattern keeps its anchor (`${v/#\*/X}`). The runtime compiles each distinct (text, options) once (bounded
+cache); a pattern without `* ? [ (` is matched as a string (no regex).
+
+Semantics, all as bash 5.2: `?`, `*` and a bracket match any character including a newline, and a match
+ends at `\z` (never before a trailing newline); a bracket follows POSIX (`]` first is a member, `[!]]`,
+`[\d]` is the letter `d`, a reversed range `[z-a]` matches nothing, an unknown class `[[:foo:]]` matches
+nothing, `[=c=]` and `[.c.]`/`[.name.]` are the character); classes follow the locale (C.UTF-8: Unicode
+categories, `é` is alpha and `ẞ` upper; C/POSIX: bytes and ASCII classes); nocase folds characters,
+ranges and members but never a class (`[[:lower:]]b` does not match `Ab`). Extglob `@ ? * + !` is exact,
+negation included; `#`/`%` try every prefix / suffix length and keep the shortest or longest whole match
+(`${v##@(a|ab)}` on `abc` is `c`, not the regex's first arm). `${v/p/r}` takes the leftmost start and the
+longest match there; `//` after an empty match copies one character and never matches at the end
+(`${v//*([0-9])/X}` on `123x` is `XXx`); an empty pattern changes nothing except that `/#` prefixes and
+`/%` appends. The replacement is a bash template, never .NET substitution syntax: `&` is the match, `\&` a
+literal `&`, `\\` a backslash; a quoted part (`"&"`) is literal and an unquoted variable's value is
+template text (`r='&'; ${v/b/$r}` is the match); with `shopt -u patsub_replacement` every `&` is literal.
+`^`/`,` test only the first character, `^^`/`,,` every character, each against the WHOLE pattern
+(`${v^^ab}` changes nothing).
+
+Guard: `Core.Tests/PatternCompilerGuardTests` fails on any other glob-to-regex translation or hand
+matcher in the emitter or runtime, and on emitted `-creplace` / `-like` / `[regex]'…'`. Behaviour:
+`BashPatternTests` (engine), `Differential.Tests/PatternContextDifferentialTests` (one pattern through every
+context, bash oracle).
+
+Known divergence (bash 5.2.21): in the `/` operators only, bash never matches a negated bracket whose first
+member is `]` (`v=x; ${v/[!]]/X}` is `x`, while `${v#[!]]}` is empty and `[[ x == [!]] ]]` is true); ps-bash
+matches it as in every other context.
 
 ### `[[ … =~ … ]]` and `BASH_REMATCH`
 
