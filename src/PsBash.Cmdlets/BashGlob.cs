@@ -198,6 +198,26 @@ internal static class BashGlob
         return list;
     }
 
+    /// <summary>
+    /// Windows: the pattern's leading literal directory, when spelled <c>/c/...</c>, <c>/mnt/c/...</c> or <c>/tmp/...</c>,
+    /// becomes the directory it names (<see cref="PsBash.Core.RuntimePath.Map"/>, which a redirect, <c>cd</c> and
+    /// <c>cat</c> use), with <c>/</c> separators: the spelling the emitter gives the same LITERAL word. A prefix that
+    /// arrives by expansion (<c>S=/c/x; ls $S/*.txt</c>) only meets the mapping here. Only the part before the first
+    /// glob character or escape is mapped; a pattern without such a prefix is returned as is.
+    /// </summary>
+    private static string MapUnixRoot(string pattern)
+    {
+        if (pattern.Length < 2 || pattern[0] != '/') return pattern;
+        int meta = pattern.AsSpan().IndexOfAny("*?[\\");
+        int cut = pattern.LastIndexOf('/', meta < 0 ? pattern.Length - 1 : meta) + 1;   // the head ends with its `/`
+        string head = pattern[..cut];
+        string mapped = PsBash.Core.RuntimePath.Map(head);
+        if (string.Equals(mapped, head, StringComparison.Ordinal)) return pattern;
+        mapped = PsBash.Core.BashPath.ToShell(mapped);
+        if (!mapped.EndsWith('/')) mapped += "/";
+        return BashGlobText.Escape(mapped) + pattern[cut..];
+    }
+
     /// <summary>Index of the <c>]</c> closing the bracket expression opened at <paramref name="open"/>; -1 when unclosed.</summary>
     internal static int BracketEnd(string text, int open)
     {
@@ -219,6 +239,7 @@ internal static class BashGlob
 
     private static List<string> ExpandCore(string pattern, string cwd, bool dotGlob, bool globStar, bool noCase, bool skipDots)
     {
+        if (OperatingSystem.IsWindows()) pattern = MapUnixRoot(pattern);
         string prefix = "";
         string dir = cwd;
         string rest = pattern;

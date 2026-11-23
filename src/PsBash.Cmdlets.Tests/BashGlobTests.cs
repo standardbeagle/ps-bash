@@ -111,6 +111,36 @@ public class BashGlobTests : IClassFixture<SharedPwshFixture>, IDisposable
     }
 
     /// <summary>
+    /// REGRESSION: <c>S=/c/Users/me/x; ls $S/stk*.txt</c> listed nothing (the word stayed <c>/c/Users/me/x/stk*.txt</c>).
+    /// The emitter maps git-bash (<c>/c/</c>), WSL (<c>/mnt/c/</c>) and <c>/tmp</c> spellings only in LITERAL words; a
+    /// prefix that arrives by expansion reached the run-time glob as is, which looked for <c>C:\c\Users\...</c>. The
+    /// matches are spelled as the literal word's are (<c>echo /c/x/*</c> prints <c>C:/x/...</c>).
+    /// </summary>
+    [SkippableFact]
+    [Trait("Platform", "Windows")]
+    public void Expand_UnixDriveAndTmpPrefixes_ResolveAsALiteralWordDoes()
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "/c/ and /tmp are directories of their own elsewhere");
+        string native = _dir.Replace('\\', '/');                                   // C:/Users/.../psb-g-x
+        string gitBash = "/" + char.ToLowerInvariant(native[0]) + native[2..];      // /c/Users/.../psb-g-x
+
+        Assert.Equal(native + "/y.txt", Glob(gitBash + "/*.txt"));
+        Assert.Equal(native + "/sub/a1|" + native + "/sub/b1", Glob(gitBash + "/sub/?1"));
+        Assert.Equal(native + "/y.txt", Glob("/mnt" + gitBash + "/*.txt"));
+
+        // /tmp is $env:TEMP (RuntimePath), as `cat /tmp/x` and `> /tmp/x` take it.
+        string temp = Environment.GetEnvironmentVariable("TEMP")!;
+        string name = "psb-gt-" + Guid.NewGuid().ToString("N")[..8];
+        Directory.CreateDirectory(Path.Combine(temp, name));
+        try
+        {
+            File.WriteAllText(Path.Combine(temp, name, "stk1.txt"), "v\n");
+            Assert.Equal(temp.Replace('\\', '/').TrimEnd('/') + "/" + name + "/stk1.txt", Glob("/tmp/" + name + "/stk*.txt"));
+        }
+        finally { Directory.Delete(Path.Combine(temp, name), true); }
+    }
+
+    /// <summary>
     /// A literal backslash (quoted: <c>'C:\dir\'*.txt</c>, so <c>\\</c> in the pattern) is a separator on Windows: no
     /// file name can hold one. It was matched as a name character, so the word never expanded (and <c>ls</c> then
     /// listed bare names). The matches keep the separators as typed.
