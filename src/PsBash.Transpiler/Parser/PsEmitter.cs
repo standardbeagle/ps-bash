@@ -2969,6 +2969,12 @@ public static partial class PsEmitter
         // must append to the shell's array, not to one local to that block.
         : _lastpipeStageDepth > 0 && _functionDepth == 0 && _subshellDepth == 0
             ? "$global:" + name
+        // A subshell body's array write goes to the array its code reads, through the subshell's journal, which puts it
+        // back when the subshell ends: `$name = Set-BashElement $name ...` changes an associative or sparse array IN PLACE,
+        // so a copy in the subshell's scope still changed the shell's array. REGRESSION: `declare -A d=([a]=1); ( d[a]=9 );
+        // echo ${d[a]}` printed 9, and `sp=([3]=x); echo q | { read w; sp+=("$w"); }` left sp with two elements.
+        : _subshellDepth > 0 && _functionDepth == _subshellFunctionDepth
+            ? PsBuild.ArraySlot(name)
             : "$" + name;
 
     /// <summary>Above 0 while the last stage of a pipeline is emitted under <c>shopt -s lastpipe</c>.</summary>

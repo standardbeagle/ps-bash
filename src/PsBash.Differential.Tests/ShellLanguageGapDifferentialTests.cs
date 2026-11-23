@@ -543,6 +543,62 @@ public class ShellLanguageGapDifferentialTests
         """);
 
     /// <summary>
+    /// <c>unset</c> in a subshell unsets the subshell's view of an array, whoever wrote it (the subshell, a function it
+    /// called, the shell before it), and the array is back when the subshell ends; a function's local array unset in it
+    /// reads as unset until the function returns. REGRESSION (fleet review of the journal): the subshell's array is
+    /// written in place and <c>unset</c> removed only its caller's scope, so <c>( mapfile -t m &lt;&lt;&lt; x; unset m;
+    /// echo ${#m[@]} )</c> printed 1.
+    /// </summary>
+    [SkippableFact]
+    public Task Subshell_UnsetOfAnArray_UnsetsTheSubshellsView() => SameAsScript(
+        """
+        {
+        ( mapfile -t m <<< x; unset m; echo "1 n=${#m[@]}"; declare -p m >/dev/null 2>&1 || echo "1 gone" )
+        f() { arr=(x y); }; ( f; unset arr; echo "2 n=${#arr[@]}" ); echo "2 out n=${#arr[@]}"
+        ( m=(a b); unset m; echo "3 n=${#m[@]} [${m[*]}]"; m+=(z); echo "3 ${m[*]}" ); echo "3 out n=${#m[@]}"
+        m=(a b); ( unset m; echo "4 n=${#m[@]}"; m+=(z); echo "4 ${m[*]}" ); echo "4 out ${m[*]}"
+        g() { local -a p=(1 2); ( unset p; echo "5 n=${#p[@]}" ); echo "5 out ${p[*]}"; }; g
+        declare -A as=([k]=v); ( unset as; echo "6 n=${#as[@]}" ); echo "6 out ${as[k]}"
+        h() { local -a q=(l); unset q; echo "7 in n=${#q[@]}"; }; q=(g1 g2); ( h; echo "7 after ${q[*]}" ); h; echo "7 top ${q[*]}"
+        } 2>&1
+        """);
+
+    /// <summary>
+    /// An associative or sparse array a subshell changes in place (<c>m[k]=v</c>, <c>sp+=(y)</c>, directly or in a
+    /// function, in <c>( )</c>, <c>$( )</c> or a pipe stage) is as it was when the subshell ends: the journal keeps a copy
+    /// of such an array, not the array itself. REGRESSION: <c>declare -A mm=([a]=1); fa() { mm[b]=2; }; ( fa ); echo
+    /// ${#mm[@]}</c> printed 2.
+    /// </summary>
+    [SkippableFact]
+    public Task Subshell_AnArrayChangedInPlace_IsAsItWasAfterIt() => SameAsScript(
+        """
+        {
+        declare -A mm=([a]=1); fa() { mm[b]=2; }; ( fa ); echo "1 ${#mm[@]}"
+        sp=([5]=x); g() { sp+=(y); }; ( g ); echo "2 ${#sp[@]} ${!sp[*]}"
+        declare -A d2=([a]=1); ( d2[a]=9; d2[c]=3; echo "3 in ${d2[a]} ${#d2[@]}" ); echo "3 out ${d2[a]} ${#d2[@]}"
+        s2=([3]=x); ( s2[7]=y; echo "4 in ${!s2[*]}" ); echo "4 out ${!s2[*]}"
+        s3=([3]=x); echo q | { read -r w; s3+=("$w"); echo "5 in ${!s3[*]}"; }; echo "5 out ${!s3[*]}"
+        declare -A d3=([a]=1); fd() { d3[z]=1; }; x=$(fd; echo "${#d3[@]}"); echo "6 $x ${#d3[@]}"
+        } 2>&1
+        """);
+
+    /// <summary>
+    /// A local array of a function called inside a subshell ends with the call, and a caller's local array the subshell
+    /// writes is put back. REGRESSION (cost): each call's local was journaled, and each journal entry scanned the earlier
+    /// ones, so <c>seq N | while read n; do parse "$n"; done</c> with <c>parse() { local -a p; read -ra p; }</c> was
+    /// quadratic in N (bound: <c>Cmdlets.Tests/ArrayWriteJournalTests</c>).
+    /// </summary>
+    [SkippableFact]
+    public Task Subshell_FunctionLocalArrays_EndWithTheCall() => SameAsScript(
+        """
+        {
+        outer() { local -a p=(o); ( inner; echo "1 in ${p[*]}" ); echo "1 out ${p[*]}"; }; inner() { p+=(i); }; outer
+        outer2() { local -a p=(o); ( inner2; echo "2 in ${p[*]}" ); echo "2 out ${p[*]}"; }; inner2() { local -a p=(x); p+=(i); }; outer2
+        pz() { local -a p; IFS=, read -ra p <<< "$1"; echo "${p[1]} ${#p[@]}"; }; seq 3 | while read n; do pz "$n,x$n"; done; echo "3 [${p[*]}]"
+        } 2>&1
+        """);
+
+    /// <summary>
     /// <c>exec CMD</c> reads its own here-string / <c>&lt;</c> file when it has one, else the stdin it inherits (a pipe, a
     /// group's redirect, a subshell's), and ends only its subshell. REGRESSION: <c>echo q | exec cat</c> and
     /// <c>{ exec cat; } &lt; f</c> printed nothing; the fix's first cut displaced <c>( exec cat &lt;&lt;&lt; q )</c>'s own input.

@@ -80,7 +80,8 @@ public static class BashVariableLookup
     /// </summary>
     internal static ArrayWriteJournal OpenJournal(SessionState state)
     {
-        var journal = new ArrayWriteJournal();
+        var frames = VarFrameStack.Current;
+        var journal = new ArrayWriteJournal(frames, frames.Depth);
         state.PSVariable.Set(JournalVariable, journal);
         return journal;
     }
@@ -92,37 +93,87 @@ public static class BashVariableLookup
     /// A variable the subshell made global is removed then. REGRESSION: a scope walk per write (<c>Get-Variable -Scope
     /// $i</c> in a script, each miss an exception) made <c>seq 10000 | while read n; do add "$n"; done</c> with
     /// <c>add() { items+=("$1"); }</c> pay two scripts per append.
+    /// <para>Its size is the number of distinct outside arrays written, whatever the number of writes: a local array of a
+    /// function called inside the subshell is not noted (it ends with the call), and a name is looked up in O(1).
+    /// REGRESSION: every call's <c>local -a p; read -ra p</c> was noted (each call's local is a new variable) and each
+    /// note scanned all earlier ones, so <c>seq N | while read n; do parse "$n"; done</c> was quadratic in N.</para>
     /// </summary>
-    internal sealed class ArrayWriteJournal
+    internal sealed class ArrayWriteJournal(VarFrameStack frames, int depth)
     {
         private readonly List<(PSVariable Variable, object? Before, string? Made)> _writes = [];
+
+        // The entries of each name (PowerShell variable names ignore case): almost always one.
+        private readonly Dictionary<string, List<int>> _byName = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The variables noted so far (each is put back once).</summary>
+        internal int Count => _writes.Count;
 
         /// <summary>
         /// A write to <paramref name="variable"/> follows; <paramref name="made"/> is its name when this write made it
         /// global. Only the first write to a variable counts. A function's local is a new <see cref="PSVariable"/> per
-        /// lookup, so one is known by its name and the value it holds (every array write stores a new array).
+        /// lookup, so one is known by its name and the value it holds (every array write stores a new array). The value
+        /// kept is a copy when the write may change it in place (an associative or sparse array: <c>m[k]=v</c>,
+        /// <c>sp+=(x)</c>), else the subshell's write would be kept too.
         /// </summary>
         public void Note(PSVariable variable, string? made)
         {
+            string name = variable.Name;
+            // A local array of a function the subshell called: it ends with that call, inside the subshell.
+            if (made is null && frames.InnermostLocalArrayDepth(name) > depth) return;
             object? now = variable.Value;
-            foreach (var (seen, _, _) in _writes)
-                if (ReferenceEquals(seen, variable)
-                    || now is not null && ReferenceEquals(seen.Value, now) && string.Equals(seen.Name, variable.Name, StringComparison.OrdinalIgnoreCase))
-                    return;
-            _writes.Add((variable, now, made));
+            if (_byName.TryGetValue(name, out var entries))
+            {
+                foreach (int i in entries)
+                {
+                    PSVariable seen = _writes[i].Variable;
+                    if (ReferenceEquals(seen, variable) || now is not null && ReferenceEquals(seen.Value, now)) return;
+                }
+            }
+            else _byName[name] = entries = new List<int>(1);
+            entries.Add(_writes.Count);
+            object? raw = now is PSObject wrapped ? wrapped.BaseObject : now;
+            _writes.Add((variable, raw is IDictionary ? BashShellState.CloneMutable(raw) : now, made));
         }
 
-        /// <summary>The subshell ended: every variable it wrote holds what it held before, newest first.</summary>
-        public void Undo(SessionState state)
+        /// <summary>
+        /// The subshell ended: every variable it wrote holds what it held before, newest first. Each is put back on its
+        /// own, so one that cannot be (made read-only meanwhile) leaves the others, and the rest of the restore, done.
+        /// </summary>
+        public void Undo(SessionState? state)
         {
             for (int i = _writes.Count - 1; i >= 0; i--)
             {
                 var (variable, before, made) = _writes[i];
-                if (made is not null) state.PSVariable.Remove("global:" + made);
-                else variable.Value = before;
+                try
+                {
+                    if (made is not null) state?.PSVariable.Remove("global:" + made);
+                    else variable.Value = before;
+                }
+                catch (Exception e) when (e is SessionStateException or InvalidOperationException or ArgumentException)
+                {
+                    // That variable keeps the subshell's value; the others are still put back.
+                }
             }
             _writes.Clear();
+            _byName.Clear();
         }
+    }
+
+    /// <summary>
+    /// <c>unset NAME</c>, after the builtin removed the variable from its caller's scope: when the array NAME held is
+    /// still the one seen (it lives further out: the shell's global, a calling function's local the caller's scope does
+    /// not own, an array a subshell wrote in place), that variable is emptied, so NAME reads as unset as bash's does. In
+    /// a subshell its journal puts the array back when the subshell ends. REGRESSION: <c>( mapfile -t m &lt;&lt;&lt; x;
+    /// unset m; echo ${#m[@]} )</c> printed 1, since the subshell's array is written in place (the journal) and the
+    /// builtin removed only its caller's scope.
+    /// </summary>
+    public static void UnsetSurvivingArray(SessionState state, string name, object? before)
+    {
+        if (before is null || ArrayVariable(state, name) is not { } survivor || !Writable(survivor)) return;
+        object? held = survivor.Value is PSObject wrapped ? wrapped.BaseObject : survivor.Value;
+        if (!ReferenceEquals(held, before)) return;
+        Journal(state)?.Note(survivor, made: null);
+        survivor.Value = null;
     }
 
     /// <summary>
@@ -186,6 +237,9 @@ public static class BashVariableLookup
     public static string? AssignThroughNameref(SessionState state, string name, string? value, bool append)
     {
         value ??= "";
+        // The subscript-error mark describes THIS write only: one left by an earlier write whose emitted code does not
+        // take it (`${r:=w}`) must not make a later failure (`q=1bad`) end the shell.
+        BashArrayElement.TakeSubscriptError();
         ViewNameref(state, name);
         if (BashShellState.WriteTarget(name, value, out bool invalid) is not { } target)
             return invalid ? "`" + value + "': not a valid identifier" : null;

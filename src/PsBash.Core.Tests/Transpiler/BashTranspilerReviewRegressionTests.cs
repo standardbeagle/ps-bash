@@ -436,13 +436,24 @@ public class BashTranspilerReviewRegressionTests
 
     [Theory]
     [InlineData("f() { local st=(a); st+=(b); }; f", "$st = Add-BashArray ($st ?? ${env:st}) @(")]
-    [InlineData("f() { ( st+=(b) ); }; f", "$st = Add-BashArray ($st ?? ${env:st}) @(")]
     public void Transpile_LocalOrSubshellArrayWrite_StaysLocal(string bash, string expected)
     {
         var ps = BashTranspiler.Transpile(bash);
         Assert.Contains(expected, ps);
         Assert.DoesNotContain("$global:st", ps);
     }
+
+    // Oracle: a subshell's array writes end with it - `declare -A d=([a]=1); ( d[a]=9 ); echo ${d[a]}` prints 1. The body
+    // writes the array its code reads through the slot, which the subshell's journal puts back (copying an associative
+    // or sparse array first). REGRESSION: it wrote `$d = Set-BashElement $d ...`, a variable of the subshell's scope, but
+    // Set-BashElement had already changed the shell's table in place, so 9 survived the subshell.
+    [Theory]
+    [InlineData("declare -A d=([a]=1); ( d[a]=9 )", "$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'd'); $__psbSlot.Value = Set-BashElement ($__psbSlot.Value)")]
+    [InlineData("sp=([3]=x); echo q | { read -r w; sp+=(\"$w\"); }", "$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'sp'); $__psbSlot.Value = Add-BashArray (")]
+    [InlineData("f() { ( st+=(b) ); }; f", "$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'st'); $__psbSlot.Value = Add-BashArray (")]
+    [InlineData("( a=(x y) )", "$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a'); $__psbSlot.Value = @(")]
+    public void Transpile_SubshellArrayWrite_GoesThroughTheJournaledSlot(string bash, string expected)
+        => Assert.Contains(expected, BashTranspiler.Transpile(bash));
 
     // Oracle: bash ignores -r on a nameref - `typeset -n -r ref=x; ref=v` still assigns through it.
     [Fact]

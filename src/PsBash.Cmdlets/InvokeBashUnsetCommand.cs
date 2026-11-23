@@ -246,6 +246,7 @@ public sealed class InvokeBashUnsetCommand : BashCmdlet
                 // observable contract — the variable disappears for the
                 // caller).
                 // Bash: with neither -f nor -v, a name that is no variable at all unsets the function of that name.
+                object? arrayBefore = BashVariableLookup.ArrayHolder(SessionState, store);
                 InvokeCommand.InvokeScript(
                     "param($n, $explicitVar, $fn) $isVar = (Get-Variable -Name $n -Scope 1 -ErrorAction SilentlyContinue) -or (Test-Path ('Env:\\' + $n)); " +
                     "Remove-Variable -Name $n -Scope 1 -ErrorAction SilentlyContinue; " +
@@ -253,6 +254,8 @@ public sealed class InvokeBashUnsetCommand : BashCmdlet
                     "elseif (-not $isVar -and -not $explicitVar -and -not $fn.Contains('[')) { Remove-Item -Path ('Function:\\' + $fn) -Force -ErrorAction SilentlyContinue }",
                     // `declare c; unset c`: a declared name is a variable even with no value yet (no function is unset).
                     store, explicitVar || BashShellState.HasAttributes(store), name);
+                // An array further out than the caller's scope (a subshell's array is written in place) is unset too.
+                BashVariableLookup.UnsetSurvivingArray(SessionState, store, arrayBefore);
                 // SHELL has a startup value even when the environment lacks it (PsBuild maps a read of it to
                 // BashRuntime.DefaultShell); once unset it reads as unset, as in bash.
                 if (name == "SHELL") SessionState.PSVariable.Set("global:__BashShellUnset", true);

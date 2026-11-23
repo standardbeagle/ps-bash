@@ -1826,10 +1826,14 @@ public static class PsBuild
     /// <summary>
     /// <c>${name=word}</c> / <c>${name:=word}</c>'s assignment where <paramref name="name"/> is a nameref whose target is
     /// known only at run time: the value goes to the target (or names it, while there is none), and is the expansion.
+    /// A target <c>a[1/0]</c> is bash's subscript expansion error, as for <see cref="AssignThroughNameref"/>: the line is
+    /// dropped and <c>bash -c</c> ends. REGRESSION: the error mark was never taken here, so it outlived the expansion and a
+    /// later, unrelated failure (<c>declare -n q; q=1bad</c>) ended the shell.
     /// </summary>
     public static string AssignDefaultThroughNameref(string name, string valueExpr)
         => "$($__psbV = [string](" + valueExpr + "); if ($__psbNr = [PsBash.Cmdlets.BashVariableLookup]::AssignThroughNameref($ExecutionContext.SessionState, "
-           + SingleQuote(name) + ", $__psbV, $false)) { " + ShellDiagnosticLine("$__psbNr") + " }; $__psbV)";
+           + SingleQuote(name) + ", $__psbV, $false)) { " + ShellDiagnosticLine("$__psbNr") + "; "
+           + "if ([PsBash.Cmdlets.BashArrayElement]::TakeSubscriptError()) { " + SetStatus(1) + "; " + UsageDiscardMark + " } }; $__psbV)";
 
     /// <summary>
     /// <c>${!name}</c> where <paramref name="name"/> is a nameref whose target is known only at run time: the name of the

@@ -396,6 +396,18 @@ public class PsBuildTests
         Assert.True(PsBuild.CanDiscardLine(ps));
     }
 
+    // Oracle: `declare -n r; r='a[1/0]'; : ${r:=x}; echo no` reports "1/0: division by 0" and ends `bash -c`, as the
+    // assignment form does. REGRESSION: the default form never took the subscript-error mark, so it outlived the
+    // expansion and a later `q=1bad` (an assignment error, which `-c` survives) ended the shell.
+    [Fact]
+    public void AssignDefaultThroughNameref_TakesTheSubscriptError()
+    {
+        string ps = PsBuild.AssignDefaultThroughNameref("r", "'x'");
+        Assert.Contains("if ([PsBash.Cmdlets.BashArrayElement]::TakeSubscriptError()) { " + PsBuild.SetStatus(1) + "; " + PsBuild.UsageDiscardMark + " }", ps);
+        Assert.EndsWith("$__psbV)", ps);
+        Assert.True(PsBuild.CanDiscardLine(ps));
+    }
+
     // The scalar is an expression the emitter picks (PsEmitter.ScalarValueOf): a run-time nameref's is its target's.
     [Fact]
     public void ArrayAppendBase_OfARunTimeNameref_FallsBackToTheTargetsScalar()

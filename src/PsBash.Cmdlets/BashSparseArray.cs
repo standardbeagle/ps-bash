@@ -15,6 +15,14 @@ public sealed class BashSparseArray : IDictionary
 
     public BashSparseArray() { }
 
+    /// <summary>A copy with the same subscripts and values (a write to one leaves the other as it was).</summary>
+    public BashSparseArray Copy()
+    {
+        var copy = new BashSparseArray();
+        foreach (var kv in _items) copy._items[kv.Key] = kv.Value;
+        return copy;
+    }
+
     public static BashSparseArray FromList(IEnumerable? items)
     {
         var sparse = new BashSparseArray();

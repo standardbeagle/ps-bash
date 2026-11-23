@@ -544,6 +544,7 @@ public static class BashShellState
             object[] a => a.Clone(),
             Hashtable h => h.Clone(),   // shallow, keeps the table's key comparer (and BashAssoc's type)
             Dictionary<string, string> sd => new Dictionary<string, string>(sd, sd.Comparer),   // the alias table
+            BashSparseArray sp => sp.Copy(),   // keeps its holes (a Hashtable copy is no indexed array)
             IDictionary d => new Hashtable(d),
             List<string> ls => new List<string>(ls),   // the history list keeps its type (InvokeBashHistoryCommand.Entries)
             ArrayList l => new ArrayList(l),

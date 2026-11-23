@@ -187,6 +187,15 @@ public sealed class VarFrameStack
         return false;
     }
 
+    /// <summary>The depth of the innermost active function holding <paramref name="name"/> as a local array, else -1.</summary>
+    public int InnermostLocalArrayDepth(string name)
+    {
+        int depth = -1;
+        foreach (var held in _localArrays)
+            if (held.Depth > depth && string.Equals(held.Name, name, StringComparison.OrdinalIgnoreCase)) depth = held.Depth;
+        return depth;
+    }
+
     /// <summary>The declare attributes (<see cref="BashShellState.MarkAttribute"/>) each function's locals hid, put back at its return.</summary>
     private readonly List<(int Depth, string Name, string? Attrs, bool Readonly, string? Nameref)> _localAttrs = new();
 
