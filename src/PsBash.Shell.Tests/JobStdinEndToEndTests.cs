@@ -21,6 +21,9 @@ public class JobStdinEndToEndTests
     // A program that exits at once without reading stdin, and one that runs about a second without reading it.
     private static readonly string Quick = OperatingSystem.IsWindows() ? "hostname.exe >/dev/null" : "/bin/true";
     private static readonly string Short = OperatingSystem.IsWindows() ? "ping.exe -n 2 127.0.0.1 >/dev/null" : "/bin/sleep 1";
+    // A program that runs a minute (nohup's own redirect takes its output), and one that exits with status 3.
+    private static readonly string Long = OperatingSystem.IsWindows() ? "ping.exe -n 60 127.0.0.1" : "/bin/sleep 60";
+    private static readonly string ExitThree = OperatingSystem.IsWindows() ? "cmd.exe /c 'exit 3'" : "/bin/sh -c 'exit 3'";
 
     // These are races (a program's pipe set up and put back beside the shell's reads): each script runs its case this
     // many times in one shell, and every run must be right.
@@ -97,12 +100,31 @@ public class JobStdinEndToEndTests
         => Assert.Equal(Expected("x"), await RunAsync(Repeat($"echo x | {{ {{ cd /; {Reader}; }} & wait; }}"), null));
 
     // REGRESSION (gap 2): `nohup prog &` read /dev/null (bash: in, as GNU nohup leaves a stdin that is not a terminal).
-    // The child is awaited by its output file: `wait` does not wait for a nohup child here (a separate gap).
+    // `wait` waits for the nohup child: it is a job of the shell, as in bash.
     [SkippableFact]
     public async Task Nohup_InTheBackground_ReadsTheCompoundsStdin()
         => Assert.Equal(Expected("in"), await RunAsync(
-            "cd \"$(mktemp -d)\"; " + Repeat(
-                $"echo in | {{ nohup {Reader} > o 2>/dev/null & for i in $(seq 100); do [ -s o ] && break; sleep 0.1; done; }}; cat o; rm -f o"), null));
+            "cd \"$(mktemp -d)\"; " + Repeat($"echo in | {{ nohup {Reader} > o 2>/dev/null & wait; }}; cat o; rm -f o"), null));
+
+    // REGRESSION: `nohup cmd &` set $! but never entered the job table, so `wait` returned at once (status 0), `jobs -p`
+    // listed nothing and `kill %1` / `wait %1` said "no such job". bash: same, st=3, st=143, st=3.
+    [SkippableFact]
+    public async Task NohupChild_IsAJobOfTheShell()
+        => Assert.Equal("same\nst=3\nst=143\nst=3", await RunAsync(
+            $"nohup {Long} > /dev/null & [ \"$(jobs -p)\" = \"$!\" ] && echo same; kill %1; wait; "
+            + $"nohup {ExitThree} > /dev/null & wait %1; echo \"st=$?\"; "
+            + $"nohup {Long} > /dev/null & kill %1; wait $!; echo \"st=$?\"; "
+            + $"nohup {ExitThree} > /dev/null & wait -n; echo \"st=$?\"", null));
+
+    // The shell neither waits for a nohup child at its end nor ends it: the launcher returns while the child runs on
+    // (bash: started, at once). The bound is half the child's life, so a shell that waited for it fails.
+    [SkippableFact]
+    public async Task NohupChild_StillRunningAtTheEnd_DoesNotHoldTheShell()
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        Assert.Equal("started", await RunAsync($"nohup {Long} > /dev/null & echo started", null));
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(30), $"the shell waited {clock.Elapsed} for its nohup child");
+    }
 
     // A foreground nohup in a compound reads the compound's stdin too, and waits for its program (bash: in).
     [SkippableFact]

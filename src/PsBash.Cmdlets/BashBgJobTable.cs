@@ -8,6 +8,9 @@ namespace PsBash.Cmdlets;
 /// A shell's background-job table, as the module's own functions see it (<c>$script:BashBgJobs</c>: <c>jobs</c>,
 /// <c>wait</c>, <c>kill %N</c>, <c>fg</c>, all through <c>Find-BashBgJob</c>, docs/specs/background-jobs.md section 8),
 /// plus what a launch needs from the module: its path (for the job runspaces), its process-job launcher and its reaper.
+/// <para>Every job enters the table through <see cref="Enter"/> (its job number, then the list), and <c>$!</c> is set by
+/// the launch that started it: <see cref="LaunchInProcess"/>, <see cref="AddProcessJob"/> (<c>nohup CMD &amp;</c>), or the
+/// module's <c>Start-BashBgJob</c> for a job in a host of its own. Guard: <c>JobTableEntryGuardTests</c>.</para>
 /// PsBash.psm1 creates one per runspace as it loads and keeps it in the global <see cref="VariableName"/>, where
 /// <c>Invoke-BashBackground</c> (<see cref="InvokeBashBackgroundCommand"/>) finds it.
 /// <para>The in-process launch (<see cref="LaunchInProcess"/>) is C#, start to end: it used to be about 4 ms of psm1
@@ -87,8 +90,7 @@ public sealed class BashBgJobTable
         var ps = BashJobRunspaces.NewJob(cmdlet.SessionState, body, vars, status, isolated, ModulePath);
         int id = _nextId++;
         var job = NewRecord(id, ps, status, live: mux is not null, text);
-        job.Properties.Add(new PSNoteProperty("JobNumber", NextJobNumber(Jobs)));
-        Jobs.Add(job);
+        Enter(job);
         object started;
         try
         {
@@ -104,6 +106,45 @@ public sealed class BashBgJobTable
         }
         job.Properties["AsyncResult"].Value = started;
         cmdlet.SessionState.PSVariable.Set("global:BashBgLastPid", id);
+    }
+
+    /// <summary>
+    /// A child process already running as a job of this shell (<c>nohup CMD &amp;</c>, <see cref="DetachedJob"/>): it enters
+    /// the table as bash's does, so <c>wait</c>, <c>jobs</c>, <c>kill %N</c> and <c>wait -n</c> see it, and its OS pid is
+    /// <c>$!</c>. The record is a process job's (<c>Start-BashBgProcessJob</c>): the job itself is its PowerShell and its
+    /// Status, plus <c>Detached</c>, which tells <c>kill</c> to send a signal rather than stop it and the shell's teardown
+    /// to leave it running.
+    /// </summary>
+    internal void AddProcessJob(PSCmdlet cmdlet, DetachedJob process, string? text)
+    {
+        var job = new PSObject();
+        job.Properties.Add(new PSNoteProperty("Id", process.Pid));
+        job.Properties.Add(new PSNoteProperty("PowerShell", process));
+        job.Properties.Add(new PSNoteProperty("AsyncResult", process.AsyncResult));
+        job.Properties.Add(new PSNoteProperty("Done", false));
+        job.Properties.Add(new PSNoteProperty("Status", process));
+        job.Properties.Add(new PSNoteProperty("ExitCode", null));
+        job.Properties.Add(new PSNoteProperty("Raw", true));
+        job.Properties.Add(new PSNoteProperty("Live", false));
+        job.Properties.Add(new PSNoteProperty("Text", text));
+        job.Properties.Add(new PSNoteProperty("Detached", true));
+        job.Properties.Add(new PSCodeProperty("HasExited", typeof(BashBgJobTable).GetMethod(nameof(HasExited))!));
+        job.Methods.Add(new PSCodeMethod("Kill", typeof(BashBgJobTable).GetMethod(nameof(Kill))!));
+        Enter(job);
+        cmdlet.SessionState.PSVariable.Set("global:BashBgLastPid", process.Pid);
+    }
+
+    /// <summary>
+    /// THE way a job enters the table: it gets bash's job number (<see cref="NextJobNumber"/>, the N of <c>%N</c>) and
+    /// joins the list. The module's <c>Start-BashBgJob</c> calls it too, before it starts the job.
+    /// </summary>
+    public void Enter(PSObject job)
+    {
+        ArgumentNullException.ThrowIfNull(job);
+        int number = NextJobNumber(Jobs);
+        if (job.Properties["JobNumber"] is { } slot) slot.Value = number;
+        else job.Properties.Add(new PSNoteProperty("JobNumber", number));
+        Jobs.Add(job);
     }
 
     /// <summary>
@@ -147,11 +188,18 @@ public sealed class BashBgJobTable
         return Unwrap(instance.Properties["AsyncResult"]?.Value) is IAsyncResult { IsCompleted: true };
     }
 
-    /// <summary>The record's Kill(): stop its pipeline and mark it done.</summary>
+    /// <summary>The record's Kill(): stop its pipeline (a <c>nohup</c> child: SIGTERM) and mark it done.</summary>
     public static void Kill(PSObject instance)
     {
         ArgumentNullException.ThrowIfNull(instance);
-        try { (Unwrap(instance.Properties["PowerShell"]?.Value) as PowerShell)?.Stop(); }
+        try
+        {
+            switch (Unwrap(instance.Properties["PowerShell"]?.Value))
+            {
+                case PowerShell ps: ps.Stop(); break;
+                case DetachedJob process: process.Stop(); break;
+            }
+        }
         catch (Exception) { }
         if (instance.Properties["Done"] is { } done) done.Value = true;
     }

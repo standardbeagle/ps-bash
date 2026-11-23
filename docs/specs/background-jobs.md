@@ -393,6 +393,13 @@ foreground command for CPU. That is the thing to fix, and the executor model mus
 | Pipeline stages with side effects (`{ x=1; } \| cat`) | out of scope here; fix with `ShellStateScope` per stage (separate task) |
 | `Remove-BashBgState` / pool teardown in `SdkRunspace` | replaced by `JobRegistry.OnConnectionEnd(policy)` per §6.2 |
 
+**Invariant: a job enters the table one way.** `BashBgJobTable.Enter` gives it its job number and adds it; the launch
+that registered it sets `$!`: `BashBgJobTable.LaunchInProcess` (an in-process job), psm1 `Start-BashBgJob` (a job in a
+host of its own, via `$script:BashBgJobTable.Enter`) and `BashBgJobTable.AddProcessJob` (a `nohup CMD &` child, a
+`DetachedJob` record with `Detached`). A `nohup` child is a job as in bash: `wait`, `jobs`, `kill %N`, `wait -n` see it;
+`kill` sends it the signal and `wait` collects its real status; the shell's teardown leaves it running. `nohup` once set
+`$!` itself and entered nothing, so `wait` returned at once. Guard: `Core.Tests/JobTableEntryGuardTests`.
+
 **Invariant: a jobspec names a job through one resolver.** `%N`, `%%`/`%+`/`%`, `%-` and a `$!` id map to a job-table
 entry only in psm1 `Find-BashBgJob` (`kill`, `wait`, `fg`). `%N` is the job's own number (`Get-BashJobNumber`: one past
 the highest in the table when `Start-BashBgJob` added it), not its position, so `fg %1` leaves the next job `%2`. A job

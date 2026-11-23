@@ -151,11 +151,20 @@ public static class DetachedProcess
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
 
-    /// <summary>A started detached process, held only to learn its status: <see cref="Wait"/> never kills it.</summary>
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool TerminateProcess(IntPtr process, uint exitCode);
+
+    /// <summary>
+    /// A started detached process, held to learn its status (<see cref="Wait"/>, <see cref="OnExit"/>) and to send it
+    /// a signal (<see cref="Signal"/>: <c>kill %N</c> on a <c>nohup CMD &amp;</c> job). Nothing here ends it on its own:
+    /// it was started not to die with this shell.
+    /// </summary>
     public sealed class DetachedChild : IDisposable
     {
+        private readonly object _gate = new();
         private readonly JobProcess? _unix;
         private IntPtr _process;
+        private RegisteredWaitHandle? _exitWait;
 
         internal DetachedChild(int pid, JobProcess? unix, IntPtr process) { Pid = pid; _unix = unix; _process = process; }
 
@@ -185,12 +194,67 @@ public static class DetachedProcess
             return null;
         }
 
+        /// <summary>
+        /// Calls <paramref name="exited"/> once, on a pool thread (or at once when the process has already exited), with
+        /// its status (128+N when signal N ended it). No thread waits meanwhile: POSIX continues from
+        /// <see cref="JobProcess.Exited"/>, Windows registers a wait on the process handle. Dispose only after the call.
+        /// </summary>
+        public void OnExit(Action<int> exited)
+        {
+            ArgumentNullException.ThrowIfNull(exited);
+            if (_unix is not null)
+            {
+                _unix.Exited.ContinueWith(t => exited(t.Result), CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                return;
+            }
+            lock (_gate)
+            {
+                if (_process == IntPtr.Zero) throw new ObjectDisposedException(nameof(DetachedChild));
+                _exitWait = ThreadPool.RegisterWaitForSingleObject(new ProcessWaitHandle(_process), (_, _) =>
+                {
+                    int code;
+                    lock (_gate) code = _process != IntPtr.Zero && GetExitCodeProcess(_process, out var raw) ? unchecked((int)raw) : 1;
+                    exited(code);
+                }, null, Timeout.Infinite, executeOnlyOnce: true);
+            }
+        }
+
+        /// <summary>
+        /// <c>kill -N</c>: send bash signal <paramref name="bashSignal"/>. POSIX: to the process group, through
+        /// <see cref="JobProcess.SendSignal"/> (the child itself ignores HUP: <c>trap '' HUP</c>). Windows has no
+        /// signals: HUP is ignored here, as nohup's child would, and anything else ends the process with status 128+N,
+        /// as a death by signal reads in bash. False once the process is gone or let go of.
+        /// </summary>
+        public bool Signal(int bashSignal)
+        {
+            lock (_gate)
+            {
+                if (_unix is not null) return _unix.SendSignal(bashSignal);
+                if (_process == IntPtr.Zero) return false;
+                if (bashSignal == PsBash.Core.Platform.OsSignals.SIGHUP) return WaitForSingleObject(_process, 0) != 0;
+                return TerminateProcess(_process, (uint)(128 + bashSignal));
+            }
+        }
+
         public void Dispose()
         {
-            _unix?.Dispose();
-            if (_process != IntPtr.Zero) { CloseHandle(_process); _process = IntPtr.Zero; }
+            lock (_gate)
+            {
+                _unix?.Dispose();
+                _exitWait?.Unregister(null);
+                _exitWait = null;
+                if (_process != IntPtr.Zero) { CloseHandle(_process); _process = IntPtr.Zero; }
+            }
         }
     }
+
+    /// <summary>A process handle to wait on; the <see cref="DetachedChild"/> owns (and closes) the handle.</summary>
+    private sealed class ProcessWaitHandle : WaitHandle
+    {
+        public ProcessWaitHandle(IntPtr process) => SafeWaitHandle = new Microsoft.Win32.SafeHandles.SafeWaitHandle(process, ownsHandle: false);
+    }
+
     private static DetachedChild StartWindows(string exe, IReadOnlyList<string> args, string cwd, string outPath, bool append, string? errPath, bool errAppend,
         IntPtr? stdin)
     {

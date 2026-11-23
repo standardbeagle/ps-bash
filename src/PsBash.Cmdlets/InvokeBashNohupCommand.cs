@@ -9,8 +9,10 @@ namespace PsBash.Cmdlets;
 /// The <c>nohup</c> builtin: runs a command immune to hangups, as GNU nohup does.
 /// <list type="bullet">
 /// <item><c>nohup CMD &amp;</c> (the emitter's <c>--psbash-bg</c>): CMD runs so it outlives this shell (see
-/// <see cref="DetachedProcess"/>) and nohup returns at once. The new process's real OS pid becomes <c>$!</c>, and none of
-/// this shell's pipes are inherited, so an agent waiting for EOF on the tool call's output does not hang.</item>
+/// <see cref="DetachedProcess"/>) and nohup returns at once. CMD is a job of this shell, as in bash: it enters the job
+/// table (<see cref="BashBgJobTable.AddProcessJob"/>, a <see cref="DetachedJob"/>), its real OS pid is <c>$!</c>, and
+/// <c>wait</c>, <c>jobs</c>, <c>kill %N</c> see it. None of this shell's pipes are inherited, so an agent waiting for EOF
+/// on the tool call's output does not hang, and the shell ending neither waits for CMD nor ends it.</item>
 /// <item>A foreground <c>nohup CMD</c> WAITS for CMD and its status is CMD's (<c>nohup ls /x &gt; o</c> is 2): it still
 /// runs detached when its output goes to a file (the caller's redirect, or <c>nohup.out</c> when stdout is a terminal), so
 /// the shell going away does not take it down.</item>
@@ -134,23 +136,22 @@ public sealed class InvokeBashNohupCommand : BashCmdlet
             FileSystemHelpers.WriteStderr(this, stdin is null
                 ? "nohup: ignoring input and appending output to 'nohup.out'"
                 : "nohup: appending output to 'nohup.out'");
-        DetachedProcess.DetachedChild? child = null;
         try
         {
-            child = DetachedProcess.SpawnChild(exe, exeArgs, cwd, outPath, append || defaultLog, errPath, errAppend, stdin?.ReadEnd);
+            var child = DetachedProcess.SpawnChild(exe, exeArgs, cwd, outPath, append || defaultLog, errPath, errAppend, stdin?.ReadEnd);
+            // The job owns the child and the shell's pipe from here: it lets go of both when CMD exits, whatever this
+            // shell does meanwhile (`nohup x &`, a stopped wait), so CMD keeps reading the pipe while it runs.
+            var job = new DetachedJob(child, stdin);
+            stdin = null;
             if (background)
             {
-                InvokeCommand.InvokeScript("param($p) $global:BashBgLastPid = $p", child.Pid);
+                // A job of this shell, as bash's `nohup CMD &` is: the one way into the job table, which sets $!.
+                BashBgJobTable.Of(SessionState)?.AddProcessJob(this, job, "nohup " + string.Join(' ', rest));
                 return;
             }
             // Foreground: nohup's status is CMD's. A stop (Ctrl+C) ends the wait, never CMD: it was started to survive.
-            if (child.Wait(_stop.Token) is int status)
-            {
-                FileSystemHelpers.SetLastExitCode(this, status);
-                child.Dispose();
-                child = null;
-            }
-            else FileSystemHelpers.SetLastExitCode(this, 130);
+            WaitHandle.WaitAny([job.AsyncResult.AsyncWaitHandle, _stop.Token.WaitHandle]);
+            FileSystemHelpers.SetLastExitCode(this, job.AsyncResult.IsCompleted ? job.Code : 130);
         }
         catch (Exception ex)
         {
@@ -160,29 +161,8 @@ public sealed class InvokeBashNohupCommand : BashCmdlet
         }
         finally
         {
-            // A child still running (`nohup x &`, a stopped wait) keeps the shell's pipe until it exits.
-            if (child is not null && stdin is not null) HoldUntilExit(child, stdin);
-            else
-            {
-                child?.Dispose();
-                stdin?.Dispose();
-            }
+            stdin?.Dispose(); // CMD never started
         }
-    }
-
-    /// <summary>Let go of <paramref name="stdin"/> (the shell takes back what CMD left) once <paramref name="child"/> exits.</summary>
-    private static void HoldUntilExit(DetachedProcess.DetachedChild child, PipeHandoff.Lease stdin)
-    {
-        new Thread(() =>
-        {
-            try { child.Wait(CancellationToken.None); }
-            finally
-            {
-                child.Dispose();
-                stdin.Dispose();
-            }
-        })
-        { IsBackground = true, Name = "ps-bash nohup stdin hold" }.Start();
     }
 
     /// <summary>

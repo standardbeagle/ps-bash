@@ -3109,7 +3109,8 @@ function Complete-BashBgJob {
     if ($Job.Done) { return }
     $ps = $Job.PowerShell
     # The signal the job sent itself, recorded by its wrapper: status 128+N, and `wait` reports it (Write-BashBgSignalReport).
-    $selfSignal = if ($Job.Status -is [System.Collections.IDictionary]) { $Job.Status.Signal } else { $null }
+    # A nohup child (Detached): the signal a `kill` sent that ended it (PsBash.Cmdlets.DetachedJob.Signal).
+    $selfSignal = if ($Job.Status -is [System.Collections.IDictionary] -or $Job.PSObject.Properties['Detached']) { $Job.Status.Signal } else { $null }
     if ($selfSignal) { $Job | Add-Member -NotePropertyName Signal -NotePropertyValue ([int]$selfSignal) -Force }
     try {
         $out = $ps.EndInvoke($Job.AsyncResult)
@@ -3202,6 +3203,9 @@ function Stop-BashBgJob {
     if ($null -eq $job) { return $false }
     # SIGCONT / SIGWINCH do not end a job; a finished job is a zombie that kill still finds.
     if ($Probe -or $Signal -in 18, 28 -or $job.Done -or $job.AsyncResult.IsCompleted) { return $true }
+    # A nohup child (`nohup cmd &`, PsBash.Cmdlets.DetachedJob) is a process that may catch or ignore the signal (it
+    # ignores HUP): it is sent the signal, and `wait` collects its real status, as bash's does.
+    if ($job.PSObject.Properties['Detached']) { [void]$job.PowerShell.Send($Signal); return $true }
     $job.ExitCode = 128 + $Signal
     # wait reports a job a signal ended (Write-BashBgSignalReport).
     $job | Add-Member -NotePropertyName Signal -NotePropertyValue $Signal -Force
@@ -3265,7 +3269,8 @@ function Complete-BashBgJobsAtExit {
         they finished.
     #>
     param([int]$GraceMs = 1000)
-    $jobs = @($script:BashBgJobs | Where-Object { -not $_.Done })
+    # A nohup child still running is not waited for: it was started to outlive the shell (its output is in its file).
+    $jobs = @($script:BashBgJobs | Where-Object { -not $_.Done -and -not ($_.PSObject.Properties['Detached'] -and -not $_.AsyncResult.IsCompleted) })
     if ($jobs.Count -eq 0) { return }
     $deadline = [Environment]::TickCount64 + $GraceMs
     foreach ($job in $jobs) {
@@ -3291,7 +3296,8 @@ function Remove-BashBgState {
     #>
     $had = $script:BashBgJobs.Count -gt 0 -or $null -ne $global:BashBgLastPid
     foreach ($job in @($script:BashBgJobs)) {
-        try { if (-not $job.AsyncResult.IsCompleted) { $job.PowerShell.Stop() } } catch { }
+        # A nohup child (Detached) is forgotten, never stopped: it was started to outlive the shell.
+        try { if (-not $job.AsyncResult.IsCompleted -and -not $job.PSObject.Properties['Detached']) { $job.PowerShell.Stop() } } catch { }
         try { $job.PowerShell.Dispose() } catch { }
         $job.Done = $true
     }
@@ -3384,7 +3390,7 @@ function Start-BashBgJob {
     .SYNOPSIS
         The one place the module starts a background job (`cmd &`): a job in a host process of its own
         (Start-BashBgProcessJob; an in-process job is started in C#, PsBash.Cmdlets.BashBgJobTable.LaunchInProcess, the same
-        way). Registers the record ($BgJob) in the job table, then runs $StartJob (BashJobProcess::Start) as the LAST act,
+        way, and a `nohup cmd &` child enters through BashBgJobTable.AddProcessJob). Registers the record ($BgJob) in the job table, then runs $StartJob (BashJobProcess::Start) as the LAST act,
         keeping its result with property sets only. Once the job runs, the launcher's way back to the next command must be work-free
         (docs/specs/background-jobs.md section 12.4): on Windows every script->.NET method call (the table's .Add) is
         reported to AMSI under PowerShell's process-wide lock, slow when Defender is loaded, while the job's way to its
@@ -3393,11 +3399,9 @@ function Start-BashBgJob {
         Guard: BackgroundJobLaunchGuardTests (nothing but property and variable sets after the start).
     #>
     param([Parameter(Mandatory)]$BgJob, [Parameter(Mandatory)][scriptblock]$StartJob, [switch]$Process)
-    # bash's job number: one past the highest in the table (Get-BashJobNumber, Find-BashBgJob's %N).
-    $__bgNumber = 1
-    foreach ($__bgOther in $script:BashBgJobs) { $__n = Get-BashJobNumber $__bgOther @($script:BashBgJobs); if ($__n -ge $__bgNumber) { $__bgNumber = $__n + 1 } }
-    $BgJob.JobNumber = $__bgNumber
-    $script:BashBgJobs.Add($BgJob)
+    # The table's one way in (PsBash.Cmdlets.BashBgJobTable.Enter): bash's job number, one past the highest in the
+    # table (Get-BashJobNumber, Find-BashBgJob's %N), then the list. Guard: JobTableEntryGuardTests.
+    $script:BashBgJobTable.Enter($BgJob)
     try { $__bgStarted = & $StartJob }
     catch {
         # A refused start (PSBASH_JOBS_MAX) is reported and the script goes on, as when the start was a plain
@@ -3420,7 +3424,8 @@ function Start-BashBgJob {
 
 # The job table Invoke-BashBackground (a cmdlet) launches into: this module's list, path, process-job launcher and
 # reaper, one per runspace. A re-import replaces it with the new module's.
-$global:__psbashBgJobTable = [PsBash.Cmdlets.BashBgJobTable]::new($script:BashBgJobs, $script:BashBgModulePath, ${function:Start-BashBgProcessJob}, ${function:Remove-BashBgFinished})
+$script:BashBgJobTable = [PsBash.Cmdlets.BashBgJobTable]::new($script:BashBgJobs, $script:BashBgModulePath, ${function:Start-BashBgProcessJob}, ${function:Remove-BashBgFinished})
+$global:__psbashBgJobTable = $script:BashBgJobTable
 
 function Invoke-BashWait {
     <#

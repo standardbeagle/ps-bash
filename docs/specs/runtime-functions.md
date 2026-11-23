@@ -473,13 +473,18 @@ INVARIANT: `command`, `env`, `flock` and a foreground `nohup` run NAME ARGS thro
   run command`), 127; `flock`'s `failed to execute` is 69 (util-linux EX_UNAVAILABLE). Only `command`/`builtin` run a builtin the emitter
   implements (`cd`, `eval`).
 
-`nohup CMD &` (the emitter's `--psbash-bg`) detaches CMD and returns at once. A foreground `nohup CMD`
+`nohup CMD &` (the emitter's `--psbash-bg`) detaches CMD and returns at once. CMD is a JOB of the shell, as in
+bash: it enters the job table through `BashBgJobTable.AddProcessJob` (a `DetachedJob`; the table's one way in is
+`BashBgJobTable.Enter`, guard `JobTableEntryGuardTests`), its OS pid is `$!` and `jobs -p`, `wait` (bare, `$!`,
+`%N`, `-n`) collects its status, and `kill %N` / `kill $!` sends it the signal (POSIX: to its process group, HUP
+ignored by the child; Windows: HUP ignored, anything else ends it with 128+N). The shell neither waits for it at
+its end nor ends it (`Remove-BashBgState`, `Complete-BashBgJobsAtExit` skip a running `Detached` record). A foreground `nohup CMD`
 waits and returns CMD's status: with its output redirected (or stdout a terminal: `nohup.out`) CMD
 still runs detached and nohup waits for it; with stdout a pipe or a capture (`nohup CMD | cat`,
 `$(nohup CMD)`) CMD runs in place through the runner and no `nohup.out` is made, as GNU nohup leaves
 a non-terminal stdout alone.
 Its stdin, likewise, is the shell's when there is one (`echo in | { nohup cat > o & wait; }`
-writes `in`; a background `nohup` reads the compound's stdin, never the shell's own), held for the child until it exits
+writes `in`; a background `nohup` reads the compound's stdin, never the shell's own), held for the child (`DetachedJob`) until it exits
 (`stdio-messaging.md` §4.7); otherwise the null device. The message says `ignoring input` only for the null device.
 
 INVARIANT: the detached child's redirect files are opened as the shell would open them (`DetachedProcess`):

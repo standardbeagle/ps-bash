@@ -185,6 +185,23 @@ public sealed partial class JobProcess : IDisposable
     /// <summary>Kill the whole tree now.</summary>
     public bool KillTree() => Signal(JobSignal.Kill);
 
+    /// <summary>
+    /// <c>kill -N</c>: send bash signal <paramref name="bashSignal"/> (its Linux number, <see cref="PsBash.Core.Platform.OsSignals"/>)
+    /// to the job's process group, which may catch or ignore it, as a released job (<c>nohup</c>) still can be sent
+    /// one. Windows has no signals: KILL is a tree kill (137), anything else a tree termination (143). False when there
+    /// was nothing to signal.
+    /// </summary>
+    public bool SendSignal(int bashSignal)
+    {
+        lock (_gate)
+        {
+            if (_disposed) return false;
+            if (OperatingSystem.IsWindows())
+                return SignalWindows(bashSignal == PsBash.Core.Platform.OsSignals.SIGKILL ? JobSignal.Kill : JobSignal.Terminate);
+            return SendToGroup(PsBash.Core.Platform.OsSignals.ToNative(bashSignal));
+        }
+    }
+
     /// <summary>Freeze every process of the job (SIGSTOP on POSIX; <c>NtSuspendProcess</c> per member on Windows).</summary>
     public bool Suspend() => ChangeRunState(suspend: true);
 

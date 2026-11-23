@@ -72,15 +72,31 @@ public class JobStdinDifferentialTests
     }
 
     // REGRESSION (gap 2): `nohup prog &` read /dev/null, not the compound's stdin. GNU nohup leaves a stdin that is not a
-    // terminal alone. The background child is awaited by its output file: ps-bash's `wait` does not wait for a nohup
-    // child (it is no job of the shell's; a separate gap).
+    // terminal alone. `wait` waits for the nohup child: it is a job of the shell (NohupChild_IsAJobOfTheShell).
     [SkippableFact] public Task Nohup_ReadsTheCompoundsStdin()
     {
         Skip.If(OperatingSystem.IsWindows(), "the programs are named by their Unix path");
         return AssertOracle.EqualAsync("""
-            echo in | { nohup /usr/bin/cat > o.txt & for i in $(seq 100); do [ -s o.txt ] && break; sleep 0.1; done; }; /usr/bin/cat o.txt
+            echo in | { nohup /usr/bin/cat > o.txt & wait; }; /usr/bin/cat o.txt
             echo in2 | nohup /usr/bin/cat > o2.txt; /usr/bin/cat o2.txt
             echo in3 | { nohup /usr/bin/cat > o3.txt; read r; echo "r=$r"; }; /usr/bin/cat o3.txt
+            """ + "\n");
+    }
+
+    // REGRESSION: `nohup cmd &` set $! but never entered the job table: `wait` returned at once with status 0, `jobs -p`
+    // listed nothing, `kill %1` and `wait %1` said "no such job", and `wait -n` had nothing to wait for (127).
+    [SkippableFact] public Task NohupChild_IsAJobOfTheShell()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "the programs are named by their Unix path");
+        return AssertOracle.EqualAsync("""
+            nohup /usr/bin/sleep 0.3 > /dev/null & jobs -p > jp.txt; [ "$(/usr/bin/cat jp.txt)" = "$!" ] && echo same; wait $!; echo "st=$?"
+            nohup /usr/bin/sleep 0.3 > /dev/null & wait %1; echo "st=$?"
+            nohup /bin/sh -c 'exit 3' > /dev/null & wait $!; echo "st=$?"
+            nohup /bin/sh -c 'exit 4' > /dev/null & wait -n; echo "st=$?"
+            nohup /usr/bin/sleep 5 > /dev/null & kill %1; wait %1; echo "st=$?"
+            nohup /usr/bin/sleep 5 > /dev/null & kill $!; wait; echo "st=$?"
+            nohup /usr/bin/sleep 5 > /dev/null & /usr/bin/sleep 0.3; kill -HUP $!; /usr/bin/sleep 0.2; kill -0 $! && echo alive; kill $!; wait $!; echo "st=$?"
+            echo in | { nohup /bin/sh -c '/usr/bin/sleep 0.2; /usr/bin/cat' > o.txt & wait; }; /usr/bin/cat o.txt
             """ + "\n");
     }
 }

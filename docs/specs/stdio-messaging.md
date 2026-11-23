@@ -303,8 +303,8 @@ the call, only in the foreground and one at a time (`SetStdHandle` / `dup2(fd, 0
 | Process | How it gets the read end | Lease released |
 |---|---|---|
 | a job in a host process of its own (§12.6 of `background-jobs.md`) | `BackgroundJobStdin.ForProcess` takes it; `BashJobProcess.Start` offers it to the running job host (`PipeHandoff`), whose first line is `PsBuild.AdoptJobStdin`: `$global:__BashStdIn = [BackgroundJobStdin]::Adopt(token)` | when the job ends, BEFORE its handle completes, so the unread rest is the shell's again when `wait` returns |
-| `nohup prog &` | `BackgroundJobStdin.ForProcess`; the spawn's fd 0 (`DetachedProcess.SpawnChild(..., stdin)`) | when the child exits (a waiter thread) |
-| foreground `nohup prog` (detached form) | `HoldFor(SharedStdin.Get)` | after the wait |
+| `nohup prog &` | `BackgroundJobStdin.ForProcess`; the spawn's fd 0 (`DetachedProcess.SpawnChild(..., stdin)`) | when the child exits (`DetachedJob`: an exit callback, no waiting thread), BEFORE the job reports done, so `wait` returns with the rest the shell's |
+| foreground `nohup prog` (detached form) | `HoldFor(SharedStdin.Get)` | when the child exits (`DetachedJob`; a stopped wait leaves it held) |
 
 `PipeHandoff` (`Transpiler/Platform/PipeHandoff.cs`) is the only way a pipe goes into a process already running:
 Windows `DuplicateHandle` into the receiver (inheritable there, token `w:<handle>`); Linux the receiver opens
