@@ -3134,6 +3134,34 @@ public class PsEmitterTests
         Assert.DoesNotContain($"'{expected}'", result);
     }
 
+    // `u=; [[ 'a{1,2}}' =~ ^${u:-a\{1,2\}}\}$ ]]` is true in bash: the operand word the expansion takes keeps its own
+    // quoting (an escaped character matches literally), while the variable's value is regex text. Which arm is taken is
+    // known only at run time, so the operand arm is built as =~ word text and BashPatternMatch.EreExpansion tells them apart.
+    [Theory]
+    [InlineData("[[ $a =~ ^${u:-a\\{1,2\\}}\\}$ ]]", "EreQuote('{')")]
+    [InlineData("[[ $a =~ ^${u-a\\.b}$ ]]", "EreQuote('.')")]
+    [InlineData("[[ $a =~ ^${u:+x'.'}$ ]]", "EreQuote('.')")]
+    [InlineData("[[ $a =~ ^${u+\"a.b\"}$ ]]", "EreQuote([string](")]
+    [InlineData("[[ $a =~ ^${u:-${w:-a\\.}}$ ]]", "EreQuote('.')")]
+    public void Transpile_RegexRhsDefaultOperand_KeepsItsQuoting(string bash, string quotedPart)
+    {
+        var result = PsEmitter.Transpile(bash);
+        Assert.Contains("[PsBash.Cmdlets.BashPatternMatch]::EreExpansion(", result);
+        Assert.Contains("[PsBash.Cmdlets.EreOperandText]::new(", result);
+        Assert.Contains(quotedPart, result);
+    }
+
+    // `${u:=a\.b}` yields the variable's new value (a.b, quote-removed), which is regex text like any value; `$v` inside an
+    // operand is regex text too.
+    [Fact]
+    public void Transpile_RegexRhsAssignDefault_IsTheValue()
+    {
+        var result = PsEmitter.Transpile("[[ $a =~ ^${u:=a\\.b}$ ]]");
+        Assert.DoesNotContain("EreOperandText", result);
+        Assert.Contains("::EreRaw([string](", result);
+        Assert.Contains("[PsBash.Cmdlets.BashPatternMatch]::EreRaw([string]($env:v))", PsEmitter.Transpile("[[ $a =~ ^${u:-$v}$ ]]"));
+    }
+
     [Fact]
     public void Transpile_ExtendedRegexRhs_MixedLiteralAndVar_StaysQuoted()
     {

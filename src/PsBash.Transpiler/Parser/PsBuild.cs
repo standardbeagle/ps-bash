@@ -286,6 +286,17 @@ public static class PsBuild
     public static string EreUnquoted(string expr) => "[PsBash.Cmdlets.BashPatternMatch]::EreRaw(" + expr + ")";
 
     /// <summary>
+    /// An unquoted <c>${u:-w}</c> <c>${u-w}</c> <c>${u:+w}</c> <c>${u+w}</c> in the <c>=~</c> word: <paramref name="expr"/>
+    /// is the expansion, whose operand arm is an <see cref="EreOperand"/>. At run time the arm the expansion took decides:
+    /// the variable's value is regex text, the operand keeps its own quoting (<c>u=; [[ 'a{1}' =~ ^${u:-a\{1\}}$ ]]</c>).
+    /// </summary>
+    public static string EreExpansion(string expr) => "[PsBash.Cmdlets.BashPatternMatch]::EreExpansion(" + expr + ")";
+
+    /// <summary>The operand arm of an <see cref="EreExpansion"/>: <paramref name="ereWord"/> is its word built by
+    /// <see cref="EreWord"/> (quoted parts literal, unquoted text and expansions regex text).</summary>
+    public static string EreOperand(string ereWord) => "[PsBash.Cmdlets.EreOperandText]::new(" + ereWord + ")";
+
+    /// <summary>
     /// Escape <paramref name="value"/> for placement INSIDE a PowerShell double-quoted
     /// string (returns the inner text, no surrounding quotes): a backtick goes before every
     /// backtick (PowerShell's escape char), <c>$</c> (starts variable expansion) and

@@ -11,15 +11,23 @@ internal sealed class EreBudgetException() : Exception("REG_ESPACE");
 /// <item>Groups: glibc's <c>sift_states_backward</c> (which nodes can still reach the match end, per position)
 /// and then its <c>set_regs</c>/<c>proceed_next_node</c>/<c>update_regs</c> walk, so every capture is the one
 /// glibc reports.</item>
-/// <item>Back-references: glibc's fail-stack search over (start, end) candidates, under the work budget.</item>
+/// <item>Back-references: one backward pass (a reference counting as any length) names the positions a match can
+/// start at; from each, leftmost first, an exact search over (node, position, referenced groups' spans), each state
+/// once, finds the ends; the states on a real path to the longest (glibc's sifted states) steer its fail-stack walk
+/// to the groups.</item>
 /// </list>
+/// Every loop is charged to the work budget and every allocation to the memory budget: past either, status 2.
 /// </summary>
 internal sealed class BashEreProgram
 {
-    // Work units (node visits) one match may spend: ~a second of CPU. Past it the test is status 2.
+    // Work units (node visits, characters compared, words allocated) one match may spend: ~a second of CPU.
     internal const long MaxWork = 200_000_000;
-    // The group walk keeps one bit per (node, position) of the match: 32 MB.
+    // One bit per (node, position): 32 MB.
     internal const long MaxViabilityWords = 1L << 22;
+    // Memory one match may hold (bitsets, search states, the fail stack).
+    internal const long MaxMemoryBytes = 128L << 20;
+    // Distinct back-reference search states from one start.
+    internal const int MaxStates = 1 << 20;
 
     private readonly EreKind[] _kind;
     private readonly int[] _value;
@@ -33,6 +41,9 @@ internal sealed class BashEreProgram
     private readonly int[] _backrefs;
     private readonly int _init, _end, _nsub;
     private readonly int[] _subexpMap;
+    // Group index -> its slot among the groups some back-reference names (-1: none does).
+    private readonly int[] _refSlot;
+    private readonly int _nref;
     private readonly bool _hasBackref, _icase;
 
     internal string? Error { get; }
@@ -42,7 +53,7 @@ internal sealed class BashEreProgram
     {
         Error = error;
         _kind = [];
-        _value = _next = _predStart = _pred = _consuming = _backrefs = _subexpMap = [];
+        _value = _next = _predStart = _pred = _consuming = _backrefs = _subexpMap = _refSlot = [];
         _set = [];
         _opt = [];
         _edests = [];
@@ -100,6 +111,10 @@ internal sealed class BashEreProgram
         }
         _consuming = consuming.ToArray();
         _backrefs = backrefs.ToArray();
+        _refSlot = new int[nsub];
+        Array.Fill(_refSlot, -1);
+        foreach (int b in _backrefs)
+            if (_value[b] >= 0 && _value[b] < nsub && _refSlot[_value[b]] < 0) _refSlot[_value[b]] = _nref++;
         // Reverse epsilon edges (a back-reference counts as one: it can match the empty string).
         _predStart = new int[m + 1];
         for (int i = 0; i < m; i++) _predStart[i + 1] = _predStart[i] + predCount[i + 1];
@@ -121,21 +136,27 @@ internal sealed class BashEreProgram
     /// <summary>The code points of <paramref name="s"/> (a lone surrogate is one) and each one's UTF-16 offset.</summary>
     internal static int[] CodePoints(string s, out int[] offsets)
     {
-        var cps = new List<int>(s.Length);
-        var offs = new List<int>(s.Length + 1);
+        var cps = new int[s.Length];
+        var offs = new int[s.Length + 1];
+        int k = 0;
         for (int i = 0; i < s.Length; i++)
         {
-            offs.Add(i);
+            offs[k] = i;
             if (char.IsHighSurrogate(s[i]) && i + 1 < s.Length && char.IsLowSurrogate(s[i + 1]))
             {
-                cps.Add(char.ConvertToUtf32(s[i], s[i + 1]));
+                cps[k++] = char.ConvertToUtf32(s[i], s[i + 1]);
                 i++;
             }
-            else cps.Add(s[i]);
+            else cps[k++] = s[i];
         }
-        offs.Add(s.Length);
-        offsets = offs.ToArray();
-        return cps.ToArray();
+        offs[k] = s.Length;
+        if (k < s.Length)
+        {
+            Array.Resize(ref cps, k);
+            Array.Resize(ref offs, k + 1);
+        }
+        offsets = offs;
+        return cps;
     }
 
     internal BashEreResult Run(string subject)
@@ -169,13 +190,23 @@ internal sealed class BashEreProgram
         private readonly int _n = cps.Length;
         private readonly int _m = p._kind.Length;
         private readonly int _words = (p._kind.Length + 63) >> 6;
-        private long _work;
+        private long _work, _memory;
 
         private void Spend(long units)
         {
             _work += units;
             if (_work > MaxWork) throw new EreBudgetException();
         }
+
+        // Charge an allocation of `bytes` (work: one unit per 8 bytes) that stays held until Release.
+        private void Hold(long bytes)
+        {
+            _memory += bytes;
+            if (_memory > MaxMemoryBytes) throw new EreBudgetException();
+            Spend(1 + (bytes >> 3));
+        }
+
+        private void Release(long bytes) => _memory -= bytes;
 
         private bool IsWordAt(int i) => i >= 0 && i < _n && BashEreClasses.IsWord(cps[i]);
 
@@ -194,6 +225,10 @@ internal sealed class BashEreProgram
         {
             if (pos >= _n) return false;
             int c = cps[pos];
+            // An invalid byte (RawBytes' marker) is only ever itself: glibc's `.` and every bracket, negated ones
+            // included, refuse it (its single-byte bit is masked out in UTF-8, and it has no wide character).
+            if (c >= RawBytes.FirstMarker && c <= RawBytes.LastMarker)
+                return p._kind[node] == EreKind.Char && c == p._value[node];
             return p._kind[node] switch
             {
                 EreKind.Char => c == p._value[node],
@@ -214,7 +249,7 @@ internal sealed class BashEreProgram
             regs[0] = s;
             regs[1] = e;
             if (p._nsub == 0) return regs;
-            var v = Viability(s, e, backrefs: false);
+            var v = Viability(s, e);
             return Walk(s, e, v, failStack: false);
         }
 
@@ -292,16 +327,15 @@ internal sealed class BashEreProgram
         private void Mark(ulong[] v, int row, int node) => v[row * _words + (node >> 6)] |= 1UL << (node & 63);
 
         /// <summary>
-        /// Row <c>pos - s</c>: the nodes from which, at <c>pos</c>, the match can still end exactly at
-        /// <paramref name="e"/>. With back-references a reference counts as matching any length (the fail-stack
-        /// walk checks the text).
+        /// glibc's sifted states for a regex without back-references: row <c>pos - s</c> holds the nodes from which,
+        /// at <c>pos</c>, the match can still end exactly at <paramref name="e"/>.
         /// </summary>
-        private ulong[] Viability(int s, int e, bool backrefs)
+        private ulong[] Viability(int s, int e)
         {
             int rows = e - s + 1;
             if ((long)rows * _words > MaxViabilityWords) throw new EreBudgetException();
+            Hold(8L * rows * _words);
             var v = new ulong[rows * _words];
-            var after = backrefs ? new ulong[_words] : null;
             var queue = new int[_m];
             for (int pos = e; pos >= s; pos--)
             {
@@ -321,35 +355,29 @@ internal sealed class BashEreProgram
                             queue[qn++] = node;
                         }
                 }
-                if (after != null)
-                    foreach (int b in p._backrefs)
-                    {
-                        int nx = p._next[b];
-                        if ((after[nx >> 6] >> (nx & 63) & 1) != 0 && !Test(v, row, b))
-                        {
-                            Mark(v, row, b);
-                            queue[qn++] = b;
-                        }
-                    }
-                for (int qi = 0; qi < qn; qi++)
-                {
-                    int d = queue[qi];
-                    for (int k = p._predStart[d]; k < p._predStart[d + 1]; k++)
-                    {
-                        int pr = p._pred[k];
-                        if (Test(v, row, pr)) continue;
-                        var kind = p._kind[pr];
-                        if (kind == EreKind.Anchor && !Holds(p._value[pr], pos)) continue;
-                        if (kind == EreKind.BackRef && !backrefs) continue;
-                        Mark(v, row, pr);
-                        queue[qn++] = pr;
-                    }
-                }
-                if (after != null)
-                    for (int w = 0; w < _words; w++) after[w] |= v[row * _words + w];
-                Spend(_m);
+                Close(v, row, pos, queue, qn, backrefs: false);
+                Spend(_m + _words);
             }
             return v;
+        }
+
+        // Backward epsilon closure of the `qn` queued nodes of a row (each edge once: O(edges)).
+        private void Close(ulong[] v, int row, int pos, int[] queue, int qn, bool backrefs)
+        {
+            for (int qi = 0; qi < qn; qi++)
+            {
+                int d = queue[qi];
+                for (int k = p._predStart[d]; k < p._predStart[d + 1]; k++)
+                {
+                    int pr = p._pred[k];
+                    if (Test(v, row, pr)) continue;
+                    var kind = p._kind[pr];
+                    if (kind == EreKind.Anchor && !Holds(p._value[pr], pos)) continue;
+                    if (kind == EreKind.BackRef && !backrefs) continue;
+                    Mark(v, row, pr);
+                    queue[qn++] = pr;
+                }
+            }
         }
 
         private sealed class ViaSet(int size)
@@ -393,6 +421,7 @@ internal sealed class BashEreProgram
             pm[0] = s;
             pm[1] = e;
             var prev = (int[])pm.Clone();
+            Spend(_m);
             var via = new ViaSet(_m);
             var fs = failStack ? new Stack<FailEntry>() : null;
             int cur = p._init, pos = s;
@@ -401,6 +430,8 @@ internal sealed class BashEreProgram
             {
                 if (fs == null || fs.Count == 0) return -1;
                 var ent = fs.Pop();
+                Release(EntryBytes(ent));
+                Spend(ent.Regs.Length + ent.Via.Length);
                 pos = ent.Pos;
                 Array.Copy(ent.Regs, pm, pm.Length);
                 Array.Copy(ent.Prev, prev, prev.Length);
@@ -422,17 +453,26 @@ internal sealed class BashEreProgram
                                 cur = Pop();
                                 break;
                             }
-                    if (cur < 0) return Finish(pm);
+                    if (cur < 0) return Done(Finish(pm));
                 }
                 cur = Proceed(ref pos, cur, pm, prev, via, fs, v, s, e);
                 if (cur < 0)
                 {
                     cur = Pop();
-                    if (cur < 0) return null;
+                    if (cur < 0) return Done(null);
                 }
             }
-            return Finish(pm);
+            return Done(Finish(pm));
+
+            int[]? Done(int[]? result)
+            {
+                if (fs != null)
+                    foreach (var ent in fs) Release(EntryBytes(ent));
+                return result;
+            }
         }
+
+        private static long EntryBytes(FailEntry ent) => 64 + 4L * (ent.Regs.Length + ent.Prev.Length + ent.Via.Length);
 
         private int[] Finish(int[] pm)
         {
@@ -492,7 +532,12 @@ internal sealed class BashEreProgram
                     }
                     // Avoid an endless loop like "(a*)*": take the second branch if the first was tried.
                     if (via.Contains(dest)) return cand;
-                    fs?.Push(new FailEntry(pos, cand, (int[])pm.Clone(), (int[])prev.Clone(), via.Snapshot()));
+                    if (fs != null)
+                    {
+                        var ent = new FailEntry(pos, cand, (int[])pm.Clone(), (int[])prev.Clone(), via.Snapshot());
+                        Hold(EntryBytes(ent));
+                        fs.Push(ent);
+                    }
                     break;
                 }
                 return dest;
@@ -509,6 +554,7 @@ internal sealed class BashEreProgram
                     if (naccepted != 0)
                     {
                         if (_n - pos < naccepted) return -1;
+                        Spend(naccepted);
                         for (int k = 0; k < naccepted; k++)
                             if (cps[so + k] != cps[pos + k]) return -1;
                     }
@@ -533,93 +579,284 @@ internal sealed class BashEreProgram
 
         // ---- back-references ----------------------------------------------------------------------------
 
+        private readonly record struct State(int Node, int Pos, int[] Regs);
+
+        private sealed class StateComparer : IEqualityComparer<State>
+        {
+            internal static readonly StateComparer Instance = new();
+
+            public bool Equals(State a, State b) =>
+                a.Node == b.Node && a.Pos == b.Pos &&
+                (ReferenceEquals(a.Regs, b.Regs) || a.Regs.AsSpan().SequenceEqual(b.Regs));
+
+            public int GetHashCode(State st)
+            {
+                var h = new HashCode();
+                h.Add(st.Node);
+                h.Add(st.Pos);
+                foreach (int r in st.Regs) h.Add(r);
+                return h.ToHashCode();
+            }
+        }
+
         /// <summary>
-        /// Leftmost start, longest end, checked exactly: for each start, the ends a reference-as-any-length NFA
-        /// can reach, longest first, each confirmed by glibc's fail-stack walk.
+        /// The exact search's states (node, position, spans of the referenced groups), each once, and its edges kept
+        /// reversed: which states lead to which. The states persist across starts.
+        /// </summary>
+        private sealed class StateGraph
+        {
+            internal readonly Dictionary<State, int> Index = new(StateComparer.Instance);
+            internal readonly List<State> States = [];
+            internal readonly List<bool> Expanded = [];
+            internal readonly List<int> FirstIn = [];   // per state: its first incoming edge, -1 none
+            internal readonly List<int> EdgeFrom = [];
+            internal readonly List<int> NextIn = [];    // per edge: the next incoming edge of the same state
+            internal readonly List<int> EndStates = [];
+        }
+
+        // What one state holds (its index entry, list slots, stack slot), and one edge.
+        private const long StateBytes = 96;
+        private const long EdgeBytes = 8;
+
+        /// <summary>
+        /// Leftmost start, longest end, checked exactly. <see cref="Live"/> names the starts a match is possible from
+        /// (a reference counting as any length); from each, leftmost first, <see cref="Ends"/> searches exactly, each
+        /// state once (the states persist across starts: none of an earlier start's reached the end, so the search is
+        /// bounded by the distinct states, not starts × states). Then, longest end first, the states on a real path
+        /// to that end (<see cref="ExactViability"/>, glibc's sifted states) steer glibc's fail-stack walk to the
+        /// groups.
         /// </summary>
         internal int[]? SearchWithBackrefs()
         {
+            var live = Live(out var starts, out bool full);
+            if (live == null) return null;
+            var prune = full ? live : null;
+            var graph = new StateGraph();
+            var stack = new Stack<int>();
+            Hold(_n + 1L);
+            var endMark = new bool[_n + 1];
+            var ends = new List<int>();
+            var unset = new int[2 * p._nref];
+            Array.Fill(unset, -1);
             for (int s = 0; s <= _n; s++)
             {
-                var ends = Reach(s);
-                if (ends == null) continue;
-                for (int e = _n; e >= s; e--)
+                if (starts[s >> 6] == 0)
                 {
-                    if (!ends[e]) continue;
-                    var v = Viability(s, e, backrefs: true);
-                    if (!Test(v, 0, p._init)) continue;
-                    var regs = Walk(s, e, v, failStack: true);
+                    Spend(1);
+                    s |= 63;
+                    continue;
+                }
+                if ((starts[s >> 6] >> (s & 63) & 1) == 0) continue;
+                Ends(s, prune, graph, stack, endMark, ends, unset);
+                if (ends.Count == 0) continue;
+                ends.Sort();
+                for (int k = ends.Count - 1; k >= 0; k--)
+                {
+                    int e = ends[k];
+                    long before = _memory;
+                    var v = ExactViability(s, e, graph);
+                    var regs = Test(v, 0, p._init) ? Walk(s, e, v, failStack: true) : null;
+                    Release(_memory - before);
                     if (regs != null) return regs;
                 }
+                // A real match the walk cannot retrace: its span, no groups.
+                var whole = new int[2 * (p._nsub + 1)];
+                Array.Fill(whole, -1);
+                whole[0] = s;
+                whole[1] = ends[^1];
+                return whole;
             }
             return null;
         }
 
-        // The positions where a match from s could end, a back-reference matching any length.
-        private bool[]? Reach(int s)
+        /// <summary>
+        /// One backward pass, a back-reference matching any length: row <c>pos</c> holds the nodes from which, at
+        /// <c>pos</c>, a match can still end somewhere. Bit <c>pos</c> of <paramref name="starts"/>: a match can
+        /// start there. All rows are kept when they fit (<paramref name="full"/>: the search prunes with them),
+        /// else two. Null: no start.
+        /// </summary>
+        private ulong[]? Live(out ulong[] starts, out bool full)
         {
-            var ends = new bool[_n + 1];
+            full = (_n + 1L) * _words <= MaxViabilityWords;
+            int rows = full ? _n + 1 : 2;
+            Hold(8L * rows * _words);
+            var v = new ulong[rows * _words];
+            int startWords = (_n >> 6) + 1;
+            Hold(8L * startWords);
+            starts = new ulong[startWords];
+            var after = new ulong[_words];
+            var queue = new int[_m];
             bool any = false;
-            var mark = new int[_m];
-            var sticky = new List<int>();
-            var stickyMark = new bool[_m];
-            var cur = new List<int>();
-            var nxt = new List<int>();
-            var stack = new Stack<int>();
-            int gen = 0;
-
-            void Close(List<int> list, int node, int pos)
+            for (int pos = _n; pos >= 0; pos--)
             {
-                stack.Push(node);
-                while (stack.Count > 0)
+                int row = full ? pos : pos & 1;
+                if (!full) Array.Clear(v, row * _words, _words);
+                int qn = 0;
+                Mark(v, row, p._end);
+                queue[qn++] = p._end;
+                if (pos < _n)
                 {
-                    int x = stack.Pop();
-                    if (mark[x] == gen) continue;
-                    mark[x] = gen;
-                    Spend(1);
-                    switch (p._kind[x])
+                    int nextRow = full ? pos + 1 : (pos + 1) & 1;
+                    foreach (int node in p._consuming)
+                        if (Accepts(node, pos) && Test(v, nextRow, p._next[node]))
+                        {
+                            Mark(v, row, node);
+                            queue[qn++] = node;
+                        }
+                }
+                foreach (int b in p._backrefs)
+                {
+                    int nx = p._next[b];
+                    if ((after[nx >> 6] >> (nx & 63) & 1) != 0 && !Test(v, row, b))
                     {
-                        case EreKind.End:
-                            ends[pos] = any = true;
-                            break;
-                        case EreKind.Anchor:
-                            if (Holds(p._value[x], pos)) stack.Push(p._edests[x][0]);
-                            break;
-                        case EreKind.BackRef:
-                            int nx = p._next[x];
-                            stack.Push(nx);
-                            if (!stickyMark[nx])
-                            {
-                                stickyMark[nx] = true;
-                                sticky.Add(nx);
-                            }
-                            break;
-                        case EreKind.Alt:
-                        case EreKind.Star:
-                        case EreKind.OpenSub:
-                        case EreKind.CloseSub:
-                            foreach (int d in p._edests[x]) stack.Push(d);
-                            break;
-                        default:
-                            list.Add(x);
-                            break;
+                        Mark(v, row, b);
+                        queue[qn++] = b;
                     }
+                }
+                Close(v, row, pos, queue, qn, backrefs: true);
+                for (int w = 0; w < _words; w++) after[w] |= v[row * _words + w];
+                if (Test(v, row, p._init))
+                {
+                    starts[pos >> 6] |= 1UL << (pos & 63);
+                    any = true;
+                }
+                Spend(_m + _words);
+            }
+            return any ? v : null;
+        }
+
+        /// <summary>
+        /// The ends of the matches from <paramref name="s"/>, exactly (a reference compares the text its group took),
+        /// into <paramref name="ends"/>; the states and edges into <paramref name="g"/>. Each state is expanded once,
+        /// and none outside <paramref name="live"/>.
+        /// </summary>
+        private void Ends(int s, ulong[]? live, StateGraph g, Stack<int> stack, bool[] endMark, List<int> ends,
+            int[] unset)
+        {
+            long regsBytes = 24 + 8L * p._nref;
+            stack.Push(Intern(new State(p._init, s, unset)));
+            while (stack.Count > 0)
+            {
+                int at = stack.Pop();
+                if (g.Expanded[at]) continue;
+                g.Expanded[at] = true;
+                Spend(1);
+                var st = g.States[at];
+                int x = st.Node, pos = st.Pos;
+                var regs = st.Regs;
+                switch (p._kind[x])
+                {
+                    case EreKind.End:
+                        g.EndStates.Add(at);
+                        if (!endMark[pos])
+                        {
+                            endMark[pos] = true;
+                            ends.Add(pos);
+                        }
+                        // Nothing ends later than the subject.
+                        if (pos == _n) stack.Clear();
+                        break;
+                    case EreKind.Anchor:
+                        if (Holds(p._value[x], pos)) Push(at, p._edests[x][0], pos, regs);
+                        break;
+                    case EreKind.Alt:
+                    case EreKind.Star:
+                        foreach (int d in p._edests[x]) Push(at, d, pos, regs);
+                        break;
+                    case EreKind.OpenSub:
+                    case EreKind.CloseSub:
+                        int slot = p._refSlot[p._value[x]];
+                        if (slot >= 0)
+                        {
+                            Hold(regsBytes);
+                            var copy = (int[])regs.Clone();
+                            if (p._kind[x] == EreKind.OpenSub)
+                            {
+                                copy[2 * slot] = pos;
+                                copy[2 * slot + 1] = -1;
+                            }
+                            else copy[2 * slot + 1] = pos;
+                            regs = copy;
+                        }
+                        Push(at, p._edests[x][0], pos, regs);
+                        break;
+                    case EreKind.BackRef:
+                        int r = p._refSlot[p._value[x]];
+                        int so = regs[2 * r], eo = regs[2 * r + 1];
+                        if (so < 0 || eo < so) break;
+                        int len = eo - so;
+                        if (len > _n - pos) break;
+                        Spend(len);
+                        if (!cps.AsSpan(so, len).SequenceEqual(cps.AsSpan(pos, len))) break;
+                        Push(at, p._next[x], pos + len, regs);
+                        break;
+                    default:
+                        if (Accepts(x, pos)) Push(at, p._next[x], pos + 1, regs);
+                        break;
                 }
             }
 
-            gen++;
-            Close(cur, p._init, s);
-            for (int pos = s; pos < _n; pos++)
+            void Push(int from, int node, int pos, int[] regs)
             {
-                if (cur.Count == 0 && sticky.Count == 0) break;
-                gen++;
-                nxt.Clear();
-                foreach (int node in cur)
-                    if (Accepts(node, pos)) Close(nxt, p._next[node], pos + 1);
-                for (int k = 0; k < sticky.Count; k++) Close(nxt, sticky[k], pos + 1);
-                (cur, nxt) = (nxt, cur);
+                if (live != null && !Test(live, pos, node)) return;
+                int to = Intern(new State(node, pos, regs));
+                Hold(EdgeBytes);
+                g.EdgeFrom.Add(from);
+                g.NextIn.Add(g.FirstIn[to]);
+                g.FirstIn[to] = g.EdgeFrom.Count - 1;
+                if (!g.Expanded[to]) stack.Push(to);
             }
-            return any ? ends : null;
+
+            int Intern(State st)
+            {
+                if (g.Index.TryGetValue(st, out int i)) return i;
+                if (g.States.Count >= MaxStates) throw new EreBudgetException();
+                Hold(StateBytes);
+                i = g.States.Count;
+                g.Index[st] = i;
+                g.States.Add(st);
+                g.Expanded.Add(false);
+                g.FirstIn.Add(-1);
+                return i;
+            }
+        }
+
+        /// <summary>
+        /// glibc's sifted states for the match [s, e): row <c>pos - s</c> holds the nodes of the states on a real path
+        /// from <paramref name="s"/> to the end at <paramref name="e"/> (backward over the search's edges), so the
+        /// walk never follows a reference-as-any-length route the text does not allow.
+        /// </summary>
+        private ulong[] ExactViability(int s, int e, StateGraph g)
+        {
+            int rows = e - s + 1;
+            if ((long)rows * _words > MaxViabilityWords) throw new EreBudgetException();
+            Hold(8L * rows * _words);
+            var v = new ulong[rows * _words];
+            int count = g.States.Count;
+            Hold(5L * count); // seen, and the queue at its largest
+            var seen = new bool[count];
+            var queue = new Queue<int>();
+            foreach (int at in g.EndStates)
+                if (g.States[at].Pos == e)
+                {
+                    seen[at] = true;
+                    queue.Enqueue(at);
+                }
+            while (queue.Count > 0)
+            {
+                int at = queue.Dequeue();
+                Spend(1);
+                var st = g.States[at];
+                if (st.Pos >= s && st.Pos <= e) Mark(v, st.Pos - s, st.Node);
+                for (int edge = g.FirstIn[at]; edge >= 0; edge = g.NextIn[edge])
+                {
+                    int from = g.EdgeFrom[edge];
+                    if (seen[from]) continue;
+                    seen[from] = true;
+                    queue.Enqueue(from);
+                }
+            }
+            return v;
         }
     }
 }

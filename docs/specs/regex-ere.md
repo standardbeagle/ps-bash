@@ -11,6 +11,12 @@ bash builds regcomp's text from the word with `quote_string_for_globbing(QGLOB_R
 1. **The word** (`PsEmitter.BuildEreWord` → `PsBuild.EreTest`). A quoted character (`'…'`, `"…"`, `$'…'`, an
    unquoted `\c`, a tilde's expansion) is marked with CTLESC (`BashPatternMatch.EreQuote`). Unquoted text and the
    value of an unquoted expansion (`re='a.b'; [[ $s =~ $re ]]`) stay regex text (`EreRaw` doubles a CTLESC in it).
+   The operand word that `${u:-w}`, `${u-w}`, `${u:+w}` or `${u+w}` takes keeps its own quoting: in
+   `u=; [[ 'a{1}' =~ ^${u:-a\{1\}}$ ]]` the braces match literally, while the value of `u`, when it is the one
+   used, is regex text. Which arm is taken is known only at run time. The emitter builds the operand arm as word
+   text (`PsEmitter.TryEmitEreOperand` → `PsBuild.EreOperand`, an `EreOperandText`), and
+   `BashPatternMatch.EreExpansion` uses it as is or marks a value like `EreRaw` does. `${u:=w}` is the new value, so
+   it is regex text.
 2. **`BashEre.WordToRegex`**. This is a port of pathexp.c. A marked ERE special (`. [ \ ( ) * + ? { | ^ $`) becomes
    `\c`, and any other marked character becomes itself. So the word `\d` is the regex `d`, `a"."c` is `a\.c`, and
    `\<` is `<`. A marked character inside `[…]` is plain. An unclosed `[` is rescanned as text.
@@ -29,6 +35,13 @@ bash builds regcomp's text from the word with `quote_string_for_globbing(QGLOB_R
      `scripts/ere-classes-gen.py` from an oracle dump. For example, `٣` is `alnum` but not `digit`, and `€` is
      `punct`. `[a-z]` is a code-point range. `[[=e=]]` is just `e`. A multi-character `[[.x.]]` or `[[=x=]]` is an
      error.
+   - **Brackets, hyphens and endpoints.** A `-` first or last is a member, `[--@]` is a range from `-`, and
+     `[a-c-e]` / `[a---z]` are REG_ERANGE. A collating symbol can be an endpoint (`[[.-.]-z]`). A multibyte
+     endpoint (`[α-ω]`, `[[.α.]-ω]`) is REG_ECOLLATE: C.UTF-8 has no collation rules.
+   - **An invalid byte** (`$'\xff'`, RawBytes' marker U+DC80–U+DCFF) is only ever itself in the subject. `.` and
+     every bracket refuse it, negated ones included (`[^a]`). In a bracket, `[[.\xff.]]` and `[[=\xff=]]` are valid
+     but add nothing, `[[:\xff:]]` is REG_ECTYPE, and as an endpoint it is its byte value: `[a-\xff]` is a..U+00FF
+     (so it matches `é`), and `[\xff-z]` is REG_ERANGE.
    - **icase.** Both sides are folded with glibc's `towupper`. An escaped ASCII pattern character is not folded, so
      under nocasematch `\d` matches neither `d` nor `D`. `[:upper:]` and `[:lower:]` become `[:alpha:]`.
    - Every REG_* error (BADRPT, EBRACE, BADBR, EPAREN, EBRACK, ERANGE, ECTYPE, ECOLLATE, ESUBREG, EESCAPE) is
@@ -55,12 +68,30 @@ intentional-differences.md). None of them can hang or crash the host.
 |---|---|---|
 | Nesting | 1000 groups deep | `NestingGuard` in `ParseSubExp` |
 | Tree size | 400,000 nodes | REG_ESPACE; glibc's own limit is `RE_DUP_MAX` = 32767 per `{n}` |
-| Matcher work | 200M steps | Applies per match |
-| Capture bitsets | 4M words | Applies per match |
+| Matcher work | 200M units | Per match. Every loop is charged: node visits, characters compared, words allocated |
+| Matcher memory | 128 MB | Per match. Every allocation is held against it: bitsets, search states, the fail stack |
+| Capture bitsets | 4M words (32 MB) | Per match |
+| Back-reference search states | 1M | Per match |
+| Anything else that throws | — | `BashEreCompiler.Compile` and `BashEre.Match` turn any exception except OutOfMemory into status 2 |
 
 Without back-references the matcher is O(n·m) in time, for subject length n and m NFA nodes. `^(a|aa)*$` and
-`(x+x+)+y` over thousands of characters take milliseconds. Back-references are NP-hard in general; their
-per-start search is bounded by the same work budget.
+`(x+x+)+y` over thousands of characters take milliseconds.
+
+With back-references (`BashEreProgram.SearchWithBackrefs`), three passes run:
+
+1. **`Live`**: one backward O(n·m) pass where a reference matches any length. It names the positions a match can
+   start from. When the subject has none, the answer is no match: `(x)\1` on 1 MB of `a` returns at once.
+2. **`Ends`**: from each candidate start, leftmost first, an exact search over states of (node, position, spans
+   of the referenced groups). A reference compares the text its group took. Each state is expanded once, the
+   states persist across starts, and the search is pruned by the `Live` rows. So it costs the number of distinct
+   states, not starts × ends × n. The ends it finds are real ends. (The old search trusted a reference-as-any-length
+   NFA for the span, so `(a*)*(x)\2` matched `xy`.)
+3. glibc's fail-stack walk (`set_regs`) gives the groups of the longest end.
+
+Back-references are NP-hard in general, and glibc is itself cubic on `(a*)\1$`, `^(a+)\1$` and `(a*)*b\1`. On
+4000 characters glibc takes 1–2 s and ps-bash is exact. On 20000 characters glibc takes about a minute, and ps-bash
+may answer status 2 when the budget runs out. A typical back-reference on a line of a few KB (`(word[0-9]+) .* \1`)
+takes milliseconds.
 
 Compiled programs are cached, 512 entries keyed by (regex, icase).
 
@@ -84,6 +115,10 @@ Two related commands are not POSIX ERE: `rg` (`InvokeBashRgCommand.cs`) uses Rus
 
 - `Core.Tests/Parser/BashEreTests`: the engine against oracle tables. It covers statuses, captures, errors, icase,
   classes, `WordToRegex`, and the bounds.
-- `Core.Tests/EreNoDotNetRegexGuardTests`: the source and the emitted text never reach .NET regex.
+- `Core.Tests/EreNoDotNetRegexGuardTests`: the source and the emitted text never reach .NET regex: not the type,
+  `[GeneratedRegex]`, PowerShell's `-match`/`-replace`/`-split`/`switch -regex`/`Select-String`/`[regex]`, nor a
+  runtime/pattern/builder helper that does (followed transitively, pattern producers like `TranslateBre` included).
+- `Core.Tests/Parser/BashEreTests.Match_BackReferenceBombs_AreBoundedInTimeAndMemory`: a wall-clock and an
+  allocation bound (`GC.GetAllocatedBytesForCurrentThread`) on the back-reference bombs.
 - `Core.Tests/Parser/PsEmitterTests` (`Transpile_*Regex*`): the emitted word shapes.
 - `Differential.Tests/RegexEreDifferentialTests`: compares bash with ps-bash end to end.
