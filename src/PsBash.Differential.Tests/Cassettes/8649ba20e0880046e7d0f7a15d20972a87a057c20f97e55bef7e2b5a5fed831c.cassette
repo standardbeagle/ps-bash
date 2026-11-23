@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 100
+stdout-length: 43
+stderr-length: 0
+==== SCRIPT ====
+for i in 1 2 3; do last=$i; echo "job $i"; done & wait; echo "shell i=${i-unset} last=${last-unset}"
+==== STDOUT ====
+job 1
+job 2
+job 3
+shell i=unset last=unset
+
+==== STDERR ====
+
