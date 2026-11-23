@@ -40,43 +40,27 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $publishDir = "src/PsBash.Shell/bin/Release/net10.0/win-x64/publish"
 $destDir = "$env:USERPROFILE\.local\bin"
-$managementClient = Join-Path $publishDir "ps-bash.exe"
 
-if (Test-Path $managementClient) {
-    Write-Host "Requesting running ps-bash host shutdown..." -ForegroundColor DarkGray
-    & $managementClient host shutdown --deadline-ms 5000
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "ps-bash host shutdown returned exit code $LASTEXITCODE; continuing with file replacement."
-    }
-}
-
-# `host shutdown` only retires the ONE daemon answering the canonical endpoint.
-# Stray ps-bash-host processes — orphans on isolated/per-invocation endpoints, or
-# OLD-BUILD daemons left over from a previous install — survive it, and a daemon
-# outlives its launcher by design. After a rebuild those leftovers POISON reuse:
-# a new-build launcher sees an old-build host, treats it as obsolete, and does the
-# slow retire-and-replace cycle on every -c (observed as 12-19s/call + exit-125
-# "connection forcibly closed"). Force-kill the remaining DAEMON hosts so the
-# freshly deployed build starts from a clean slate.
+# The daemon hosts of the build being replaced. They are retired AFTER the swap (below), each only once it runs no
+# command, so an agent's long build or test run finishes instead of dying with exit 125. REGRESSION: this script asked
+# the canonical host to shut down and then force-killed every other daemon host at once, busy or not.
 #
-# Only hosts running from $destDir, and never an --interactive host: an
-# interactive host IS a user's open terminal (it may even be the parent of the
-# shell running this script, or of an agent session), and killing it kills that
-# session. Dev-build hosts under the repo's src/*/bin belong to a test run that
-# may be in progress and are not this install's business either.
-$destHostPath = Join-Path "$env:USERPROFILE\.local\bin" 'ps-bash-host.exe'
-$strays = @(Get-CimInstance Win32_Process -Filter "Name='ps-bash-host.exe'" -ErrorAction SilentlyContinue |
+# A daemon left over from an old build would POISON reuse if left running (a new-build launcher retires it on every
+# -c), so each one is retired here rather than left to idle out. Not touched: --interactive hosts (a user's open
+# terminal; it may be the parent of this very script), private --launcher-pid hosts (each exits with its one command),
+# and dev-build hosts under the repo's src/*/bin (a test run's).
+$destHostPath = Join-Path $destDir 'ps-bash-host.exe'
+$oldHosts = @(Get-CimInstance Win32_Process -Filter "Name='ps-bash-host.exe'" -ErrorAction SilentlyContinue |
     Where-Object {
         $_.ExecutablePath -and
         [string]::Equals($_.ExecutablePath, $destHostPath, [StringComparison]::OrdinalIgnoreCase) -and
-        $_.CommandLine -notmatch '--interactive'
+        $_.CommandLine -notmatch '--interactive' -and
+        $_.CommandLine -notmatch '--launcher-pid'
     } |
-    ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
-if ($strays.Count -gt 0) {
-    Write-Host "Force-killing $($strays.Count) leftover ps-bash-host process(es) so the new build starts clean..." -ForegroundColor DarkGray
-    $strays | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 500
-}
+    ForEach-Object {
+        $endpoint = if ($_.CommandLine -match '--ipc-endpoint=(?:"([^"]+)"|(\S+))') { if ($Matches[1]) { $Matches[1] } else { $Matches[2] } }
+        [pscustomobject]@{ Pid = [int]$_.ProcessId; Endpoint = $endpoint }
+    })
 
 # NTFS trick: a locked file cannot be deleted or overwritten, but it CAN be
 # renamed — existing handles keep pointing at the old file by its file record.
@@ -143,6 +127,38 @@ Copy-Item (Join-Path $destDir 'ps-bash.exe') $bashShim -Force
 Remove-Item "$env:TEMP\ps-bash\module-*" -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host "Deployed ps-bash to $destDir\ps-bash.exe (agent shell alias: $bashShim)" -ForegroundColor Green
+
+# Drain the old build's daemon hosts (captured above): `host drain` claims each one's execution lease with a command of
+# its own and shuts it down only then, so the only command a shutdown can end is that claim. A busy host is retried
+# every second until it is idle, for up to PSBASH_INSTALL_DRAIN_MS (default 10 minutes). Meanwhile new-build launchers
+# spill past busy old hosts instead of killing them (HostRetire). Old hosts' files were renamed, not deleted, above,
+# so they keep running from the .old copies until they are retired.
+if ($oldHosts.Count -gt 0) {
+    $drainMs = if ($env:PSBASH_INSTALL_DRAIN_MS -match '^\d+$') { [int]$env:PSBASH_INSTALL_DRAIN_MS } else { 600000 }
+    $withEndpoint = @($oldHosts | Where-Object Endpoint)
+    $noEndpoint = @($oldHosts | Where-Object { -not $_.Endpoint })
+    foreach ($h in $noEndpoint) {
+        Write-Warning "ps-bash-host pid $($h.Pid) has no --ipc-endpoint on its command line; left running (a new-build launcher retires it once idle)."
+    }
+    $leftBusy = @()
+    if ($withEndpoint.Count -gt 0) {
+        Write-Host "Draining $($withEndpoint.Count) old ps-bash-host process(es): each is retired once its command finishes (up to $([int]($drainMs / 1000)) s)..." -ForegroundColor DarkGray
+        $drainArgs = @('host', 'drain', '--deadline-ms', "$drainMs") + @($withEndpoint | ForEach-Object { '--host'; "$($_.Pid)=$($_.Endpoint)" })
+        $drainOut = & (Join-Path $destDir 'ps-bash.exe') @drainArgs 2>&1
+        $drainOut | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+        $leftBusy = @($drainOut | ForEach-Object { if ("$_" -match '^(busy|unresponsive) pid=(\d+)') { [int]$Matches[2] } })
+    }
+    # Past the deadline: stop what is left, and say exactly what each was running (its child processes), since that
+    # command is being interrupted.
+    foreach ($hostPid in $leftBusy) {
+        $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$hostPid" -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.CommandLine })
+        $what = if ($children.Count -gt 0) { $children -join ' | ' } else { '(an in-process command; no child process)' }
+        Write-Warning "ps-bash-host pid $hostPid was still busy after $([int]($drainMs / 1000)) s; stopping it, which interrupts: $what"
+        Stop-Process -Id $hostPid -Force -ErrorAction SilentlyContinue
+    }
+    if ($leftBusy.Count -eq 0) { Write-Host "Drained every old ps-bash-host; no in-flight command was interrupted." -ForegroundColor DarkGray }
+}
 
 # ---------------------------------------------------------------------------
 # Module install to PSModulePath

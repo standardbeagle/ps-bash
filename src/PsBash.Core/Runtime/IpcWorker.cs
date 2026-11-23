@@ -398,10 +398,13 @@ public sealed class IpcWorker : IWorker
         {
             return; // a host a killed launcher started came up; nothing to spawn
         }
+        // An older build that still answers our health payload speaks our protocol (same frames, same BUSY).
+        bool speaksOurProtocol = false;
         if (state == HostHealthState.Healthy)
         {
             if (CurrentHostMatchesLauncher()) return;
             state = HostHealthState.Obsolete; // answered but wrong build/protocol
+            speaksOurProtocol = true;
         }
 
         // Classify what cleanup we are allowed to do BEFORE touching anything. The
@@ -413,7 +416,18 @@ public sealed class IpcWorker : IWorker
             throw new HostUnavailableException(
                 $"Cannot replace ps-bash-host at {_scheme}:{_endpoint} — {unsafeReason}.");
 
-        if (state == HostHealthState.Obsolete)
+        if (state == HostHealthState.Obsolete && speaksOurProtocol)
+        {
+            // Retire it only while it runs no one's command (HostRetire). A busy one is left to finish: our command
+            // is refused BUSY there and spills to another slot, and a later launcher retires it once it is idle.
+            // REGRESSION: after every install, the first launcher to reach each older-build slot host shut it down and
+            // killed it mid-command, ending another agent's long command with exit 125.
+            var outcome = await HostRetire.TryRetireIdleAsync(
+                NewTransport, HostProtocol.DefaultShutdownDeadlineMs, ct).ConfigureAwait(false);
+            if (outcome == HostRetire.Outcome.Busy) return;
+            await WaitForListenerGoneAsync(GetShutdownDeadline(), ct).ConfigureAwait(false);
+        }
+        else if (state == HostHealthState.Obsolete)
         {
             // The current host responded — give it a chance to drain and exit
             // cleanly before we touch the endpoint or spawn a replacement. Bound
@@ -529,6 +543,11 @@ public sealed class IpcWorker : IWorker
         catch (IOException) { /* old host or wedged — fall through to endpoint cleanup */ }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { /* deadline */ }
 
+        await WaitForListenerGoneAsync(deadline, ct).ConfigureAwait(false);
+    }
+
+    private async Task WaitForListenerGoneAsync(TimeSpan deadline, CancellationToken ct)
+    {
         // Wait briefly for the listener to actually disappear so the spawn
         // step has a chance to bind. Bounded by the same deadline so a wedged
         // host cannot stall the launcher indefinitely.

@@ -63,6 +63,37 @@ public class SdkWorkerEnvironmentTests : IAsyncLifetime
         return (exit, lines);
     }
 
+    // REGRESSION: $SECONDS counted from the warm runspace's load, not the shell's start: a host's runspace is warmed
+    // long before a command arrives, so `[ $SECONDS -ge 10 ]` was true ~2 s into a script. Each launcher command is a
+    // new shell; $SECONDS starts at 0 there.
+    [Fact]
+    public async Task Seconds_CountsFromTheShellsStart_NotTheRunspacesWarmUp()
+    {
+        var worker = _fixture.CreateWorker();
+        await RunAsync(worker, "$null", Block([]));   // warm, as a host's pool is
+        await Task.Delay(TimeSpan.FromSeconds(2.5));
+
+        var (exit, lines) = await RunAsync(worker, PsBash.Core.Transpiler.BashTranspiler.Transpile("echo $SECONDS")!, Block([]));
+
+        Assert.Equal(0, exit);
+        Assert.Equal("0", string.Concat(lines).Trim());
+    }
+
+    // `SECONDS=n` restarts the count from n, and assigning the same value again restarts it again.
+    [Fact]
+    public async Task Seconds_AssignmentRestartsTheCount()
+    {
+        var worker = _fixture.CreateWorker();
+        string script = "SECONDS=0; sleep 1.2; SECONDS=0; echo \"again=$SECONDS\"; SECONDS=10; sleep 1.2; echo \"ten=$SECONDS\"";
+
+        var (exit, lines) = await RunAsync(worker, PsBash.Core.Transpiler.BashTranspiler.Transpile(script)!, Block([]));
+
+        Assert.Equal(0, exit);
+        string text = string.Concat(lines);
+        Assert.Contains("again=0", text);
+        Assert.Matches("ten=1[12]", text);   // 1.2 s after SECONDS=10 (12 only on a stall past 0.8 s)
+    }
+
     // Executor slots replaced the "inside a host" marker: a ps-bash a command spawns is told the host is
     // busy and moves to another slot, so nothing marks the nesting in the environment.
     [Fact]

@@ -38,6 +38,38 @@ public sealed class SessionAnchorWatcherTests
             "a daemon whose session anchor is gone must exit within the grace, not the idle hour");
     }
 
+    // REGRESSION: these tests ran the watcher against made-up anchors and every run appended "session anchor 1:2
+    // gone" lines to the user's real ~/.psbash/host.log, the log read to diagnose live hosts. The suite logs to a
+    // file of its own (CanonicalTestEnvironment), and hosts it spawns inherit that.
+    [Fact]
+    public async Task AnchorGone_IsLoggedToTheSuitesLog_NotTheUsersHostLog()
+    {
+        string real = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".psbash", "host.log");
+        string? suiteLog = Environment.GetEnvironmentVariable("PSBASH_HOST_LOG");
+        Assert.False(string.IsNullOrEmpty(suiteLog), "the suite must route host logging away from the user's log");
+        Assert.NotEqual(Path.GetFullPath(real), Path.GetFullPath(suiteLog!), StringComparer.OrdinalIgnoreCase);
+
+        var anchor = new ProcessIdentity(Random.Shared.Next(1_000_000, int.MaxValue), DateTime.UtcNow.Ticks);
+        string marker = $"session anchor {anchor.ToArgumentValue()} gone";
+        using var cts = new CancellationTokenSource();
+        using var idle = new IdleShutdown(cts, TimeSpan.FromHours(1), _ => { });
+        await using (SessionAnchorWatcher.TryCreate(anchor, idle, cts,
+                         pollInterval: TimeSpan.FromMilliseconds(20), grace: TimeSpan.FromMilliseconds(50),
+                         isAnchorRunning: () => false, recordExitReason: _ => { }))
+        {
+            Assert.True(cts.Token.WaitHandle.WaitOne(TimeSpan.FromSeconds(5)));
+        }
+
+        Assert.Contains(marker, File.ReadAllText(suiteLog!));
+        Assert.DoesNotContain(marker, File.Exists(real) ? ReadShared(real) : "");
+    }
+
+    private static string ReadShared(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        return new StreamReader(stream).ReadToEnd();
+    }
+
     [Fact]
     public async Task AnchorAlive_HostKeepsServing()
     {
