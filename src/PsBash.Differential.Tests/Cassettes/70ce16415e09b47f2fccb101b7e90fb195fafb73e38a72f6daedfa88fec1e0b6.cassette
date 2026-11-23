@@ -1,0 +1,23 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 287
+stdout-length: 71
+stderr-length: 0
+==== SCRIPT ====
+t() { printf '%s rc=%s m=%s\n' "$1" "$2" "$(printf '%q,' "${BASH_REMATCH[@]}")"; }
+v() { local n=$1 s=$2 re=$3; [[ $s =~ $re ]]; t "$n" $?; }
+[[ é =~ ^[[:alpha:]]$ ]]; t e12 $?
+[[ ab =~ (?:a)b ]]; t e13 $?
+[[ ab =~ a(?=b) ]]; t e14 $?
+[[ ab =~ a(?b) ]]; t F17 $?
+[[ aB =~ ab ]]; t e17 $?
+==== STDOUT ====
+e12 rc=0 m=é,
+e13 rc=2 m=é,
+e14 rc=2 m=é,
+F17 rc=2 m=é,
+e17 rc=1 m='',
+
+==== STDERR ====
+

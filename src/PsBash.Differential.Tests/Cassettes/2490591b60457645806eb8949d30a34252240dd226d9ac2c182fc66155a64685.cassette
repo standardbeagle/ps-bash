@@ -1,0 +1,54 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1285
+stdout-length: 119
+stderr-length: 0
+==== SCRIPT ====
+trap ':' ERR
+printf 'l1\n' > rc
+r1(){ { return 6; } >/nonexistent/x; echo "no $?"; }; r1 2>/dev/null; echo "r1=$?"
+r2(){ return 6 </dev/null; echo no; }; r2; echo "r2=$?"
+r3(){ eval 'return 7' </dev/null; echo no; }; r3; echo "r3=$?"
+r4(){ eval 'return 7' <rc; echo no; }; r4; echo "r4=$?"
+r5(){ return 6 <missing; echo "no $?"; }; r5 2>/dev/null; echo "r5=$?"
+r6(){ [[ 1 ]] && { return 6; }; echo no; }; r6; echo "r6=$?"
+r7(){ [[ 1 ]] && { return 6; } 2>x; echo no; }; r7; echo "r7=$?"
+( true && { exit 3; }; echo no ); echo "r8=$?"
+r9(){ while :; do return 6; done </dev/null; echo no; }; r9; echo "r9=$?"
+r10(){ false || return 5; echo no; }; r10; echo "r10=$?"
+r11(){ { return 6; } 2>/nonexistent/x || echo "or $?"; echo after; }; r11 2>/dev/null; echo "r11=$?"
+r12(){ eval 'return 7' <missing; echo "no $?"; }; r12 2>/dev/null; echo "r12=$?"
+c='return 8'; r13(){ eval "$c" <rc; echo no; }; r13; echo "r13=$?"
+n1(){ { { :; } 2>x; return 6; } >y; echo no; }; n1; echo "n1=$?"
+n2(){ for i in 1 2; do { [[ $i = 3 ]] && return 6; break; } 2>x; done; { return 7; } 2>x; echo no; }; n2; echo "n2=$?"
+n3(){ g(){ { return 2; } 2>x; }; { g; echo "g=$?"; return 8; } 2>x; echo no; }; n3; echo "n3=$?"
+n4(){ { :; } >/nonexistent/x; { return 6; } 2>x; echo no; }; n4 2>/dev/null; echo "n4=$?"
+
+==== STDOUT ====
+no 1
+r1=0
+r2=6
+r3=7
+r4=7
+no 1
+r5=0
+r6=6
+r7=6
+r8=3
+r9=6
+r10=5
+or 1
+after
+r11=0
+no 1
+r12=0
+r13=8
+n1=6
+n2=7
+g=2
+n3=8
+n4=6
+
+==== STDERR ====
+

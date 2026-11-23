@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 179
+stdout-length: 13
+stderr-length: 41
+==== SCRIPT ====
+p() { printf '<%s>' "$@"; printf ' #%s\n' "$#"; }
+x=abc; unset u; echo "${u:-$'\x24x'}" "${u:-$'a\x41'}"
+declare -A m5; m5[']']=v; echo "${m5[$'\x5d']}"; echo same-line
+echo after
+==== STDOUT ====
+abc aA
+after
+
+==== STDERR ====
+bash: line 3: ${m5[]]}: bad substitution
+

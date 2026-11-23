@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 177
+stdout-length: 75
+stderr-length: 0
+==== SCRIPT ====
+export LC_ALL=C.UTF-8; shopt -s extglob
+cd "$(mktemp -d)" || exit
+mkdir -p sub/deep; touch sub/s1 sub/deep/d1; shopt -s globstar; echo sub/**/; echo **/; echo **/d1; echo sub/**
+==== STDOUT ====
+sub/ sub/deep/
+sub/ sub/deep/
+sub/deep/d1
+sub/ sub/deep sub/deep/d1 sub/s1
+
+==== STDERR ====
+

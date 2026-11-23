@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 137
+stdout-length: 37
+stderr-length: 0
+==== SCRIPT ====
+export LC_ALL=C.UTF-8; shopt -s extglob
+a=(abc xbz); echo "${a[@]/b/Y}" "${a[@]#?}" "${a[@]^^}"; set -- foo bar; echo "${@/o/0}" "${*%r}"
+==== STDOUT ====
+aYc xYz bc bz ABC XBZ
+f0o bar foo ba
+
+==== STDERR ====
+

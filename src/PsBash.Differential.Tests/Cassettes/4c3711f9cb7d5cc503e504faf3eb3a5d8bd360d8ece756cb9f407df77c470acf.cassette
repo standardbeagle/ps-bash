@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 1
+script-length: 91
+stdout-length: 0
+stderr-length: 54
+==== SCRIPT ====
+a=(1); declare -n sr; v="a[1/0]"; sr=$v; sr=x; echo "after $?"
+echo "next $?"; declare -p a
+==== STDOUT ====
+
+==== STDERR ====
+bash: line 1: 1/0: division by 0 (error token is "0")
+

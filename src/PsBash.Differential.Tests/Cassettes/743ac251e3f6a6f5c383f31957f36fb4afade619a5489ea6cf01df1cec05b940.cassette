@@ -1,0 +1,26 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 417
+stdout-length: 167
+stderr-length: 0
+==== SCRIPT ====
+e1(){ eval 'declare -a ea=(7 8)'; eval 'declare -i ei=2*3'; ei+=1; ea+=(9); echo "e1: ${ea[*]} $ei"; }
+e1; declare -p ea ei 2>&1
+e2(){ eval 'declare -n er=ex'; er=set; }; ex=orig; e2; echo "ex=$ex"; declare -p er 2>&1
+s2(){ declare -i si=2*3; si+=1; declare -l sl=AB; sl+=CD; echo "s2: $si $sl"; }; s2; echo "after[${si-u}${sl-u}]"
+declare -l tl; tl=AB; tl+=CD; echo "tl=$tl"; declare -u tu=ab; tu+=cd; echo "tu=$tu"
+
+==== STDOUT ====
+e1: 7 8 9 7
+bash: line 2: declare: ea: not found
+bash: line 2: declare: ei: not found
+ex=set
+bash: line 3: declare: er: not found
+s2: 7 abcd
+after[uu]
+tl=abcd
+tu=ABCD
+
+==== STDERR ====
+

@@ -1,0 +1,43 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 761
+stdout-length: 151
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+{
+( mapfile -t m <<< x; unset m; echo "1 n=${#m[@]}"; declare -p m >/dev/null 2>&1 || echo "1 gone" )
+f() { arr=(x y); }; ( f; unset arr; echo "2 n=${#arr[@]}" ); echo "2 out n=${#arr[@]}"
+( m=(a b); unset m; echo "3 n=${#m[@]} [${m[*]}]"; m+=(z); echo "3 ${m[*]}" ); echo "3 out n=${#m[@]}"
+m=(a b); ( unset m; echo "4 n=${#m[@]}"; m+=(z); echo "4 ${m[*]}" ); echo "4 out ${m[*]}"
+g() { local -a p=(1 2); ( unset p; echo "5 n=${#p[@]}" ); echo "5 out ${p[*]}"; }; g
+declare -A as=([k]=v); ( unset as; echo "6 n=${#as[@]}" ); echo "6 out ${as[k]}"
+h() { local -a q=(l); unset q; echo "7 in n=${#q[@]}"; }; q=(g1 g2); ( h; echo "7 after ${q[*]}" ); h; echo "7 top ${q[*]}"
+} 2>&1
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+1 n=0
+1 gone
+2 n=0
+2 out n=0
+3 n=0 []
+3 z
+3 out n=0
+4 n=0
+4 z
+4 out a b
+5 n=0
+5 out 1 2
+6 n=0
+6 out v
+7 in n=0
+7 after g1 g2
+7 in n=0
+7 top g1 g2
+rc=0
+
+==== STDERR ====
+

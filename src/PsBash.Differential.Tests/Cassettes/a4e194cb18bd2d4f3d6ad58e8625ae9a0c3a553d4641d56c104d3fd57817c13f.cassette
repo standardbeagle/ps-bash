@@ -1,0 +1,53 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 703
+stdout-length: 403
+stderr-length: 0
+==== SCRIPT ====
+t() { printf '%s rc=%s m=%s\n' "$1" "$2" "$(printf '%q,' "${BASH_REMATCH[@]}")"; }
+v() { local n=$1 s=$2 re=$3; [[ $s =~ $re ]]; t "$n" $?; }
+[[ ab =~ (a|ab) ]]; t e01 $?
+[[ xabcx =~ (a|ab)(c|bcd)? ]]; t e02 $?
+[[ aaa =~ a*? ]]; t e03 $?
+re='a.*?c'; [[ abcbc =~ $re ]]; t e20 $?
+[[ abc =~ ^(a)|(x)$ ]]; t e24 $?
+[[ ab =~ (a)(x)?b ]]; t e25 $?
+[[ abcd =~ (a|ab)(c|bcd)(d*) ]]; t e33 $?
+v V72 'b' '(a*)*'
+v V74 'abc' '(a|ab)(bc|c)'
+v V75 'aa' '(a*)(a*)'
+v V76 'ab' '((a)|b)*'
+v V78 'aa' '((a?))*'
+v V80 'abc' '(.*)(.*)'
+v V85 'abab' '(a|ab)(c|bcd)?(d*)'
+v V87 'aaa' '(a|aa)*'
+v V89 'abcabc' '(abc|ab|a)*(c)?'
+v V90 'xyx' '(x|xy)(x|yx)?'
+v V93 'aa' '(a|)*'
+v V96 'abb' 'a(b|bb){1,2}'
+v V98 'aba' '(a(b)?)+'
+==== STDOUT ====
+e01 rc=0 m=ab,ab,
+e02 rc=0 m=abc,ab,c,
+e03 rc=0 m=aaa,
+e20 rc=0 m=abcbc,
+e24 rc=0 m=a,a,'',
+e25 rc=0 m=ab,a,'',
+e33 rc=0 m=abcd,a,bcd,'',
+V72 rc=0 m='','',
+V74 rc=0 m=abc,a,bc,
+V75 rc=0 m=aa,aa,'',
+V76 rc=0 m=ab,b,a,
+V78 rc=0 m=aa,a,a,
+V80 rc=0 m=abc,abc,'',
+V85 rc=0 m=ab,ab,'','',
+V87 rc=0 m=aaa,a,
+V89 rc=0 m=abcabc,abc,'',
+V90 rc=0 m=xyx,x,yx,
+V93 rc=0 m=aa,a,
+V96 rc=0 m=abb,b,
+V98 rc=0 m=aba,a,b,
+
+==== STDERR ====
+

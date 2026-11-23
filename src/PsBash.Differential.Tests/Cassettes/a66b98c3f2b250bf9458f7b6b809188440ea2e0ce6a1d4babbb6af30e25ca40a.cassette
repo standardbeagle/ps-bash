@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 249
+stdout-length: 12
+stderr-length: 0
+==== SCRIPT ====
+export LC_ALL=C.UTF-8; shopt -s extglob
+p=$(printf '@(%.0s' {1..40}); [[ x == $p ]]; echo $?; [[ $p == $p ]]; echo $?; v=x; echo "${v#$p}"; case $p in $p) echo m;; esac; p=$(printf '@(%.0s' {1..2000}); [[ x == $p ]]; echo $?; [[ $p == $p ]]; echo $?
+==== STDOUT ====
+1
+0
+x
+m
+1
+0
+
+==== STDERR ====
+

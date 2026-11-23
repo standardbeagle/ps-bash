@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 210
+stdout-length: 7
+stderr-length: 0
+==== SCRIPT ====
+export LC_ALL=C.UTF-8; shopt -s extglob
+t() { [[ $2 == $1 ]]; printf '%s' $?; }; t '@(a(b)c)' 'a(b)c'; t '@(a(b)c)' 'a(bc)'; t '@(a(x|y))' 'a(x|y)'; t '@(a(x|y))' ax; t '@(a[)]b)' 'a)b'; t '@(a\)b)' 'a)b'; echo
+==== STDOUT ====
+010100
+
+==== STDERR ====
+

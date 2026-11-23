@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 295
+stdout-length: 188
+stderr-length: 0
+==== SCRIPT ====
+p(){ declare -ga "gg=(1 2)"; declare -Ag "$1"; }; p 'gh=([a]=b)'; declare -p gg gh
+g(){ eval 'declare -ga gx=(1)'; eval 'readonly -a rx=(2)'; c='declare -gA gm=([k]=v)'; eval "$c"; }; g; declare -p gx rx gm 2>&1
+eval 'declare -a ta=(1 2)'; c='declare -A tm=([x]=y)'; eval "$c"; declare -p ta tm
+
+==== STDOUT ====
+declare -a gg=([0]="1" [1]="2")
+declare -A gh=([a]="b" )
+declare -a gx=([0]="1")
+declare -ar rx=([0]="2")
+declare -A gm=([k]="v" )
+declare -a ta=([0]="1" [1]="2")
+declare -A tm=([x]="y" )
+
+==== STDERR ====
+

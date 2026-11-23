@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 123
+stdout-length: 11
+stderr-length: 0
+==== SCRIPT ====
+export LC_ALL=C.UTF-8; shopt -s extglob
+cd "$(mktemp -d)" || exit
+touch 'x(a|b)y' xa; d='(a|b)'; echo x"$d"*; echo x@(a|b)*
+==== STDOUT ====
+x(a|b)y
+xa
+
+==== STDERR ====
+

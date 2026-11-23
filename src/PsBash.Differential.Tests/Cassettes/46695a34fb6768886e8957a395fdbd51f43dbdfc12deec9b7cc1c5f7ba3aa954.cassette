@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 111
+stdout-length: 26
+stderr-length: 0
+==== SCRIPT ====
+export LC_ALL=C.UTF-8; shopt -s extglob
+v='a(b)c'; echo "${v/(b)/[x]}" "${v//[()]/_}" "${v/b/(x)}" "${v/b/")"}"
+==== STDOUT ====
+a[x]c a_b_c a((x))c a())c
+
+==== STDERR ====
+

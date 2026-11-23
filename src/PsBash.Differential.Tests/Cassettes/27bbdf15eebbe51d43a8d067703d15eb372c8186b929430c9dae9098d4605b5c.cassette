@@ -1,0 +1,27 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 577
+stdout-length: 40
+stderr-length: 0
+==== SCRIPT ====
+history -s 'return 7'; g() { fc -s 2>/dev/null; echo notreached; }; g; echo "st=$?"
+history -s break; for i in 1 2 3; do echo "$i"; fc -s 2>/dev/null; done
+history -s continue; for i in 1 2; do fc -s 2>/dev/null; echo "no$i"; done; echo "c=$i"
+history -s 'v=2'; v=0; h() { local v=1; fc -s 2>/dev/null; echo "in=$v"; }; h; echo "out=$v"
+history -s 'return 5'; k() { fc -s; echo notreached; }; k 2>/dev/null; echo "bare=$?"
+k2() { eval 'return 4' 2>/dev/null; echo notreached; }; k2; echo "ev=$?"
+c='return 3'; k3() { eval "$c" >/dev/null; echo notreached; }; k3; echo "evr=$?"
+
+==== STDOUT ====
+st=7
+1
+c=2
+in=2
+out=0
+bare=5
+ev=4
+evr=3
+
+==== STDERR ====
+

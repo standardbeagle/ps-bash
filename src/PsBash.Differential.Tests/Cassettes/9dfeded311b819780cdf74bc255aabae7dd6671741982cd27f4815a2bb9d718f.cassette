@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 101
+stdout-length: 22
+stderr-length: 0
+==== SCRIPT ====
+export LC_ALL=C.UTF-8; shopt -s extglob
+v=$'ab\n'; printf '%q|' "${v/%/P}" "${v%b}" "${v//?/.}"; echo
+==== STDOUT ====
+$'ab\nP'|$'ab\n'|...|
+
+==== STDERR ====
+

@@ -1,0 +1,26 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 382
+stdout-length: 78
+stderr-length: 0
+==== SCRIPT ====
+p() { printf '<%s>' "$@"; printf ' #%s\n' "$#"; }
+HOME=/hh; OLDPWD=/old
+w=a:~+:~-; [ "$w" = "a:$PWD:/old" ] && echo ok1
+w=a:~:~/x:~+/x:~-/x; [ "$w" = "a:/hh:/hh/x:$PWD/x:/old/x" ] && echo ok2
+export e=a:~+; [ "$e" = "a:$PWD" ] && echo ok3
+f() { local l=~-:~; echo "$l"; }; f
+declare d=~+:~-; [ "$d" = "$PWD:/old" ] && echo ok4
+arr=(~- x:~-); p "${arr[@]}"; p a=~ b=~-:~ ~nosuchuserx
+==== STDOUT ====
+ok1
+ok2
+ok3
+/old:/hh
+ok4
+</old><x:~-> #2
+<a=/hh><b=/old:/hh><~nosuchuserx> #3
+
+==== STDERR ====
+

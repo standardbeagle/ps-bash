@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 178
+stdout-length: 12
+stderr-length: 0
+==== SCRIPT ====
+export LC_ALL=C.UTF-8; shopt -s extglob
+x='-'; [[ b == [a"$x"c] ]] || echo r4; [[ '-' == [a"$x"c] ]] && echo r5; x='a-c'; [[ b == [$x] ]] && echo r6; [[ b == ["$x"] ]] || echo r7
+==== STDOUT ====
+r4
+r5
+r6
+r7
+
+==== STDERR ====
+

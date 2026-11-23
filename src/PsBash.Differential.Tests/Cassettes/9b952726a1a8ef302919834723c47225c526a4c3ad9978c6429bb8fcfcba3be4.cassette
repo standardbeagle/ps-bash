@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 203
+stdout-length: 35
+stderr-length: 0
+==== SCRIPT ====
+export LC_ALL=C.UTF-8; shopt -s extglob
+cd "$(mktemp -d)" || exit
+touch one.txt two.md; mkdir foo; touch foo/two.txt; GLOBIGNORE='*.txt'; echo * */*; GLOBIGNORE='[!o]*'; echo *; GLOBIGNORE='f*'; echo */*
+==== STDOUT ====
+foo two.md foo/two.txt
+one.txt
+*/*
+
+==== STDERR ====
+

@@ -1,0 +1,29 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 431
+stdout-length: 46
+stderr-length: 185
+==== SCRIPT ====
+( typeset -n ref; echo ref=$ref; echo nounset; set -o nounset; echo ref=$ref; echo after ); echo "st=$?"
+( typeset -n ref; set -u; echo "[${ref-d}] [${ref:-e}]"; echo "[${#ref}]"; echo after ); echo "st=$?"
+( typeset -n ref; set -u; echo "${ref}"; echo after ); echo "st=$?"
+( f() { local -n lr; set -u; echo "lr=$lr"; echo after; }; f ); echo "st=$?"
+( declare -n r2; v=tg; r2=$v; set -u; echo "r2=$r2"; echo after ); echo "st=$?"
+==== STDOUT ====
+ref=
+nounset
+st=1
+[d] [e]
+st=1
+st=1
+st=1
+st=1
+
+==== STDERR ====
+bash: line 1: ref: unbound variable
+bash: line 2: ref: unbound variable
+bash: line 3: ref: unbound variable
+environment: line 4: lr: unbound variable
+bash: line 5: r2: unbound variable
+

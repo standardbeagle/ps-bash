@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 168
+stdout-length: 65
+stderr-length: 0
+==== SCRIPT ====
+declare -n r; read r <<< tgt; declare -p r; r=5; echo "tgt=$tgt"
+declare -n p; printf -v p %s hi; declare -p p
+declare -n o; getopts ab o -a; echo "st=$?"; declare -p o
+==== STDOUT ====
+declare -n r="tgt"
+tgt=5
+declare -n p="hi"
+st=0
+declare -n o="a"
+
+==== STDERR ====
+

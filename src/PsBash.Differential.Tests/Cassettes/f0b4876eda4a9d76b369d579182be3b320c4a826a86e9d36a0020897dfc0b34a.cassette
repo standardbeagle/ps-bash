@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 211
+stdout-length: 8
+stderr-length: 29
+==== SCRIPT ====
+cd "$(mktemp -d)"
+p() { printf '%s' "$#:"; [ $# -gt 0 ] && printf '<%s>' "$@"; echo; }; x='a b'; e=; g='*'; HOME=/home/hh
+c=$( shopt -s failglob; for f in zz*q; do echo "$f"; done; echo more ); echo "[$c] rc=$?"
+==== STDOUT ====
+[] rc=1
+
+==== STDERR ====
+bash: line 3: no match: zz*q
+

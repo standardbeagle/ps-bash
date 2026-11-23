@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 198
+stdout-length: 52
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"
+p() { printf '%s' "$#:"; [ $# -gt 0 ] && printf '<%s>' "$@"; echo; }; x='a b'; e=; g='*'; HOME=/home/hh
+set -- a b c; IFS=-; p "${*:2}" "$*" "${*}" "${*^^}" "${*/a/X}" "${*:-d}" $*
+==== STDOUT ====
+9:<b-c><a-b-c><a-b-c><A-B-C><X-b-c><a-b-c><a><b><c>
+
+==== STDERR ====
+

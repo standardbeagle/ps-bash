@@ -1,0 +1,29 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 439
+stdout-length: 57
+stderr-length: 56
+==== SCRIPT ====
+( set -e; shift 5; echo survived ); echo "u01 $?"
+( set -e; declare -p nosuch_zz 2>/dev/null; echo survived ); echo "u02 $?"
+( set -e; local x 2>/dev/null; echo survived ); echo "u07 $?"
+( set -e; export -f nosuchfn_zz 2>/dev/null; echo survived ); echo "u08 $?"
+( trap 'echo ERR' ERR; shift 5; echo after ); echo v01
+x=1 > /nonexist_zz/x 2>/dev/null; echo "k35 $?"
+shift 5; echo "k25 $?"; export -f nosuchfn_zz 2>/dev/null; echo "k30c $?"
+==== STDOUT ====
+u01 1
+u02 1
+u07 1
+u08 1
+ERR
+after
+v01
+k35 1
+k25 1
+k30c 1
+
+==== STDERR ====
+bash: line 6: /nonexist_zz/x: No such file or directory
+

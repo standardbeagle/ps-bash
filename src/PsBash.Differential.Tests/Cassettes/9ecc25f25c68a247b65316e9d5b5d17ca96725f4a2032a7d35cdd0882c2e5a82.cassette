@@ -1,0 +1,23 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 122
+stdout-length: 85
+stderr-length: 0
+==== SCRIPT ====
+echo ~a’b; echo ~x”y
+echo ~x’ ';Write-Output PWNED-t3;#'
+echo ~x’/a
+echo ';Write-Output PWNED-t4;#'
+echo ~a\'b ~a{b ~a\$b
+
+==== STDOUT ====
+~a’b
+~x”y
+~x’ ;Write-Output PWNED-t3;#
+~x’/a
+;Write-Output PWNED-t4;#
+~a'b ~a{b ~a$b
+
+==== STDERR ====
+

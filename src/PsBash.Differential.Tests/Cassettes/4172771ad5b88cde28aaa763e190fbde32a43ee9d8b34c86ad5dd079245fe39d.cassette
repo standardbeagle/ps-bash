@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 149
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+export LC_ALL=C.UTF-8; shopt -s extglob
+[[ x] == [!]]* ]]; echo $?; [[ ']' == []] ]]; echo $?; [[ - == [a\-z] ]]; echo $?; [[ m == [a\-z] ]]; echo $?
+==== STDOUT ====
+0
+0
+0
+1
+
+==== STDERR ====
+

@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 204
+stdout-length: 155
+stderr-length: 0
+==== SCRIPT ====
+declare -A m=(['a]=b']=c); declare -p m
+declare -A n=(["x]=y"]=1 [k]=2); declare -p n
+declare -A p; p['q]=r']=s; declare -p p
+declare -A t=([$'u]=v']=w); declare -p t
+i=1; a=([i+1]=x [3]=y); declare -p a
+
+==== STDOUT ====
+declare -A m=(["a]=b"]="c" )
+declare -A n=(["x]=y"]="1" [k]="2" )
+declare -A p=(["q]=r"]="s" )
+declare -A t=(["u]=v"]="w" )
+declare -a a=([2]="x" [3]="y")
+
+==== STDERR ====
+

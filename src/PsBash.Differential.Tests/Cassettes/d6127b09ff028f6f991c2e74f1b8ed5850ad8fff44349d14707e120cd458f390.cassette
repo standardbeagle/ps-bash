@@ -1,0 +1,28 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 686
+stdout-length: 79
+stderr-length: 0
+==== SCRIPT ====
+s=$(printf 'ab%.0s' {1..500}); re='(.)\1'; [[ $s =~ $re ]]; echo "R02 $?"; [[ ${s}xx =~ $re ]]; echo "R03 $? ${BASH_REMATCH[0]}"
+s=$(head -c 1000000 /dev/zero | tr '\0' a); re='(x)\1'; [[ $s =~ $re ]]; echo "R04 $?"
+re='(a)\1'; [[ $s =~ $re ]]; echo "R05 $? ${BASH_REMATCH[0]}"
+s=$(head -c 4000 /dev/zero | tr '\0' a); re='(a*)\1$'; [[ $s =~ $re ]]; echo "R06 $? ${#BASH_REMATCH[0]} ${#BASH_REMATCH[1]}"
+re='^(a+)\1$'; [[ ${s}a =~ $re ]]; echo "R07 $?"
+re='(a*)*b\1'; [[ $s =~ $re ]]; echo "R08 $?"
+long=$(printf 'word%d ' {1..200}); re='(word[0-9]+) .* \1 '; [[ "$long word7 " =~ $re ]]; echo "R26 $? ${BASH_REMATCH[1]}"
+re='(.)\1'; [[ $long =~ $re ]]; echo "R27 $? ${BASH_REMATCH[0]}"
+==== STDOUT ====
+R02 1
+R03 0 xx
+R04 1
+R05 0 aa
+R06 0 4000 2000
+R07 1
+R08 1
+R26 0 word7
+R27 0 11
+
+==== STDERR ====
+

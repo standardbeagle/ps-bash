@@ -1,0 +1,21 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 160
+stdout-length: 19
+stderr-length: 56
+==== SCRIPT ====
+o=e
+(( 1/0 )) 2>/dev/null; echo "DZ $?"
+( set -$o; f() { false; echo inf; }; f || echo caught ); echo "n05 $?"
+x=$(( 1/0 )) 2>/dev/null; echo "word $?"
+echo end
+==== STDOUT ====
+DZ 1
+inf
+n05 0
+end
+
+==== STDERR ====
+bash: line 4: 1/0 : division by 0 (error token is "0 ")
+

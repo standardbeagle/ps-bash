@@ -1,0 +1,23 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 349
+stdout-length: 33
+stderr-length: 0
+==== SCRIPT ====
+o=e; nm=errexit
+( set -$o; false; echo "n04 WRONG" ); echo "n04 $?"
+( set -o $nm; f() { false; echo inf; }; f || echo "n05 caught" ); echo "n05 $?"
+c=set; ( $c -e; false; echo "n07 WRONG" ); echo "n07 $?"
+( x="set -e"; eval "$x"; false; echo "n10 WRONG" ); echo "n10 $?"
+printf 'set -e\n' > lib.sh; ( . ./lib.sh; false; echo survived ); echo "h1 $?"
+==== STDOUT ====
+n04 1
+inf
+n05 0
+n07 1
+n10 1
+h1 1
+
+==== STDERR ====
+

@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 368
+stdout-length: 51
+stderr-length: 0
+==== SCRIPT ====
+export LC_ALL=C.UTF-8; shopt -s extglob
+s=BcA
+case $s in [a-c]) c=Y;; *) c=n;; esac
+if [[ $s == [a-c] ]]; then e=Y; else e=n; fi
+if [[ $s != [a-c] ]]; then ne=Y; else ne=n; fi
+printf '%q|' "$c" "$e" "$ne" "${s#[a-c]}" "${s##[a-c]}" "${s%[a-c]}" "${s%%[a-c]}" "${s/[a-c]/X}" "${s//[a-c]/X}" "${s/#[a-c]/X}" "${s/%[a-c]/X}" "${s^^[a-c]}" "${s,,[a-c]}" "${s^[a-c]}"
+echo
+
+==== STDOUT ====
+n|n|Y|BcA|BcA|BcA|BcA|BXA|BXA|BcA|BcA|BCA|BcA|BcA|
+
+==== STDERR ====
+

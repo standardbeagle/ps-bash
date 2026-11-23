@@ -1,0 +1,27 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 484
+stdout-length: 47
+stderr-length: 42
+==== SCRIPT ====
+p() { printf '<%s>' "$@"; printf ' #%s\n' "$#"; }
+declare -A m5; m5[']']=v; m5['}']=w; m5[x]=X
+echo ${m5[$'\x5d']}; echo "${m5[`echo ]`]}" ${m5[`echo ]`]} "${m5[$(echo ])]}"
+echo "${m5[}]}" ${m5[}]} "${m5['}']}" ${m5["}"]} ${m5[\}]}
+echo "${m5[$'\x7d']}" ${m5[$'\x7d']} "${#m5[}]}" ${m5[}]:-d} "${m5[}]/w/z}"
+i=0; a=(q r); echo "${a[$((i+0))]}" "${a[ ${i} ]}" "${m5[x]:-{z}}" "${m5[y]:-{z}}"
+declare -A m; m[$'a]b']=1; echo ${m[$'a]b']}; echo "${m[$'a]b']}"; echo same-line
+echo after
+==== STDOUT ====
+v
+v v v
+w w w w w
+w w 1 w z
+q q X} {z}
+1
+after
+
+==== STDERR ====
+bash: line 7: ${m[a]b]}: bad substitution
+

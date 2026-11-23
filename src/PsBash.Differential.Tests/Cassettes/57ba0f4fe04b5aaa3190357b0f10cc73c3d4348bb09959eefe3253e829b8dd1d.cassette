@@ -1,0 +1,48 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1078
+stdout-length: 304
+stderr-length: 0
+==== SCRIPT ====
+f1() { \local m="$1"; echo "in1[$m]"; }; f1 "a b*"; echo "out1[${m-unset}]"
+f2() { builtin local m2="$1"; echo "in2[$m2]"; }; f2 "a b*"; echo "out2[${m2-unset}]"
+f3() { x='m3=a b*'; local "$x"; echo "in3[$m3]"; }; f3; echo "out3[${m3-unset}]"
+f4() { builtin local "m4=$1"; echo "in4[$m4]"; }; f4 "a'b c"; echo "out4[${m4-unset}]"
+f5() { \local cmd="${1-__missing__}"; echo "in5[$cmd]"; }; f5; echo "out5[${cmd-unset}]"
+f6() { \declare d6="$1"; echo "in6[$d6]"; }; f6 "a b"; echo "out6[${d6-unset}]"
+f7() { 'typeset' t7="$1"; echo "in7[$t7]"; }; f7 'x$y z'; echo "out7[${t7-unset}]"
+f8() { \local m8=$1; echo "in8[$m8]"; }; f8 "a b"; echo "out8[${m8-unset}] b[${b-unset}]"
+f9() { builtin local m9=$1; echo "in9[$m9]"; }; f9 "p q"; echo "out9[${m9-unset}] q[${q-unset}]"
+m10=outer; f10() { \local m10="$1"; m10+=x; echo "in10[$m10]"; }; f10 "*"; echo "out10[$m10]"
+f11() { local "m11=$1"; echo "in11[$m11]"; }; f11 '$(echo hi)'; echo "out11[${m11-unset}]"
+f12() { local 'm12=a b*'; local -i 'n12=1+2' k12; echo "in12[$m12][$n12]"; }; f12; echo "out12[${m12-unset}][${n12-unset}]"
+
+==== STDOUT ====
+in1[a b*]
+out1[unset]
+in2[a b*]
+out2[unset]
+in3[a b*]
+out3[unset]
+in4[a'b c]
+out4[unset]
+in5[__missing__]
+out5[unset]
+in6[a b]
+out6[unset]
+in7[x$y z]
+out7[unset]
+in8[a]
+out8[unset] b[unset]
+in9[p]
+out9[unset] q[unset]
+in10[*x]
+out10[outer]
+in11[$(echo hi)]
+out11[unset]
+in12[a b*][3]
+out12[unset][unset]
+
+==== STDERR ====
+

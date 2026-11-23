@@ -1,0 +1,65 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1164
+stdout-length: 160
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+{
+printf 'f1\nf2\n' > f
+echo "1:$( ( exec cat < <(echo q3) ) )"
+echo "2:$( ( exec cat < f; echo after ) | tr '\n' ' ')"
+echo "3:$( ( exec 2>/dev/null cat < f; echo after ) | tr '\n' ' ')"
+y=$(exec cat < f); echo "4:$y" | tr '\n' ' '; echo
+echo "5:$( ( exec tr a-z A-Z < <(echo low) ) )"
+echo "6:$(X=1 exec cat < f | tr '\n' ' ')"
+echo "7:$(exec cat < <(echo ps))"
+k() { exec cat < f; echo notreached; }
+echo "8:$( ( k ) | tr '\n' ' ')"
+echo "9:$( exec cat < f 2>/dev/null | tr '\n' ' ')"
+echo "10:$( ( exec cat <<< hs ) )"
+echo "11:$(echo q | exec cat)"
+echo "12:$(cat f | { exec cat; } | tr '\n' ' ')"
+echo "13:$(set -o pipefail; echo q | exec 2>/dev/null cat)"
+echo "14:$(echo q | { X=1 cat; })"
+echo "15:$(echo q | { X=1 tr a-z A-Z; })"
+echo "16:$(echo q | ( X=1 cat ))"
+echo "17:$(while read -r l; do X=1 cat; echo "r=$l"; done < f | tr '\n' ' ')"
+true < f; echo "18:$?"; : < f; echo "19:$?"; false < f; echo "20:$?"
+g() { echo q | return 3; }; g; echo "21:$?"
+echo "22:$(fn() { cat; }; fn < f | tr '\n' ' ')"
+( exec cat < missing; echo after ) 2>/dev/null; echo "23:$?"
+} 2>&1
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+1:q3
+2:f1 f2
+3:f1 f2
+4:f1 f2
+5:LOW
+6:f1 f2
+7:ps
+8:f1 f2
+9:f1 f2
+10:hs
+11:q
+12:f1 f2
+13:q
+14:q
+15:Q
+16:q
+17:f2 r=f1
+18:0
+19:0
+20:1
+21:3
+22:f1 f2
+after
+23:0
+rc=0
+
+==== STDERR ====
+

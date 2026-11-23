@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 163
+stdout-length: 22
+stderr-length: 0
+==== SCRIPT ====
+export LC_ALL=C.UTF-8; shopt -s extglob
+shopt -s nocasematch; v=ABC; printf '%s|' "${v/b/x}" "${v//[a-b]/x}" "${v#a}" "${v%c}" "${v^^b}"; [[ ABC == abc ]]; echo $?
+==== STDOUT ====
+AxC|xxC|ABC|ABC|ABC|0
+
+==== STDERR ====
+

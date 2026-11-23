@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 130
+stdout-length: 15
+stderr-length: 0
+==== SCRIPT ====
+export LC_ALL=C.UTF-8; shopt -s extglob
+v=abc; shopt -u patsub_replacement; printf '%s|' "${v/b/&}" "${v/b/[&]}" "${v/b/\&}"; echo
+==== STDOUT ====
+a&c|a[&]c|a&c|
+
+==== STDERR ====
+

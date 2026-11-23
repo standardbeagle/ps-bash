@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 170
+stdout-length: 49
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+err() { sed -E 's/^([^:]*: )?(line [0-9]+: )?//' "$1"; }
+( exec >&-; printf 'p\n'; echo "s=$?" >&2; printf ''; echo "s=$?" >&2 ) 2>e09p
+err e09p
+==== STDOUT ====
+printf: write error: Bad file descriptor
+s=1
+s=0
+
+==== STDERR ====
+

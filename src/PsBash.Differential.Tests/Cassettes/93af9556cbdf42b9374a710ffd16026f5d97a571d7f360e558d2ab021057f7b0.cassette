@@ -1,0 +1,41 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 669
+stdout-length: 230
+stderr-length: 0
+==== SCRIPT ====
+echo $: x
+1e5=1 2>&1 | sed 's/^.*line [0-9]*: //'; echo "st ${PIPESTATUS[0]}"
+08=x 2>&1 | sed 's/^.*line [0-9]*: //'; echo "st ${PIPESTATUS[0]}"
+echo 1e5=1 08=x; 1e5=1 2>/dev/null; echo st=$?; 08=x 2>/dev/null; echo st=$?
+echo "${u:-x)}"
+echo "${u:-x’)+@(Write-Output PWNED-p5)+@(’}"
+declare -A m=([k]=v); echo "${m['x’)+@(Write-Output PWNED-p7)+@(’']}" ok
+u=1; echo "${u:+a)b}" "${v:=c)d}" "${v}" "${w-(e}"
+x=abc; echo "${x/b/)}" "${x#a)}" "${x:-\")}"
+x='a(b)c'; echo "${x/(/[}" "${x//)/]}" "${x#a(}" "${x%'c'}" "${#x}"
+set -- 'p)q'; echo "${1:-'z'}" "${2:-($1)}" "pre${3:-')'}post"
+u=1; echo "${u:+'q'}" "[${u:+($u)}]" "${v2:='a)'}" "$v2"; y="${w:-'(z)'}"; echo "$y"
+
+==== STDOUT ====
+$: x
+1e5=1: command not found
+st 127
+08=x: command not found
+st 127
+1e5=1 08=x
+st=127
+st=127
+x)
+x’)+@(Write-Output PWNED-p5)+@(’
+ ok
+a)b c)d c)d (e
+a)c abc abc
+a[b)c a(b]c b)c a(b) 5
+p)q (p)q) pre')'post
+'q' [(1)] 'a)' 'a)'
+'(z)'
+
+==== STDERR ====
+

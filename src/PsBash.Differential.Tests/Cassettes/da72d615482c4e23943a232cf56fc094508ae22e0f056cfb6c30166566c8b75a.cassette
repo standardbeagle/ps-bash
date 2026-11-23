@@ -1,0 +1,28 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 257
+stdout-length: 118
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+printf 'abcdef' > rw; echo XY 1<> rw; od -c rw
+cat 0<> newrw; echo "s=$?"; ls newrw
+echo XY 0<> rw4 >&0; od -c rw4
+printf 'abc\n' > rd; read -u 7 l 7<> rd; echo "7=$l"; od -c rd
+exec 3>fm; exec 4>&3-; echo m >&4; exec 4>&-; cat fm
+
+==== STDOUT ====
+0000000   X   Y  \n   d   e   f
+0000006
+s=0
+newrw
+0000000   X   Y  \n
+0000003
+7=abc
+0000000   a   b   c  \n
+0000004
+m
+
+==== STDERR ====
+

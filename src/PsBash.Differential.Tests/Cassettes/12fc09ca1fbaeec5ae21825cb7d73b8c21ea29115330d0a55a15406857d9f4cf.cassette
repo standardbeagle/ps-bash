@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 62
+stdout-length: 47
+stderr-length: 0
+==== SCRIPT ====
+declare -n r; v='a[2]'; r=$v; r=9; echo "r=$r"; declare -p r a
+==== STDOUT ====
+r=9
+declare -n r="a[2]"
+declare -a a=([2]="9")
+
+==== STDERR ====
+

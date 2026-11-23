@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 306
+stdout-length: 43
+stderr-length: 0
+==== SCRIPT ====
+[[ ab =~ (a) ]]
+[[ ab =~ x ]]; echo "n01 $? count=${#BASH_REMATCH[@]}"
+[[ ab =~ x ]]; echo "n02 [${BASH_REMATCH[@]}]"
+[[ ab =~ x ]]; printf 'n03 <%s>\n' "${BASH_REMATCH[@]}"
+[[ ab =~ (a)(x)?b ]]; echo "n04 ${#BASH_REMATCH[@]} [${BASH_REMATCH[2]}]"
+f() { [[ ab =~ (b) ]]; }; f; echo "n05 ${BASH_REMATCH[1]}"
+==== STDOUT ====
+n01 1 count=0
+n02 []
+n03 <>
+n04 3 []
+n05 b
+
+==== STDERR ====
+

@@ -1,0 +1,41 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 514
+stdout-length: 274
+stderr-length: 281
+==== SCRIPT ====
+( x=X; typeset -n ref; echo hi; ref=(x y); echo ref=$ref; declare -p ref ); echo "st=$?"
+( x=X; typeset -n ref; ref=(x y); echo "${ref[1]} ${#ref[@]}"; ref=x; echo "ref=$ref x=$x"; declare -p ref ); echo "st=$?"
+( typeset -n ref; ref+=(p q); echo "ref=$ref"; declare -p ref ); echo "st=$?"
+( typeset -n ref; ref=([k]=v); declare -p ref ); echo "st=$?"
+( f() { local -n lr; lr=(a b); echo "lr=$lr ${#lr[@]}"; declare -p lr; }; f ); echo "st=$?"
+( declare -n r; v=arr; r=$v; r=(p q); declare -p arr r ); echo "st=$?"
+==== STDOUT ====
+hi
+ref=x
+declare -a ref=([0]="x" [1]="y")
+st=0
+y 2
+ref=x x=X
+declare -a ref=([0]="x" [1]="y")
+st=0
+ref=p
+declare -a ref=([0]="p" [1]="q")
+st=0
+declare -a ref=([0]="v")
+st=0
+lr=a 2
+declare -a lr=([0]="a" [1]="b")
+st=0
+declare -a arr=([0]="p" [1]="q")
+declare -n r="arr"
+st=0
+
+==== STDERR ====
+bash: line 1: warning: ref: removing nameref attribute
+bash: line 2: warning: ref: removing nameref attribute
+bash: line 3: warning: ref: removing nameref attribute
+bash: line 4: warning: ref: removing nameref attribute
+environment: line 5: warning: lr: removing nameref attribute
+

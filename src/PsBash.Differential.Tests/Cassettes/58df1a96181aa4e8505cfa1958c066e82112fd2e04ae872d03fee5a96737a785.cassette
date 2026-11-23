@@ -1,0 +1,47 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 501
+stdout-length: 236
+stderr-length: 0
+==== SCRIPT ====
+t() { printf '%s rc=%s m=%s\n' "$1" "$2" "$(printf '%q,' "${BASH_REMATCH[@]}")"; }
+v() { local n=$1 s=$2 re=$3; [[ $s =~ $re ]]; t "$n" $?; }
+[[ x =~ (x) ]]
+v V18 a 'a\'
+v V21 'a' '\1(a)'
+v V27 a 'a{'
+v V30 a 'a{2,1}'
+v V32 a '*a'
+v V35 a '^*'
+v V39 a '(a'
+v V48 a 'a{32768}'
+v V49 'a' '[[:foo:]]'
+v V50 'a' '[z-a]'
+v V55 ' ' '[[.space.]]'
+v V60 'β' '[α-ω]'
+v V70 'a' 'a\b*'
+[[ ab =~ a[ ]]; t L27 $?
+bad='('
+if [[ ab =~ $bad ]]; then echo F7 y; else echo "F7 n $?"; fi
+[[ ab =~ $bad ]] || echo "F8 $?"
+==== STDOUT ====
+V18 rc=2 m=x,x,
+V21 rc=2 m=x,x,
+V27 rc=2 m=x,x,
+V30 rc=2 m=x,x,
+V32 rc=2 m=x,x,
+V35 rc=2 m=x,x,
+V39 rc=2 m=x,x,
+V48 rc=2 m=x,x,
+V49 rc=2 m=x,x,
+V50 rc=2 m=x,x,
+V55 rc=2 m=x,x,
+V60 rc=2 m=x,x,
+V70 rc=2 m=x,x,
+L27 rc=2 m=x,x,
+F7 n 2
+F8 2
+
+==== STDERR ====
+

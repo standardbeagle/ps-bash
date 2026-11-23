@@ -1,0 +1,45 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 576
+stdout-length: 451
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"
+cat > s.sh <<'EOF'
+s=abcdefghijkl; a=(a b c d e f g h i j k l)
+echo "${s:010}" "${s:1:010}" "${s: -010}"
+echo "${a[@]:010:2}"
+i=2; j='1+1'
+echo "${a[@]:i}"
+echo "${a[@]:1+1:2}" "${a[@]:$j:2}" "${s:$j:2}" "${s:j:2}" "${s:i+1:i}"
+set -- a b c d e; echo "${@:1+1:2}" "${*:j:2}" "${@:$#}"
+echo "${s:9223372036854775807}|${s:2:9223372036854775807}|${a[@]:9223372036854775807}|"
+echo "${s:08}"
+echo "rc=$?"
+echo "${s:1:08}"
+echo "${a[@]:08}"
+echo "${a[@]:0:08}"
+echo "${@:08}"
+echo end
+EOF
+bash s.sh >out 2>err; cat err; echo ---; cat out
+cd /; rm -rf "$W"
+==== STDOUT ====
+s.sh: line 9: s: 08: value too great for base (error token is "08")
+s.sh: line 11: s: 08: value too great for base (error token is "08")
+s.sh: line 12: a[@]: 08: value too great for base (error token is "08")
+s.sh: line 13: a[@]: 08: value too great for base (error token is "08")
+s.sh: line 14: @: 08: value too great for base (error token is "08")
+---
+ijkl bcdefghi efghijkl
+i j
+c d e f g h i j k l
+c d c d cd cd de
+b c b c e
+|cdefghijkl||
+rc=1
+end
+
+==== STDERR ====
+

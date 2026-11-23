@@ -1,0 +1,64 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1000
+stdout-length: 286
+stderr-length: 0
+==== SCRIPT ====
+c1(){ if return 6; then echo t; fi; echo no; }
+c2(){ while return 6; do :; done; echo no; }
+c3(){ until return 6; do :; done; echo no; }
+c4(){ ! return 6; echo no; }
+c5(){ return 6 && echo and; echo no; }
+c6(){ return 6 || echo or; echo no; }
+c7(){ if { return 6; }; then :; fi; echo no; }
+c8(){ if ! return 6; then :; fi; echo no; }
+c9(){ while { return 6; } 2>x; do :; done; echo no; }
+c10(){ if [[ 1 ]] && return 6; then :; fi; echo no; }
+c11(){ if false; then :; elif return 6; then :; fi; echo no; }
+c12(){ if eval 'return 6'; then :; fi; echo no; }
+c13(){ ! { return 6; } 2>x; echo no; }
+c14(){ [[ 1 ]] && ! return 6; echo no; }
+c15(){ while :; do if return 6; then :; fi; done; echo no; }
+cc='if return 6; then :; fi; until ! return 7; do :; done'; c16(){ eval "$cc"; echo no; }
+se(){ ( set -e; "$@"; echo after ); echo "se-$1=$?"; }
+for k in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do se c$k; done
+trap ':' ERR
+for k in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do c$k; echo "err-c$k=$?"; done
+
+==== STDOUT ====
+se-c1=6
+se-c2=6
+se-c3=6
+se-c4=6
+se-c5=6
+se-c6=6
+se-c7=6
+se-c8=6
+se-c9=6
+se-c10=6
+se-c11=6
+se-c12=6
+se-c13=6
+se-c14=6
+se-c15=6
+se-c16=6
+err-c1=6
+err-c2=6
+err-c3=6
+err-c4=6
+err-c5=6
+err-c6=6
+err-c7=6
+err-c8=6
+err-c9=6
+err-c10=6
+err-c11=6
+err-c12=6
+err-c13=6
+err-c14=6
+err-c15=6
+err-c16=6
+
+==== STDERR ====
+

@@ -1,0 +1,61 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 843
+stdout-length: 347
+stderr-length: 0
+==== SCRIPT ====
+t() { printf '%s rc=%s m=%s\n' "$1" "$2" "$(printf '%q,' "${BASH_REMATCH[@]}")"; }
+v() { local n=$1 s=$2 re=$3; [[ $s =~ $re ]]; t "$n" $?; }
+[[ 5 =~ ^\d$ ]]; t e04 $?
+[[ d =~ ^\d$ ]]; t e05 $?
+[[ 5 =~ [\d] ]]; t e06 $?
+[[ 'a b' =~ \<b ]]; t e08 $?
+[[ 'a{1' =~ a\{1 ]]; t e15 $?
+[[ abab =~ (ab)\1 ]]; t e16 $?
+[[ x =~ \w ]]; t e18 $?
+[[ 'a b' =~ a\sb ]]; t e19 $?
+[[ abc =~ a\.c ]]; t e23 $?
+[[ ab =~ \(a\) ]]; t e27 $?
+[[ '(a)' =~ \(a\) ]]; t e28 $?
+[[ ab =~ a\Kb ]]; t e32 $?
+[[ 'ab' =~ a\x62 ]]; t e34 $?
+[[ 'a(b' =~ a\(b ]]; echo "e40 $?"
+[[ 'a+' =~ ^a\+$ ]]; echo "e41 $?"
+[[ ab =~ ^a\b ]]; echo "e42 $?"
+[[ 'a}' =~ a\} ]]; t L09 $?
+[[ 'a\b' =~ a\\b ]]; t L12 $?
+[[ 'a|b' =~ a\|b ]]; t L13 $?
+[[ 'a^b' =~ a\^b ]]; t L14 $?
+[[ 'a$b' =~ a\$b ]]; t L15 $?
+[[ 'a[b' =~ a\[b ]]; t L16 $?
+[[ '-' =~ [\-] ]]; t L17 $?
+[[ '\' =~ [\d] ]]; t L19 $?
+==== STDOUT ====
+e04 rc=1 m='',
+e05 rc=0 m=d,
+e06 rc=1 m='',
+e08 rc=1 m='',
+e15 rc=0 m=a\{1,
+e16 rc=1 m='',
+e18 rc=1 m='',
+e19 rc=1 m='',
+e23 rc=1 m='',
+e27 rc=1 m='',
+e28 rc=0 m=\(a\),
+e32 rc=1 m='',
+e34 rc=1 m='',
+e40 0
+e41 0
+e42 0
+L09 rc=0 m=a\},
+L12 rc=0 m=a\\b,
+L13 rc=0 m=a\|b,
+L14 rc=0 m=a\^b,
+L15 rc=0 m=a\$b,
+L16 rc=0 m=a\[b,
+L17 rc=0 m=-,
+L19 rc=1 m='',
+
+==== STDERR ====
+

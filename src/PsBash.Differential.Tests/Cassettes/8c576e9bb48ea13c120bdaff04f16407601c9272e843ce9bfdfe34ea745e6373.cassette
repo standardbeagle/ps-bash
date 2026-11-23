@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 123
+stdout-length: 18
+stderr-length: 0
+==== SCRIPT ====
+export LC_ALL=C.UTF-8; shopt -s extglob
+ext='.*'; fn=a.tar.gz; printf '%s|' "${fn%$ext}" "${fn%%$ext}" "${fn%"$ext"}"; echo
+==== STDOUT ====
+a.tar|a|a.tar.gz|
+
+==== STDERR ====
+

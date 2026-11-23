@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 287
+stdout-length: 48
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"
+p() { printf '%s' "$#:"; [ $# -gt 0 ] && printf '<%s>' "$@"; echo; }; x='a b'; e=; g='*'; HOME=/home/hh
+z='p:q r'; unset IFS; IFS=: printf '9<%s>\n' $(echo "[${IFS-unset}]") $z; IFS=; IFS=: printf '10<%s>\n' $(echo "[${IFS-unset}]") $z; unset IFS; echo "[${IFS-unset}]"
+==== STDOUT ====
+9<[unset]>
+9<p:q>
+9<r>
+10<[]>
+10<p:q r>
+[unset]
+
+==== STDERR ====
+

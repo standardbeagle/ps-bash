@@ -1,0 +1,36 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 453
+stdout-length: 114
+stderr-length: 53
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+printf 'abcdefgh' > e2; echo XY 2<> e2 >&2; od -c e2
+echo hi 2<> e3 >&2; od -c e3
+{ echo x; } 0<> newc; echo "s=$?"; ls newc
+printf 'q\n' > rc; { read l; echo "l=$l"; } 0<> rc
+while read -r l; do echo "w=$l"; done 0<> rc
+while read -r l; do echo "w=$l"; done 0<> newd; echo "s=$?"; ls newd
+( cat 0<> /nodir_zz/f ) 2>&1 | wc -l; ( cat 0<> /nodir_zz/f ) 2>/dev/null; echo "s=$?"
+{ cat; } 0<> /nodir_zz/f 2>/dev/null; echo "s=$?"
+
+==== STDOUT ====
+0000000   X   Y  \n   d   e   f   g   h
+0000010
+0000000   h   i  \n
+0000003
+x
+s=0
+newc
+l=q
+w=q
+s=0
+newd
+1
+s=1
+s=1
+
+==== STDERR ====
+bash: line 9: /nodir_zz/f: No such file or directory
+

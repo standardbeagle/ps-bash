@@ -1,0 +1,43 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 601
+stdout-length: 221
+stderr-length: 0
+==== SCRIPT ====
+t() { printf '%s rc=%s m=%s\n' "$1" "$2" "$(printf '%q,' "${BASH_REMATCH[@]}")"; }
+v() { local n=$1 s=$2 re=$3; [[ $s =~ $re ]]; t "$n" $?; }
+[[ λ =~ ^.$ ]]; t e26 $?
+v V61 'é' '^..$'
+v V62 'é' '^.$'
+v V63 '😀' '^.$'
+[[ $'a\tb' =~ a[[:blank:]]b ]]; t F19 $?
+[[ '_' =~ [[:punct:]] ]]; t F21 $?
+[[ 'é' =~ [[:lower:]] ]]; t F22 $?
+[[ 'É' =~ [[:upper:]] ]]; t F23 $?
+[[ '٣' =~ [[:digit:]] ]]; t F24 $?
+[[ '٣' =~ [[:alnum:]] ]]; t F25 $?
+[[ '€' =~ [[:punct:]] ]]; t F28 $?
+[[ 'é' =~ [^a] ]]; t F30 $?
+[[ 'aé' =~ ^a[^x]$ ]]; t F32 $?
+re='\w'; [[ 'é' =~ $re ]]; t F34 $?
+re='\bé'; [[ 'aé' =~ $re ]]; t F35 $?
+==== STDOUT ====
+e26 rc=0 m=λ,
+V61 rc=1 m='',
+V62 rc=0 m=é,
+V63 rc=0 m=😀,
+F19 rc=0 m=$'a\tb',
+F21 rc=0 m=_,
+F22 rc=0 m=é,
+F23 rc=0 m=É,
+F24 rc=1 m='',
+F25 rc=0 m=٣,
+F28 rc=0 m=€,
+F30 rc=0 m=é,
+F32 rc=0 m=aé,
+F34 rc=0 m=é,
+F35 rc=1 m='',
+
+==== STDERR ====
+

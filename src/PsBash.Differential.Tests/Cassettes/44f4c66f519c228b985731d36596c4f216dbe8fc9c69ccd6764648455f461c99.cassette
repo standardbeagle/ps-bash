@@ -1,0 +1,23 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 338
+stdout-length: 188
+stderr-length: 0
+==== SCRIPT ====
+c='a’;Write-Output PWNED-r1;’b'; echo | "$c" 2>&1 | sed 's/^.*line [0-9]*: //'; echo st=$?
+{ "$c"; } < /dev/null 2>&1 | sed 's/^.*line [0-9]*: //'
+set -- printf '[%s]\n' 'x’;Write-Output PWNED-r3;’y'; echo | "$@"
+w='printf [%s]\n a’;Write-Output PWNED-r4;’b'; $w
+f() { printf '[%s]\n' "$@"; }; c=f; echo | $c 'a’;Write-Output PWNED-r5;’'
+
+==== STDOUT ====
+a’;Write-Output PWNED-r1;’b: command not found
+st=0
+a’;Write-Output PWNED-r1;’b: command not found
+[x’;Write-Output PWNED-r3;’y]
+[a’;Write-Output PWNED-r4;’b]
+[a’;Write-Output PWNED-r5;’]
+
+==== STDERR ====
+

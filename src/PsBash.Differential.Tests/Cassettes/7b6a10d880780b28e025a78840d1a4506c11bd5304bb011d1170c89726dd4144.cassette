@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 155
+stdout-length: 70
+stderr-length: 0
+==== SCRIPT ====
+p() { printf '<%s>' "$@"; printf ' #%s\n' "$#"; }
+unset x u; echo {a,${x:-{b,c}}}
+p {a,${x:-{b,c}}}; p {a,${x:-b,c}}; p x{a,${u:-{b}}}y; p {a,${u:-x}}{1,2}
+==== STDOUT ====
+a {b,c}
+<a><{b,c}> #2
+<a><b,c> #2
+<xay><x{b}y> #2
+<a1><a2><x1><x2> #4
+
+==== STDERR ====
+

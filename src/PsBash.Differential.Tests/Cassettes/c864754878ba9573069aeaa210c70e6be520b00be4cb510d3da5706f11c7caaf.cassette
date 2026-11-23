@@ -1,0 +1,60 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1266
+stdout-length: 196
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"
+cat > s.sh <<'EOF'
+declare -ai q=([1]=010); q[2]+=010; echo "${q[@]}"
+declare -ai a=(1+1 2*3 010 '' abc); a+=(9*9); a[0]+=5; echo "${a[@]}"
+declare -ai b; b[1]=x*2; x=3; b[x+1]=x; echo "${!b[@]} ${b[@]}"
+declare -ai r; r=7*2; r+=1; echo "${r[@]}"
+declare -ai c; read -a c <<< '1+1 2*3 010'; echo "$? ${c[@]}"
+declare -ai d; mapfile -t d < <(printf '%s\n' 2+2 010); echo "$? ${d[@]}"
+printf '%s\n' 3*3 1+0 > f; declare -ai e; readarray -t -O 1 e < f; echo "${!e[@]} ${e[@]}"
+declare -ai s; while read -a s; do echo "row ${s[@]}"; done < f
+declare -ai t; read -a t < f && echo "ok ${t[@]}"
+f() { local -ai l=(1+2); l+=(2*2); echo "${l[@]}"; read -ra l <<< '5*5'; echo "${l[@]}"; }; f
+g=(1+1 2); declare -i g; g+=(3*3); g[0]=4*4; echo "${g[@]}"
+declare -ia h=(1+1); h=(2+2 3+3); echo "${h[@]}"
+declare -Ai m=([k]=1+1); m[j]=2*3; echo "${m[k]} ${m[j]}"
+i=0; declare -ai y; y[i++]=i; echo "$i ${!y[@]} ${y[@]}"
+declare -ai p; echo "${p[5]:=2+2}"; echo "${p[5]}"
+declare -ai w=(1); declare -p w
+declare -ai u=(1); unset u; u=(2+2); echo "${u[@]}"
+declare -ai k=(1); declare +i k; k+=(2+2); echo "${k[@]}"
+declare -ai z=(1 2); z[0]+=1/0; echo not-here; echo "${z[@]}"
+echo end
+EOF
+bash s.sh >out 2>err; cat err; echo ---; cat out
+cd /; rm -rf "$W"
+==== STDOUT ====
+s.sh: line 19: 1/0: division by 0 (error token is "0")
+---
+8 8
+7 6 8 0 0 81
+1 4 0 3
+15
+0 2 6 8
+0 4 8
+1 2 9 1
+row 9
+row 1
+ok 9
+3 4
+25
+16 2 9
+4 6
+2 6
+1 0 1
+4
+4
+declare -ai w=([0]="1")
+2+2
+1 2+2
+end
+
+==== STDERR ====
+

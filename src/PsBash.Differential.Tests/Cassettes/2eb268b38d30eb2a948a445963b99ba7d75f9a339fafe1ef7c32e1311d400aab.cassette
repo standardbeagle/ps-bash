@@ -1,0 +1,21 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 163
+stdout-length: 10
+stderr-length: 0
+==== SCRIPT ====
+shopt -s expand_aliases
+alias eval='echo no'
+alias local='echo LL'
+'eval' 'echo x'; \eval 'echo y'; c='echo z'; "eval" "$c"
+f6() { 'local' z=5; echo "z=$z"; }; f6
+
+==== STDOUT ====
+x
+y
+z
+z=5
+
+==== STDERR ====
+

@@ -1,0 +1,102 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1526
+stdout-length: 610
+stderr-length: 0
+==== SCRIPT ====
+( cd() { printf 'F-cd %s\n' "$*"; }; "cd" a; 'cd' b; \cd c; $'cd' d; f=cd; "$f" e; $f g; cd h; c""d i )
+( ls() { printf 'F-ls %s\n' "$*"; }; "ls" a; 'ls' b; \ls c; $'ls' d; f=ls; "$f" e; ls h )
+( echo() { printf 'F-echo %s\n' "$*"; }; "echo" a; 'echo' b; \echo c; $'echo' d; f=echo; "$f" e; echo h )
+( cat() { printf 'F-cat %s\n' "$*"; }; "cat" a; 'cat' b; \cat c; f=cat; "$f" e; cat h )
+( sort() { printf 'F-sort %s\n' "$*"; }; "sort" a; 'sort' b; \sort c; f=sort; "$f" e; sort h )
+( where() { printf 'F-where %s\n' "$*"; }; "where" a; 'where' b; \where c; f=where; "$f" e; where h )
+( set() { printf 'F-set %s\n' "$*"; }; "set" a; 'set' b; \set c; f=set; "$f" e; set h )
+( h() { printf 'F-h %s\n' "$*"; }; "h" a; 'h' b; \h c; f=h; "$f" e; h x )
+( r() { printf 'F-r %s\n' "$*"; }; "r" a; 'r' b; \r c; f=r; "$f" e; r x )
+( function select { printf 'F-select %s\n' "$*"; }; "select" a; 'select' b; \select c; f=select; "$f" e )
+( eval 'h() { printf "F-h-eval %s\n" "$*"; }'; "h" a; h b; eval 'cd() { printf "F-cd-eval %s\n" "$*"; }'; "cd" c; cd d )
+( cat() { printf 'F-cat-pipe %s\n' "$*"; }; printf 'x\n' | "cat" p; "echo" q | 'cat' )
+"true"; echo "true=$?"; 'false'; echo "false=$?"; "printf" '%s\n' prog-ok; 'env' true; echo "env=$?"
+"nosuch_q1" 2>/dev/null; echo "nf1=$?"; \nosuch_q2 2>/dev/null; echo "nf2=$?"
+shopt -s expand_aliases
+alias greet='printf "A-greet %s\n"'
+greet a
+"greet" b 2>/dev/null; echo "alias-quoted=$?"
+\greet c 2>/dev/null; echo "alias-escaped=$?"
+g=greet; $g d 2>/dev/null; echo "alias-expanded=$?"
+
+==== STDOUT ====
+F-cd a
+F-cd b
+F-cd c
+F-cd d
+F-cd e
+F-cd g
+F-cd h
+F-cd i
+F-ls a
+F-ls b
+F-ls c
+F-ls d
+F-ls e
+F-ls h
+F-echo a
+F-echo b
+F-echo c
+F-echo d
+F-echo e
+F-echo h
+F-cat a
+F-cat b
+F-cat c
+F-cat e
+F-cat h
+F-sort a
+F-sort b
+F-sort c
+F-sort e
+F-sort h
+F-where a
+F-where b
+F-where c
+F-where e
+F-where h
+F-set a
+F-set b
+F-set c
+F-set e
+F-set h
+F-h a
+F-h b
+F-h c
+F-h e
+F-h x
+F-r a
+F-r b
+F-r c
+F-r e
+F-r x
+F-select a
+F-select b
+F-select c
+F-select e
+F-h-eval a
+F-h-eval b
+F-cd-eval c
+F-cd-eval d
+F-cat-pipe p
+F-cat-pipe
+true=0
+false=1
+prog-ok
+env=0
+nf1=127
+nf2=127
+A-greet a
+alias-quoted=127
+alias-escaped=127
+alias-expanded=127
+
+==== STDERR ====
+

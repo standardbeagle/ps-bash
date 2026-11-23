@@ -1,0 +1,38 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 370
+stdout-length: 175
+stderr-length: 0
+==== SCRIPT ====
+t() { printf '%s rc=%s m=%s\n' "$1" "$2" "$(printf '%q,' "${BASH_REMATCH[@]}")"; }
+v() { local n=$1 s=$2 re=$3; [[ $s =~ $re ]]; t "$n" $?; }
+shopt -s nocasematch
+[[ AB =~ ^ab$ ]]; t e36 $?
+v C01 D '\d'
+v C03 A '[a-z]'
+v C04 a '[A-Z]'
+v C05 A '[[:lower:]]'
+v C07 É 'é'
+v C08 a '[^A]'
+v C09 'ǅ' 'ǆ'
+v C10 'ß' 'SS'
+v C12 'ς' 'Σ'
+v C14 'é' '[É]'
+[[ xAB =~ a(b) ]]; t C15 $?
+==== STDOUT ====
+e36 rc=0 m=AB,
+C01 rc=1 m='',
+C03 rc=0 m=A,
+C04 rc=0 m=a,
+C05 rc=0 m=A,
+C07 rc=0 m=É,
+C08 rc=1 m='',
+C09 rc=0 m=ǅ,
+C10 rc=1 m='',
+C12 rc=0 m=ς,
+C14 rc=0 m=é,
+C15 rc=0 m=AB,B,
+
+==== STDERR ====
+

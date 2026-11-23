@@ -1,0 +1,32 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 258
+stdout-length: 57
+stderr-length: 0
+==== SCRIPT ====
+trap 'echo "ERR L=$LINENO"' ERR
+echo a
+{ { cat; } < /nonexistent/zz
+} 2>/dev/null
+echo after
+{ cat; } 2>/dev/null < /nonexistent/zz
+echo end
+: 2>/dev/null > /nonexistent/d/o
+true 2>/dev/null < /nonexistent/zz
+{ :; } 2>/dev/null 2> /nonexistent/d/e
+echo done
+
+==== STDOUT ====
+a
+ERR L=2
+after
+ERR L=5
+end
+ERR L=8
+ERR L=9
+ERR L=9
+done
+
+==== STDERR ====
+

@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 167
+stdout-length: 23
+stderr-length: 0
+==== SCRIPT ====
+export LC_ALL=C.UTF-8; shopt -s extglob
+cd "$(mktemp -d)" || exit
+touch Ab ab1; shopt -s nocaseglob; echo [[:upper:]]*; echo [[:lower:]]b; echo A*; shopt -u nocaseglob
+==== STDOUT ====
+Ab
+[[:lower:]]b
+Ab ab1
+
+==== STDERR ====
+

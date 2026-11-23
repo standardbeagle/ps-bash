@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 217
+stdout-length: 27
+stderr-length: 0
+==== SCRIPT ====
+f1() { false; y=1; }; if f1; then echo "m01 ok"; else echo "m01 WRONG"; fi
+for i in 1; do false; y=1; done && echo "m06 ok" || echo "m06 WRONG"
+false; g() { :; }; echo "fndef $?"
+g2() { false; x=1; }; g2; echo "h3 $?"
+==== STDOUT ====
+m01 ok
+m06 ok
+fndef 0
+h3 0
+
+==== STDERR ====
+

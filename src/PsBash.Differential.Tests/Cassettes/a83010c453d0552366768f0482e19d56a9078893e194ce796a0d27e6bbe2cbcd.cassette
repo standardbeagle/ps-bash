@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 254
+stdout-length: 11
+stderr-length: 0
+==== SCRIPT ====
+p() { printf '<%s>' "$@"; printf ' #%s\n' "$#"; }
+unset u; [[ aa =~ ^${u:-a{1,2}}$ ]] && echo y || echo n
+[[ a{1,2} =~ ^${u:-a{1,2}}$ ]] && echo y2 || echo n2
+[[ '}' =~ ^${u:-"}"}$ ]] && echo y4 || echo n4
+[[ ')' =~ ^$(echo ")")$ ]] && echo y5 || echo n5
+==== STDOUT ====
+y
+n2
+y4
+y5
+
+==== STDERR ====
+

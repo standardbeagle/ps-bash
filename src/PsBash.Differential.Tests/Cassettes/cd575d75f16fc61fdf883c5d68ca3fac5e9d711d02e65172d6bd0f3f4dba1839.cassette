@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 209
+stdout-length: 16
+stderr-length: 0
+==== SCRIPT ====
+( set -eE; shopt -s inherit_errexit; x=$(false; echo after); echo "x=$x survived" ); echo "s27 $?"
+( set -eE; trap 'echo ERR' ERR; shopt -s inherit_errexit; x=$(false; echo after); echo "x=$x" ); echo "s28 $?"
+==== STDOUT ====
+s27 1
+ERR
+s28 1
+
+==== STDERR ====
+

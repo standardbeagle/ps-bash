@@ -1,0 +1,37 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 285
+stdout-length: 204
+stderr-length: 0
+==== SCRIPT ====
+echo a #c 'x
+;Write-Output PWNED-u1;#'
+printf '[%s]\n' a @PSVersionTable z @args
+printf '[%s]\n' q -n w　--x a b c d ef
+x=a b; printf '[%s]\n' $x "$x" pre $x
+printf '[%s]\n' a $(echo X)b \ q
+for w in a b c　d; do printf '[%s]' "$w"; done; echo
+printf '[%s]\n' xy zw | od -c | head -2
+
+==== STDOUT ====
+a #c x
+;Write-Output PWNED-u1;#
+[a @PSVersionTable]
+[z @args]
+[q -n]
+[w　--x]
+[a b]
+[c d]
+[ef]
+[a b]
+[a b]
+[pre a b]
+[a Xb]
+[ q]
+[a b][c　d]
+0000000   [   x  \v   y   ]  \n   [   z  \f   w   ]  \n
+0000014
+
+==== STDERR ====
+

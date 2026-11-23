@@ -1,0 +1,78 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1852
+stdout-length: 449
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"
+cat > s.sh <<'EOF'
+declare -i n=5; [ -z "$KEEP" ] || unset n; n=n*2; echo "1 $n"
+declare -i n2=0; for k in 1 2 3; do if [ $k = 9 ]; then unset n2; fi; n2+=k; done; echo "2 $n2"
+declare -i n3=1; if false; then unset n3; fi; n3=n3+1; echo "3 $n3"
+declare -i n4=1; case x in y) unset n4;; esac; n4=n4+1; echo "4 $n4"
+declare -ai a5=(1); if false; then unset a5; fi; a5+=(2+2); echo "5 ${a5[@]}"
+declare -ai a6=(1); [ -n "$KEEP" ] && declare +i a6; a6[1]=2+2; echo "6 ${a6[@]}"
+declare -i n7=1; unset n7; n7=2+2; echo "7 $n7"
+f8() { declare -i v=1; unset v; v=2+2; echo "8 $v"; }; f8
+f9() { declare -i v; v=1+1; echo "9 $v"; unset v; }; f9
+declare -Ai c; for w in a b a a; do c[$w]+=1; done; echo "10 ${c[a]} ${c[b]}"; declare -p c
+declare -iA c2; c2[x]=1+1; echo "11 ${c2[x]}"; declare -p c2
+shopt -s lastpipe; declare -ai r; echo "1+1 2*2" | read -a r; echo "12 $? ${r[@]}"
+declare -ai mp; printf '%s\n' 3+3 4*4 | mapfile -t mp; echo "13 ${mp[@]}"
+i=5; declare -ai o=([2]=i++ [0]=i++); echo "14 ${o[0]} ${o[2]} $i"
+declare -ai a15=(1); a15+=(a15[0]+1 a15[1]+1); echo "15 ${a15[@]}"
+declare -ai a16=(1 2); a16=(a16[1]+1 a16[0]+1); echo "16 ${a16[@]}"
+a17=(x y); declare -i a17; mapfile -t -O 2 a17 <<< 5+5; echo "17 ${a17[@]}"
+declare -ai z18; z18=(5 1/0 3); echo not-here
+echo "18 ${z18[@]}"
+declare -ai a19; a19=(); echo "19 ${#a19[@]}"; a19+=(); echo "19b ${#a19[@]}"
+g() { local -ai l=(1); l+=(l[0]+1); echo "20 ${l[@]}"; }; g
+echo end
+EOF
+bash s.sh >out 2>err; cat err; echo ---; cat out
+for body in 'declare -ai a; a=(1 y+1); echo not-here' 'declare -i n; n=y+1; echo not-here' 'declare -ai b; b[0]=y+1; echo not-here' 'declare -ai c; read -a c <<< "y+1"; echo not-here' 'declare -ai d; d=([1]=y+1); echo not-here'; do
+  printf 'set -u\n%s\necho after\n' "$body" > u.sh
+  bash u.sh 2>&1; echo "rc=$?"
+done
+cd /; rm -rf "$W"
+==== STDOUT ====
+s.sh: line 18: 1/0: division by 0 (error token is "0")
+---
+1 10
+2 6
+3 2
+4 2
+5 1 4
+6 1 4
+7 2+2
+8 2+2
+9 2
+10 3 1
+declare -Ai c=([b]="1" [a]="3" )
+11 2
+declare -Ai c2=([x]="2" )
+12 0 2 4
+13 6 16
+14 6 5 7
+15 1 2 3
+16 1 2
+17 x y 10
+18 5
+19 0
+19b 0
+20 1 2
+end
+u.sh: line 2: y: unbound variable
+rc=1
+u.sh: line 2: y: unbound variable
+rc=1
+u.sh: line 2: y: unbound variable
+rc=1
+u.sh: line 2: y: unbound variable
+rc=1
+u.sh: line 2: y: unbound variable
+rc=1
+
+==== STDERR ====
+

@@ -1,0 +1,23 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 305
+stdout-length: 83
+stderr-length: 0
+==== SCRIPT ====
+p() { printf '<%s>' "$@"; printf ' #%s\n' "$#"; }
+unset u; x=abc
+cat <<EOF
+1 ${u:-$'a\x41'} ${u:-'q'} ${u:-"q"} ${u:-\x} ${u:-\$x} ${u:-$x}
+2 ${x/b/'z'} ${x/b/"z"} ${x#'a'} ${x#"a"} ${x/b/$'\x41'}
+"${u:-$'a\x41'}"
+EOF
+echo "3 ${u:-$'a\x41'} ${u:-'q'} ${u:-"q"} ${u:-\x} ${x/b/'z'} ${x#'a'} ${x/b/$'\x41'}"
+==== STDOUT ====
+1 $'a\x41' 'q' q \x $x abc
+2 azc azc bc bc aAc
+"$'a\x41'"
+3 aA 'q' q \x azc bc aAc
+
+==== STDERR ====
+

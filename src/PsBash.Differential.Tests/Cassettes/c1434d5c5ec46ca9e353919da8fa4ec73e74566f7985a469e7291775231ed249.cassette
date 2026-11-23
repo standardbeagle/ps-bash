@@ -1,0 +1,30 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 179
+stdout-length: 28
+stderr-length: 0
+==== SCRIPT ====
+while read -u 3 l; do echo "d=$l"; done 3<<EOF
+d1
+d2
+EOF
+exec {hd}<<EOF
+hd1
+EOF
+read -u $hd l; echo "hd=$l"; exec {hd}<&-
+read -u 5 l 5<<EOF
+five
+EOF
+echo "5=$l"
+{ cat; } <<< grp
+
+==== STDOUT ====
+d=d1
+d=d2
+hd=hd1
+5=five
+grp
+
+==== STDERR ====
+

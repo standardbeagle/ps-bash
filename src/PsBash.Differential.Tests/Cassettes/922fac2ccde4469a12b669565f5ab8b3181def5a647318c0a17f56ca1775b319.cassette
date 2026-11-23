@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 119
+stdout-length: 4
+stderr-length: 0
+==== SCRIPT ====
+export LC_ALL=C.UTF-8; shopt -s extglob
+e=; [[ a == "@(a)"$e ]]; echo $?; case a in "+(a)"$e) echo Y;; *) echo n;; esac
+==== STDOUT ====
+1
+n
+
+==== STDERR ====
+

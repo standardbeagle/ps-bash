@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 154
+stdout-length: 6
+stderr-length: 0
+==== SCRIPT ====
+export LC_ALL=C.UTF-8
+v='+(a)'; case '+(a)' in $v) echo e1;; esac; case aa in $v) echo e2;; esac; [[ '+(a)' == $v ]] && echo e3; [[ aa == $v ]] && echo e4
+==== STDOUT ====
+e1
+e4
+
+==== STDERR ====
+

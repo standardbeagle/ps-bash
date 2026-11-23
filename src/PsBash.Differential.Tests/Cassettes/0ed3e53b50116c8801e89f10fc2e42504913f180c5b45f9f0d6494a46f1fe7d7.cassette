@@ -1,0 +1,25 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 194
+stdout-length: 117
+stderr-length: 62
+==== SCRIPT ====
+history -c; history -s 'echo three tee'
+history -p '!e:s/e/E/:s/c/C/' '!!:gs/e/E/' '!!:s/e/[&]/' '!!:g&' '!!:s' '!!:s/e/\&x/' '!!:$:s/e/E/'; echo "p=$?"
+history -p '!!:gs/t/T/:&'; echo "rep=$?"
+
+==== STDOUT ====
+ECho three tee
+Echo thrEE tEE
+[e]cho three tee
+[e]cho thr[e][e] t[e][e]
+echo three tee
+&xcho three tee
+tEe
+p=0
+rep=1
+
+==== STDERR ====
+bash: line 3: history: !!:gs/t/T/:&: history expansion failed
+

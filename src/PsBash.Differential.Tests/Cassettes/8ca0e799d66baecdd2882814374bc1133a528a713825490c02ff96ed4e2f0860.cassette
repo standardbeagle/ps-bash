@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 125
+stdout-length: 43
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+err() { sed -E 's/^([^:]*: )?(line [0-9]+: )?//' "$1"; }
+echo y 2>e 3>/nonexist/f
+echo "s=$?"
+err e
+==== STDOUT ====
+s=1
+/nonexist/f: No such file or directory
+
+==== STDERR ====
+

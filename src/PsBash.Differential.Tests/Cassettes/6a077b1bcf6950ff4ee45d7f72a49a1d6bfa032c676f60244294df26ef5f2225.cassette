@@ -1,0 +1,43 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 654
+stdout-length: 172
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"
+cat > s.sh <<'EOF'
+a=(a b c d e f g h i j k l)
+k=010; echo "${a[$k]}" "${a[k]}" "${a[010]}" "${a[$k]:-none}" "${a[k]:-none}"
+declare -A m=([010]=x); echo "${m[010]}" "${m[$k]}"
+b=(a b c d e f g h i j k l); i=-010; unset 'b[i]'; echo "${b[@]}"
+c=(a b c d e f g h i j k l); unset 'c[010]'; echo "${c[@]}"
+d=(); d[010]=x; echo "${!d[@]}"
+ref='a[010]'; echo "${!ref}"
+declare -i n=010; echo "$n"
+h=ff; echo $((16#$h)) $((16#$h + 1)); (( v = 16#$h )); echo "$v"
+echo $((16#FF)) $((16#Ff)) $((36#Z)) $((20#J)) $((64#Z))
+i=08; echo "${a[$i]}"
+echo "rc=$?"
+echo end
+EOF
+bash s.sh >out 2>err; cat err; echo ---; cat out
+cd /; rm -rf "$W"
+==== STDOUT ====
+s.sh: line 11: 08: value too great for base (error token is "08")
+---
+i i i i i
+x x
+a b c d f g h i j k l
+a b c d e f g h j k l
+8
+i
+8
+255 256
+255
+255 255 35 19 61
+rc=1
+end
+
+==== STDERR ====
+

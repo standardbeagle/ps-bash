@@ -1,0 +1,29 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 380
+stdout-length: 57
+stderr-length: 0
+==== SCRIPT ====
+read -u 3 b 3<<< x; echo "b=$b"; cat 0<<< zero
+{ read -u 3 l; echo "g=$l"; } 3<<< gx
+while read -u 3 l; do echo "w=$l"; done 3<<< wx
+if true; then read -u 3 l; echo "if=$l"; fi 3<<< ifx
+exec {hv}<<< hx; read -u $hv l; echo "hv=$l"; exec {hv}<&-
+exec 4<<< four; read -u 4 l; echo "4=$l"; exec 4<&-
+read -u 6 a 6<<< "q $((1+2))"; echo "a=$a"
+exec <<< sh-in; read l; echo "stdin=$l"
+
+==== STDOUT ====
+b=x
+zero
+g=gx
+w=wx
+if=ifx
+hv=hx
+4=four
+a=q 3
+stdin=sh-in
+
+==== STDERR ====
+

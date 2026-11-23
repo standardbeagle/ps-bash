@@ -1,0 +1,29 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 152
+stdout-length: 99
+stderr-length: 0
+==== SCRIPT ====
+echo $^ x
+echo $é$^
+echo a$ $ b "$" '$' $% $= $, $. $/ $+ $]
+echo "$^ $: $é" x$^y
+printf '[%s]\n' a @x @ b@c --% ; echo @ --%
+x=1; echo $x#b ${x}#c a#b
+
+==== STDOUT ====
+$^ x
+$é$^
+a$ $ b $ $ $% $= $, $. $/ $+ $]
+$^ $: $é x$^y
+[a]
+[@x]
+[@]
+[b@c]
+[--%]
+@ --%
+1#b 1#c a#b
+
+==== STDERR ====
+

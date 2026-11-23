@@ -1,0 +1,81 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1462
+stdout-length: 983
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"
+cat > s.sh <<'EOF'
+i=0; a=(10 20 30); (( a[i++] += i )); echo "$i ${a[*]}"
+i=0; a=(1 2 3); (( a[i++]++ )); echo "$i ${a[*]}"
+i=0; a=(1 2 3); (( ++a[i++] )); echo "$i ${a[*]}"
+i=0; a=(1 2 3); (( a[i] = i++ )); echo "$i ${a[*]}"
+i=0; a=(1 2 3); (( a[i++] = 9 )); echo "$i ${a[*]}"
+i=0; a=(1 2 3); echo $(( a[i++] *= 5 )) "$i ${a[*]}"
+i=0; a=(1 2 3); let 'a[i++]+=10'; echo "$i ${a[*]}"
+i=0; a=(1 2 3); (( a[i++] += a[i++] )); echo "$i ${a[*]}"
+i=0; a=(1 2 3); x='a[i++]'; (( x++ )); echo "$i ${a[*]} $x"
+a=(1 2 3); (( a[-1]++ )); echo "${a[*]}"
+declare -A m=([k]=5); k=k; (( m[$k]++ )); echo "${m[k]}"
+x=1; echo $((1 + x = 5)) $x
+echo $((2 * x = 5 + 1))
+echo $((1 + x += 5))
+(( 3 + x = 4 )); echo "st=$? x=$x"
+declare -i n=5; declare n+=010; echo "$n"; declare n=010; echo "$n"; n+=010; echo "$n"
+b=([010]=x [2]=y); declare -p b
+c=([08]=x [1]=y); declare -p c; echo after-c
+a=(a b c d e); i=1; echo "${a[@]:$i:2}"; set -- p q r s; echo "${@:$i:1}" "${@:$#}"
+i=010; echo "${a[@]:$i}|"; i=' 1 '; echo "${a[@]:$i:1}"; j='1+1'; echo "${a[@]:$j:1}"; i=-2; echo "${a[@]:$i}"
+( set -u; echo "${a[@]:$zz}"; echo not-here ); echo "st=$?"
+s=abcdef; x=${s:08}; echo "[$x]"; echo same-line
+if [[ ${s:08} == a ]]; then echo y; fi; echo same
+f(){ echo ${s:08}; echo in-f; }; f; echo after
+y=$(echo ${s:08}; echo inner); echo "[$y]"
+( echo ${s:08}; echo inner ); echo outer
+echo end
+EOF
+bash s.sh >out 2>err; cat err; echo ---; cat out
+cd /; rm -rf "$W"
+==== STDOUT ====
+s.sh: line 12: 1 + x = 5: attempted assignment to non-variable (error token is "= 5")
+s.sh: line 13: 2 * x = 5 + 1: attempted assignment to non-variable (error token is "= 5 + 1")
+s.sh: line 14: 1 + x += 5: attempted assignment to non-variable (error token is "+= 5")
+s.sh: line 15: ((: 3 + x = 4 : attempted assignment to non-variable (error token is "= 4 ")
+s.sh: line 18: 08: value too great for base (error token is "08")
+s.sh: line 21: zz: unbound variable
+s.sh: line 22: s: 08: value too great for base (error token is "08")
+s.sh: line 23: s: 08: value too great for base (error token is "08")
+s.sh: line 24: s: 08: value too great for base (error token is "08")
+s.sh: line 25: s: 08: value too great for base (error token is "08")
+s.sh: line 26: s: 08: value too great for base (error token is "08")
+---
+1 11 20 30
+1 2 2 3
+1 2 2 3
+1 1 0 3
+1 9 2 3
+5 1 5 2 3
+1 11 2 3
+2 3 2 3
+1 1 2 3 2
+1 2 4
+6
+st=1 x=1
+13
+8
+16
+declare -a b=([2]="y" [8]="x")
+b c
+p s
+|
+b
+c
+d e
+st=1
+[]
+outer
+end
+
+==== STDERR ====
+

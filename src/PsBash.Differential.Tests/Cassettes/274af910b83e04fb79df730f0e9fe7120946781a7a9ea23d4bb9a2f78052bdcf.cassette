@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 213
+stdout-length: 27
+stderr-length: 0
+==== SCRIPT ====
+s=$(printf 'a%.0s' {1..3000}); [[ $s =~ ^(a|aa)*$ ]]; echo "P1 $? ${#BASH_REMATCH[1]}"
+[[ ${s}b =~ (a|aa)*c ]]; echo "P2 $?"
+[[ $s =~ (a*)*b ]]; echo "P3 $?"
+[[ $s =~ ((a*)*)*$ ]]; echo "P4 $? ${#BASH_REMATCH[1]}"
+==== STDOUT ====
+P1 0 1
+P2 1
+P3 1
+P4 0 3000
+
+==== STDERR ====
+

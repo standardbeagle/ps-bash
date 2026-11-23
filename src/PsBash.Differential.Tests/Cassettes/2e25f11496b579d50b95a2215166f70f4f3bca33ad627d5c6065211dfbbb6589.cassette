@@ -1,0 +1,38 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 500
+stdout-length: 202
+stderr-length: 0
+==== SCRIPT ====
+p() { printf '<%s>' "$@"; printf ' #%s\n' "$#"; }
+x='a b'; unset u
+p ${x/ /{1,2\}}; echo after
+p ${x/ /\}} "${x/ /{\}}" ${x:-{a,b\}}
+p ${u:-{a,b}} ${u:-{a}b} ${u:-{} ${u:-${u:-{a}}}
+p "${u:-$(echo })}" "${u:-`echo }`}" ${u:-$'\'}'}
+p "${x:-'}'}" "${u:-'}'}" "${u:-"{}"}" "${u:-\{\}}"
+y=${u:-a:{b}:c}; p "$y"; a=(1); p ${a[0]:-{z}}
+p $(echo ${u:-)}); p "$(echo "${u:-)}")"
+p {a,${x/ /\}}} {a,${u:-{b}} {a,$(echo },)} x{a,${u:-b,c}}y {a,${x/ /,}}
+cat <<EOF
+${u:-{h}} ${x/ /\}} ${u:-{a,b\}}
+EOF
+echo end
+==== STDOUT ====
+<a{1,2}b> #1
+after
+<a}b><a{}b><a><b> #4
+<{a,b}><{ab}><{><{a}> #4
+<}><}><'}> #3
+<a b><'}'><{}><\{}> #4
+<a:{b:c}> #1
+<1}> #1
+<)> #1
+<)> #1
+<a><a}b><{a,{b}><a><},><xay><xb,cy><a><a,b> #9
+{h} a}b {a,b}
+end
+
+==== STDERR ====
+

@@ -1,0 +1,60 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1174
+stdout-length: 377
+stderr-length: 0
+==== SCRIPT ====
+t() { printf '%s rc=%s m=%s\n' "$1" "$2" "$(printf '%q,' "${BASH_REMATCH[@]}")"; }
+v() { local n=$1 s=$2 re=$3; [[ $s =~ $re ]]; t "$n" $?; }
+u=; [[ 'a{1,2}}' =~ ^${u:-a\{1,2\}}\}$ ]]; t U01 $?
+u=; [[ 'aa}' =~ ^${u:-a\{1,2\}}\}$ ]]; t U02 $?
+u='a{2}'; [[ 'aa}' =~ ^${u:-x}\}$ ]]; t U03 $?
+u='a{2}'; [[ 'a{2}}' =~ ^${u:-x}\}$ ]]; t U04 $?
+u=; [[ a.b =~ ^${u:-a'.'b}$ ]]; t U05 $?
+u=; [[ axb =~ ^${u:-a'.'b}$ ]]; t U06 $?
+u=; [[ axb =~ ^${u:-a.b}$ ]]; t U07 $?
+u=; [[ axb =~ ^${u:-"a.b"}$ ]]; t U08 $?
+u=; v='x.y'; [[ xzy =~ ^${u:-$v}$ ]]; t U10 $?
+u=; v='x.y'; [[ xzy =~ ^${u:-"$v"}$ ]]; t U11 $?
+u=1; [[ 'x.' =~ ^${u:+x\.}$ ]]; t U12 $?
+u=1; [[ 'xy' =~ ^${u:+x\.}$ ]]; t U13 $?
+u=; [[ '' =~ ^${u:+x\.}$ ]]; t U14 $?
+u=; [[ 'a\b' =~ ^${u:-a\\b}$ ]]; t U15 $?
+u=; [[ 'a*' =~ ^${u:-a\*}$ ]]; t U16 $?
+u=; [[ 'aaa' =~ ^${u:-a\*}$ ]]; t U17 $?
+u=; [[ 'axb' =~ "^${u:-a.b}$" ]]; t U20 $?
+u=; [[ 'a.b' =~ ^${u-a\.b}$ ]]; t U21 $?
+unset u; [[ 'axb' =~ ^${u=a\.b}$ ]]; t U24 $?; echo "u=$u"
+u=; w=; [[ 'a.' =~ ^${u:-${w:-a\.}}$ ]]; t U25 $?
+u=; w=; [[ 'ax' =~ ^${u:-${w:-a\.}}$ ]]; t U26 $?
+u=; [[ 'a[b' =~ ^${u:-a\[b}$ ]]; t U29 $?
+unset u; [[ 'a(b)' =~ ^${u-a\((b)\)}$ ]]; t U31 $?
+==== STDOUT ====
+U01 rc=0 m=a\{1\,2\}\},
+U02 rc=1 m='',
+U03 rc=0 m=aa\},
+U04 rc=1 m='',
+U05 rc=0 m=a.b,
+U06 rc=1 m='',
+U07 rc=0 m=axb,
+U08 rc=1 m='',
+U10 rc=0 m=xzy,
+U11 rc=1 m='',
+U12 rc=0 m=x.,
+U13 rc=1 m='',
+U14 rc=0 m='',
+U15 rc=0 m=a\\b,
+U16 rc=0 m=a\*,
+U17 rc=1 m='',
+U20 rc=1 m='',
+U21 rc=1 m='',
+U24 rc=0 m=axb,
+u=a.b
+U25 rc=0 m=a.,
+U26 rc=1 m='',
+U29 rc=0 m=a\[b,
+U31 rc=0 m=a\(b\),b,
+
+==== STDERR ====
+

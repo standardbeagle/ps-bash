@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 233
+stdout-length: 96
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"
+p() { printf '%s' "$#:"; [ $# -gt 0 ] && printf '<%s>' "$@"; echo; }; x='a b'; e=; g='*'; HOME=/home/hh
+n='a;echo pwn'; m='$(echo pwn)'; q='"x y"'; p $n$m; p $q$q; p `echo '$x'`$x; set -- "$m" '`echo pwn`'; p "$@"$m
+==== STDOUT ====
+3:<a;echo><pwn$(echo><pwn)>
+3:<"x><y""x><y">
+2:<$xa><b>
+3:<$(echo pwn)><`echo pwn`$(echo><pwn)>
+
+==== STDERR ====
+

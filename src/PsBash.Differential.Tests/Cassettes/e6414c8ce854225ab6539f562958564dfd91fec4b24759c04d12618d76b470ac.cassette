@@ -1,0 +1,21 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 179
+stdout-length: 10
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+err() { sed -E 's/^([^:]*: )?(line [0-9]+: )?//' "$1"; }
+exec 5>&1
+{ { exec >log; echo e >&2; } 2>&1; echo e2 >&2; } 2>&1
+exec >&5 5>&-
+echo log:
+cat log
+==== STDOUT ====
+e
+e2
+log:
+
+==== STDERR ====
+

@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 206
+stdout-length: 28
+stderr-length: 0
+==== SCRIPT ====
+export LC_ALL=C.UTF-8; shopt -s extglob
+cd "$(mktemp -d)" || exit
+echo $(compgen -W 'abc abd xyz a.c' -X 'a?c'); echo $(compgen -W 'abc abd xyz a.c' -X '!@(a*)'); echo $(compgen -W 'abc abd xyz' -X '[!a]*')
+==== STDOUT ====
+abd xyz
+abc abd a.c
+abc abd
+
+==== STDERR ====
+

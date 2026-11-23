@@ -1,0 +1,26 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 334
+stdout-length: 65
+stderr-length: 0
+==== SCRIPT ====
+false; echo "k18 $((1+1)) $?"
+arr=( $(exit 3) ); echo "k46 $?"
+declare -a arr2=( $(exit 3) ); echo "k47 $?"
+false; eval ''; echo "k48 $?"
+local zz 2>/dev/null; echo "k43 $?"
+t4() { trap 'echo "t04 ret-trap $?"' RETURN; return 6; }; t4; echo "t04 after $?"; trap - RETURN
+( set -e; trap 'false; echo intrap' EXIT; true ); echo "u31 $?"
+==== STDOUT ====
+k18 2 1
+k46 3
+k47 0
+k48 0
+k43 1
+t04 ret-trap 0
+t04 after 6
+u31 1
+
+==== STDERR ====
+

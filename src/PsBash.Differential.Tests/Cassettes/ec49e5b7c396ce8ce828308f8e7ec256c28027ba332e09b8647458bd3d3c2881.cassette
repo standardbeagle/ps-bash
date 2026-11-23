@@ -1,0 +1,46 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 557
+stdout-length: 232
+stderr-length: 0
+==== SCRIPT ====
+t() { printf '%s rc=%s m=%s\n' "$1" "$2" "$(printf '%q,' "${BASH_REMATCH[@]}")"; }
+v() { local n=$1 s=$2 re=$3; [[ $s =~ $re ]]; t "$n" $?; }
+[[ x =~ x ]]
+[[ 'a\b' =~ a[\]b ]]; t e07 $?
+[[ a =~ [[.a.]] ]]; t e29 $?
+[[ a =~ [[=a=]] ]]; t e30 $?
+[[ 'a]' =~ []a]+ ]]; t e31 $?
+[[ AB =~ [a-z]+ ]]; t e35 $?
+v V20 '\' '[\]'
+v V51 '-' '[a-]'
+v V52 '-' '[]-a]'
+v V53 ']' '[]a]'
+v V54 'x' '[^]a]'
+v V56 '-' '[[.-.]]'
+v V57 'é' '[[=e=]]'
+v V59 'é' '[a-z]'
+v V99 'a' '[[:alpha:][:digit:]]'
+re='a[b'; [[ 'a[b' =~ $re ]]; t F6 $?
+p='[a-'; [[ 'b]' =~ $p"]"] ]]; t F12 $?
+==== STDOUT ====
+e07 rc=2 m=x,
+e29 rc=0 m=a,
+e30 rc=0 m=a,
+e31 rc=0 m=a\],
+e35 rc=1 m='',
+V20 rc=0 m=\\,
+V51 rc=0 m=-,
+V52 rc=1 m='',
+V53 rc=0 m=\],
+V54 rc=0 m=x,
+V56 rc=0 m=-,
+V57 rc=1 m='',
+V59 rc=1 m='',
+V99 rc=0 m=a,
+F6 rc=2 m=a,
+F12 rc=1 m='',
+
+==== STDERR ====
+

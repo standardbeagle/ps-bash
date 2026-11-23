@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 123
+stdout-length: 30
+stderr-length: 0
+==== SCRIPT ====
+p() { printf '<%s>' "$@"; printf ' #%s\n' "$#"; }
+n=3; unset u
+p a$"*" x$"y" a$'\x41'b a$'b'c x$"$n"y
+echo "${u:-$'t\x41'}"
+==== STDOUT ====
+<a*><xy><aAb><abc><x3y> #5
+tA
+
+==== STDERR ====
+

@@ -1,0 +1,25 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 148
+stdout-length: 25
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+echo {a} >f; cat f
+echo {a} <<<x
+echo {a}&>g; cat g
+echo {a} 2>e; cat e
+echo {a}>h; echo "a=${a:+set}"; ls h; exec {a}>&-
+
+==== STDOUT ====
+{a}
+{a}
+{a}
+{a}
+
+a=set
+h
+
+==== STDERR ====
+

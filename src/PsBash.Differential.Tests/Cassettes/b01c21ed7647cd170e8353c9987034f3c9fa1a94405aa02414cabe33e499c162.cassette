@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 122
+stdout-length: 42
+stderr-length: 0
+==== SCRIPT ====
+history -c; history -s 'echo seven'; fc -s 2>/dev/null | cat; history
+( history -s sub ); history -s piped | cat; history
+
+==== STDOUT ====
+seven
+    1  echo seven
+    1  echo seven
+
+==== STDERR ====
+

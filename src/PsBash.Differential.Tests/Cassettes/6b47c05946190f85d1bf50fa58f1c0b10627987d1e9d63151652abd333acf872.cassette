@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 139
+stdout-length: 12
+stderr-length: 0
+==== SCRIPT ====
+export LC_ALL=C.UTF-8
+v='+(a)'; w='+(a)x'; u=aax; echo "${w#$v}" "${u#$v}"; shopt -s extglob; echo "${u#$v}"; case aa in $v) echo e7;; esac
+==== STDOUT ====
+x aax
+ax
+e7
+
+==== STDERR ====
+

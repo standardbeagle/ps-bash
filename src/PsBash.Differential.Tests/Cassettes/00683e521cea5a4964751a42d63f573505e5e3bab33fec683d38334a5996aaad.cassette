@@ -1,0 +1,25 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 311
+stdout-length: 34
+stderr-length: 0
+==== SCRIPT ====
+x='a b'; 'export' v3=$x; echo "[$v3]"
+f3() { \local w=$x; echo "[$w]"; "declare" d=$x; echo "[$d]"; }; f3
+'readonly' r3=$x; echo "[$r3]"
+( eval "'declare' -a A=(x y)" ) 2>/dev/null; echo "arr=$?"
+( eval "g() { 'local' a=(1 2); }" ) 2>/dev/null; echo "loc=$?"
+( eval '\export Q=(1)' ) 2>/dev/null; echo "exp=$?"
+
+==== STDOUT ====
+[a]
+[a]
+[a]
+[a]
+arr=2
+loc=2
+exp=2
+
+==== STDERR ====
+

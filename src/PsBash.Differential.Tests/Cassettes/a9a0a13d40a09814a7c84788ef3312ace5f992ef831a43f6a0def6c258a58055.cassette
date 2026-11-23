@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 182
+stdout-length: 35
+stderr-length: 0
+==== SCRIPT ====
+p() { printf '<%s>' "$@"; printf ' #%s\n' "$#"; }
+declare -A m=([k]=~root); echo "${m[k]}"
+declare -A m2=([k]=~root/x [j]=a:~root [n]=~nosuchuserx); echo "${m2[k]} ${m2[j]} ${m2[n]}"
+==== STDOUT ====
+~root
+~root/x a:~root ~nosuchuserx
+
+==== STDERR ====
+

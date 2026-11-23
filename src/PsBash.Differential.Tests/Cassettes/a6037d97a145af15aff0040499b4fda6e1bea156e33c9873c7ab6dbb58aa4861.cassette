@@ -1,0 +1,48 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 170
+stdout-length: 57
+stderr-length: 0
+==== SCRIPT ====
+x=V; cat <<EOF
+a $x\
+b
+c\$x\
+d
+e\\
+f
+EOF
+cat <<-EOF
+	t1\
+	t2
+	EOF
+cat <<EOF
+a\
+EOF
+EOF
+cat <<'EOF'
+q\
+r
+EOF
+cat <<EOF
+\a \n \" \' \$x \`x\` \\ \{
+EOF
+cat <<EOF
+end\\
+EOF
+
+==== STDOUT ====
+a
+c$xd
+e\
+f
+t1	t2
+aEOF
+q\
+r
+\a \n \" \' $x `x` \ \{
+end\
+
+==== STDERR ====
+

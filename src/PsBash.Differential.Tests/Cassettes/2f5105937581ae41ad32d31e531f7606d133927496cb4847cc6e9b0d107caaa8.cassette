@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 177
+stdout-length: 37
+stderr-length: 0
+==== SCRIPT ====
+export LC_ALL=C.UTF-8; shopt -s extglob
+v=abc; printf '%s|' "${v^b}" "${v^^ab}" "${v^^[ab]}" "${v^}" "${v^^}"; v=ABC; printf '%s|' "${v,b}" "${v,,BC}" "${v,,[BC]}" "${v,}"; echo
+==== STDOUT ====
+abc|abc|ABc|Abc|ABC|ABC|ABC|Abc|aBC|
+
+==== STDERR ====
+

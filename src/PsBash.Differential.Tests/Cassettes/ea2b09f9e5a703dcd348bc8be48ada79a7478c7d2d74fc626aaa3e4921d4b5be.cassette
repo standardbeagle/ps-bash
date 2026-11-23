@@ -1,0 +1,57 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1009
+stdout-length: 260
+stderr-length: 0
+==== SCRIPT ====
+x() { printf '%s:' "$1"; od -An -tx1 | tr -s ' \n' ' '; echo; }
+s=$'\xff'
+printf '%s' "$s" | x var
+t=$s; printf '%s' "$t" | x copy
+u="a${s}b"; printf '%s' "$u" | x interp
+c=$(printf '\xff'); printf '%s' "$c" | x cmdsub
+c2="$(printf 'a\xfeb')"; printf '%s' "$c2" | x cmdsubq
+printf '\xfd\n' > f; read -r r2 < f; printf '%s' "$r2" | x readfile
+printf '\xfd\n' | { read -r r3; printf '%s' "$r3" | x readpipe; }
+read -r r4 <<< "$s"; printf '%s' "$r4" | x readhs
+a=($'\xff' x); a+=("$s"); printf '%s' "${a[0]}${a[2]}" | x array
+declare -A m; m[k]=$s; printf '%s' "${m[k]}" | x assoc
+cat <<< "$s" | x herestring
+cat <<EOF | x heredoc
+$s
+EOF
+f() { local l=$1; printf '%s' "$l" | x local; }; f "$s"
+printf -v pv '%s' "$s"; printf '%s' "$pv" | x printfv
+echo -n "$s" | x echo
+v=${s}z; printf '%s' "${v%z}" "${#s}" | x strip-len
+printf '%s\n' "$s" > g; od -An -tx1 g | tr -s ' \n' ' '; echo ":redirect"
+printf '%q\n' "$s" "a${s}b"
+{ t=$s; printf '%s' "$t" | x job; } & wait
+( s=$'\xfe' ); printf '%s' "$s" | x subshell
+
+==== STDOUT ====
+var: ff
+copy: ff
+interp: 61 ff 62
+cmdsub: ff
+cmdsubq: 61 fe 62
+readfile: fd
+readpipe: fd
+readhs: ff
+array: ff ff
+assoc: ff
+herestring: ff 0a
+heredoc: ff 0a
+local: ff
+printfv: ff
+echo: ff
+strip-len: ff 31
+ ff 0a :redirect
+$'\377'
+$'a\377b'
+job: ff
+subshell: ff
+
+==== STDERR ====
+

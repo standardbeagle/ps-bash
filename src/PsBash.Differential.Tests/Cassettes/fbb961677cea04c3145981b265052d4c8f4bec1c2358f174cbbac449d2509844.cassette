@@ -1,0 +1,30 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 544
+stdout-length: 374
+stderr-length: 0
+==== SCRIPT ====
+q1(){ declare 'qa=(1 2)'; local 'qb=(3 4)'; declare -a "qc=(5 6)"; declare -p qa qb qc; }; q1 2>&1
+hv=H; q2(){ declare -a "$1"; declare -p qe; }; q2 'qe=($(echo hi) $hv x\ y)' 2>&1
+q3(){ declare -A "$1"; declare -p qm; }; q3 'qm=([a]=1 [b]="2 3")' 2>&1
+i2(){ local -a "$1"; declare -p ib 2>&1; }; i2 'ib=(`echo bq` "$(echo cs)" {p,q})' 2>&1
+declare -a a='(1 2)'; declare -p a; declare e='(1 2)'; declare -p e; x=(9); declare -a x+='(10)'; declare -p x
+f(){ local -a 'c=(3 4)'; typeset -A "m=([k]=v)"; local -a d="(5 6)"; declare -p c m d; }; f
+
+==== STDOUT ====
+declare -- qa="(1 2)"
+declare -- qb="(3 4)"
+declare -a qc=([0]="5" [1]="6")
+declare -a qe=([0]="hi" [1]="H" [2]="x y")
+declare -A qm=([b]="2 3" [a]="1" )
+declare -a ib=([0]="bq" [1]="cs" [2]="p" [3]="q")
+declare -a a=([0]="1" [1]="2")
+declare -- e="(1 2)"
+declare -a x=([0]="9" [1]="10")
+declare -a c=([0]="3" [1]="4")
+declare -A m=([k]="v" )
+declare -a d=([0]="5" [1]="6")
+
+==== STDERR ====
+

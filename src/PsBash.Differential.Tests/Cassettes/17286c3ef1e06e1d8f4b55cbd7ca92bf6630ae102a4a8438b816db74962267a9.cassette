@@ -1,0 +1,105 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1494
+stdout-length: 457
+stderr-length: 0
+==== SCRIPT ====
+t() { printf '%s rc=%s m=%s\n' "$1" "$2" "$(printf '%q,' "${BASH_REMATCH[@]}")"; }
+v() { local n=$1 s=$2 re=$3; [[ $s =~ $re ]]; t "$n" $?; }
+export LC_ALL=C.UTF-8
+[[ x =~ x ]]
+[[ - =~ [a---z] ]]; echo "B01 $?"
+[[ b =~ [a---z] ]]; echo "B02 $?"
+[[ β =~ [α-ω] ]]; echo "B03 $?"
+v B05 ',' '[!--]'
+v B06 . '[--/]'
+v B07 + '[%--]'
+v B08 - '[--@]'
+v B09 a '[a-a]'
+v B10 b '[[.-.]-z]'
+v B11 b '[a-[.z.]]'
+v B12 - '[--]'
+v B13 - '[^-a]'
+v B14 d '[a-c-e]'
+v B15 - '[a-c-]'
+v B16 b '[---]'
+v B17 - '[---]'
+v B18 a '[[.a.]-[.c.]]'
+v B19 é '[[.é.]]'
+[[ x =~ [[.$'\xff'.]] ]]; echo "B20 $?"
+[[ $'\xff' =~ [[.$'\xff'.]] ]]; echo "B21 $?"
+[[ $'\xff' =~ $'\xff' ]]; echo "B22 $?"
+[[ x =~ [[=$'\xff'=]] ]]; echo "B23 $?"
+[[ x =~ [[:$'\xff':]] ]]; echo "B24 $?"
+v B25 b '[a-]b]'
+v B27 ']' '[]-a]'
+v B28 '^' '[]-^]'
+v B29 'b' '[α-a]'
+v B30 'b' '[a-α]'
+v B31 'β' '[[.α.]-ω]'
+v B32 'β' '[α-[.ω.]]'
+[[ $'\xff' =~ [$'\xff'] ]]; echo "B33 $?"
+[[ $'\xff' =~ [a-$'\xff'] ]]; echo "B34 $?"
+[[ b =~ [[.$'\xff'.]-z] ]]; echo "B35 $?"
+[[ é =~ [a-$'\xff'] ]]; echo "B36 $?"
+[[ b =~ [a-$'\xff'] ]]; echo "B37 $?"
+[[ $'\x80' =~ [$'\x80'-$'\xff'] ]]; echo "B38 $?"
+[[ é =~ [$'\x80'-$'\xff'] ]]; echo "B39 $?"
+[[ b =~ [$'\xff'-z] ]]; echo "B40 $?"
+[[ ÿ =~ [a-$'\xff'] ]]; echo "B41 $?"
+[[ b =~ [a-[.$'\xff'.]] ]]; echo "B44 $?"
+[[ é =~ [^$'\xff'] ]]; echo "B45 $?"
+[[ $'\xff' =~ [^$'\xff'] ]]; echo "B46 $?"
+[[ $'\xff' =~ [^a] ]]; echo "B47 $?"
+[[ $'\xff' =~ . ]]; echo "B48 $?"
+[[ $'\xfe' =~ [$'\xff'-$'\xfe'] ]]; echo "B49 $?"
+==== STDOUT ====
+B01 2
+B02 2
+B03 2
+B05 rc=0 m=\,,
+B06 rc=0 m=.,
+B07 rc=0 m=+,
+B08 rc=0 m=-,
+B09 rc=0 m=a,
+B10 rc=0 m=b,
+B11 rc=0 m=b,
+B12 rc=0 m=-,
+B13 rc=1 m='',
+B14 rc=2 m='',
+B15 rc=0 m=-,
+B16 rc=1 m='',
+B17 rc=0 m=-,
+B18 rc=0 m=a,
+B19 rc=2 m=a,
+B20 1
+B21 1
+B22 0
+B23 1
+B24 2
+B25 rc=1 m='',
+B27 rc=0 m=\],
+B28 rc=0 m=\^,
+B29 rc=2 m=\^,
+B30 rc=2 m=\^,
+B31 rc=2 m=\^,
+B32 rc=2 m=\^,
+B33 1
+B34 1
+B35 2
+B36 0
+B37 0
+B38 1
+B39 0
+B40 2
+B41 0
+B44 0
+B45 0
+B46 1
+B47 1
+B48 1
+B49 2
+
+==== STDERR ====
+

@@ -1,0 +1,27 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 277
+stdout-length: 89
+stderr-length: 0
+==== SCRIPT ====
+v=$'a\r\nb'; echo $v | od -c | head -2
+printf %s "$v" | od -c | head -2
+echo "len=${#v}"
+[[ $'a\r\nb' == $'a\r\nb' ]] && echo m1; [[ $'a\nb' == $'a\nb' ]] && echo m2; [[ $'a\rb' == $'a\rb' ]] && echo m3
+[[ $v == $'a\r\nb' ]] && echo m4; x="$v"; [ "$x" = $'a\r\nb' ] && echo m5
+
+==== STDOUT ====
+0000000   a  \r       b  \n
+0000005
+0000000   a  \r  \n   b
+0000004
+len=4
+m1
+m2
+m3
+m4
+m5
+
+==== STDERR ====
+

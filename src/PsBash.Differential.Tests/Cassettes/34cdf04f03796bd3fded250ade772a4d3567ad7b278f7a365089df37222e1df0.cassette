@@ -1,0 +1,49 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1069
+stdout-length: 370
+stderr-length: 0
+==== SCRIPT ====
+t() { printf '%s rc=%s m=%s\n' "$1" "$2" "$(printf '%q,' "${BASH_REMATCH[@]}")"; }
+v() { local n=$1 s=$2 re=$3; [[ $s =~ $re ]]; t "$n" $?; }
+re='(a*)*(x)\2'; [[ xy =~ $re ]]; echo "R01 $? ${#BASH_REMATCH[@]}"
+line='key=value; other=thing; key=value; x'; re='(key=[a-z]+).*\1'; [[ $line =~ $re ]]; echo "R09 $? ${BASH_REMATCH[1]}"
+re='([a-z]+) \1'; [[ 'the the cat sat sat' =~ $re ]]; t R10 $?
+re='(a|ab)(c|bcd)(d*)\2'; [[ abcdbcd =~ $re ]]; t R11 $?
+re='(a*)+\1b'; [[ aab =~ $re ]]; t R12 $?
+re='((a)|b)*\2'; [[ abba =~ $re ]]; t R13 $?
+re='(a)|\1x'; [[ x =~ $re ]]; t R14 $?
+re='(a)?\1'; [[ b =~ $re ]]; t R15 $?
+re='()\1*'; [[ b =~ $re ]]; t R16 $?
+re='(.)(.)\2\1'; [[ xabbay =~ $re ]]; t R17 $?
+re='(a+)(b+)\1\2'; [[ aabbaabbx =~ $re ]]; t R18 $?
+re='^(.*)\1$'; [[ abcabc =~ $re ]]; t R19 $?
+re='(.*)\1'; [[ xyzxyzq =~ $re ]]; t R20 $?
+re='([a-c]*)\1'; [[ abcabcabc =~ $re ]]; t R21 $?
+re='(x)?(y)?\2'; [[ yy =~ $re ]]; t R22 $?
+re='(a)\1{2}'; [[ aaaa =~ $re ]]; t R23 $?
+re='(a)(\1)*'; [[ aaaa =~ $re ]]; t R24 $?
+re='(ab|a)(bc|c)?\1'; [[ abcab =~ $re ]]; t R25 $?
+==== STDOUT ====
+R01 1 0
+R09 0 key=value
+R10 rc=0 m=the\ the,the,
+R11 rc=0 m=abcdbcd,a,bcd,'',
+R12 rc=0 m=aab,a,
+R13 rc=0 m=abba,b,a,
+R14 rc=2 m=abba,b,a,
+R15 rc=1 m='',
+R16 rc=0 m='','',
+R17 rc=0 m=abba,a,b,
+R18 rc=0 m=aabbaabb,aa,bb,
+R19 rc=0 m=abcabc,abc,
+R20 rc=0 m=xyzxyz,xyz,
+R21 rc=0 m=abcabc,abc,
+R22 rc=0 m=yy,'',y,
+R23 rc=0 m=aaa,a,
+R24 rc=0 m=aaaa,a,a,
+R25 rc=0 m=abcab,ab,c,
+
+==== STDERR ====
+

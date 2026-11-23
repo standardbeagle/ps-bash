@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 153
+stdout-length: 10
+stderr-length: 0
+==== SCRIPT ====
+export LC_ALL=C.UTF-8; shopt -s extglob
+pp='@(a|ab)'; v=abc; printf '%s|' "${v##$pp}" "${v#$pp}" "${v/$pp/X}"; case $v in $pp*) echo Y;; *) echo n;; esac
+==== STDOUT ====
+c|bc|Xc|Y
+
+==== STDERR ====
+

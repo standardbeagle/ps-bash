@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 1
+script-length: 241
+stdout-length: 43
+stderr-length: 0
+==== SCRIPT ====
+declare -n r; v=tg; r=$v; [[ -v r ]]; echo "unset=$?"; tg=1; [[ -v r ]]; echo "set=$?"
+declare -n q; [[ -v q ]]; echo "none=$?"
+declare -p r; set | grep -c '^r='; declare -n ar; w=arr; ar=$w; arr=(1 2); declare -p | grep -c '^declare -a ar='
+==== STDOUT ====
+unset=1
+set=0
+none=1
+declare -n r="tg"
+1
+0
+
+==== STDERR ====
+

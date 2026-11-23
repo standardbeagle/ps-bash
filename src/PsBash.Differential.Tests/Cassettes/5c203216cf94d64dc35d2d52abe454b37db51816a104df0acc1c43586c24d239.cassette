@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 181
+stdout-length: 10
+stderr-length: 0
+==== SCRIPT ====
+export LC_ALL=C.UTF-8; shopt -s extglob
+for s in a b '' aa x; do [[ $s == !(!(a)) ]]; printf '%s' $?; done; echo; for s in a b ''; do [[ $s == @(!(a)) ]]; printf '%s' $?; done; echo
+==== STDOUT ====
+01111
+100
+
+==== STDERR ====
+

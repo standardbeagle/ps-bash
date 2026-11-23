@@ -1,0 +1,29 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 297
+stdout-length: 41
+stderr-length: 0
+==== SCRIPT ====
+printf 'l1\nl2\n' > in.txt
+true < in.txt; echo "t1 $?"
+: <<< word; echo "t3 $?"
+cd /nonexist_zz 2>/dev/null 1>&2; echo "t4 $?"
+f7() { return 3 <<< w; echo no; }; f7; echo "t7 $?"
+false <<EOF
+body
+EOF
+echo "t10 $?"
+( exec <<< word; read w; echo "t12 $w" )
+echo x | builtin >> out.txt; echo "t13 $?"
+==== STDOUT ====
+t1 0
+t3 0
+t4 1
+t7 3
+t10 1
+t12 word
+t13 0
+
+==== STDERR ====
+

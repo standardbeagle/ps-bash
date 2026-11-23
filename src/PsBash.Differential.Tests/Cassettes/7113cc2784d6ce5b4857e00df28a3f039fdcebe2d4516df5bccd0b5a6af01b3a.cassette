@@ -1,0 +1,33 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 592
+stdout-length: 74
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+{
+declare -A mm=([a]=1); fa() { mm[b]=2; }; ( fa ); echo "1 ${#mm[@]}"
+sp=([5]=x); g() { sp+=(y); }; ( g ); echo "2 ${#sp[@]} ${!sp[*]}"
+declare -A d2=([a]=1); ( d2[a]=9; d2[c]=3; echo "3 in ${d2[a]} ${#d2[@]}" ); echo "3 out ${d2[a]} ${#d2[@]}"
+s2=([3]=x); ( s2[7]=y; echo "4 in ${!s2[*]}" ); echo "4 out ${!s2[*]}"
+s3=([3]=x); echo q | { read -r w; s3+=("$w"); echo "5 in ${!s3[*]}"; }; echo "5 out ${!s3[*]}"
+declare -A d3=([a]=1); fd() { d3[z]=1; }; x=$(fd; echo "${#d3[@]}"); echo "6 $x ${#d3[@]}"
+} 2>&1
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+1 1
+2 1 5
+3 in 9 2
+3 out 1 1
+4 in 3 7
+4 out 3
+5 in 3 4
+5 out 3
+6 2 1
+rc=0
+
+==== STDERR ====
+

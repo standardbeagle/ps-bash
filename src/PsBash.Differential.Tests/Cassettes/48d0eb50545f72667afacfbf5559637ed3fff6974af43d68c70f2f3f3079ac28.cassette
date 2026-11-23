@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 217
+stdout-length: 22
+stderr-length: 0
+==== SCRIPT ====
+( { exit 3; } 2>/dev/null; echo no ); echo "sx=$?"
+( if true; then exit 4; fi >x; echo no ); echo "sx2=$?"
+( set -e; { false; } 2>x; echo no ); echo "se=$?"
+( while true; do exit 5; done 2>x; echo no ); echo "sx3=$?"
+
+==== STDOUT ====
+sx=3
+sx2=4
+se=1
+sx3=5
+
+==== STDERR ====
+

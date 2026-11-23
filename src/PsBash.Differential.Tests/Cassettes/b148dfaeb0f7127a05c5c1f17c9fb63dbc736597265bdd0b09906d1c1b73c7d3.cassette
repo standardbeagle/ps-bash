@@ -1,0 +1,39 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 278
+stdout-length: 46
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+echo hi <<<x
+true <<<x; echo "s=$?"
+false <<EOF
+body
+EOF
+echo "s=$?"
+printf 'p\n' <<<x
+echo $(echo q) <<EOF
+$(touch made)
+EOF
+ls made
+f() { echo in-f; }; f <<<x
+g() { cat; }; g <<<from-g
+echo a | echo b <<<x
+v=w; echo $v <<<y; g=-; cat $g <<<from-dash
+
+==== STDOUT ====
+hi
+s=0
+s=1
+p
+q
+made
+in-f
+from-g
+b
+w
+from-dash
+
+==== STDERR ====
+
