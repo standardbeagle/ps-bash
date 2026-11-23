@@ -722,6 +722,39 @@ public static class PsBuild
         return false;
     }
 
+    /// <summary>
+    /// True when <paramref name="psText"/> is ONE PowerShell pipeline element, which can stand after a <c>|</c> and receive
+    /// the records: a command (<c>Invoke-BashHead -n $($a = 1; 2)</c>, whose <c>; </c> is nested in an argument),
+    /// <c>&amp; { … }</c>, <c>. { … }</c>, <c>&amp; (…)</c>. False for a statement list (a <c>;</c> at depth 0,
+    /// <see cref="IsStatementList"/>), an expression (<c>$( … )</c>, <c>$x = …</c>, <c>[void]…</c>, <c>( … )</c>, a
+    /// string or number), and a statement keyword (<c>if</c>, <c>foreach</c>, <c>return</c>, …), none of which PowerShell
+    /// takes after a pipe. A <c>; </c> nested in an argument does not make a command unpipeable. REGRESSION: asked
+    /// as "has a <c>; </c> anywhere", <c>head -n $((n+1)) &lt; f</c> under <c>set -u</c> (the arithmetic guard is a
+    /// <c>$( …; … )</c> argument) and any reader with a <c>&lt;( )</c> argument were taken for statement lists and
+    /// re-emitted unfed: they printed nothing.
+    /// </summary>
+    public static bool IsPipeElement(string psText)
+    {
+        var t = psText.AsSpan().TrimStart();
+        if (t.IsEmpty || IsStatementList(psText)) return false;
+        char c = t[0];
+        if (c is '$' or '(' or '[' or '@' or '\'' or '"' or '-' or '!' or '+' or '{' || char.IsAsciiDigit(c)) return false;
+        int end = 0;
+        while (end < t.Length && char.IsAsciiLetter(t[end])) end++;
+        if (end > 0 && (end == t.Length || t[end] is ' ' or '\t' or '\r' or '\n' or '(' or '{')
+            && PsStatementKeywords.Contains(t[..end].ToString()))
+            return false;
+        return true;
+    }
+
+    /// <summary>PowerShell words that begin a statement (case-insensitive), never a command after a pipe.</summary>
+    private static readonly HashSet<string> PsStatementKeywords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "if", "elseif", "else", "foreach", "for", "while", "do", "until", "switch", "try", "catch", "finally", "trap",
+        "function", "filter", "workflow", "return", "throw", "exit", "break", "continue", "data", "class", "enum",
+        "param", "using", "begin", "process", "end",
+    };
+
     /// <summary>The index of the quote closing the span opened at <paramref name="open"/> (or the end of the text).
     /// Single-quoted text is literal ('' reads as close-then-reopen); double-quoted text honours backtick escapes and
     /// <c>$( … )</c> subexpressions, which may hold quotes and semicolons of their own.</summary>
@@ -2277,6 +2310,34 @@ public static class PsBuild
         "$__psbash_stdin_prev = Get-Variable -Name __BashStdIn -Scope Global -ValueOnly -ErrorAction SilentlyContinue; "
         + "$global:__BashStdIn = New-BashLazyStdin " + SingleQuote(producerCommand) + "; "
         + "try { " + body + " } finally { try { $global:__BashStdIn.Close() } catch { }; $global:__BashStdIn = $__psbash_stdin_prev }";
+
+    /// <summary>
+    /// <c>cmd &lt; file</c> for a command whose emission is no pipe element (exec's <c>cmd; return</c>, eval / source text,
+    /// <c>true</c>'s <c>$( )</c>): <paramref name="body"/> runs in this shell (dot-sourced) with the file as its stdin
+    /// scope, a cursor that reads the file one record at a time as the readers in the body ask (<c>New-BashFileStdin</c>).
+    /// Not a pipe into the block: a block after a pipe starts only once the file was read to its end, so
+    /// <c>exec head -c 5 &lt; /dev/zero</c> never finished. The <c>finally</c> closes the file and restores the stdin
+    /// before it. <paramref name="saveVar"/> is unique per scope (a dot-sourced scope shares its caller's variables).
+    /// </summary>
+    public static string FileStdinScope(string target, string body, string saveVar) =>
+        ". { $" + saveVar + " = Get-Variable -Name __BashStdIn -Scope Global -ValueOnly -ErrorAction SilentlyContinue; "
+        + "$global:__BashStdIn = New-BashFileStdin " + target + "; "
+        + "try { " + body + " } finally { try { $global:__BashStdIn.Close() } catch { }; $global:__BashStdIn = $" + saveVar + " } }";
+
+    /// <summary>
+    /// <c>cmd &lt;&amp;N</c> / <c>cmd &lt;&amp;$fd</c> for a command or compound whose emission is no pipe element: a
+    /// statement list (callers wrap it) that runs <paramref name="body"/> with descriptor <paramref name="fdWord"/> as its
+    /// stdin scope. <c>New-BashFdStdin</c> reads the descriptor one line at a time as the readers ask (the rest stays
+    /// unread, as in bash), passes the current stdin on for 0-2 and for a descriptor that is the shell's stdin (it then
+    /// returns nothing, and nothing is closed), and gives an empty stdin for <c>-</c>. Never a raw <c>0&lt;&amp;N</c>, which
+    /// PowerShell ended at its background operator.
+    /// </summary>
+    public static string DescriptorStdinScope(string fdWord, string body, string saveVar) =>
+        "$" + saveVar + " = Get-Variable -Name __BashStdIn -Scope Global -ValueOnly -ErrorAction SilentlyContinue; "
+        + "$" + saveVar + "_in = New-BashFdStdin " + fdWord + "; "
+        + "if ($null -ne $" + saveVar + "_in) { $global:__BashStdIn = $" + saveVar + "_in }; "
+        + "try { " + body + " } finally { if ($null -ne $" + saveVar + "_in) { try { $" + saveVar + "_in.Close() } catch { } }; "
+        + "$global:__BashStdIn = $" + saveVar + " }";
 
     /// <summary>
     /// <c>cmd &lt; /dev/null</c>: run <paramref name="body"/> with an EMPTY stdin (end of input at once) instead

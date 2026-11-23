@@ -351,6 +351,68 @@ public class PsBuildTests
     public void HasUnquotedStatementSeparator_SeparatorOutsideQuotes_True(string text)
         => Assert.True(PsBuild.HasUnquotedStatementSeparator(text));
 
+    // A command whose `; ` is nested in an argument (set -u's arithmetic guard, a <( ) body's scope) is ONE pipe element:
+    // taken for a statement list it was re-emitted unfed (`set -u; head -n $((n+1)) < f` printed nothing).
+    [Theory]
+    [InlineData("Invoke-BashHead -n $($__psbash_av = 1; $__psbash_av + 1)")]
+    [InlineData("Invoke-BashGrep -Fxf (Invoke-ProcessSub { & { $__psbash_ss = 1; try { git ls-files } finally { } } })")]
+    [InlineData("Invoke-BashCat \"$(a; b)\"")]
+    [InlineData("& { a; b }")]
+    [InlineData(". { a; b }")]
+    [InlineData("& (Resolve-BashCommand $c) x")]
+    [InlineData("  Invoke-BashCat")]
+    [InlineData("Invoke-BashCat 2>$null")]
+    [InlineData("ForEach-Object { $_ }")]
+    [InlineData("Endpoint-Tool x")]
+    public void IsPipeElement_Command_True(string text) => Assert.True(PsBuild.IsPipeElement(text));
+
+    // What PowerShell refuses after a pipe: a statement list, an expression, a statement keyword.
+    [Theory]
+    [InlineData("Invoke-BashCat; return")]
+    [InlineData("$env:X = '1'; Invoke-BashCat")]
+    [InlineData("$($global:LASTEXITCODE = 0; [void]$true)")]
+    [InlineData("$global:LASTEXITCODE = 0")]
+    [InlineData("[void]$(a)")]
+    [InlineData("(1)")]
+    [InlineData("'text'")]
+    [InlineData("\"text\"")]
+    [InlineData("@(1)")]
+    [InlineData("42")]
+    [InlineData("-not $x")]
+    [InlineData("if ($x) { a }")]
+    [InlineData("IF($x) { a }")]
+    [InlineData("foreach ($l in $x) { a }")]
+    [InlineData("return")]
+    [InlineData("return 3")]
+    [InlineData("exit 1")]
+    [InlineData("try { a } finally { b }")]
+    [InlineData("switch ($x) { }")]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void IsPipeElement_StatementOrExpression_False(string text) => Assert.False(PsBuild.IsPipeElement(text));
+
+    [Fact]
+    public void FileStdinScope_IsOneDotBlockThatClosesTheCursorAndRestores()
+    {
+        var s = PsBuild.FileStdinScope("'f'", "BODY", "__psbash_fin_prev7");
+        Assert.StartsWith(". { $__psbash_fin_prev7 = Get-Variable -Name __BashStdIn", s);
+        Assert.Contains("$global:__BashStdIn = New-BashFileStdin 'f'; try { BODY } finally {", s);
+        Assert.Contains("$global:__BashStdIn.Close()", s);
+        Assert.EndsWith("$global:__BashStdIn = $__psbash_fin_prev7 } }", s);
+        Assert.False(PsBuild.IsStatementList(s));
+    }
+
+    [Fact]
+    public void DescriptorStdinScope_ReplacesTheStdinOnlyWhenADescriptorIsRead()
+    {
+        var s = PsBuild.DescriptorStdinScope("$__psbFd", "BODY", "__psbash_fdin_prev3");
+        Assert.Contains("$__psbash_fdin_prev3_in = New-BashFdStdin $__psbFd; ", s);
+        Assert.Contains("if ($null -ne $__psbash_fdin_prev3_in) { $global:__BashStdIn = $__psbash_fdin_prev3_in }", s);
+        Assert.Contains("try { BODY } finally { if ($null -ne $__psbash_fdin_prev3_in) {", s);
+        Assert.EndsWith("$global:__BashStdIn = $__psbash_fdin_prev3 }", s);
+        Assert.DoesNotContain("<&", s);
+    }
+
     [Fact]
     public void RedirectStage_StdoutOnly_IsThePathForm()
         => Assert.Equal(" | Invoke-BashRedirect -Path f -Append",
