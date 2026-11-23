@@ -5,6 +5,9 @@
 # summary.txt gets one line per step and ends with FINISHED.
 # Optional: PROJECTS (comma list of Core,Security,Cmdlets,Differential,Host,Shell; default the CI four) and
 # FILTER (a dotnet test --filter applied to every project) — for smaller runs on the lighter fleet hosts.
+# Every build and test step runs in the box's tman machine queue "default" when tman is there (every fleet box),
+# so a gate waits for room instead of piling onto whatever else the box runs. Linux-only agent runs on build3 or
+# build2 use scripts/remote-test.sh instead (own worktree, same queue).
 BUNDLE=$1 TAG=$2 OUT=$3 PROJECTS=${4:-Core,Security,Cmdlets,Differential} FILTER=${5:-}
 mkdir -p "$OUT"; SUM="$OUT/summary.txt"
 s() { echo "$(date +%H:%M:%S) $*" >> "$SUM"; }
@@ -24,14 +27,16 @@ s "checked out $(git log --oneline -1)"
 
 export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 NB=(-m:1 -nodeReuse:false -p:UseSharedCompilation=false)
-if ! dotnet build ps-bash.sln -c Debug "${NB[@]}" > "$OUT/build.log" 2>&1; then
+TM=~/.local/bin/tman Q=()
+if [ -x "$TM" ] && "$TM" queue default > /dev/null 2>&1; then Q=("$TM" run --queue default --label "agent=fleet-$TAG" --stall 10m --max-time 95m --); fi
+if ! "${Q[@]}" dotnet build ps-bash.sln -c Debug "${NB[@]}" > "$OUT/build.log" 2>&1; then
     s "BUILD FAILED: $(grep -m3 -E 'error [A-Z]+[0-9]+' "$OUT/build.log" | tr '\n' ' ')"; s FINISHED; exit 1
 fi
 s 'build ok'
 
 run() { # name project [dotnet test args...]
     local name=$1 proj=$2; shift 2
-    timeout 90m dotnet test "src/$proj" -c Debug --no-build "${NB[@]}" --blame-hang-timeout 5m --blame-hang-dump-type none "$@" > "$OUT/$name.log" 2>&1
+    "${Q[@]}" timeout 90m dotnet test "src/$proj" -c Debug --no-build "${NB[@]}" --blame-hang-timeout 5m --blame-hang-dump-type none "$@" > "$OUT/$name.log" 2>&1
     s "$name: $(grep -E 'Passed!|Failed!' "$OUT/$name.log" | sed 's/^ *//' | tr '\n' ' ')"
     grep -E '^\s+Failed ' "$OUT/$name.log" | sed 's/^ */    /' >> "$SUM"
 }

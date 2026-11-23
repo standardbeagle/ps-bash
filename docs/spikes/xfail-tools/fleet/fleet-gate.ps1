@@ -4,6 +4,10 @@
 #   fleet-gate.ps1 -Tag t -Status                                          print both summaries
 #   fleet-gate.ps1 -Tag t -Fetch                                           copy the result folders back here
 #
+# For Linux-only runs on build3/build2 use scripts/remote-test.sh instead: one worktree per agent, run inside the
+# box's tman queue, and it returns when the run ends (no -Status polling). This script is for the Windows side.
+# Wait on -Status from a Monitor until-loop, never foreground sleeps.
+#
 # The snapshot is the working tree as a commit on refs/fleet/snapshot (tracked changes plus untracked files
 # under src/ docs/ spec/ tests/, .gitignore applies), made through a temporary index: the real index, HEAD
 # and branches are untouched. It travels as a git bundle, and each remote checkout is moved to it DETACHED.
