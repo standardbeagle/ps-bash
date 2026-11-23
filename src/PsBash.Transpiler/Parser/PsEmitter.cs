@@ -6234,7 +6234,9 @@ public static partial class PsEmitter
         }
 
         var bare = cmd with { EnvPairs = ImmutableArray<EnvPair>.Empty };
-        result = WrapEnvPairs(cmd.EnvPairs, WithEnvShadow(cmd.EnvPairs, () => EmitSimple(bare)), TempFrameKind(cmd));
+        // In a stdin scope the bare command is fed as any reader is: the save/restore around it is a statement list, which
+        // EmitSimpleFed leaves alone. REGRESSION: `echo q | { X=1 cat; }` printed nothing.
+        result = WrapEnvPairs(cmd.EnvPairs, WithEnvShadow(cmd.EnvPairs, () => EmitSimpleFed(bare)), TempFrameKind(cmd));
         // `foo=bar $unset`: a command word that expands to NOTHING leaves no command, so the assignment persists
         // (only a command that actually runs gets the temporary binding).
         if (cmd.Words.Length > 0 && IsPureUnquotedVarWord(cmd.Words[0]))
@@ -6469,19 +6471,22 @@ public static partial class PsEmitter
         // (EmitEvalWithStdin). REGRESSION: piped into a bare `. $(...)`, `read` in f read nothing.
         // `eval 'return 7' < f`, `return 6 < f`: a statement list too (no pipe stage: the whole script failed to parse); run
         // as source's text is, and a return in it leaves the function (RedirectGroup).
-        if (innerCmd.EnvPairs.IsDefaultOrEmpty && GetLiteralValue(innerCmd.Words[0]) is "source" or "." or "eval" or "return" or "exit")
+        // So is any other command whose emission is no pipe element (IsUnpipeableStage: exec's `cmd; return`, `true`'s
+        // `$( )`): wrapped in `& { }` as the stage after the file, its statements never saw the file. REGRESSION:
+        // `( exec cat < <(echo q3) )` printed nothing, and `( exec cat < f; echo after )` printed only "after".
+        if (innerCmd.EnvPairs.IsDefaultOrEmpty && GetLiteralValue(innerCmd.Words[0]) is "source" or "." or "eval" or "return" or "exit"
+            || IsUnpipeableStage(inner))
         {
-            var fed = WithStdinScope(true, () => EmitSimple(innerCmd));
+            // Its readers take the file from the scope (EmitSimpleFed), not from a pipe into the statement list.
+            var fed = WithStdinScope(true, () => WithPipeStageFeed(false, () => EmitSimple(innerCmd)));
             string Feed(string body) => $"Invoke-BashCat {target} -RawStdinBytes | {DotStdinBlock(body)}";
             result = guarded ? InputRedirectGuarded(target, fed, Feed, failTail, clearsNested) : RedirectGroup(fed, Feed);
             return true;
         }
-        // The command is a pipe stage: `true < f` / `: < f` emit an expression, which PowerShell allows only first in a
-        // pipeline. REGRESSION: `... | $($global:LASTEXITCODE = 0; [void]$true)` failed the parse of the whole script.
-        var stage = WrapPipelineStageIfStatementList(inner);
+        // The command is the pipe stage after the file: one pipeline element (an expression or a statement list was fed above).
         result = mappedConsumer
-            ? $"Invoke-BashCat {target} -RawStdinBytes | {stage}"
-            : $"Invoke-BashCat {target} -RawStdinBytes | {NativeStdinFeedStage(innerCmd)}{stage}";
+            ? $"Invoke-BashCat {target} -RawStdinBytes | {inner}"
+            : $"Invoke-BashCat {target} -RawStdinBytes | {NativeStdinFeedStage(innerCmd)}{inner}";
         if (guarded)
             result = InputRedirectGuarded(target, result, static r => r, failTail, clearsNested);
         return true;
@@ -13338,17 +13343,25 @@ public static partial class PsEmitter
     /// conditionals; this covers the statement-list SIMPLE commands it does not see.
     /// `&amp; { … }` (not `$( … )`) keeps the stage streaming, and its child scope
     /// matches bash, which runs every pipe stage in its own subshell.
+    /// <para>
+    /// The wrap hands its statements NO input: a block's <c>$input</c> reaches no command inside it. It is for a stage
+    /// that is not fed (the first stage, a pipefail stage already fed by its own wrapper); a FED stage whose text is
+    /// <see cref="IsUnpipeableStage"/> is re-emitted in a stdin scope instead (TryEmitInputRedirect, EmitSimplePipeStage).
+    /// REGRESSION: <c>( exec cat &lt; &lt;(echo q3) )</c> became <c>... | &amp; { Invoke-BashCat; return }</c> and printed nothing.
+    /// Guard: UnpipeableFedStageGuardTests.
+    /// </para>
     /// </summary>
-    private static string WrapPipelineStageIfStatementList(string emitted)
-    {
-        // A `$( ... )` subexpression (`return` outside a function) is an EXPRESSION, which PowerShell allows only as a
-        // pipeline's first element: `echo x | return 3` emitted `... | $(...)` and the whole script failed to parse.
-        if (emitted.StartsWith("& {", StringComparison.Ordinal)
-            || (!emitted.StartsWith("$(", StringComparison.Ordinal) && !PsBuild.HasUnquotedStatementSeparator(emitted)))
-            return emitted;
+    private static string WrapPipelineStageIfStatementList(string emitted) =>
+        IsUnpipeableStage(emitted) ? $"& {{ {emitted} }}" : emitted;
 
-        return $"& {{ {emitted} }}";
-    }
+    /// <summary>
+    /// True when <paramref name="emitted"/> is no pipe element: a statement list (<c>Invoke-BashCat; return</c>, an env
+    /// prefix's save/restore) or a <c>$( ... )</c> EXPRESSION (<c>return</c> outside a function, <c>true</c>), which PowerShell
+    /// allows only as a pipeline's first element (<c>echo x | return 3</c> failed the parse of the whole script).
+    /// </summary>
+    private static bool IsUnpipeableStage(string emitted) =>
+        !emitted.StartsWith("& {", StringComparison.Ordinal)
+        && (emitted.StartsWith("$(", StringComparison.Ordinal) || PsBuild.HasUnquotedStatementSeparator(emitted));
 
     [ThreadStatic] private static int _timeDepth;
 
@@ -13773,8 +13786,12 @@ public static partial class PsEmitter
             // is the ONE shared rule for cmdlet-output → native stdin;
             // Get-BashText is identity on a string and on any object with
             // no BashText, so it is safe for every pipe target.
-            return NativeStdinFeedStage(simple)
-                + WrapPipelineStageIfStatementList(Emit(simple));
+            // A statement list or an expression is no pipe element, and in `& { }` its statements never see the stage's
+            // records: it runs in a stdin scope, whose readers take them (as a compound stage's do, EmitCompoundStage).
+            var emitted = Emit(simple);
+            return IsUnpipeableStage(emitted)
+                ? "& { " + PsBuild.StdinScope(WithStdinScope(true, () => WithPipeStageFeed(false, () => EmitSimpleFed(simple)))) + " }"
+                : NativeStdinFeedStage(simple) + emitted;
         }
         finally { _pipeStageFeedsInput = savedFeed; }
     }
