@@ -145,6 +145,28 @@ public class ArithOneEvaluatorTests
         Assert.Contains("nesting too deep", ex.Message);
     }
 
+    // bash: e=$(printf '(%.0s' {1..1000})1$(printf ')%.0s' {1..1000}); echo $((e)) -> 1. A run-time value is parsed on
+    // whatever thread evaluates it: one that runs out of stack first retries on a large stack (as a transpile does), so
+    // the limit is the depth cap on every thread. REGRESSION: 300 parens were "nesting too deep".
+    [Theory]
+    [InlineData(300)]
+    [InlineData(1000)]
+    public void Evaluate_NestedParensAsDeepAsBashTakes_OnSmallStackThread_IsTheValue(int depth)
+    {
+        string expr = new string('(', depth) + "1" + new string(')', depth);
+        long? value = null;
+        Exception? caught = null;
+        var t = new System.Threading.Thread(() =>
+        {
+            try { value = Eval(expr); }
+            catch (Exception e) { caught = e; }
+        }, 256 * 1024);
+        t.Start();
+        t.Join();
+        Assert.Null(caught);
+        Assert.Equal(1L, value);
+    }
+
     [Theory]
     // A compound assignment reads its target before the right side runs.
     [InlineData("x += (x=10)", 1L, 11L)]

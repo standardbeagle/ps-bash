@@ -142,6 +142,37 @@ public class NestingGuardTests
         Assert.NotNull(BashArithmeticParser.Parse(Rep("(", 100) + "1" + Rep(")", 100)));
     }
 
+    /// <summary>
+    /// bash takes <c>$(( ((…((1))…)) ))</c> 1000 parens deep (oracle: 300 and 1000 print 1). REGRESSION: a NestingGuard
+    /// level per precedence FUNCTION cost ~5 levels per paren, so 300 was "nesting too deep". A paren is one level.
+    /// </summary>
+    [Theory]
+    [InlineData(300)]
+    [InlineData(1000)]
+    public void Transpile_NestedParens_AsDeepAsBashTakes_AreAccepted(int depth)
+    {
+        string bash = "echo $((" + Rep("(", depth) + "1" + Rep(")", depth) + "))";
+        Assert.False(string.IsNullOrEmpty(BashTranspiler.Transpile(bash)));
+    }
+
+    [Theory]
+    [InlineData("paren", "(", "1", ")")]
+    [InlineData("?: false branch", "0?0:", "1", "")]
+    [InlineData("?: middle operand", "1?", "1", ":0")]
+    [InlineData("unary -", "- ", "1", "")]
+    [InlineData("power", "1**", "1", "")]
+    [InlineData("assignment chain", "a=", "1", "")]
+    public void ArithmeticParse_NestedParensAndChains_TheLimitIsOneLevelPerEdge(string shape, string open, string atom, string close)
+    {
+        // At the limit it parses (on a large stack, as every transpile and runtime evaluation retries); one past it is
+        // the clean "nesting too deep".
+        static PsBash.Core.Parser.Ast.ArithmeticSyntax Parse(string e) => NestingGuard.OnLargeStack(() => BashArithmeticParser.Parse(e));
+        int max = NestingGuard.MaxArithmeticDepth;
+        Assert.NotNull(Parse(Rep(open, max) + atom + Rep(close, max)));
+        var ex = Assert.Throws<BashArithmeticParseException>(() => { Parse(Rep(open, max + 1) + atom + Rep(close, max + 1)); });
+        Assert.True(ex.Message.Contains(NestingGuard.TooDeepMessage, StringComparison.Ordinal), shape + ": " + ex.Message);
+    }
+
     [Fact]
     public void Transpile_RealisticNesting_IsNotRejected()
     {

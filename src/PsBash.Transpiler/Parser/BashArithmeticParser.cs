@@ -128,14 +128,15 @@ public sealed class BashArithmeticParser
         return node;
     }
 
-    // Every function a recursive edge of this grammar enters holds one NestingGuard level: ParseComma (from a paren group
-    // and a ?: middle operand), ParseAssignment (a=b=…), ParseConditional (the ?: false branch), ParsePower (2**2**…) and
-    // ParseUnary (- - … x). So no expression can overflow the stack, at transpile time or in the runtime evaluator, whose
-    // recursion follows the tree built here. REGRESSION: the ?: false branch recursed into ParseConditional, which held no
-    // level, and `0?0:0?0:…1` 30000 deep overflowed the host. Guard: NestingGuardTests.ArithmeticParse_EveryRecursionEdge*.
+    // Every recursive EDGE of this grammar holds one NestingGuard level while it is taken: a paren group and a ?: middle
+    // operand (-> ParseComma), the ?: false branch (-> ParseConditional), a=b=… (-> ParseAssignment), 2**2**… (->
+    // ParsePower) and - - … x (-> ParseUnary). Every cycle of the call graph passes one of them, so no expression can
+    // overflow the stack, at transpile time or in the runtime evaluator, whose recursion follows the tree built here; and a
+    // paren costs ONE level, not one per precedence function it passes through (bash takes 1000 nested parens).
+    // REGRESSIONS: the ?: false branch held no level and `0?0:0?0:…1` 30000 deep overflowed the host; then a level per
+    // FUNCTION cut nested parens to ~200. Guards: NestingGuardTests.ArithmeticParse_EveryRecursionEdge*, *_NestedParens*.
     private ArithmeticExpr ParseComma()
     {
-        using var nesting = NestingGuard.EnterArithmetic();
         var value = ParseAssignment();
         int count = 0;
         while (Accept(T.Comma))
@@ -148,37 +149,39 @@ public sealed class BashArithmeticParser
 
     private ArithmeticExpr ParseAssignment()
     {
-        using var nesting = NestingGuard.EnterArithmetic();
         if (Current.Kind == T.Ident && TryAssignmentOp(_tokens[_position + 1].Kind, out var op))
         {
             string name = Current.Text!;
             _position += 2;
-            var assignment = new ArithmeticExpr.Assignment(name, op, ParseAssignment());
+            ArithmeticExpr value;
+            using (NestingGuard.EnterArithmetic()) value = ParseAssignment();
+            var assignment = new ArithmeticExpr.Assignment(name, op, value);
             return op is ArithmeticAssignmentOp.Divide or ArithmeticAssignmentOp.Modulo
                 ? NoteErrorToken(assignment, LastTokenStart())
                 : assignment;
         }
-        var value = ParseConditional();
+        var condition = ParseConditional();
         // bash (expr.c expassign): an assignment operator after anything but a bare name -- `1=2`, `0 ? 1 : x = 5`, whose
         // left side is the whole conditional -- is "attempted assignment to non-variable (error token is "= 5")".
         if (TryAssignmentOp(Current.Kind, out _)) Error("attempted assignment to non-variable");
-        return value;
+        return condition;
     }
 
     private ArithmeticExpr ParseConditional()
     {
-        using var nesting = NestingGuard.EnterArithmetic();
         var condition = ParseLogicalOr();
         if (!Accept(T.Question)) return condition;
         // bash (expr.c expcond): nothing, or a `:`, after the `?` and nothing after the `:` is "expression expected".
         if (Current.Kind is T.End or T.Colon) Error("expression expected");
         // Bash follows C here: the middle operand is a full expression, so a
         // comma belongs to the true branch rather than the surrounding level.
-        var whenTrue = ParseComma();
+        ArithmeticExpr whenTrue, whenFalse;
+        using (NestingGuard.EnterArithmetic()) whenTrue = ParseComma();
         Expect(T.Colon);
         if (Current.Kind == T.End) Error("expression expected");
         // The false branch is a conditional, not an assignment: `0 ? 1 : x = 5` assigns to the conditional (an error).
-        return new ArithmeticExpr.Conditional(condition, whenTrue, ParseConditional());
+        using (NestingGuard.EnterArithmetic()) whenFalse = ParseConditional();
+        return new ArithmeticExpr.Conditional(condition, whenTrue, whenFalse);
     }
 
     private ArithmeticExpr ParseLogicalOr() => ParseLeft(ParseLogicalAnd, (T.OrOr, ArithmeticBinaryOp.LogicalOr));
@@ -212,23 +215,29 @@ public sealed class BashArithmeticParser
 
     private ArithmeticExpr ParsePower()
     {
-        using var nesting = NestingGuard.EnterArithmetic();
         var value = ParseUnary();
-        return Accept(T.StarStar)
-            ? NoteErrorToken(new ArithmeticExpr.Binary(ArithmeticBinaryOp.Power, value, ParsePower()), LastTokenStart())
-            : value;
+        if (!Accept(T.StarStar)) return value;
+        ArithmeticExpr exponent;
+        using (NestingGuard.EnterArithmetic()) exponent = ParsePower();
+        return NoteErrorToken(new ArithmeticExpr.Binary(ArithmeticBinaryOp.Power, value, exponent), LastTokenStart());
     }
 
     private ArithmeticExpr ParseUnary()
     {
-        using var nesting = NestingGuard.EnterArithmetic();
-        if (Accept(T.Plus)) return new ArithmeticExpr.Unary(ArithmeticUnaryOp.Plus, ParseUnary());
-        if (Accept(T.Minus)) return new ArithmeticExpr.Unary(ArithmeticUnaryOp.Negate, ParseUnary());
-        if (Accept(T.Bang)) return new ArithmeticExpr.Unary(ArithmeticUnaryOp.LogicalNot, ParseUnary());
-        if (Accept(T.Tilde)) return new ArithmeticExpr.Unary(ArithmeticUnaryOp.BitwiseNot, ParseUnary());
+        if (Accept(T.Plus)) return new ArithmeticExpr.Unary(ArithmeticUnaryOp.Plus, ParseUnaryOperand());
+        if (Accept(T.Minus)) return new ArithmeticExpr.Unary(ArithmeticUnaryOp.Negate, ParseUnaryOperand());
+        if (Accept(T.Bang)) return new ArithmeticExpr.Unary(ArithmeticUnaryOp.LogicalNot, ParseUnaryOperand());
+        if (Accept(T.Tilde)) return new ArithmeticExpr.Unary(ArithmeticUnaryOp.BitwiseNot, ParseUnaryOperand());
         if (Accept(T.Inc)) return ParsePrefixIncrement(1);
         if (Accept(T.Dec)) return ParsePrefixIncrement(-1);
         return ParsePostfix();
+    }
+
+    /// <summary>A unary sign's operand: the recursive edge ParseUnary -> ParseUnary, one nesting level.</summary>
+    private ArithmeticExpr ParseUnaryOperand()
+    {
+        using var nesting = NestingGuard.EnterArithmetic();
+        return ParseUnary();
     }
 
     private ArithmeticExpr ParsePrefixIncrement(int delta)
@@ -265,7 +274,8 @@ public sealed class BashArithmeticParser
         }
         if (Accept(T.LParen))
         {
-            var value = ParseComma();
+            ArithmeticExpr value;
+            using (NestingGuard.EnterArithmetic()) value = ParseComma();
             Expect(T.RParen);
             return value;
         }

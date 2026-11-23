@@ -1452,10 +1452,13 @@ degraded to the whole array. The evaluator itself also pasted a `$x` value with 
   (`InvokeBashArithmeticCommand.ResolveLvalue`, the `resolve` callback of `BashArith.Evaluate`).
 - Only the evaluator's own .NET faults become a `BashArithException`. A fault thrown by a read, write or resolve
   callback passes on unchanged (it is tagged by an exception filter in `BashArith.Callbacks`, without unwinding).
-- Every recursive descent function of the parser (`ParseComma`, `ParseAssignment`, `ParseConditional`,
-  `ParsePower`, `ParseUnary`) holds one `NestingGuard` level, so no edge recurses unbounded: a 100000-deep `0?0:…`,
-  `(((…`, `- - …`, `2**2**…` or `a=a=…` fails cleanly ("nesting too deep"). bash computes such chains; ps-bash
-  stops at its depth limit (guard `NestingGuardTests.ArithmeticParse_EveryRecursionEdge*`).
+- Every recursive EDGE of the parser holds one `NestingGuard.EnterArithmetic` level while it is taken: a paren
+  group, both `?:` operands, `a=`, `**` and a unary sign. A paren costs one level, and the arithmetic budget
+  (`NestingGuard.MaxArithmeticDepth`, 1024) is counted apart from the shell's, so 1000 nested parens parse as in
+  bash. A 100000-deep `0?0:…`, `(((…`, `- - …`, `2**2**…` or `a=a=…` fails cleanly ("nesting too deep"), where
+  bash computes some and crashes on others. A run-time parse that runs out of stack first retries on the large
+  stack (`NestingGuard.WithStackFallback`, as a transpile does). Guards: `NestingGuardTests.ArithmeticParse_EveryRecursionEdge*`,
+  `NestingGuardTests.ArithmeticParse_NestedParensAndChains_TheLimitIsOneLevelPerEdge`.
 
 **Emitted shapes.** A slice bound or subscript that is ONE variable (`${a[@]:$i:1}`, `${@:$#}`, `${a[$k]}`) reads it
 and takes `PsBuild.ArithPlainOrValue`: its plain-decimal value without an evaluator call, else the evaluator's

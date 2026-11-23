@@ -85,7 +85,9 @@ public static class BashArith
     {
         try
         {
-            return BashArithmeticParser.Parse(expression, tokens);
+            // On a thread whose stack runs out before the depth cap (1000 nested parens on a small pipeline thread), the
+            // parse runs again on a large stack, as a transpile does: the limit is the same on every thread.
+            return NestingGuard.WithStackFallback(() => BashArithmeticParser.Parse(expression, tokens));
         }
         catch (BashArithmeticParseException ex)
         {

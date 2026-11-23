@@ -30,17 +30,36 @@ public static class NestingGuard
     /// space only. Comfortably holds <see cref="MaxDepth"/> levels through lexer + parser + emitter.</summary>
     internal const int LargeStackBytes = 256 * 1024 * 1024;
 
+    /// <summary>
+    /// Arithmetic nesting levels accepted per thread, counted apart from <see cref="MaxDepth"/>: bash takes
+    /// <c>$(( ((…((1))…)) ))</c> 1000 parens deep (and crashes far beyond), so the limit sits above that, wherever the
+    /// expression is nested in the script. The arithmetic parser enters one level per recursive EDGE it takes (a paren,
+    /// a <c>?:</c> operand, <c>a=</c>, <c>**</c>, a unary sign), so a paren costs one level, not one per precedence
+    /// function it passes through.
+    /// </summary>
+    public const int MaxArithmeticDepth = 1024;
+
     [ThreadStatic] private static int t_depth;
+    [ThreadStatic] private static int t_arithDepth;
     [ThreadStatic] private static bool t_onLargeStack;
 
     internal const string TooDeepMessage = "nesting too deep";
 
     /// <summary>Enter one nesting level of the bash lexer/parser; dispose to leave it.</summary>
-    public static Scope Enter() => EnterCore(arithmetic: false);
+    public static Scope Enter() => EnterCore();
 
     /// <summary>Enter one nesting level of the arithmetic parser (its own exception type, which every
-    /// arithmetic consumer already converts).</summary>
-    public static Scope EnterArithmetic() => EnterCore(arithmetic: true);
+    /// arithmetic consumer already converts, and its own budget, <see cref="MaxArithmeticDepth"/>).</summary>
+    public static ArithmeticScope EnterArithmetic()
+    {
+        bool stackOk = RuntimeHelpers.TryEnsureSufficientExecutionStack();
+        if (!stackOk) t_stackExhausted = true;
+        if (t_arithDepth >= MaxArithmeticDepth || !stackOk)
+            throw new BashArithmeticParseException(
+                $"{TooDeepMessage} (more than {MaxArithmeticDepth} levels, or out of stack) in arithmetic expression");
+        t_arithDepth++;
+        return default;
+    }
 
     [ThreadStatic] private static bool t_stackExhausted;
 
@@ -76,19 +95,20 @@ public static class NestingGuard
         }
     }
 
-    private static Scope EnterCore(bool arithmetic)
+    private static Scope EnterCore()
     {
         bool stackOk = RuntimeHelpers.TryEnsureSufficientExecutionStack();
         if (!stackOk) t_stackExhausted = true;
         if (t_depth >= MaxDepth || !stackOk)
-        {
-            string message = $"{TooDeepMessage} (more than {MaxDepth} levels, or out of stack)";
-            throw arithmetic
-                ? new BashArithmeticParseException(message + " in arithmetic expression")
-                : new ParseException(message, 1, 1, "nesting");
-        }
+            throw new ParseException($"{TooDeepMessage} (more than {MaxDepth} levels, or out of stack)", 1, 1, "nesting");
         t_depth++;
         return default;
+    }
+
+    /// <summary>Leaves the level entered by <see cref="EnterArithmetic"/>.</summary>
+    public readonly struct ArithmeticScope : IDisposable
+    {
+        public void Dispose() => t_arithDepth--;
     }
 
     /// <summary>
