@@ -75,11 +75,19 @@ public class ProcessSubStreamingTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void ProducerError_DeletesTheTempFile_AndRethrows()
     {
+        // The directory is shared with every class that runs a `<(...)` in parallel, so a new name there is not
+        // necessarily this producer's (build3: failed 2 of 3 full runs). Count only new files holding this test's
+        // own marker. The producer writes enough marked rows (~1 MB) before it throws that a leaked file holds them
+        // on disk (the writer streams: ProducerOutput_IsOnDisk_WhileTheProducerIsStillRunning), never an empty file.
+        string marker = "psub-err-" + Guid.NewGuid().ToString("N");
         var got = Run(
             SnapshotFn +
-            "$before = Get-SubNames; $err = ''; " +
-            "try { [void](Invoke-ProcessSub { 'x'; throw 'producer failed' }) } catch { $err = $_.Exception.Message }; " +
-            "$left = @(Get-SubNames | Where-Object { $before -notcontains $_ }).Count; \"$err|$left\"");
+            $"$before = Get-SubNames; $err = ''; $m = '{marker}'; " +
+            "try { [void](Invoke-ProcessSub { 1..20000 | ForEach-Object { \"$m $_\" }; throw 'producer failed' }) } catch { $err = $_.Exception.Message }; " +
+            "$dir = Join-Path ([System.IO.Path]::GetTempPath()) 'ps-bash/proc-sub'; " +
+            "$left = @(Get-SubNames | Where-Object { $before -notcontains $_ } | Where-Object { " +
+            "  $t = Get-Content -Raw -LiteralPath (Join-Path $dir $_) -ErrorAction Ignore; $t -and $t.Contains($m) }).Count; " +
+            "\"$err|$left\"");
         Assert.Equal("producer failed|0", got[0]);
     }
 
