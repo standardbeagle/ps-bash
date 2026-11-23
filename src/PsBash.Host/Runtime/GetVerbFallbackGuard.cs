@@ -48,11 +48,12 @@ internal static class GetVerbFallbackGuard
                 e.CommandScriptBlock = ScriptBlock.Create(launch.StandInScript(ProgramFile.Shown(e.CommandName, app.Path)));
                 return;
             }
-            // An EXPORTED scalar holds a value the process environment cannot (Linux: an invalid byte): PowerShell's
-            // launcher would give the program U+FFFD for it. Invoke-BashNative starts it with the exact bytes
-            // (NativeRunner). Only then: every other program keeps PowerShell's launcher, and the terminal.
-            if (!NativeRunner.LookingUpRaw && ProcessScalars.KeepsAnyExported)
-                e.CommandScriptBlock = ScriptBlock.Create(NativeRunner.StandIn(app.Path));
+            // A scalar holds a value the process environment cannot (Linux: an invalid byte): PowerShell's launcher
+            // would give the program U+FFFD for it, in its environment (exported) or its argv (`prog "$s"`). Only the
+            // stand-in sees the argv: it starts the program through Invoke-BashNative with the exact bytes when the
+            // environment or the argv needs them, and otherwise as PowerShell would, on the terminal (NativeRunner).
+            if (!NativeRunner.LookingUpRaw && ProcessScalars.KeepsAny)
+                e.CommandScriptBlock = ScriptBlock.Create(NativeRunner.ShellStandIn(app.Path));
         };
     }
 

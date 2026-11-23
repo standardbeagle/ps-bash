@@ -114,6 +114,27 @@ public class RawBytesDifferentialTests
             /usr/bin/printf '%s' "$s" 2>&1 | x merged
             { /usr/bin/printf '%s' "$s" | x job; } & wait
             s=$'\xfe' /usr/bin/true; printf '%s' "$s" | x prefix-restore
+            { time /usr/bin/printenv E; } 2>/dev/null | x time
+            echo E | xargs /usr/bin/printenv | x xargs
+            : > f1; find . -name f1 -exec /usr/bin/printenv E \; | x find-exec
+            """ + "\n");
+    }
+
+    // REGRESSION (Linux): with the switch keyed on EXPORTED kept scalars only, `prog "$s"` of a scalar that is not
+    // exported went through PowerShell's launcher again and wrote ef bf bd. The stand-in now decides per argv
+    // (PsBash.Core.NativeRunner.ShellStandIn); a cmdlet that runs a program by name decides on the argv it builds
+    // (InvokeBashNativeCommand.MergedProgramPath).
+    [SkippableFact] public Task Argv_ToAProgram_KeepsTheInvalidByte()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "a Windows child gets its argv as UTF-16: an invalid byte has no UTF-16 form");
+        return AssertOracle.EqualAsync(Hex + """
+            printf '\xfd\n' | xargs /usr/bin/printf '%s' | x xargs-nothing-kept
+            s=$'\xff'
+            /usr/bin/printf '%s' "$s" | x argv-noexport
+            for f in "$s" "$s$s"; do /usr/bin/printf '%s' "$f" | x loop; done
+            printf '%s\n' "$s" | xargs /usr/bin/printf '%s' | x xargs
+            { time /usr/bin/printf '%s' "$s"; } 2>/dev/null | x time
+            : > f1; find . -name f1 -exec /usr/bin/printf '%s' "$s" \; | x find-exec
             """ + "\n");
     }
 

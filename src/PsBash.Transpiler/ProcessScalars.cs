@@ -107,22 +107,30 @@ public static class ProcessScalars
     /// environment, so it takes no program off the terminal (a <c>line</c> left over from a read loop of a binary file).
     /// A kept value the environment no longer has is dropped here, as it is on a read.
     /// </summary>
-    public static bool KeepsAnyExported
+    public static bool KeepsAnyExported => AnyCurrent(exportedOnly: true);
+
+    /// <summary>
+    /// True while ANY scalar's exact value is kept beside the environment: a program's argv may carry it
+    /// (<c>prog "$s"</c>, <c>for f in *; do prog "$f"; done</c> over a file name with an invalid byte), which only the
+    /// code that sees the argv can tell (<see cref="ChildNeedsExactBytes"/>). The shell's lookup hook hands a program
+    /// a stand-in while this holds; the stand-in decides per argv and otherwise runs the program as PowerShell would.
+    /// A kept value the environment no longer has is dropped here, as it is on a read.
+    /// </summary>
+    public static bool KeepsAny => AnyCurrent(exportedOnly: false);
+
+    private static bool AnyCurrent(bool exportedOnly)
     {
-        get
+        if (s_kept.IsEmpty) return false;
+        foreach (var (name, kept) in s_kept)
         {
-            if (s_kept.IsEmpty) return false;
-            foreach (var (name, kept) in s_kept)
+            if (!string.Equals(Environment.GetEnvironmentVariable(name), kept.Stored, StringComparison.Ordinal))
             {
-                if (!string.Equals(Environment.GetEnvironmentVariable(name), kept.Stored, StringComparison.Ordinal))
-                {
-                    s_kept.TryRemove(new KeyValuePair<string, Kept>(name, kept));
-                    continue;
-                }
-                if (ShellExports.IsExported(name)) return true;
+                s_kept.TryRemove(new KeyValuePair<string, Kept>(name, kept));
+                continue;
             }
-            return false;
+            if (!exportedOnly || ShellExports.IsExported(name)) return true;
         }
+        return false;
     }
 
     /// <summary>

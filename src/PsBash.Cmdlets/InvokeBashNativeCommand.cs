@@ -38,6 +38,7 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
     public PSObject? InputObject { get; set; }
 
     private StreamingChildProcess? _child;
+    private NativeStdinBridge? _ownStdin;
     private SteppablePipeline? _fallback;
     private bool _finished;
 
@@ -120,6 +121,7 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
     protected override void DisposeResources()
     {
         _child?.Dispose();
+        ReleaseOwnStdin();
         _fallback?.Dispose();
     }
 
@@ -131,11 +133,19 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
             // Piped input is fed to it; otherwise it reads the process stdin, as a program PowerShell starts does.
             // Not merged, its stderr goes through this cmdlet's error stream (StreamingChildProcess).
             bool piped = MyInvocation.ExpectingInput;
+            // Outside the foreground (a background job, env's command) the process stdin is the foreground's: such a
+            // program reads its own compound stdin (a job's top level: end of input, as bash's /dev/null) through a
+            // pipe of its own, never by a swap of the process stdin (NativeStdinBridge.Enter refuses it there); a stdin
+            // the shell reads too has one pipe for all its programs (NativeStdinBridge.ForChild).
+            if (!piped && PsBash.Core.ScalarOverlay.Current is not null
+                && NativeStdinBridge.ForChild(SharedStdin.Get(SessionState)) is { } own)
+                _ownStdin = own;
             _child = BashRuntime.StartChildProcessStreaming(psi, keepStdinOpen: piped,
-                new ChildStdioMode(MergeStderr: merge, InheritStdin: !piped));
+                new ChildStdioMode(MergeStderr: merge, InheritStdin: !piped, Stdin: _ownStdin?.ChildStdin));
         }
         catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex))
         {
+            ReleaseOwnStdin();
             // Found but not runnable (bash: "cannot execute", 126).
             FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + $"{Name}: {ex.Message}");
             FileSystemHelpers.SetLastExitCode(this, 126);
@@ -146,23 +156,39 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
     {
         if (_child is null || _finished) return;
         _finished = true;
-        int exitCode = _child.Complete(this);
+        int exitCode;
+        try { exitCode = _child.Complete(this); }
+        finally { ReleaseOwnStdin(); }
         if (Stopping) return;
         FileSystemHelpers.SetLastExitCode(this, exitCode);
+    }
+
+    /// <summary>The program is gone: what it left of its own stdin goes back to the compound's (NativeStdinBridge.Exit).</summary>
+    private void ReleaseOwnStdin()
+    {
+        var own = _ownStdin;
+        _ownStdin = null;
+        own?.Exit();
     }
 
     /// <summary>
     /// For a cmdlet that runs a command by name (<c>env</c>, <c>xargs</c>, <c>find -exec</c>, <c>command</c>): the program
     /// path to run through <see cref="RunMerged"/> when the cmdlet's stderr goes down the pipeline
     /// (<see cref="StderrMerge.Redirected"/>: merged, or split off to a file or <c>/dev/null</c>) or the cmdlet runs in a
-    /// background job (its environment is the job's scalars, <see cref="JobProgramLookup"/>), and
+    /// background job (its environment is the job's scalars, <see cref="JobProgramLookup"/>) or the program needs exact
+    /// bytes (<see cref="PsBash.Core.ProcessScalars.ChildNeedsExactBytes"/> of <paramref name="argv"/>), and
     /// <paramref name="name"/> is a program the OS starts as it is; null otherwise (run it by name as before, where the
     /// lookup hook gives a <c>#!</c> script or a document <see cref="PsBash.Core.ProgramFile"/>'s stand-in).
     /// </summary>
-    internal static string? MergedProgramPath(PSCmdlet cmdlet, string name)
+    internal static string? MergedProgramPath(PSCmdlet cmdlet, string name, IEnumerable<string> argv)
     {
+        ArgumentNullException.ThrowIfNull(argv);
         // In a background job always: PowerShell would start it with the process environment, not the job's scalars.
-        if (string.IsNullOrEmpty(name) || (!StderrMerge.Redirected(cmdlet) && PsBash.Core.ScalarOverlay.Current is null)) return null;
+        // Likewise when its environment or argv has a value PowerShell's launcher would turn into U+FFFD (NativeRunner):
+        // `xargs prog` over input with an invalid byte, `find -exec prog {}` over such a name.
+        if (string.IsNullOrEmpty(name)
+            || (!StderrMerge.Redirected(cmdlet) && PsBash.Core.ScalarOverlay.Current is null
+                && !PsBash.Core.ProcessScalars.ChildNeedsExactBytes(argv))) return null;
         return ProgramLookup.Find(cmdlet, name) is { } app && !IsBatchFile(app.Path) ? app.Path : null;
     }
 

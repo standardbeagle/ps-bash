@@ -692,7 +692,7 @@ public sealed class InvokeBashXargsCommand : BashCmdlet
             int childExit = 0;
             // `xargs prog 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4);
             // its stdin is empty, as GNU xargs gives it /dev/null.
-            if (InvokeBashNativeCommand.MergedProgramPath(this, cmd) is { } program)
+            if (InvokeBashNativeCommand.MergedProgramPath(this, cmd, callArgs) is { } program)
             {
                 childExit = InvokeBashNativeCommand.RunMerged(this, program, callArgs, inheritStdin: false);
             }

@@ -39,6 +39,19 @@ public sealed class StdinCursor
     /// </summary>
     public bool IsShellStdin { get; init; }
 
+    /// <summary>
+    /// A background job was started with this cursor while the shell reads it too (<c>BackgroundJobStdin.Inherit</c>).
+    /// Every program that reads it then reads ONE pipe (<c>NativeStdinBridge.ForChild</c>), as bash's readers share one
+    /// file description: a pump per program would take records ahead of the shell's next reader even when the program
+    /// reads none (<c>printf 'hi\n' | { /usr/bin/sleep 2 &amp; sleep 1; cat; }</c> prints <c>hi</c> in bash).
+    /// </summary>
+    public bool SharedWithAJob
+    {
+        get => Volatile.Read(ref _sharedWithAJob);
+        set => Volatile.Write(ref _sharedWithAJob, value);
+    }
+    private bool _sharedWithAJob;
+
     /// <summary>An empty cursor, filled by <see cref="Enqueue"/> (the eager compound-scope form).</summary>
     public StdinCursor()
     {

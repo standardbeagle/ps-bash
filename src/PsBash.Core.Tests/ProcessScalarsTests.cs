@@ -105,6 +105,23 @@ public class ProcessScalarsTests
         finally { ProcessScalars.Set(name, null); }
     }
 
+    // A kept value that is not exported still turns the shell's stand-in on (KeepsAny): `prog "$s"` carries it in argv,
+    // which only the stand-in sees. REGRESSION: keyed on exported values only, `s=$'\xff'; /usr/bin/printf %s "$s"` wrote
+    // ef bf bd (Differential RawBytesDifferentialTests.Export_ToAProgram_KeepsTheInvalidByte, row argv-noexport).
+    [Fact]
+    public void KeepsAny_ANotExportedValue_TurnsTheStandInOn()
+    {
+        if (ProcessScalars.EnvironmentHoldsEveryString) return; // nothing is ever kept there
+        var name = Name();
+        try
+        {
+            ProcessScalars.Set(name, Ff);
+            Assert.True(ProcessScalars.KeepsAny);
+            Assert.True(ProcessScalars.ChildNeedsExactBytes([Ff]));
+        }
+        finally { ProcessScalars.Set(name, null); }
+    }
+
     // The switch turns off as soon as no exported scalar holds such a value: programs go back to PowerShell's launcher
     // (and keep the terminal). Each case is a way the value goes: unset, a plain value, and a direct environment write
     // (the host's reset); the export attribute removed is Differential (RawBytesDifferentialTests). Kept values of other tests may run meanwhile, so each case

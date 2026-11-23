@@ -20,7 +20,12 @@ namespace PsBash.Cmdlets;
 /// input: the launcher's forwarded stdin through <see cref="NativeStdinBridge"/>, or nothing) instead of a pipe the
 /// caller writes and closes.
 /// </param>
-public readonly record struct ChildStdioMode(bool MergeStderr = false, bool InheritStdin = false)
+/// <param name="Stdin">
+/// The child's stdin is this pipe read end, which the caller owns and keeps (<see cref="NativeStdinBridge.ForChild"/>:
+/// a compound's stdin for a program started outside the foreground). Wins over <paramref name="InheritStdin"/>.
+/// </param>
+public readonly record struct ChildStdioMode(bool MergeStderr = false, bool InheritStdin = false,
+    System.Runtime.InteropServices.SafeHandle? Stdin = null)
 {
     /// <summary>Separate stdout/stderr pipes, a stdin pipe: the default.</summary>
     public static ChildStdioMode Separate => default;
@@ -171,7 +176,7 @@ public static class ChildStdio
         {
             output = new AnonymousPipeServerStream(PipeDirection.In, childEnd);
             if (!mode.MergeStderr) error = new AnonymousPipeServerStream(PipeDirection.In, childEnd);
-            if (!mode.InheritStdin) input = new AnonymousPipeServerStream(PipeDirection.Out, childEnd);
+            if (!mode.InheritStdin && mode.Stdin is null) input = new AnonymousPipeServerStream(PipeDirection.Out, childEnd);
 
             IntPtr childOut = output.ClientSafePipeHandle.DangerousGetHandle();
             var spec = new JobProcessStart(startInfo.FileName, arguments, environment)
@@ -184,11 +189,11 @@ public static class ChildStdio
                 AllowBreakaway = true,
                 OwnProcessGroup = !(TerminalForegroundOverride?.Invoke() ?? JobProcess.IsTerminalForegroundJob()),
                 Stdio = new JobStdio(
-                    input?.ClientSafePipeHandle.DangerousGetHandle(),
+                    mode.Stdin?.DangerousGetHandle() ?? input?.ClientSafePipeHandle.DangerousGetHandle(),
                     childOut,
                     // THE merge: one handle for fd 1 and fd 2.
                     error is null ? childOut : error.ClientSafePipeHandle.DangerousGetHandle(),
-                    InheritStdin: mode.InheritStdin),
+                    InheritStdin: mode.InheritStdin && mode.Stdin is null),
             };
 
             JobProcess job;

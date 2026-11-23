@@ -139,7 +139,7 @@ public sealed class InvokeBashTimeCommand : BashCmdlet
         {
             // `time prog 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4); its
             // output streams through as it runs and the timing record carries no text of its own.
-            var merged = InvokeBashNativeCommand.MergedProgramPath(this, cmd) is { } program
+            var merged = InvokeBashNativeCommand.MergedProgramPath(this, cmd, args[1..]) is { } program
                 ? InvokeBashNativeCommand.RunMerged(this, program, args[1..], inheritStdin: true, input: _stdin.Count > 0 ? _stdin : null)
                 : (int?)null;
             var output = merged is not null ? []

@@ -928,7 +928,7 @@ public sealed class InvokeBashFindCommand : BashCmdlet
             }
             FileSystemHelpers.SetLastExitCode(this, 0);
             // `find -exec prog {} \; 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4).
-            if (InvokeBashNativeCommand.MergedProgramPath(this, argv[0]) is { } program)
+            if (InvokeBashNativeCommand.MergedProgramPath(this, argv[0], argv.Skip(1)) is { } program)
             {
                 int exit = InvokeBashNativeCommand.RunMerged(this, program, argv.Skip(1), inheritStdin: true);
                 FileSystemHelpers.SetLastExitCode(this, exit);
