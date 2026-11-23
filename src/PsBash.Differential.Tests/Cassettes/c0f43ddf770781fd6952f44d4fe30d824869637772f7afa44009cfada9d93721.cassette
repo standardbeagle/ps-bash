@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 138
+stdout-length: 57
+stderr-length: 0
+==== SCRIPT ====
+g() { local -n lr; lr=$1; echo "[${lr:-none}] [${#lr}] [${lr^^}] [${!lr}] [${lr[@]}]"; }
+tf=abc; g tf; ta=(p q); g ta; echo "[${lr-gone}]"
+==== STDOUT ====
+[abc] [3] [ABC] [tf] [abc]
+[p] [1] [P] [ta] [p q]
+[gone]
+
+==== STDERR ====
+

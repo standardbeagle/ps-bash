@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 201
+stdout-length: 119
+stderr-length: 0
+==== SCRIPT ====
+( declare -n ar; w=arr; ar=$w; arr=(a "b c" d); echo "[${ar[1]}] [${#ar[@]}]"; ar+=(z); ar[0]=A; declare -p arr ar )
+g() { local -n gr; gr=$1; gr+=(y); echo "[${gr[@]}]"; }; ga=(x); g ga; declare -p ga
+==== STDOUT ====
+[b c] [3]
+declare -a arr=([0]="A" [1]="b c" [2]="d" [3]="z")
+declare -n ar="arr"
+[x y]
+declare -a ga=([0]="x" [1]="y")
+
+==== STDERR ====
+

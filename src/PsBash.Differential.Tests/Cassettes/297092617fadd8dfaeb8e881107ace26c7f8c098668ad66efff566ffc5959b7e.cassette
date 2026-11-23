@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 504
+stdout-length: 61
+stderr-length: 0
+==== SCRIPT ====
+printf 'declare -A M\nM[k]=v\ndeclare -a L=(a b)\nL+=(c)\n' > cfg.sh
+g(){ source ./cfg.sh; echo "${M[k]} ${L[*]}"; }; g; echo "[${L[*]}][${M[k]}]"
+printf 'local -a S=(1)\nS+=(2)\nS[5]=6\nunset "S[0]"\nread -a R <<< "p q"\ndeclare -a R2\nread -a R2 <<< "s t"\nmapfile -t MP <<< "m1"\nlocal -a MQ; mapfile -t MQ <<< "n1"\necho "S:${S[*]} R2:${R2[*]} MQ:${MQ[*]}"\n' > src2.sh
+k(){ source ./src2.sh; }; k; echo "[${S[*]}][${R2[*]}][${MQ[*]}][${R[*]}][${MP[*]}]"
+source ./cfg.sh; echo "top: ${M[k]} ${L[*]}"
+
+==== STDOUT ====
+v a b c
+[][]
+S:2 6 R2:s t MQ:n1
+[][][][p q][m1]
+top: v a b c
+
+==== STDERR ====
+

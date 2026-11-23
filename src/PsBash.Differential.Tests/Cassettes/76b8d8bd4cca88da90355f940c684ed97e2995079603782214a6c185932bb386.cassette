@@ -1,0 +1,52 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1036
+stdout-length: 138
+stderr-length: 0
+==== SCRIPT ====
+f(){ eval 'declare -i iv=2*3'; iv+=1; echo $iv; }; f
+g(){ eval 'local -i n=1+1'; echo $n; n=3+4; echo $n; }; g
+eval 'declare -u u'; u=ab; echo $u
+eval 'declare -l lo'; lo=XY; echo $lo; lo+=ZZ; echo $lo
+h(){ eval 'local -u hu'; hu=cd; hu+=ef; echo $hu; }; h; echo "top[${hu-unset}]"
+w(){ eval 'declare -i wi=1'; (( wi += 2 )); echo "wi=$wi"; let wi=wi*3; echo "wi=$wi"; }; w
+d='declare -i'; r1(){ $d ri=2*3; ri+=1; echo "r1=$ri"; }; r1
+r2(){ local -i "$1"; rn=4*4; echo "r2=$rn"; }; r2 rn
+r3(){ declare "$1" rc; rc=MiXed; rc+=Up; echo "r3=$rc"; }; r3 -u; r3 -l
+r4(){ eval "$1"; rv=5+5; rv+=1; echo "r4=$rv"; }; r4 'declare -i rv'
+x=5; r5(){ eval 'declare -i x'; x+=2; echo "r5=$x"; }; r5; echo "x=$x"
+r6(){ declare -n "$1"; nr=via; echo "r6=$nt"; }; nt=orig; r6 nr=nt; echo "nt=$nt"
+ni(){ eval 'declare -i nv'; declare -n nref=nv; nref=3*3; echo "nv=$nv"; }; ni
+xu(){ eval 'declare -u xv'; xv=ab; export xv; xv+=cd; echo "$xv"; env | grep '^xv='; }; xu
+dz=1; $d dq; x=$(false); echo "s1=$?"; y=ok; echo "s2=$?"; false; z=1; echo "s3=$?"
+
+==== STDOUT ====
+7
+2
+7
+AB
+xy
+xyzz
+CDEF
+top[unset]
+wi=3
+wi=9
+r1=7
+r2=16
+r3=MIXEDUP
+r3=mixedup
+r4=11
+r5=2
+x=5
+r6=via
+nt=via
+nv=9
+ABCD
+xv=ABCD
+s1=1
+s2=0
+s3=0
+
+==== STDERR ====
+

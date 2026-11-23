@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 67
+stdout-length: 3
+stderr-length: 124
+==== SCRIPT ====
+(echo ${zz?}); (echo ${zz:?}); zz=; (echo ${zz:?}); (echo ${zz?}ok)
+==== STDOUT ====
+ok
+
+==== STDERR ====
+bash: line 1: zz: parameter not set
+bash: line 1: zz: parameter null or not set
+bash: line 1: zz: parameter null or not set
+

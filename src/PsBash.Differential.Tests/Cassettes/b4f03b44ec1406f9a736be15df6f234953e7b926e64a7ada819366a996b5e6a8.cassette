@@ -1,0 +1,36 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 648
+stdout-length: 98
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+{
+a=(G); g() { unset a; }; f() { local -a a=(1); g; echo "1 [${a[*]}]"; }; f
+a=(1 2); f2() { unset a; }; f2; echo "2 ${a+set}|${#a[@]}"; declare -p a
+a=(G); g3() { unset a; echo "3 g ${a+set}"; }; f3() { local -a a=(1); g3; echo "3 [${a[*]}]"; }; ( f3 ); echo "3 ${a[*]}"
+a=(1 2); ( unset a; echo "4 in ${a+set}|${#a[@]}" ); echo "4 ${a[*]}"
+f5() { local -a a; a+=(x); unset a; echo "5 f [${a[*]}]"; }; a=(G); f5; echo "5 ${a[*]}"
+f6() { local -a a=(1); unset a; echo "6 f [${a[*]}]"; }; unset a; f6; echo "6 [${a[*]}]"
+} 2>&1 | sed 's/^[^ ]*: line [0-9]*: /SRC: /'
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+1 [G]
+2 |0
+SRC: declare: a: not found
+3 g set
+3 [G]
+3 G
+4 in |0
+4 1 2
+5 f []
+5 G
+6 f []
+6 []
+rc=0
+
+==== STDERR ====
+

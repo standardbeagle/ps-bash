@@ -1,0 +1,28 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 528
+stdout-length: 27
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+{
+a=(0); { a+=(u); echo 1; } | while read x; do a+=(d); done; echo "1 ${a[*]}"
+a=(0); { a+=(u); echo 1; echo 2; } | while read x; do a+=(d); done; echo "2 ${a[*]}"
+a=(0); { a+=(u); echo 1; } | { a+=(m); cat; } | while read x; do a+=(d); done; echo "3 ${a[*]}"
+a=(0); { echo 1; a+=(u); } | while read x; do a+=(d); done; echo "4 ${a[*]}"
+declare -A m=([k]=0); { m[u]=1; echo 1; } | while read x; do m[d]=2; done; echo "5 ${#m[@]} ${!m[*]}"
+} 2>&1
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+1 0
+2 0
+3 0
+4 0
+5 1 k
+rc=0
+
+==== STDERR ====
+

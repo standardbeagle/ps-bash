@@ -1,0 +1,23 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 342
+stdout-length: 100
+stderr-length: 0
+==== SCRIPT ====
+f() { local -n q=$1; echo "[${q[@]}] [${#q[@]}] [${!q}]"; q+=(z); q[0]=A; }
+arr=(a b); f arr; echo "${arr[*]}"; nm=arr; f "$nm"; echo "${arr[*]}"
+h() { local -n p="$1"; p=set_by_h; }; nm=tg; h "$nm"; echo "tg=$tg"
+k() { local n=$1; local -n out=$n; out=$2; }; k tg kval; echo "tg=$tg"
+m() { local -n mr=$1; mr=(x y); }; m "$nm"; declare -p tg
+==== STDOUT ====
+[a b] [2] [arr]
+A b z
+[A b z] [3] [arr]
+A b z z
+tg=set_by_h
+tg=kval
+declare -a tg=([0]="x" [1]="y")
+
+==== STDERR ====
+

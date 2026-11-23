@@ -1,0 +1,37 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 640
+stdout-length: 72
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+{
+c1=X; read -ra c1 <<< "m n"; echo "1 $c1 ${c1[*]}"
+c2=X; mapfile -t c2 <<< $'a\nb'; echo "2 $c2 ${c2[*]}"
+c3=Y; f() { read -ra c3 <<< "c d"; }; f; echo "3 $c3 ${c3[*]}"
+c4=X; ( read -ra c4 <<< "m n"; echo "4 in $c4" ); echo "4 $c4 ${c4[*]}"
+c5=X; read -d , -ra c5 <<< "a b,c"; echo "5 $c5 ${c5[*]}"
+mapfile -t <<< $'a\nb'; echo "6 $MAPFILE ${#MAPFILE[@]}"
+c7=X; mapfile -t -O 0 c7 <<< $'a\nb'; echo "7 $c7 ${c7[*]}"
+g() { echo "8 $parts"; }; IFS=: read -ra parts <<< "a:b"; g
+c9=X; read -ra c9 <<< "m n"; export c9; echo "9 $(env | grep -c '^c9=')"
+} 2>&1
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+1 m m n
+2 a a b
+3 c c d
+4 in m
+4 X X
+5 a a b
+6 a 2
+7 a a b
+8 a
+9 0
+rc=0
+
+==== STDERR ====
+

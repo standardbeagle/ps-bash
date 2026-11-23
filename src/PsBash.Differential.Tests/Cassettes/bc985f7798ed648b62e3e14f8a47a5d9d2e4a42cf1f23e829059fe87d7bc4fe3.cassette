@@ -1,0 +1,43 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 943
+stdout-length: 172
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+{
+declare -n r1=x1; x1=X; r1=(p q); echo "1 $r1 $x1 ${x1[*]} ${r1[1]}"
+declare -n r2=x2; x2=X; r2+=(r); echo "2 $r2 $x2 ${x2[*]} ${#r2[@]}"
+declare -n r3=x3; x3=X; r3[1]=z; echo "3 $r3 $x3 ${x3[*]} ${r3[1]}"
+declare -n r4=x4; x4=X; read -ra r4 <<< "m n"; echo "4 $r4 $x4 ${x4[*]}"
+declare -n r5=x5; x5=X; mapfile -t r5 <<< $'a\nb'; echo "5 $r5 $x5 ${x5[*]}"
+declare -n r6=x6; x6=X; declare -a r6=(s t); echo "6 $r6 $x6 ${x6[*]}"
+declare -n r7=x7; r7=(p q); echo "7 $r7 $x7 ${x7[*]}"; declare -p x7
+declare -n r8=x8; x8=X; r8=(p q); echo "8 ${x8:-d} ${x8^^} ${x8/p/P} ${r8%q} ${#x8} ${#r8}"
+declare -n r9=x9; x9=X; r9=(p q); x9=Z; echo "9 $r9 $x9 ${x9[*]}"
+declare -n r10=x10; x10=X; ( r10=(p q); echo "10 in $r10 $x10" ); echo "10 $r10 $x10"
+declare -n r11=x11; x11=X; r11=(p q); unset x11; echo "11 [$r11] [$x11] ${#x11[@]}"; x11=W; echo "11 $r11 $x11"
+} 2>&1
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+1 p p p q q
+2 X X X r 2
+3 X X X z z
+4 m m m n
+5 a a a b
+6 s s s t
+7 p p p q
+declare -a x7=([0]="p" [1]="q")
+8 p P P p 1 1
+9 Z Z Z q
+10 in p p
+10 X X
+11 [] [] 0
+11 W W
+rc=0
+
+==== STDERR ====
+

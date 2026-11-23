@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 143
+stdout-length: 14
+stderr-length: 45
+==== SCRIPT ====
+declare -n r; v=tg; r=$v; echo "[${!r}]"
+declare -n b=c; declare -n a; w=b; a=$w; echo "[${!a}]"
+declare -n n0; (echo "[${!n0}]"); echo "st=$?"
+==== STDOUT ====
+[tg]
+[c]
+st=1
+
+==== STDERR ====
+bash: line 3: n0: invalid indirect expansion
+

@@ -1,0 +1,32 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 591
+stdout-length: 75
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+{
+f1() { local -n r=$1; r=(u v); echo "1 in $r ${r[1]}"; }; y1=Y; f1 y1; echo "1 $y1 ${y1[*]}"
+f2() { local -n r=$1; r+=(w); }; y2=Y; f2 y2; echo "2 $y2 ${y2[*]}"
+f3() { local -n r=$1; read -ra r <<< "c d"; echo "3 in $r"; }; y3=Y; f3 y3; echo "3 $y3 ${y3[*]}"
+f4() { local -n r=$1; r[2]=e; }; y4=Y; f4 y4; echo "4 $y4 ${y4[*]} ${!y4[*]}"
+f5() { local -n r=$1; mapfile -t r <<< $'a\nb'; }; y5=Y; f5 y5; echo "5 $y5 ${y5[*]}"
+declare -n q6; q6=y6; y6=Y; read -ra q6 <<< "c d"; echo "6 $q6 $y6 ${y6[*]}"
+} 2>&1
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+1 in u v
+1 u u v
+2 Y Y w
+3 in c
+3 c c d
+4 Y Y e 0 2
+5 a a b
+6 c c c d
+rc=0
+
+==== STDERR ====
+

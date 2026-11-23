@@ -1,0 +1,49 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 909
+stdout-length: 111
+stderr-length: 0
+==== SCRIPT ====
+t(){ "$@"; echo "$1=$?"; }
+h1(){ { return 6; } 3>x; echo no; }; t h1
+h2(){ { return 6; } {fd}>x; echo no; }; t h2
+h3(){ eval 'return 6' <<< x; echo no; }; t h3
+h4(){ builtin eval 'return 6' 2>/dev/null; echo no; }; t h4
+h5(){ eval 'return 6' 9>x; echo no; }; t h5
+h7(){ while true; do { return 6; } 2>x; done; echo no; }; t h7
+h8(){ g(){ { return 2; } 2>x; echo gno; }; { g; echo "g=$?"; } 2>x; echo after; }; t h8
+h9(){ { if true; then return 6; fi; } 2>x | cat; echo "pipe=$?"; }; t h9
+h10(){ if { return 6; } 2>x; then echo then; fi; echo no; }; t h10
+h11(){ { return 6; } 2>x && echo and; echo no; }; t h11
+h12(){ ! { return 6; } 2>x; echo no; }; t h12
+h13(){ x=$( { return 6; } 2>/dev/null; echo sub ); echo "x=$x"; }; t h13
+h14(){ ( { return 7; } 2>/dev/null; echo sub ); echo "st=$?"; }; t h14
+c='{ return 5; } 2>/dev/null'; h15(){ eval "$c"; echo no; }; t h15
+h18(){ { true; } 2>x; echo yes; }; t h18
+
+==== STDOUT ====
+h1=6
+h2=6
+h3=6
+h4=6
+h5=6
+h7=6
+g=2
+after
+h8=0
+pipe=0
+h9=0
+h10=6
+h11=6
+h12=6
+x=
+h13=0
+st=7
+h14=0
+h15=5
+yes
+h18=0
+
+==== STDERR ====
+

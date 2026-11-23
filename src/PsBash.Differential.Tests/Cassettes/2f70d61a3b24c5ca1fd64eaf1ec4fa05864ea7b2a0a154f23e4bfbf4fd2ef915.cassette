@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 140
+stdout-length: 129
+stderr-length: 0
+==== SCRIPT ====
+declare -n r; for r in a b; do r=1; done; declare -p r a b
+x=X; declare -n q=x; for q in c d; do q=2; echo "in=$q"; done; declare -p q c d x
+==== STDOUT ====
+declare -n r="b"
+declare -- a="1"
+declare -- b="1"
+in=2
+in=2
+declare -n q="d"
+declare -- c="2"
+declare -- d="2"
+declare -- x="X"
+
+==== STDERR ====
+

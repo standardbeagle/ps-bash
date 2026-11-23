@@ -1,0 +1,27 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 106
+stdout-length: 50
+stderr-length: 0
+==== SCRIPT ====
+set -o history
+history -c
+fc -l 0
+history -c
+fc -l
+history -c
+fc -l -1 5
+history -c
+fc -ln 0
+echo "st=$?"
+
+==== STDOUT ====
+1	 fc -l 0
+1	 fc -l
+1	 fc -l -1 5
+	 fc -ln 0
+st=0
+
+==== STDERR ====
+

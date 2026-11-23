@@ -1,0 +1,48 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1024
+stdout-length: 93
+stderr-length: 0
+==== SCRIPT ====
+printf 'return 9\necho fileafter\n' > rc
+t(){ "$@"; echo "$1=$?"; }
+b1(){ { return 6; } 2>/dev/null; echo no; }; t b1
+b2(){ while true; do return 6; done 2>x; echo no; }; t b2
+b3(){ if true; then return 6; fi >x; echo no; }; t b3
+b4(){ case a in a) return 6;; esac 2>x; echo no; }; t b4
+b5(){ for i in 1; do return 6; done >x; echo no; }; t b5
+b6(){ until false; do return 6; done 2>x; echo no; }; t b6
+b7(){ for ((i=0;i<1;i++)); do return 6; done 2>x; echo no; }; t b7
+b8(){ { return 6; } <rc; echo no; }; t b8
+b9(){ { return 6; } <<< x; echo no; }; t b9
+b10(){ { return 6; } 2>&1; echo no; }; t b10
+b11(){ { { return 6; } >x; echo no-inner; } 2>/dev/null; echo no; }; t b11
+b12(){ if true; then { return 6; } 2>x; fi; echo no; }; t b12
+b13(){ { return 6; } >x 2>&1; echo no; }; t b13
+b14(){ [[ 1 ]] && { return 6; } 2>x; echo no; }; t b14
+b15(){ while read -r l; do return 6; done < rc; echo no; }; t b15
+b16(){ { return 6; } > x 2>&1 < x; echo no; }; t b16
+b17(){ case a in a) { return 6; } 2>x;; esac; echo no; }; t b17
+
+==== STDOUT ====
+b1=6
+b2=6
+b3=6
+b4=6
+b5=6
+b6=6
+b7=6
+b8=6
+b9=6
+b10=6
+b11=6
+b12=6
+b13=6
+b14=6
+b15=6
+b16=6
+b17=6
+
+==== STDERR ====
+

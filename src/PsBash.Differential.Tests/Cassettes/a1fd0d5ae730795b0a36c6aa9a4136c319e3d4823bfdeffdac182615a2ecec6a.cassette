@@ -1,0 +1,28 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 420
+stdout-length: 123
+stderr-length: 0
+==== SCRIPT ====
+s1(){ local -a r; read -a r <<< "x y z"; echo "s1:${r[*]}"; }; s1; echo "[${r[*]}]"; declare -p r 2>&1
+ra=old; read -a ra <<< "x y"; echo "ra:$ra ${ra[1]}"; declare -p ra
+read -a rb <<< "p q"; echo "rb:$rb ${rb[*]}"
+mq=old; mapfile -t mq <<< "m1"; echo "mq:$mq"
+h(){ read -a hr <<< "3 4"; }; h; echo "hr:${hr[*]}"
+k(){ local -a ka=(0); kb; echo "k:${ka[*]}"; }; kb(){ read -a ka <<< "5 6"; }; k; echo "[${ka[*]-unset}]"
+
+==== STDOUT ====
+s1:x y z
+[]
+bash: line 1: declare: r: not found
+ra:x y
+declare -a ra=([0]="x" [1]="y")
+rb:p p q
+mq:m1
+hr:3 4
+k:5 6
+[unset]
+
+==== STDERR ====
+

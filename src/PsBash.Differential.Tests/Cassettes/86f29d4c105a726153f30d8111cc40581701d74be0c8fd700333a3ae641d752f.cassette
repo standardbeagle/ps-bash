@@ -1,0 +1,45 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 836
+stdout-length: 159
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+{
+arr=(a b)
+( mapfile -t arr <<< x; echo "1 in=${arr[*]}" ); echo "1 out=${arr[*]}"
+( read -ra arr <<< "p q"; echo "2 in=${arr[*]}" ); echo "2 out=${arr[*]}"
+( f() { arr=(x y); }; f; echo "3 in=${arr[*]}" ); echo "3 out=${arr[*]}"
+( m() { local -n mr=$1; mr=(x y); }; m arr; echo "4 in=${arr[*]}" ); echo "4 out=${arr[*]}"
+( m5() { local -n mr=$1; mr+=(z); }; nm=arr; m5 "$nm"; echo "5 in=${arr[*]}" ); echo "5 out=${arr[*]}"
+( w=arr; declare -n e6=$w; e6+=(q); echo "6 in=${arr[*]}" ); echo "6 out=${arr[*]}"
+( g() { mapfile -t arr <<< z; }; g; echo "7 in=${arr[*]}" ); echo "7 out=${arr[*]}"
+h() { local -a la=(1 2); ( mapfile -t la <<< 9; echo "8 in=${la[*]}" ); echo "8 out=${la[*]}"; }; h
+k() { mapfile -t arr <<< K; }; k; echo "9 ${arr[*]}"
+} 2>&1
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+1 in=x
+1 out=a b
+2 in=p q
+2 out=a b
+3 in=x y
+3 out=a b
+4 in=x y
+4 out=a b
+5 in=a b z
+5 out=a b
+6 in=a b q
+6 out=a b
+7 in=z
+7 out=a b
+8 in=9
+8 out=1 2
+9 K
+rc=0
+
+==== STDERR ====
+

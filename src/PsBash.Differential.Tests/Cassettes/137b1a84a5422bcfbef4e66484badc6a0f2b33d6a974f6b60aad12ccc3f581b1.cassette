@@ -1,0 +1,38 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 985
+stdout-length: 77
+stderr-length: 0
+==== SCRIPT ====
+( set -e; { { cat; } < /nonexistent/zz; } 2>/dev/null; echo no1 ); echo "s1=$?"
+( set -e; if true; then :; fi < /nonexistent/zz; echo no2 ) 2>/dev/null; echo "s2=$?"
+( set -e; for i in 1; do :; done < /nonexistent/zz; echo no3 ) 2>/dev/null; echo "s3=$?"
+( set -e; case x in x) : ;; esac < /nonexistent/zz; echo no4 ) 2>/dev/null; echo "s4=$?"
+( set -e; f(){ { { cat; } < /nonexistent/zz; } 2>/dev/null; echo no5; }; f; echo no5b ); echo "s5=$?"
+( set -e; g(){ { cat; } < /nonexistent/zz; echo no6; }; ( g ); echo no6b ) 2>/dev/null; echo "s6=$?"
+( set -e; echo hi > in; { { cat; } < /nonexistent/zz || :; } < in; echo leak1 ) 2>/dev/null; echo "s7=$?"
+( set -e; { { cat; } < /nonexistent/zz || :; } > out; echo leak2 ) 2>/dev/null; echo "s8=$?"
+( set -e; { { cat; } > /nonexistent/d/o; } 2>/dev/null; echo no9 ); echo "s9=$?"
+( set -e; echo hi > in; { cat; } < in; echo ok10 ); echo "s10=$?"
+( set -e; while false; do :; done < /nonexistent/zz; echo no11 ) 2>/dev/null; echo "s11=$?"
+
+==== STDOUT ====
+s1=1
+s2=1
+s3=1
+s4=1
+s5=1
+s6=1
+leak1
+s7=0
+leak2
+s8=0
+s9=1
+hi
+ok10
+s10=0
+s11=1
+
+==== STDERR ====
+

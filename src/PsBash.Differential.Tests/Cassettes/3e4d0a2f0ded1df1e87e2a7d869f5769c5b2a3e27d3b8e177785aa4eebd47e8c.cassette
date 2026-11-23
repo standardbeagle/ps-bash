@@ -1,0 +1,33 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 720
+stdout-length: 64
+stderr-length: 0
+==== SCRIPT ====
+( set -e; : > /nonexistent/d/o; echo no1 ) 2>/dev/null; echo "s1=$?"
+( set -e; true < /nonexistent/zz; echo no2 ) 2>/dev/null; echo "s2=$?"
+( set -e; { :; } 2> /nonexistent/d/e; echo no3 ) 2>/dev/null; echo "s3=$?"
+( set -e; export Y=1 > /nonexistent/d/o; echo no4 ) 2>/dev/null; echo "s4=$?"
+( set -e; local_f(){ local v=1 > /nonexistent/d/o; echo no5; }; local_f ) 2>/dev/null; echo "s5=$?"
+( set -e; : 2>> /nonexistent/d/e; echo no6 ) 2>/dev/null; echo "s6=$?"
+( set -e; : > /dev/null; true < /dev/null; { :; } 2>/dev/null; echo ok7 ); echo "s7=$?"
+( set -e; : > /nonexistent/d/o || echo handled8; echo cont8 ) 2>/dev/null; echo "s8=$?"
+( set -e; { { :; } 2> /nonexistent/d/e; } 2>/dev/null; echo no9 ); echo "s9=$?"
+
+==== STDOUT ====
+s1=1
+s2=1
+s3=1
+s4=1
+s5=1
+s6=1
+ok7
+s7=0
+handled8
+cont8
+s8=0
+s9=1
+
+==== STDERR ====
+

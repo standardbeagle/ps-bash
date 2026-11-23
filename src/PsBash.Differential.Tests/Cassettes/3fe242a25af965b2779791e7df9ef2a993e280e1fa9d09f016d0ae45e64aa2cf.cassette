@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 229
+stdout-length: 63
+stderr-length: 57
+==== SCRIPT ====
+declare -n e1; w=tg1; e1=$w; : ${e1:=dflt}; declare -p tg1
+tg2=; declare -n e2; w=tg2; e2=$w; echo "[${e2:=d2}] [${e2=d3}]"; declare -p tg2
+declare -n u; w=tu; u=$w; (echo ${u?}); (echo ${u:?boom}); echo "[${u-unset}] [${u+set}]"
+==== STDOUT ====
+declare -- tg1="dflt"
+[d2] [d2]
+declare -- tg2="d2"
+[unset] []
+
+==== STDERR ====
+bash: line 3: u: parameter not set
+bash: line 3: u: boom
+

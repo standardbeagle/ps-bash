@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 93
+stdout-length: 31
+stderr-length: 0
+==== SCRIPT ====
+declare -n r; r=$(echo tgt); tgt=T; echo "[$r]"; unset r; declare -p r; echo "[${tgt-unset}]"
+==== STDOUT ====
+[T]
+declare -n r="tgt"
+[unset]
+
+==== STDERR ====
+

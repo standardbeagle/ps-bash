@@ -1,0 +1,24 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 192
+stdout-length: 54
+stderr-length: 144
+==== SCRIPT ====
+declare -n p; printf -v p %s 'a b'; echo "st=$?"; declare -p p
+declare -n q; read q <<< 'a b'; echo "st=$?"; declare -p q
+declare -n s; v=5; s=$v; echo 'not reached'
+echo "st=$?"; declare -p s
+==== STDOUT ====
+st=1
+declare -n p
+st=1
+declare -n q
+st=1
+declare -n s
+
+==== STDERR ====
+bash: line 1: printf: `a b': not a valid identifier
+bash: line 2: read: `a b': not a valid identifier
+bash: line 3: `5': not a valid identifier
+

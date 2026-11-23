@@ -1,0 +1,38 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 929
+stdout-length: 152
+stderr-length: 0
+==== SCRIPT ====
+gd(){ local -a gy=(loc); declare -ga gy=(glob); echo "in:${gy[*]}"; gy+=(x); declare -ga gy+=(more); echo "in2:${gy[*]}"; }; gd; echo "gy:${gy[*]}"
+ge(){ local -A gm=([k]=loc); declare -gA gm=([k]=glob); echo "in:${gm[k]}"; }; ge; echo "gm:${gm[k]}"
+outer(){ local -a go=(outer); inner; echo "outer:${go[*]}"; }; inner(){ declare -ga go=(glob); }; outer; echo "go:${go[*]}"
+gh(){ declare -ga gn=(1 2); echo "in:${gn[*]}"; }; gh; echo "gn:${gn[*]}"
+gs(){ local -a gw=(loc); ( declare -ga gw=(sub); echo "sub:${gw[*]}" ); echo "in:${gw[*]}"; }; gw=(top); gs; echo "gw:${gw[*]}"
+gr(){ local -a gq=(loc); readonly -a gq=(ro) 2>&1; echo "in:${gq[*]}"; }; gr; echo "gq:${gq[*]-unset}"
+gt(){ local -a gv=(loc); eval 'declare -ga gv=(e1); gv+=(e2)'; echo "in:${gv[*]}"; }; gt; echo "gv:${gv[*]}"
+printf 'declare -ga GS=(file)\nGS+=(more)\n' > gs.sh; gu(){ local -a GS=(loc); source ./gs.sh; echo "in:${GS[*]}"; }; gu; echo "GS:${GS[*]}"
+
+==== STDOUT ====
+in:loc
+in2:loc x
+gy:glob more
+in:loc
+gm:glob
+outer:outer
+go:glob
+in:1 2
+gn:1 2
+sub:loc
+in:loc
+gw:top
+in:ro
+gq:unset
+in:loc e2
+gv:e1
+in:loc more
+GS:file
+
+==== STDERR ====
+

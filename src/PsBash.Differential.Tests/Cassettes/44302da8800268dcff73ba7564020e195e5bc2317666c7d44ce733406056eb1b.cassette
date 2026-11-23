@@ -1,0 +1,28 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 442
+stdout-length: 36
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+{
+a=(1 2); h() { a+=(3); }; g() { if false; then local -a a; fi; h; }; ( g ); echo "1 ${a[*]}"
+a=(1 2); g2() { local a; mapfile -t a <<< x; }; ( g2 ); echo "2 ${a[*]}"
+a=(1); f3() { local -a a=(9); declare -g a=(2); }; ( f3 ); echo "3 ${a[*]}"
+a=(1 2); g4() { local a; mapfile -t a <<< x; echo "4 in ${a[*]}"; }; echo q | { g4; cat; }; echo "4 ${a[*]}"
+} 2>&1
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+1 1 2
+2 1 2
+3 1
+4 in x
+q
+4 1 2
+rc=0
+
+==== STDERR ====
+

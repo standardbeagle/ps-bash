@@ -1,0 +1,25 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 154
+stdout-length: 20
+stderr-length: 57
+==== SCRIPT ====
+echo hi > in
+true < in; echo "t=$?"
+: < in; echo "c=$?"
+false < in; echo "f=$?"
+true < /nonexistent/zz; echo "m=$?"
+r() { return 3; }
+r < in; echo "r=$?"
+
+==== STDOUT ====
+t=0
+c=0
+f=1
+m=1
+r=3
+
+==== STDERR ====
+bash: line 5: /nonexistent/zz: No such file or directory
+

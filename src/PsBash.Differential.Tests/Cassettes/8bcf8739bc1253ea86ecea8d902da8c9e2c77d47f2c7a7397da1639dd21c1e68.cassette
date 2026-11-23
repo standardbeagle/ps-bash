@@ -1,0 +1,25 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 240
+stdout-length: 44
+stderr-length: 0
+==== SCRIPT ====
+printf 'n=2+3\necho "w:$n"\nu=ab\necho "u:$u"\n' > w.sh
+v=n; declare -i "$v"; source ./w.sh
+unset n; declare -i n; declare -u u; source ./w.sh
+c='n=4*4; u=cd'; eval "$c"; echo "c:$n $u"
+f(){ local -i n; source ./w.sh; }; f; echo "after:$n"
+
+==== STDOUT ====
+w:5
+u:ab
+w:5
+u:AB
+c:16 CD
+w:5
+u:AB
+after:16
+
+==== STDERR ====
+

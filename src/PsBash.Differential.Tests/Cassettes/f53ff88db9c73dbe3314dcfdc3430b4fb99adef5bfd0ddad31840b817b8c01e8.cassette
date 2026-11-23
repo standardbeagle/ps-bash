@@ -1,0 +1,61 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1280
+stdout-length: 122
+stderr-length: 544
+==== SCRIPT ====
+echo host > hn
+( set -e; : "$(cat < /nonexistent 2>/dev/null || true)" < hn; echo ok1 ); echo "s1=$?"
+( set -e; : "$({ cat; } < /nonexistent 2>/dev/null || true)" < hn; echo ok2 ); echo "s2=$?"
+( set -e; nf(){ cat < /nonexistent 2>/dev/null; }; true "$(nf || :)" < hn; echo ok3 ) 2>/dev/null; echo "s3=$?"
+( set -e; nf(){ cat < /nonexistent 2>/dev/null || :; }; : "$(nf)" < hn; echo ok4 ) 2>/dev/null; echo "s4=$?"
+( set -e; : "$(cat < /nonexistent 2>/dev/null || true)" > out; echo ok5 ); echo "s5=$?"
+( set -e; { : "$(cat < /nonexistent 2>/dev/null || true)"; } < hn; echo ok6 ); echo "s6=$?"
+( set -e; : <(cat < /nonexistent 2>/dev/null) < hn; echo ok7 ); echo "s7=$?"
+( set -e; : "$(cat < /nonexistent 2>/dev/null)" < hn; echo ok9 ); echo "s9=$?"
+( set -e; : "$(cat < /nonexistent 2>/dev/null || true)" < /nonexistent2; echo no11 ) 2>/dev/null; echo "s11=$?"
+( trap 'echo ERR' ERR; : "$(cat < /nonexistent 2>/dev/null || true)" < hn; echo ok12 ); echo "s12=$?"
+( set -e; export Q="$(cat < /nonexistent 2>/dev/null || true)" < hn; echo ok13 ); echo "s13=$?"
+( set -e; while read -r l; do : "$(cat < /nonexistent 2>/dev/null || :)"; done < hn; echo ok14 ); echo "s14=$?"
+( set -e; for i in 1; do : "$(cat < /nonexistent 2>/dev/null || :)"; done < hn; echo ok15 ); echo "s15=$?"
+
+==== STDOUT ====
+ok1
+s1=0
+ok2
+s2=0
+ok3
+s3=0
+ok4
+s4=0
+ok5
+s5=0
+ok6
+s6=0
+ok7
+s7=0
+ok9
+s9=0
+s11=1
+ok12
+s12=0
+ok13
+s13=0
+ok14
+s14=0
+ok15
+s15=0
+
+==== STDERR ====
+bash: line 2: /nonexistent: No such file or directory
+bash: line 3: /nonexistent: No such file or directory
+bash: line 6: /nonexistent: No such file or directory
+bash: line 7: /nonexistent: No such file or directory
+bash: line 8: /nonexistent: No such file or directory
+bash: line 9: /nonexistent: No such file or directory
+bash: line 11: /nonexistent: No such file or directory
+bash: line 12: /nonexistent: No such file or directory
+bash: line 13: /nonexistent: No such file or directory
+bash: line 14: /nonexistent: No such file or directory
+

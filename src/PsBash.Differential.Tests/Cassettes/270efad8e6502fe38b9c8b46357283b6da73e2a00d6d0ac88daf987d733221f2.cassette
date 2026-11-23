@@ -1,0 +1,37 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 625
+stdout-length: 58
+stderr-length: 270
+==== SCRIPT ====
+echo host > hn
+( set -e; lf(){ local L="$(cat < /nonexistent 2>/dev/null || true)" < hn; echo okL; }; lf; echo ok1 ) 2>/dev/null; echo "s1=$?"
+( set -e; declare D="$(cat < /nonexistent 2>/dev/null || true)" < hn; echo ok2 ); echo "s2=$?"
+( set -e; readonly R="$(cat < /nonexistent 2>/dev/null || true)" < hn; echo ok3 ); echo "s3=$?"
+( set -e; x="$(cat < /nonexistent 2>/dev/null || true)" < hn; echo ok4 ); echo "s4=$?"
+( set -e; export Q2="$(cat < /nonexistent 2>/dev/null || true)" > out; echo ok5 ); echo "s5=$?"
+( trap 'echo ERR' ERR; export Q3="$(cat < /nonexistent 2>/dev/null || true)" < hn; echo ok6 ); echo "s6=$?"
+
+==== STDOUT ====
+okL
+ok1
+s1=0
+ok2
+s2=0
+ok3
+s3=0
+ok4
+s4=0
+ok5
+s5=0
+ok6
+s6=0
+
+==== STDERR ====
+bash: line 3: /nonexistent: No such file or directory
+bash: line 4: /nonexistent: No such file or directory
+bash: line 5: /nonexistent: No such file or directory
+bash: line 6: /nonexistent: No such file or directory
+bash: line 7: /nonexistent: No such file or directory
+

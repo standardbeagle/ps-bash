@@ -1,0 +1,52 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 652
+stdout-length: 182
+stderr-length: 0
+==== SCRIPT ====
+a1(){ true || return 1; true && { echo a1; echo a2; }; echo a3; }
+a2(){ true || return 1; [[ 1 ]] && { echo in2; return 6; }; echo no; }
+a3(){ v=$(true || exit 4); echo "v=$?"; [[ 1 ]] && { echo in3; return 6; }; echo no; }
+a4(){ echo q | while read -r l; do [ -z "$l" ] && exit 1; break; done; true && { echo s4; }; [[ 1 ]] && { return 5; }; echo no; }
+a5(){ { return 2; } 2>/dev/null; echo no; }
+a6(){ a5 || :; true && { echo after-a5; }; false || { echo or-arm; return 7; }; echo no; }
+se(){ ( set -e; "$@"; echo "after-$1" ); echo "se-$1=$?"; }
+for k in 1 2 3 4 5 6; do se a$k; done
+trap ':' ERR
+for k in 1 2 3 4 6; do a$k; echo "err-a$k=$?"; done
+
+==== STDOUT ====
+a1
+a2
+a3
+after-a1
+se-a1=0
+in2
+se-a2=6
+v=0
+in3
+se-a3=6
+s4
+se-a4=5
+se-a5=2
+after-a5
+or-arm
+se-a6=7
+a1
+a2
+a3
+err-a1=0
+in2
+err-a2=6
+v=0
+in3
+err-a3=6
+s4
+err-a4=5
+after-a5
+or-arm
+err-a6=7
+
+==== STDERR ====
+

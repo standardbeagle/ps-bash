@@ -1,0 +1,24 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 303
+stdout-length: 72
+stderr-length: 141
+==== SCRIPT ====
+v=tg; tg=hi; declare -n r=$v; echo "[$r] [${r^^}] [${!r}]"; declare -p r; r=new; echo "tg=$tg"
+(w=tg; declare -n e4=$w e5="$w"; echo "[$e4] [$e5]")
+(w=arr; arr=(a b); declare -n e6=$w; e6+=(q); echo "${arr[*]} [${e6[1]}]")
+(w=2x; declare -n e=$w; echo "st=$?"); (w='a b'; declare -n e2=$w; echo "st=$?")
+==== STDOUT ====
+[hi] [HI] [tg]
+declare -n r="tg"
+tg=new
+[new] [new]
+a b q [b]
+st=1
+st=1
+
+==== STDERR ====
+bash: line 4: declare: `2x': invalid variable name for name reference
+bash: line 4: declare: `a b': invalid variable name for name reference
+

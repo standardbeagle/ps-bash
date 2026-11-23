@@ -1,0 +1,29 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 468
+stdout-length: 57
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+{
+outer() { local -a p=(o); ( inner; echo "1 in ${p[*]}" ); echo "1 out ${p[*]}"; }; inner() { p+=(i); }; outer
+outer2() { local -a p=(o); ( inner2; echo "2 in ${p[*]}" ); echo "2 out ${p[*]}"; }; inner2() { local -a p=(x); p+=(i); }; outer2
+pz() { local -a p; IFS=, read -ra p <<< "$1"; echo "${p[1]} ${#p[@]}"; }; seq 3 | while read n; do pz "$n,x$n"; done; echo "3 [${p[*]}]"
+} 2>&1
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+1 in o i
+1 out o
+2 in o
+2 out o
+x1 2
+x2 2
+x3 2
+3 []
+rc=0
+
+==== STDERR ====
+
