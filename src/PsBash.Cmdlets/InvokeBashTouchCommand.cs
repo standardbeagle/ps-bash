@@ -211,6 +211,12 @@ public sealed class InvokeBashTouchCommand : BashCmdlet
 
         foreach (var file in operands)
         {
+            // GNU touch.c: the operand `-` (even after `--`) is standard output, stamped with futimens(1); it never
+            // names or creates a file. A tty or pipe takes the stamp silently, and a redirected file was just opened
+            // by its redirect, so its times are already now: skipping it is what a caller can observe (oracle:
+            // `touch -; touch -- -; touch - >out` -> status 0, no file `-`).
+            if (file == "-") continue;
+
             var absolute = FileSystemHelpers.ProviderPath(this, file);
             // `touch five/` names a directory: GNU's create fails (EISDIR) and the stamping reports what stat says -
             // ENOENT (silent under -c) or ENOTDIR for a file `a/`. It made a file `five`.

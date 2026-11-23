@@ -50,6 +50,19 @@ public class TouchOptionsTests : IDisposable, IClassFixture<SharedPwshFixture>
     private static void AssertSame(DateTime expected, DateTime actual) =>
         Assert.True(Math.Abs((expected - actual).TotalSeconds) < 2, $"expected {expected:O}, got {actual:O}");
 
+    // ───────────── - (standard output) ─────────────
+
+    // GNU touch: `-` is standard output (futimens(1)), even after `--`; it never creates a file named `-`
+    // (oracle: `touch -; touch -- -; ls -A | wc -l` -> 0, both status 0). The other operands are still touched.
+    [Fact]
+    public void Dash_IsStandardOutput_NeverCreatesAFile()
+    {
+        InTmp("Invoke-BashTouch - a; Invoke-BashTouch -- - b").AssertSuccess();
+        Assert.False(File.Exists(P("-")));
+        Assert.True(File.Exists(P("a")));
+        Assert.True(File.Exists(P("b")));
+    }
+
     // ───────────── -t ─────────────
 
     [Fact]
