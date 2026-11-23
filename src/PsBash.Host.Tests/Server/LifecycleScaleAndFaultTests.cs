@@ -605,6 +605,96 @@ public sealed class LifecycleScaleAndFaultTests
         }
     }
 
+    // ─── 3b. A host of the previous protocol is replaced, never sent a command ─
+
+    /// <summary>
+    /// A host one protocol version behind (same build identity: a dev rebuild, or the release before the BODY:
+    /// framing) answers the health frame with its own payload. The launcher must classify it Obsolete, ask it to shut
+    /// down and go on to spawn a replacement (here a missing binary, so StartAsync throws "binary not found"), and
+    /// must never send it a Command: an old host runs each <c>BODY:&lt;base64&gt;</c> line as bash text. With a sidecar
+    /// the optimistic fast path must not trust it either (the sidecar names the old protocol); without one, the health
+    /// payload alone decides.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task OlderProtocolHost_IsReplaced_NeverSentACommand(bool withSidecar)
+    {
+        var (spec, scheme, endpoint) = NewIsolatedEndpoint("oldproto");
+        var prior = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
+        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, spec);
+
+        int oldProtocol = HostProtocol.ProtocolVersion - 1;
+        var requests = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        using var shutDown = new ManualResetEventSlim();
+        using var fakeCts = new CancellationTokenSource();
+        Task? fakeTask = null;
+        await using var transport = NewTransport(scheme, endpoint);
+        try
+        {
+            await transport.ListenAsync(fakeCts.Token);
+            if (withSidecar)
+            {
+                new HostMetadata(
+                    Pid: Environment.ProcessId, // alive, ours: the kill step's self-guard leaves it alone
+                    ExecutablePath: Environment.ProcessPath ?? "<unknown>",
+                    ProtocolVersion: oldProtocol,
+                    BuildIdentity: HostProtocol.BuildIdentity,
+                    TransportScheme: scheme,
+                    Endpoint: endpoint,
+                    StartedAt: DateTimeOffset.UtcNow,
+                    Owner: Environment.UserName).Write(scheme, endpoint);
+            }
+
+            fakeTask = Task.Run(async () =>
+            {
+                while (!fakeCts.IsCancellationRequested)
+                {
+                    Stream? s = null;
+                    try
+                    {
+                        s = await transport.AcceptAsync(fakeCts.Token);
+                        if (shutDown.IsSet) continue; // gone: close without an answer
+                        var mode = await HostProtocol.ReadRequestAsync(s, fakeCts.Token);
+                        requests.Enqueue(mode.GetType().Name);
+                        if (mode is Mode.Shutdown) shutDown.Set();
+                        else if (mode is Mode.Health)
+                            await HostProtocol.WriteResponseLineAsync(
+                                s, $"ps-bash-host protocol={oldProtocol} build={HostProtocol.BuildIdentity}", fakeCts.Token);
+                        await HostProtocol.WriteExitAsync(s, 0, fakeCts.Token);
+                    }
+                    catch { /* connection closed / cancellation */ }
+                    finally { try { s?.Dispose(); } catch { } }
+                }
+            }, fakeCts.Token);
+
+            var bogusBinary = Path.Combine(Path.GetTempPath(), $"does-not-exist-{Guid.NewGuid():N}");
+            using var startCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var ex = await Assert.ThrowsAsync<HostUnavailableException>(async () =>
+            {
+                await using var ipc = await IpcWorker.StartAsync(
+                    bogusBinary,
+                    startupTimeout: TimeSpan.FromSeconds(5),
+                    lifetime: Lifetime.Daemon,
+                    ct: startCts.Token);
+                await ipc.ExecuteAsync("echo reached-the-old-host", startCts.Token);
+            });
+
+            var seen = string.Join(",", requests);
+            Assert.Contains("binary not found", ex.Message); // went on to spawn the replacement
+            Assert.Contains(nameof(Mode.Health), seen);
+            Assert.Contains(nameof(Mode.Shutdown), seen);
+            Assert.DoesNotContain(nameof(Mode.Command), seen);
+        }
+        finally
+        {
+            try { fakeCts.Cancel(); } catch { }
+            try { if (fakeTask is not null) await fakeTask.WaitAsync(TimeSpan.FromSeconds(3)); } catch { }
+            Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, prior);
+            CleanupEndpoint(scheme, endpoint);
+        }
+    }
+
     // ─── 1. Concurrent clients race — exactly one healthy host wins ─────────
 
     /// <summary>

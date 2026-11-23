@@ -678,14 +678,28 @@ BOM). A request frame carries headers then a body then `<<<END>>>`:
 
 **A Command / Stdin body arrives exact.** The body is raw lines after the headers, and the reader drops a CR
 before each LF, ends the frame at a `<<<END>>>` line and reads a first line shaped like a header (`ENV:`,
-`SESSION:`, `STDIN-FEED:1`, `BODY:`) as one. A body any of that would change (`HostProtocol.BodyNeedsEncoding`:
-it holds a CR, a `<<<END>>>` line or such a first line) is sent instead as one or more `BODY:<base64>` header
+`SESSION:`, `STDIN-FEED:1`, `BODY:`) as one, and refuses a line over `MaxLineBytes` (1 MB). A body any of that
+would change (`HostProtocol.BodyNeedsEncoding`: it holds a CR, a `<<<END>>>` line, such a first line or a line over
+the cap) is sent instead as one or more `BODY:<base64>` header
 lines (chunks of at most `MaxResponseChunkChars` chars, each line under `MaxLineBytes`), and no raw line follows
 them. Every other body keeps the raw-line wire byte for byte (`protocol-request-c.bin`). One writer,
 `HostProtocol.AppendCommandBody`; tests `HostProtocolTests.RoundTrip_CommandAndStdin_BodyIsExact`. Before this a
 script `v=$'a\r\nb'` (whose transpiled text holds a CR) lost the CR on the way to the host, and
-`[[ $v == $'a\r\nb' ]]` failed. A launcher speaking this to an older host is caught by the build identity in the
-health payload (the host is Obsolete and replaced).
+`[[ $v == $'a\r\nb' ]]` failed, and a CR-free script with a 2 MB line failed outright.
+
+This framing is `ProtocolVersion` 4. Both directions break across it: a version-3 host runs each `BODY:<base64>`
+line as bash text, and a version-4 host decodes a version-3 launcher's raw body whose first line starts with
+`BODY:`. The build identity cannot catch it (the health payload carries only the version string; the file stamp is
+in the sidecar, and a host with no sidecar matches on the payload alone), so the number is what does: the health
+payload and the sidecar both carry it. Every connect path checks it before a command is sent: the optimistic
+fast path (`IpcWorker.ShouldReuseLocally` → `HostOwnership.MetadataMatchesLauncher`, sidecar protocol),
+the health probe (`CheckHealthAsync`, exact `HealthPayload`; any other `ps-bash-host …` answer is Obsolete), which
+the daemon, executor-slot and nested-launcher paths all go through (`EnsureHostReachableAsync`); an Obsolete daemon
+is shut down and replaced under the spawn lock. A per-invocation host (`PSBASH_PER_INVOCATION`, overflow,
+`JobHostSpares` for `BashJobProcess`) is the binary just spawned on a private endpoint, so Obsolete there fails at
+once (`HostUnavailableException`) rather than being sent a command. Interactive mode spawns `ps-bash-host
+--interactive` on the tty and speaks no request frames. Test:
+`LifecycleScaleAndFaultTests.OlderProtocolHost_IsReplaced_NeverSentACommand`.
 
 **Session-mode gating.** `PromptReady` / `Busy` / `HostExiting` /
 `SignalDelivered` are emitted **only** under `SESSION:Interactive`. Under

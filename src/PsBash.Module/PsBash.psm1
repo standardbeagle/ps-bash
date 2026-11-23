@@ -393,10 +393,14 @@ function Resolve-BashCommand {
     # A command word that came from an expansion (`$cmd`) is never alias-expanded in bash, and an alias runs here
     # as a global function of its name: skip that function, so `cmd=myalias; $cmd` is the command, or not found.
     $isAlias = $global:BashUserAliases -and $global:BashUserAliases.ContainsKey($Name)
-    # PowerShell's own function of a bash builtin's name (`help`) is not a bash function: `c=help; $c cd` ran PowerShell's
-    # help. A bash function always enters its variable frame (PsBuild.FunctionPrologue).
-    if (-not $isAlias -and ($__fn = Get-Command -Name ([WildcardPattern]::Escape($Name)) -CommandType Function -ErrorAction Ignore) -and
-        -not ([PsBash.Core.Parser.BashBuiltins, PsBash.Transpiler]::Names.Contains($Name) -and -not $__fn.Definition.Contains('[PsBash.Cmdlets.VarFrameStack]::EnterFunction()'))) { return $Name }
+    if (-not $isAlias -and ($__fn = Get-Command -Name ([WildcardPattern]::Escape($Name)) -CommandType Function -ErrorAction Ignore)) {
+        # A bash function starts with PsBuild.FunctionPrologue (the rule DeclarePrinter.IsBashFunction applies): return the
+        # function itself. By name, `&` takes a PowerShell alias first, so `ls() {...}; f=ls; "$f"` and `"ls"` ran
+        # Invoke-BashLs; and the old marker test never matched, so `cd() {...}; f=cd; $f` ran the cd builtin.
+        if ($__fn.Definition -and $__fn.Definition.StartsWith([PsBash.Core.Parser.PsBuild, PsBash.Transpiler]::FunctionPrologue, [StringComparison]::Ordinal)) { return $__fn }
+        # PowerShell's own function of a bash builtin's name (`help`) is not a bash function: `c=help; $c cd` ran PowerShell's help.
+        if (-not [PsBash.Core.Parser.BashBuiltins, PsBash.Transpiler]::Names.Contains($Name)) { return $Name }
+    }
     # A builtin the emitter implements (`eval`, `.`, `set`, `exec`, `local`, `exit`, ...; BashBuiltins.RunAsSource, the one
     # table): run as the static command `NAME 'op'...`, transpiled and run here, so `c=eval; $c 'x=1'` is `eval 'x=1'`.
     # The lookup by Get-Command alone said "eval: command not found" (and `set` reached PowerShell's Set-Variable).
@@ -513,8 +517,9 @@ if ($__bw.Count -eq 0) { return }
 $__bn = [string]$__bw[0]
 $__bc = Resolve-BashCommand -Name $__bn -LoopMode $__blm
 $__bargs = @($__bw | Select-Object -Skip 1)
-if ($__bfed -and $__bc -is [string] -and $__bc -ceq $__bn -and $__bn -ne '' -and
-        (Get-Command -Name ([WildcardPattern]::Escape($__bn)) -CommandType Function -ErrorAction Ignore)) {
+$__bfn = $__bc -is [System.Management.Automation.FunctionInfo] -or ($__bc -is [string] -and $__bc -ceq $__bn -and $__bn -ne '' -and
+        (Get-Command -Name ([WildcardPattern]::Escape($__bn)) -CommandType Function -ErrorAction Ignore))
+if ($__bfed -and $__bfn) {
     # A function is not piped to: its readers take from the scope's cursor themselves, a line at a time, as when it is
     # called by name. Piped, it was handed EVERYTHING left (`c=f; { $c; $c; } < in` gave the second call nothing).
     & $__bc @__bargs
@@ -532,7 +537,8 @@ if ($__bfed -and $__bc -is [string] -and $__bc -ceq $__bn -and $__bn -ne '' -and
 } elseif ($MyInvocation.ExpectingInput) {
     # Piped (`echo x | $c`): the same StdinReaders rule. A command that does not read stdin drains it and runs; piped a
     # record, a cmdlet with no pipeline-input parameter failed to bind it and never ran (`c="seq 2"; echo x | $c`).
-    $__bread = $(if ($__bsr = 'PsBash.Core.Parser.StdinReaders' -as [type]) { $__bsr::ShouldFeed($__bn, [string[]]$__bargs) } else { $true })
+    # A function reads stdin like a program, whatever its name (`cat() {...}; echo x | "cat"`).
+    $__bread = $__bfn -or $(if ($__bsr = 'PsBash.Core.Parser.StdinReaders' -as [type]) { $__bsr::ShouldFeed($__bn, [string[]]$__bargs) } else { $true })
     if ($__bread) { $input | & $__bc @__bargs } else { $null = @($input); & $__bc @__bargs }
 }
 else { & $__bc @__bargs }

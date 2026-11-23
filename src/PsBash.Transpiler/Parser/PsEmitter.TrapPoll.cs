@@ -32,7 +32,8 @@ public static partial class PsEmitter
         // `command trap ...` / `builtin eval ...` run the builtin they name.
         while (i < s.Words.Length && TryGetStaticArgValue(s.Words[i]) is "command" or "builtin") i++;
         if (i >= s.Words.Length) return false;
-        if (TryGetStaticArgValue(s.Words[i]) is not { } name)
+        // A quoted static name (`$'ls'`, `\ls`) is known now: a bare `ls` set no poll, so neither does its spelling.
+        if ((TryGetStaticArgValue(s.Words[i]) ?? QuotedCommandName(s.Words[i])) is not { } name)
             return !NamesAPath(s.Words[i]);   // named at run time: may be trap or eval, unless it is a path
         switch (name)
         {

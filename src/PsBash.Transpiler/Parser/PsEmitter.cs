@@ -8087,6 +8087,18 @@ public static partial class PsEmitter
         bool cmdSubName = needsCallOperator && dashName is null && !dynamicName && cmd.Words.Length > 1
             && cmd.Words[0].Parts is [WordPart.CommandSub] && IsUnquotedSplitWord(cmd.Words[0]);
         dynamicName |= cmdSubName;
+        // A quoted or escaped command name with a static value that UnquoteBuiltinName left quoted (`"h"`, `\greet`,
+        // `$'tool'`: not a builtin, ps-bash command or function of this script) is looked up at run time as bash looks up
+        // the bare name, skipping only alias expansion: function, builtin, program (Resolve-BashCommand). Emitted
+        // `& "h"`, PowerShell took an alias of the name before a function defined at run time, and a bash alias (a global
+        // function) answered the quoted name.
+        string? quotedName = !isScriptCommand && dashName is null && !dynamicName && cmd.Words.Length > 0
+            ? QuotedCommandName(cmd.Words[0]) : null;
+        if (quotedName is not null)
+        {
+            needsCallOperator = true;
+            dynamicName = true;
+        }
         bool arrayName = dynamicName && (IsQuotedArrayAllWord(cmd.Words[0]) || IsUnquotedArrayAllWord(cmd.Words[0]));
         // `{1..10}` / `{a,b} x`: brace expansion makes several words, the first is the command (bash: `1: command not
         // found`). Emitted bare, PowerShell printed the numbers.
@@ -8119,6 +8131,7 @@ public static partial class PsEmitter
             if (cmd.Words[0].Parts.Length > 1)
                 commandWordText = TransformWordPath(FlattenPartsToDoubleQuotedString(cmd.Words[0].Parts));
         }
+        if (quotedName is not null) commandWordText = PsBuild.SingleQuote(quotedName);
 
         if (arrayName || braceName)
         {
@@ -12918,6 +12931,9 @@ public static partial class PsEmitter
         _pipeStageFeedsInput = true;
         try
         {
+            // A quoted spelling of a builtin, ps-bash command or function (`| 'cat'`) is the bare stage, as in EmitSimple:
+            // `printf x | 'cat'` took the native-program feed in front of Invoke-BashCat.
+            simple = UnquoteBuiltinName(simple);
             // true/false as pipe targets need a cmdlet form, not a subexpression.
             // $($global:LASTEXITCODE = 0; [void]$true) cannot be a pipeline segment.
             var word0 = simple.Words.Length >= 1 ? GetLiteralValue(simple.Words[0]) : null;
@@ -14288,12 +14304,42 @@ public static partial class PsEmitter
     }
 
     /// <summary>
+    /// The name a command word spells when it is all static text with at least one quoted or escaped part
+    /// (<c>"ls"</c>, <c>'cd'</c>, <c>\ls</c>, <c>$'cd'</c>, <c>c""d</c>) and bash would look it up as a name (no
+    /// <c>/</c>); else null. bash treats it as the bare name except that alias expansion skips it: the one rule
+    /// <see cref="UnquoteBuiltinName"/> (a builtin, a ps-bash command, a function of the script: the bare word) and
+    /// EmitGeneralCommand (any other name, via Resolve-BashCommand) use.
+    /// </summary>
+    private static string? QuotedCommandName(CompoundWord word)
+    {
+        bool quoted = false;
+        var sb = new StringBuilder();
+        foreach (var part in word.Parts)
+        {
+            switch (part)
+            {
+                case WordPart.Literal l: sb.Append(l.Value); break;
+                case WordPart.EscapedLiteral e: quoted = true; sb.Append(e.Value); break;
+                case WordPart.SingleQuoted q: quoted = true; sb.Append(q.Value); break;
+                case WordPart.AnsiCQuoted a: quoted = true; sb.Append(ExpandAnsiCEscapes(a.Value)); break;
+                case WordPart.DoubleQuoted d when d.Parts.All(p => p is WordPart.Literal or WordPart.EscapedLiteral):
+                    quoted = true;
+                    foreach (var p in d.Parts) sb.Append(p is WordPart.Literal il ? il.Value : ((WordPart.EscapedLiteral)p).Value);
+                    break;
+                default: return null;
+            }
+        }
+        var name = sb.ToString();
+        return quoted && name.Length > 0 && name.IndexOfAny(['/', '\\']) < 0 ? name : null;
+    }
+
+    /// <summary>
     /// A quoted or backslash-escaped command name (<c>'local'</c>, <c>"eval"</c>, <c>\export</c>) only escapes alias
     /// expansion in bash: the builtin of that name still runs. Called after <see cref="ExpandAliases"/> (which looks at
     /// bare words only), it makes the name of a bash builtin (<see cref="BashBuiltins.Names"/>) a plain word for
     /// everything after. REGRESSION: every builtin the emitter implements (<c>local</c>, <c>export</c>, <c>set</c>,
     /// <c>eval</c>, <c>read</c>, <c>declare</c>, <c>return</c>, <c>break</c>) was looked up as a program,
-    /// <c>command not found</c> (127). Other names keep their quotes (a function or program runs either way). The bare
+    /// <c>command not found</c> (127). So is a ps-bash command or a function of the script; any other name is looked up at run time (EmitGeneralCommand). The bare
     /// word is one alias expansion passes over (<see cref="NoAliasWord"/>): EmitSimple re-enters itself (and so
     /// ExpandAliases) for parts of one command, and bash never expands a quoted word (<c>alias eval='echo no';
     /// 'eval' 'echo x'</c> prints x).
@@ -14305,7 +14351,14 @@ public static partial class PsEmitter
     private static Command.Simple UnquoteBuiltinName(Command.Simple cmd)
     {
         if (cmd.Words.IsDefaultOrEmpty || GetLiteralValue(cmd.Words[0]) is not null) return cmd;
-        if (TryGetStaticArgValue(cmd.Words[0]) is not { } name || !BashBuiltins.Names.Contains(name)) return cmd;
+        if (QuotedCommandName(cmd.Words[0]) is not { } name) return cmd;
+        // A command ps-bash implements or a function of this script: exactly the bare word (which picks the function
+        // first). Any other name (a program, a function defined at run time, a bash alias's name) is looked up at run
+        // time by Resolve-BashCommand (EmitGeneralCommand), which skips aliases.
+        if (!BashBuiltins.Names.Contains(name))
+            return IsMappedCommandName(name) || _definedFunctions?.Contains(name) == true || _unitFunctions?.Contains(name) == true
+                ? cmd with { Words = cmd.Words.SetItem(0, NoAliasWord(name)) }
+                : cmd;
         var words = cmd.Words.SetItem(0, NoAliasWord(name));
         return cmd with { Words = name is "declare" or "typeset" or "local" or "export" or "readonly" ? words.Insert(0, NoAliasWord("builtin")) : words };
     }

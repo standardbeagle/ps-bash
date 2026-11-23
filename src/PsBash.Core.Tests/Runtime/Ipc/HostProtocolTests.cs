@@ -107,6 +107,35 @@ public class HostProtocolTests
         Assert.Equal(body[..^1], cmd.Body);
     }
 
+    [Theory]
+    [InlineData('x', 1_500_000)] // one byte a char
+    [InlineData('€', 400_000)]   // three bytes a char: 1.2 MB in fewer chars than the cap
+    public async Task RoundTrip_Command_CrFreeLineOverTheCap_IsChunked(char c, int count)
+    {
+        // No CR, no header-shaped line: only the length forces BODY:. As a raw line it tripped the reader's 1 MB cap.
+        var body = "echo start\nx='" + new string(c, count) + "'\necho end\n";
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteRequestAsync(ms, new Mode.Command(body));
+        var wire = Utf8NoBom.GetString(ms.ToArray()).Split('\n');
+        Assert.Contains(wire, l => l.StartsWith("BODY:", StringComparison.Ordinal));
+        Assert.All(wire, l => Assert.True(Utf8NoBom.GetByteCount(l) <= 1024 * 1024));
+        ms.Position = 0;
+        var cmd = Assert.IsType<Mode.Command>(await HostProtocol.ReadRequestAsync(ms));
+        Assert.Equal(body[..^1], cmd.Body);
+    }
+
+    [Fact]
+    public async Task WriteRequest_Command_LineAtTheCap_StaysRawLines()
+    {
+        var line = new string('x', 1024 * 1024); // exactly the cap: the reader takes it, so the wire is unchanged
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteRequestAsync(ms, new Mode.Command(line + "\n"));
+        Assert.Equal(Utf8NoBom.GetBytes("MODE:Command\n" + line + "\n<<<END>>>\n"), ms.ToArray());
+        ms.Position = 0;
+        var cmd = Assert.IsType<Mode.Command>(await HostProtocol.ReadRequestAsync(ms));
+        Assert.Equal(line, cmd.Body);
+    }
+
     [Fact]
     public async Task WriteRequest_Command_PlainBodyStaysRawLines()
     {
@@ -853,16 +882,15 @@ public class HostProtocolTests
     // never sees them).
 
     /// <summary>
-    /// PTY-6 minor protocol bump: version 2 → 3. The bump is what advertises
-    /// the new busy / host-exiting lifecycle events to a peer; it must be
-    /// reflected in the health payload so a launcher can detect a PTY-6-capable
-    /// host.
+    /// Version 3 → 4 for the <c>BODY:</c> request framing (version 2 → 3 was PTY-6's busy / host-exiting
+    /// events). The number must be in the health payload: that is what makes a peer of the other version Obsolete.
     /// </summary>
     [Fact]
-    public void ProtocolVersion_BumpedToThreeForPty6()
+    public void ProtocolVersion_BumpedToFourForBodyFraming()
     {
-        Assert.Equal(3, HostProtocol.ProtocolVersion);
-        Assert.Contains("protocol=3", HostProtocol.HealthPayload);
+        Assert.Equal(4, HostProtocol.ProtocolVersion);
+        Assert.Contains("protocol=4 ", HostProtocol.HealthPayload);
+        Assert.Contains("protocol=4 ", HostProtocol.HealthStartingPayload);
     }
 
     /// <summary>

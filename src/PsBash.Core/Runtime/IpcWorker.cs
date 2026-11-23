@@ -590,7 +590,8 @@ public sealed class IpcWorker : IWorker
             ct.ThrowIfCancellationRequested();
             var state = await CheckHealthAsync(TimeSpan.FromMilliseconds(750), ct).ConfigureAwait(false);
             if (state == HostHealthState.Healthy) return true;
-            if (state == HostHealthState.Unhealthy) return false;
+            // Obsolete never turns Healthy (another protocol/build): stop waiting so the caller replaces it.
+            if (state is HostHealthState.Unhealthy or HostHealthState.Obsolete) return false;
 
             try { await Task.Delay(_startupPollInterval, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { throw; }
@@ -697,8 +698,15 @@ public sealed class IpcWorker : IWorker
                     throw new HostUnavailableException(
                         $"ps-bash-host exited prematurely with code {proc.ExitCode}.");
 
-                if (await CheckHealthAsync(TimeSpan.FromMilliseconds(500), ct).ConfigureAwait(false)
-                    == HostHealthState.Healthy)
+                var health = await CheckHealthAsync(TimeSpan.FromMilliseconds(500), ct).ConfigureAwait(false);
+                // A private endpoint is answered only by the host just spawned: Obsolete means the binary itself
+                // speaks another protocol/build (an old ps-bash-host beside a new launcher). It never turns Healthy,
+                // and a command must never be sent to it, so fail now instead of waiting out the startup window.
+                if (health == HostHealthState.Obsolete && _lifetime == Lifetime.PerInvocation)
+                    throw new HostUnavailableException(
+                        $"ps-bash-host at '{_hostBinaryPath}' is not this launcher's build " +
+                        $"(it does not answer '{HostProtocol.HealthPayload}'); reinstall ps-bash and ps-bash-host together.");
+                if (health == HostHealthState.Healthy)
                 {
                     spawnSucceeded = true;
                     // PerInvocation owns the host process for the lifetime of

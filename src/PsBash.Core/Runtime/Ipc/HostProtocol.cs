@@ -47,8 +47,16 @@ public static class HostProtocol
     /// pre-PTY-6 launcher running framed mode never sees them; a pre-PTY-6
     /// host simply never emits them and the launcher's handoff state machine
     /// stays in its initial state. No request-frame wire format changed.
+    /// <para>
+    /// 3 → 4: a Command / Stdin body may travel as <see cref="BodyHeaderPrefix"/> lines (see
+    /// <see cref="AppendCommandBody"/>). That one IS a request-frame change, in both directions: an older host runs
+    /// each <c>BODY:&lt;base64&gt;</c> line as bash text, and a newer host decodes an older launcher's raw body whose
+    /// first line starts with <c>BODY:</c>. The health payload and the sidecar carry this number, so either side sees
+    /// the other as Obsolete and never sends it a command (the build identity alone does not: it is the version
+    /// string, plus a file stamp only in the sidecar, and a host with no sidecar matches on the payload alone).
+    /// </para>
     /// </summary>
-    public const int ProtocolVersion = 3;
+    public const int ProtocolVersion = 4;
     public const int HealthStartingExitCode = 75;
 
     /// <summary>
@@ -450,9 +458,10 @@ public static class HostProtocol
     /// <summary>
     /// The body of a Command / Stdin frame, delivered to the host EXACTLY. As raw lines it is read back line by line,
     /// and a line reader drops a CR before each LF (<c>v=$'a\r\nb'</c> lost its CR, so <c>[[ $v == $'a\r\nb' ]]</c>
-    /// failed), a line that is <see cref="EndSentinel"/> ends the frame early, and a first line that looks like a
-    /// header is read as one. Such a body travels as <see cref="BodyHeaderPrefix"/> lines instead (base64, one or more
-    /// chunks, each under <see cref="MaxLineBytes"/>); any other body stays raw lines, byte-identical to the older wire.
+    /// failed), a line that is <see cref="EndSentinel"/> ends the frame early, a first line that looks like a header is
+    /// read as one, and a line over <see cref="MaxLineBytes"/> fails the read. Such a body travels as
+    /// <see cref="BodyHeaderPrefix"/> lines instead (base64, one or more chunks, each under <see cref="MaxLineBytes"/>);
+    /// any other body stays raw lines, byte-identical to the older wire.
     /// As raw lines, a final LF is the line's end, not body text: an encoded body leaves it off the same way.
     /// </summary>
     private static void AppendCommandBody(StringBuilder sb, string body)
@@ -489,7 +498,10 @@ public static class HostProtocol
         {
             int end = body.IndexOf('\n', at);
             if (end < 0) end = body.Length;
-            if (body.AsSpan(at, end - at).SequenceEqual(EndSentinel)) return true;
+            var line = body.AsSpan(at, end - at);
+            if (line.SequenceEqual(EndSentinel)) return true;
+            // The reader refuses a line over MaxLineBytes: a longer raw line (a 2 MB literal) failed the request.
+            if (line.Length > MaxLineBytes / 3 && RawBytes.GetByteCount(line) > MaxLineBytes) return true;
             at = end + 1;
         }
         return false;

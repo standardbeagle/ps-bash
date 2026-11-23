@@ -11,10 +11,14 @@ namespace PsBash.Differential.Tests;
 /// message <c>CommandNotFoundReport.NotFoundMessage</c>;</item>
 /// <item>a CR before an LF was dropped on the way to the host (<c>v=$'a\r\nb'</c> lost its CR, so
 /// <c>[[ $v == $'a\r\nb' ]]</c> failed); primitive <c>HostProtocol.AppendCommandBody</c>;</item>
-/// <item>a double-quoted <c>${v/p/"r"}</c> replacement kept its quotes and backslashes; primitive
-/// <c>PsEmitter.TryEmitSubstitutionOperand</c> (double-quote quote removal);</item>
+/// <item>a double-quoted <c>${v/p/"r"}</c> replacement kept its quotes and backslashes; now the pattern compiler
+/// (<c>PsEmitter.Patterns.cs</c>);</item>
 /// <item><c>declare -A m=(['a]=b']=c)</c> keyed <c>a</c> with value <c>'b]=c</c>; primitive
-/// <c>BashLexer.SubscriptClose</c>.</item>
+/// <c>BashLexer.SubscriptClose</c>;</item>
+/// <item>a quoted or escaped command name (<c>"ls"</c>, <c>\ls</c>, <c>$'cd'</c>, <c>"$f"</c>) skipped the script's
+/// function of that name: PowerShell's <c>&amp; "ls"</c> takes an alias first, and a bash alias (a global function)
+/// answered a quoted name; primitives <c>PsEmitter.QuotedCommandName</c> and <c>Resolve-BashCommand</c> (a bash
+/// function is returned as itself).</item>
 /// </list>
 /// </summary>
 public class QuotingValueDifferentialTests
@@ -53,4 +57,30 @@ public class QuotingValueDifferentialTests
         + "declare -A p; p['q]=r']=s; declare -p p\n"
         + "declare -A t=([$'u]=v']=w); declare -p t\n"
         + "i=1; a=([i+1]=x [3]=y); declare -p a\n");
+
+    // Each function shadows a PowerShell alias name (or a bash keyword: select). Every spelling must reach the function.
+    [SkippableFact]
+    public Task QuotedCommandName_ResolvesLikeTheBareName() => Same("""
+        ( cd() { printf 'F-cd %s\n' "$*"; }; "cd" a; 'cd' b; \cd c; $'cd' d; f=cd; "$f" e; $f g; cd h; c""d i )
+        ( ls() { printf 'F-ls %s\n' "$*"; }; "ls" a; 'ls' b; \ls c; $'ls' d; f=ls; "$f" e; ls h )
+        ( echo() { printf 'F-echo %s\n' "$*"; }; "echo" a; 'echo' b; \echo c; $'echo' d; f=echo; "$f" e; echo h )
+        ( cat() { printf 'F-cat %s\n' "$*"; }; "cat" a; 'cat' b; \cat c; f=cat; "$f" e; cat h )
+        ( sort() { printf 'F-sort %s\n' "$*"; }; "sort" a; 'sort' b; \sort c; f=sort; "$f" e; sort h )
+        ( where() { printf 'F-where %s\n' "$*"; }; "where" a; 'where' b; \where c; f=where; "$f" e; where h )
+        ( set() { printf 'F-set %s\n' "$*"; }; "set" a; 'set' b; \set c; f=set; "$f" e; set h )
+        ( h() { printf 'F-h %s\n' "$*"; }; "h" a; 'h' b; \h c; f=h; "$f" e; h x )
+        ( r() { printf 'F-r %s\n' "$*"; }; "r" a; 'r' b; \r c; f=r; "$f" e; r x )
+        ( function select { printf 'F-select %s\n' "$*"; }; "select" a; 'select' b; \select c; f=select; "$f" e )
+        ( eval 'h() { printf "F-h-eval %s\n" "$*"; }'; "h" a; h b; eval 'cd() { printf "F-cd-eval %s\n" "$*"; }'; "cd" c; cd d )
+        ( cat() { printf 'F-cat-pipe %s\n' "$*"; }; printf 'x\n' | "cat" p; "echo" q | 'cat' )
+        "true"; echo "true=$?"; 'false'; echo "false=$?"; "printf" '%s\n' prog-ok; 'env' true; echo "env=$?"
+        "nosuch_q1" 2>/dev/null; echo "nf1=$?"; \nosuch_q2 2>/dev/null; echo "nf2=$?"
+        shopt -s expand_aliases
+        alias greet='printf "A-greet %s\n"'
+        greet a
+        "greet" b 2>/dev/null; echo "alias-quoted=$?"
+        \greet c 2>/dev/null; echo "alias-escaped=$?"
+        g=greet; $g d 2>/dev/null; echo "alias-expanded=$?"
+
+        """);
 }

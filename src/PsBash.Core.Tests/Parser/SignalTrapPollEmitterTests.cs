@@ -65,6 +65,8 @@ public class SignalTrapPollEmitterTests
     [InlineData("f() { trap 'echo T' USR1; }\nf")]
     [InlineData("builtin trap 'echo T' USR1\necho a")]
     [InlineData("'trap' 'echo T' USR1\necho a")]
+    [InlineData("$'trap' 'echo T' USR1\necho a")]
+    [InlineData("\\trap 'echo T' USR1\necho a")]
     [InlineData("$t'ap' 'echo T' USR1\necho a")]
     [InlineData("alias t='trap \"echo T\" USR1'\necho a")]
     public void Transpile_ScriptThatCanSetATrapAtRunTime_Polls(string bash)
@@ -80,6 +82,8 @@ public class SignalTrapPollEmitterTests
     [InlineData("$dir/$name x\necho b")]                     // a run-time path names a file, never a builtin
     [InlineData("~/bin/foo a\necho b")]
     [InlineData("'/usr/local/bin/node' -e 1\necho b")]
+    [InlineData("$'ls' a\necho b")]                           // a quoted static name is known now, as the bare one
+    [InlineData("\"cat\" a; \\sort\necho b")]
     public void Transpile_TrapOnlyInTextOrASubshell_HasNoPoll(string bash)
         => Assert.Equal(0, Polls(PsEmitter.Transpile(bash)));
 
