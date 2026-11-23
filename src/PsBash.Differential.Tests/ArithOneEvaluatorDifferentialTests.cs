@@ -129,4 +129,41 @@ public class ArithOneEvaluatorDifferentialTests
             + "EOF\n"
             + Run + Done,
             timeout: TimeSpan.FromSeconds(60));
+
+    /// <summary>
+    /// The integer attribute on an ARRAY evaluates every element write: a literal (indexed and keyed), <c>+=</c>, an
+    /// element assignment and append, a bare-name write (element 0), <c>read -a</c> (also in a read loop and with a file
+    /// redirect), <c>mapfile</c> / <c>readarray</c>, <c>local -ai</c>, <c>declare -i</c> on an existing array,
+    /// <c>declare -Ai</c>, <c>${a[i]:=v}</c>; the subscript is evaluated before the value. <c>unset</c> and
+    /// <c>declare +i</c> take the attribute away. A failing element ends its line. REGRESSION:
+    /// <c>declare -ai q=([1]=010); q[2]+=010</c> stored 010 and 010010 (bash: 8 8). Guard:
+    /// Core.Tests/IntegerArrayWriteGuardTests.
+    /// </summary>
+    [SkippableFact]
+    public Task IntegerArray_EveryElementWriteEvaluates()
+        => AssertOracle.EqualAsync(Work
+            + "cat > s.sh <<'EOF'\n"
+            + "declare -ai q=([1]=010); q[2]+=010; echo \"${q[@]}\"\n"
+            + "declare -ai a=(1+1 2*3 010 '' abc); a+=(9*9); a[0]+=5; echo \"${a[@]}\"\n"
+            + "declare -ai b; b[1]=x*2; x=3; b[x+1]=x; echo \"${!b[@]} ${b[@]}\"\n"
+            + "declare -ai r; r=7*2; r+=1; echo \"${r[@]}\"\n"
+            + "declare -ai c; read -a c <<< '1+1 2*3 010'; echo \"$? ${c[@]}\"\n"
+            + "declare -ai d; mapfile -t d < <(printf '%s\\n' 2+2 010); echo \"$? ${d[@]}\"\n"
+            + "printf '%s\\n' 3*3 1+0 > f; declare -ai e; readarray -t -O 1 e < f; echo \"${!e[@]} ${e[@]}\"\n"
+            + "declare -ai s; while read -a s; do echo \"row ${s[@]}\"; done < f\n"
+            + "declare -ai t; read -a t < f && echo \"ok ${t[@]}\"\n"
+            + "f() { local -ai l=(1+2); l+=(2*2); echo \"${l[@]}\"; read -ra l <<< '5*5'; echo \"${l[@]}\"; }; f\n"
+            + "g=(1+1 2); declare -i g; g+=(3*3); g[0]=4*4; echo \"${g[@]}\"\n"
+            + "declare -ia h=(1+1); h=(2+2 3+3); echo \"${h[@]}\"\n"
+            + "declare -Ai m=([k]=1+1); m[j]=2*3; echo \"${m[k]} ${m[j]}\"\n"
+            + "i=0; declare -ai y; y[i++]=i; echo \"$i ${!y[@]} ${y[@]}\"\n"
+            + "declare -ai p; echo \"${p[5]:=2+2}\"; echo \"${p[5]}\"\n"
+            + "declare -ai w=(1); declare -p w\n"
+            + "declare -ai u=(1); unset u; u=(2+2); echo \"${u[@]}\"\n"
+            + "declare -ai k=(1); declare +i k; k+=(2+2); echo \"${k[@]}\"\n"
+            + "declare -ai z=(1 2); z[0]+=1/0; echo not-here; echo \"${z[@]}\"\n"
+            + "echo end\n"
+            + "EOF\n"
+            + Run + Done,
+            timeout: TimeSpan.FromSeconds(60));
 }

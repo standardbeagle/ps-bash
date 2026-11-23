@@ -202,7 +202,9 @@ public sealed partial class BashParser
             // path, whose identifier check reports it.
             if (ParseDeclarationPairs() is { } declPairs && !(isReadonlyKw && declPairs.Any(p => p.Name.Contains('['))))
                 return new Command.ShAssignment(declPairs, IsReadonly: isReadonlyKw || _declSawReadonly, IsAssoc: _declSawAssoc, IsDeclare: true, IsIndexed: _declSawIndexed && !_declSawAssoc,
-                    Redirects: _declRedirects.Count == 0 ? default : [.. _declRedirects], IsGlobal: isReadonlyKw || _declSawGlobal);
+                    Redirects: _declRedirects.Count == 0 ? default : [.. _declRedirects], IsGlobal: isReadonlyKw || _declSawGlobal,
+                    // `declare -ai a=(1+1)`: the integer attribute makes every element write evaluate (PsEmitter.ElementValues).
+                    Attrs: DeclaredValueAttrs());
 
             _pos = saved;
         }

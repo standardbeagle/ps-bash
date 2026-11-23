@@ -449,6 +449,9 @@ public static class PsBuild
         || emitted.Contains("$(Invoke-BashArith", StringComparison.Ordinal)
         || emitted.Contains("$__psbash_av = Invoke-BashArith", StringComparison.Ordinal)
         || (emitted.Contains("Set-BashElement ", StringComparison.Ordinal) && s_computedElementKey.IsMatch(emitted))
+        // An integer array's write evaluates its values as words (`a[0]=1/0`, `a=(1/0)`): a failure drops the line.
+        || (emitted.Contains("Set-BashElement ", StringComparison.Ordinal) && emitted.Contains(" " + IntegerElementSwitch, StringComparison.Ordinal))
+        || emitted.Contains(IntegerElementsFunction, StringComparison.Ordinal)
         || (s_elementOperandBuiltin.IsMatch(emitted) && s_elementOperand.IsMatch(emitted));
 
     /// <summary>
@@ -740,9 +743,37 @@ public static class PsBuild
     /// `a=z` / `a+=z` where a may be an array: an array (or associative array) takes the value as element 0 (key "0");
     /// otherwise <paramref name="scalarWrite"/>, the ordinary scalar assignment, runs.
     /// </summary>
-    public static string WriteElementZeroOrScalar(string arrayVar, string value, bool append, string scalarWrite)
-        => "if (" + arrayVar + " -is [array] -or " + arrayVar + " -is [System.Collections.IDictionary]) { " + arrayVar
-           + " = Set-BashElement " + TargetArg(arrayVar) + " '0' (" + value + ")" + (append ? " -Append" : "") + " } else { " + scalarWrite + " }";
+    public static string WriteElementZeroOrScalar(string arrayVar, string value, bool append, string scalarWrite, bool integer)
+        => "if (" + arrayVar + " -is [array] -or " + arrayVar + " -is [System.Collections.IDictionary]) { "
+           + SetElement(arrayVar, "'0'", "(" + value + ")", append, integer) + " } else { " + scalarWrite + " }";
+
+    /// <summary>
+    /// The one emitted element write, <c>NAME[KEY]=VALUE</c> / <c>+=</c> (<c>Set-BashElement</c>), assigning the
+    /// container back to <paramref name="target"/>. <paramref name="integer"/>: NAME has the integer attribute
+    /// (<c>declare -ai</c>), so the value is arithmetic, evaluated after the subscript, and <c>+=</c> adds. Every element
+    /// write the emitter makes goes through here, and every array-literal write through <see cref="IntegerElements"/>
+    /// (PsEmitter.ElementValues): the attribute is decided in one place (guard IntegerArrayWriteGuardTests).
+    /// </summary>
+    public static string SetElement(string target, string key, string value, bool append, bool integer, string? written = null)
+        => target + " = Set-BashElement " + TargetArg(target) + " " + key + " " + value + (append ? " -Append" : "")
+           + (written is null ? "" : " -Written " + SingleQuote(written)) + (integer ? " " + IntegerElementSwitch : "");
+
+    /// <summary>The switch that makes <see cref="SetElement"/> an integer array's write.</summary>
+    public const string IntegerElementSwitch = "-Integer";
+
+    /// <summary>
+    /// The elements an array write stores into an integer array (<c>declare -ai a=(1+1 x*2)</c>, <c>a+=(…)</c>,
+    /// <c>read -a</c>, <c>mapfile</c>): each one's text as arithmetic, in order, once every word is expanded
+    /// (<c>ConvertTo-BashIntegerArray</c>). <paramref name="keepStatus"/>: the command's status stands (read, mapfile).
+    /// </summary>
+    public static string IntegerElements(string elementsExpr, bool keepStatus = false)
+        => "(" + IntegerElementsFunction + " (" + elementsExpr + ")" + (keepStatus ? " -KeepStatus" : "") + ")";
+
+    /// <summary>The run-time function <see cref="IntegerElements"/> calls.</summary>
+    public const string IntegerElementsFunction = "ConvertTo-BashIntegerArray";
+
+    /// <summary>One value under the integer attribute, as a WORD (a failed expression drops the line, as in bash).</summary>
+    public static string IntegerValue(string valueExpr) => "[string]$(Invoke-BashArith ([string](" + valueExpr + ")))";
 
     /// <summary>
     /// The value of one emitted COMMAND-MODE argument, as an expression: <c>&amp; { $args[0] } arg</c>. An argument

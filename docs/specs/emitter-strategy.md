@@ -1438,6 +1438,18 @@ empty string skipped the operator entirely and `x=; echo ${x:-d}` printed nothin
 slice of a string, an array or the positionals (`${s:o:l}`, `${a[@]:o:l}`, `${@:o:l}`), and an indexed subscript
 that is read, written, unset or named indirectly (`${a[i]}`, `${a[$k]}`, `a[i]=x`, `unset 'a[i]'`, `ref='a[i]'; ${!ref}`).
 
+**Integer arrays.** The integer attribute on an array (`declare -ai`, `local -ai`, `declare -ia`, `declare -Ai`,
+`declare -i` on an existing array) evaluates every element write, looked up in ONE place per form: a list, a literal,
+`+=(…)`, `read -a`, `mapfile`/`readarray` go through `PsEmitter.ElementValues` (`ConvertTo-BashIntegerArray`; for the
+builtins after the whole statement, `PsEmitter.IntegerArrayAfter`), and `a[i]=v`, `a[i]+=v`, `a=v` through
+`PsBuild.SetElement`'s `integer` flag (`Set-BashElement -Integer`: subscript first, then the old value, then the new
+one). `unset NAME` and `declare +i NAME` take the attribute away. The attribute is tracked at transpile time
+(`_intVars`), like the scalar's. Guard: `IntegerArrayWriteGuardTests`; differential
+`ArithOneEvaluatorDifferentialTests.IntegerArray_EveryElementWriteEvaluates`. Known gaps: a failing element keeps the
+old array (bash keeps the elements stored before it, and prefixes `read:`/`mapfile:`); a keyed element in an append
+or a mixed list (`a+=([3]=x)`, `a=([3]=x 4)`, `a+=([0]+=z)`) is a plain word for EVERY indexed array (stored as the
+text `[3]=x`; bash: element 3), so an integer array reports it as an arithmetic error.
+
 **The one shortcut.** `BashArithmeticParser.TryPlainDecimal` decides when the evaluator can be skipped: only for a
 canonical decimal literal (`0`, `7`, `-12`; no leading `0`, no `+`, no blanks, within 64 bits). Every evaluator reads
 such text as that number, so skipping it cannot change a result. Everything else goes to the evaluator: `010` is

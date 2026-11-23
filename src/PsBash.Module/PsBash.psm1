@@ -1047,19 +1047,73 @@ function Add-BashArray {
     return ,[PsBash.Cmdlets.BashIndexedArray]::Concat($Current, $Items)
 }
 
+function ConvertTo-BashIntegerArray {
+    <#
+    .SYNOPSIS
+        The elements an array write stores under the integer attribute (`declare -ai a=(1+1 x*2)`, `a+=(…)`,
+        `read -a`, `mapfile`): each element's text evaluated as arithmetic, in order, after every word was expanded
+        (bash). A list stays a list; an indexed (sparse) or associative table is converted in place and returned.
+        An element that is no expression is a failed WORD: inside a line scope the rest of the line is dropped, as
+        bash drops it. -KeepStatus: the status is the command's own (`read`, `mapfile`), unless an element failed.
+    #>
+    param($__psbashItems, [Alias('KeepStatus')][switch]$__psbashKeepStatus)
+    $__psbashStatus = $global:LASTEXITCODE
+    $global:__BashExpansionFailed = $false
+    if ($__psbashItems -is [System.Collections.IDictionary]) {
+        foreach ($__psbashK in @($__psbashItems.Keys)) {
+            $__psbashItems[$__psbashK] = [string]$(Invoke-BashArith ([string]$__psbashItems[$__psbashK]))
+        }
+        if ($__psbashKeepStatus -and -not $global:__BashExpansionFailed) { $global:LASTEXITCODE = $__psbashStatus }
+        return $__psbashItems
+    }
+    if ($null -eq $__psbashItems) { return $null }
+    $__psbashOut = [object[]]@(foreach ($__psbashV in @($__psbashItems)) { [string]$(Invoke-BashArith ([string]$__psbashV)) })
+    if ($__psbashKeepStatus -and -not $global:__BashExpansionFailed) { $global:LASTEXITCODE = $__psbashStatus }
+    return ,$__psbashOut
+}
+
+function Get-BashIntegerElement {
+    <#
+    .SYNOPSIS
+        The value an integer array's element write stores (Set-BashElement -Integer): VALUE as arithmetic, and for
+        `a[i]+=v` the element's old value as arithmetic plus it (bash evaluates the old value first). $null when an
+        expression failed: outside a line scope the failure is marked and nothing is stored (inside one it drops the line).
+    #>
+    param($__psbashOld, $__psbashNew, [Alias('Append')][switch]$__psbashAppend)
+    $global:__BashExpansionFailed = $false
+    if ($__psbashAppend) {
+        $__psbashO = [string]$(Invoke-BashArith ([string]$__psbashOld))
+        if ($global:__BashExpansionFailed) { return $null }
+    }
+    $__psbashN = [string]$(Invoke-BashArith ([string]$__psbashNew))
+    if ($global:__BashExpansionFailed) { return $null }
+    if (-not $__psbashAppend) { return $__psbashN }
+    $__psbashSum = [string]$(Invoke-BashArith "($__psbashO)+($__psbashN)")
+    if ($global:__BashExpansionFailed) { return $null }
+    return $__psbashSum
+}
+
 function Set-BashElement {
     <#
     .SYNOPSIS
         `name[key]=value` / `name[key]+=value`. An associative array (hashtable) is keyed by the string; an indexed
         array evaluates the subscript as ARITHMETIC (`a[i+1]`, `a[$n]`), and an index past the end pads the gap
         (a PowerShell array cannot be indexed past its Count). Returns the array/table to assign back.
+        -Integer: the array has the integer attribute (`declare -ai`): the value is evaluated as arithmetic AFTER
+        the subscript (`a[i++]=i` stores 1 at 0), and `+=` adds it to the element's value (Get-BashIntegerElement).
     #>
     param($__psbashTarget, [string]$__psbashKey, $__psbashValue, [Alias('Append')][switch]$__psbashAppend,
         # The element as the script wrote it (`b[$i]`), which a bad subscript is reported as.
-        [Alias('Written')][string]$__psbashWritten)
+        [Alias('Written')][string]$__psbashWritten,
+        [Alias('Integer')][switch]$__psbashInteger)
     if (-not $__psbashWritten) { $__psbashWritten = "[${__psbashKey}]" }
     $__psbashSparse = $__psbashTarget -is [PsBash.Cmdlets.BashSparseArray]
     if ($__psbashTarget -is [System.Collections.IDictionary] -and -not $__psbashSparse) {
+        if ($__psbashInteger) {
+            $__psbashValue = Get-BashIntegerElement $__psbashTarget[$__psbashKey] $__psbashValue -Append:$__psbashAppend
+            if ($null -eq $__psbashValue) { return $__psbashTarget }
+            $__psbashAppend = $false
+        }
         $__psbashTarget[$__psbashKey] = if ($__psbashAppend) { "$($__psbashTarget[$__psbashKey])$__psbashValue" } else { $__psbashValue }
         return $__psbashTarget
     }
@@ -1076,6 +1130,11 @@ function Set-BashElement {
     if ($__psbashSparse) {
         $__psbashAt = $__psbashTarget.Resolve($__psbashIdx)
         if ($null -eq $__psbashAt) { Write-BashBadSubscript $__psbashWritten; return $__psbashTarget }
+        if ($__psbashInteger) {
+            $__psbashValue = Get-BashIntegerElement $__psbashTarget[$__psbashAt] $__psbashValue -Append:$__psbashAppend
+            if ($null -eq $__psbashValue) { return $__psbashTarget }
+            $__psbashAppend = $false
+        }
         $__psbashTarget[$__psbashAt] = if ($__psbashAppend) { "$($__psbashTarget[$__psbashAt])$__psbashValue" } else { $__psbashValue }
         return $__psbashTarget
     }
@@ -1083,6 +1142,11 @@ function Set-BashElement {
     if ($null -ne $__psbashTarget) { $__psbashArr.AddRange([object[]]@($__psbashTarget)) }
     if ($__psbashIdx -lt 0) { $__psbashIdx += $__psbashArr.Count }
     if ($__psbashIdx -lt 0) { Write-BashBadSubscript $__psbashWritten; return ,$__psbashArr.ToArray() }
+    if ($__psbashInteger) {
+        $__psbashValue = Get-BashIntegerElement $(if ($__psbashIdx -lt $__psbashArr.Count) { $__psbashArr[[int]$__psbashIdx] }) $__psbashValue -Append:$__psbashAppend
+        if ($null -eq $__psbashValue) { return ,$__psbashArr.ToArray() }
+        $__psbashAppend = $false
+    }
     if ($__psbashIdx -gt $__psbashArr.Count) {
         # A gap: a dense PowerShell array cannot hold it, so the array becomes a sparse one.
         $__psbashSp = [PsBash.Cmdlets.BashSparseArray]::FromList($__psbashArr)

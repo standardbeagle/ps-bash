@@ -149,8 +149,10 @@ public class PsBuildTests
     public void WriteElementZeroOrScalar_WritesElementZeroOfAnArray()
     {
         Assert.Equal("if ($a -is [array] -or $a -is [System.Collections.IDictionary]) { $a = Set-BashElement $a '0' (\"z\") } else { $env:a = \"z\" }",
-            PsBuild.WriteElementZeroOrScalar("$a", "\"z\"", append: false, "$env:a = \"z\""));
-        Assert.Contains("'0' (\"z\") -Append", PsBuild.WriteElementZeroOrScalar("$a", "\"z\"", append: true, "$env:a += \"z\""));
+            PsBuild.WriteElementZeroOrScalar("$a", "\"z\"", append: false, "$env:a = \"z\"", integer: false));
+        Assert.Contains("'0' (\"z\") -Append", PsBuild.WriteElementZeroOrScalar("$a", "\"z\"", append: true, "$env:a += \"z\"", integer: false));
+        // An integer array (`declare -ai a; a=3+3`) evaluates the value into element 0.
+        Assert.EndsWith("'0' (\"z\") -Integer } else { $env:a = \"z\" }", PsBuild.WriteElementZeroOrScalar("$a", "\"z\"", append: false, "$env:a = \"z\"", integer: true));
     }
     [Fact]
     public void VoidStatement_SingleStatement_UsesGrouping()
