@@ -111,14 +111,29 @@ nested), the spawning launcher passes that anchor to the host as
 `--session-anchor=<pid>:<startTicks>` (`ProcessIdentity.SessionAnchorArg`,
 `IpcWorker.SpawnAndWaitAsync`). The host's `SessionAnchorWatcher` polls it every second; once the
 pid is gone **or now belongs to a different process** (start time differs: PID reuse), it calls
-`IdleShutdown.ShortenTimeout(5 s)`. In-flight commands finish; the host exits 5 s after the last
-one ends. The host log records `session anchor <pid>:<ticks> exited; idle 5s with no connection`.
+`IdleShutdown.ShortenTimeout(5 s)`: the host exits 5 s after the last command ends. The host log
+records `session anchor <pid>:<ticks> exited; idle 5s with no connection`.
+
+A command still running 10 s after the anchor is gone (`SessionAnchorWatcher.HangupGrace`) is **hung
+up**: the watcher cancels the host, which stops the command and exits. The log records `session
+anchor <pid>:<ticks> exited; hung up N command(s) still running 10s later`. Nobody waits for such a
+command: a launcher exits when its own parent dies, and the host stops a dead launcher's command when
+it sees the disconnect, so what remains hangs off a process that outlived the session (or a
+disconnect that went unseen). Waiting for it kept daemons alive for good: after one Claude Code
+restart, daemons logged that they would exit after their last command and never did; seven orphaned
+hosts on that desktop ran for 25+ minutes at about half a core each. bash does the same to a
+session's jobs when the session leader dies.
+
+Every non-interactive host also ends its process within 30 s of starting to shut down
+(`ShutdownBackstop`): if disposal or `Environment.Exit` hangs, it logs `forced exit: …` and kills
+itself. The deadline is longer than the stuck-command watchdog's 20 s, so a command that ignores
+its stop still gets its own verdict first.
 
 Why shortening the idle timer and not cancelling outright (as `ParentDeathWatcher` does for a
 private host): the endpoint name embeds the anchor's pid **and** start time, so once the anchor
 is gone no new launcher can ever resolve this endpoint — the only work left is what is already
-connected, and cutting it off would fail a running command. A grace longer than the configured
-idle timeout never extends it.
+connected, and cutting it off at once would fail a command that is about to finish. A grace
+longer than the configured idle timeout never extends it.
 
 **Why this exists (GH #7).** The anchor walk (`ProcessAncestry.SelectSessionAnchor`) climbs
 through recognized shells/agents only. An agent whose own process name is not recognized, and
