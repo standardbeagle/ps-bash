@@ -228,6 +228,8 @@ public sealed class InvokeBashAliasCommand : BashCmdlet
                             $global:LASTEXITCODE = 2
                             return
                         }
+                        # No command in the text (a comment): nothing runs, status 0.
+                        if ([string]::IsNullOrEmpty($ps)) { $global:LASTEXITCODE = 0; return }
                         Invoke-Expression $ps
                     }.GetNewClosure()
                     Set-Item -Path ('Function:\global:' + $n) -Value $body -Force

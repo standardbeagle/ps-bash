@@ -534,7 +534,10 @@ else
         // valid bash always transpiles, so only un-transpilable input reaches
         // here. Opt out with PSBASH_NO_PS_FALLBACK=1 to always surface the bash
         // parse error.
-        if (ex.Rule != "shell-option" && !EnvFlags.IsTruthy("PSBASH_NO_PS_FALLBACK") && LooksLikePowerShell(bashCommand))
+        // Only text a USER typed to this launcher: never text a ps-bash script built at run time (`bash -c "$x"`, `sh -c`,
+        // `xargs bash -c`), which is bash data and must never become PowerShell code (StartedFromPsBashShell).
+        if (ex.Rule != "shell-option" && !EnvFlags.IsTruthy("PSBASH_NO_PS_FALLBACK") && !StartedFromPsBashShell()
+            && LooksLikePowerShell(bashCommand))
         {
             pwshCommand = bashCommand;
             if (debug)
@@ -673,6 +676,8 @@ static async Task<string> ReadTextBoundedAsync(TextReader reader, long maxChars,
 // deliberately NOT a signal). Pure string/regex so it stays AOT-safe.
 static bool LooksLikePowerShell(string input)
 {
+    // A signal inside quotes or a comment is bash data (`echo "Write-Output" )`), not the shape of the command.
+    input = BlankQuotesAndComments(input);
     if (string.IsNullOrWhiteSpace(input)) return false;
 
     // A Pascal-case hyphenated cmdlet token: Get-Content, Test-Path, New-Item, …
@@ -705,6 +710,46 @@ static bool LooksLikePowerShell(string input)
     return false;
 }
 
+// `input` with the text of every quoted part ('...', "...", $'...') and every `#` comment replaced by spaces: what is
+// left is the shape the PowerShell signals may look at. Approximate on purpose (the text did not parse as bash): an
+// unclosed quote blanks the rest, which only ever makes the fallback LESS likely.
+static string BlankQuotesAndComments(string input)
+{
+    var chars = input.ToCharArray();
+    for (int i = 0; i < chars.Length; i++)
+    {
+        char c = chars[i];
+        if (c == '\\' && i + 1 < chars.Length) { i++; continue; }
+        char close = c switch { '\'' => '\'', '"' => '"', _ => '\0' };
+        bool comment = c == '#' && (i == 0 || char.IsWhiteSpace(chars[i - 1]) || chars[i - 1] is ';' or '&' or '|' or '(');
+        if (close == '\0' && !comment) continue;
+        bool ansiC = c == '\'' && i > 0 && chars[i - 1] == '$';
+        int j = i + 1;
+        for (; j < chars.Length; j++)
+        {
+            if (comment) { if (chars[j] is '\n' or '\r') break; }
+            else if ((close == '"' || ansiC) && chars[j] == '\\' && j + 1 < chars.Length) { chars[j++] = ' '; chars[j] = ' '; continue; }
+            else if (chars[j] == close) break;
+            if (chars[j] is not ('\n' or '\r')) chars[j] = ' ';
+        }
+        if (comment) chars[i] = ' ';
+        i = j;
+    }
+    return new string(chars);
+}
+
+// True when a ps-bash shell started this launcher, directly or through a plain shell (a nested `bash -c "$x"`, `sh -c`,
+// `xargs bash -c`, awk `system()`): its command text was built at run time, so it is bash data and never runs as
+// PowerShell. Two signs, either enough: the PSBASH_SHELL_CHILD mark every ps-bash shell puts in its children's
+// environment (CaptureLauncherEnvironment, InvokeBashBashCommand), and a ps-bash-host among the near ancestors (still
+// there under `env -i` or an `unset`).
+static bool StartedFromPsBashShell()
+{
+    if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable(PsBash.Core.ShellVariables.ShellChildVariable))) return true;
+    try { return PsBash.Core.Runtime.Ipc.ProcessAncestry.FindEnclosingHost() is not null; }
+    catch (Exception) { return true; } // unknown: refuse the fallback
+}
+
 // Captures the launcher's FULL environment block to forward with each request.
 // The host is a shared daemon whose environment is process-global, so without
 // this a `-c` invocation inherits the env of whichever launcher spawned the
@@ -717,9 +762,11 @@ static IReadOnlyList<KeyValuePair<string, string>> CaptureLauncherEnvironment(bo
     foreach (System.Collections.DictionaryEntry e in Environment.GetEnvironmentVariables())
     {
         if (e.Key is string name && name != "PSBASH_DASH_C" && name != "PSBASH_STDIN_SHELL"
-            && name != PsBash.Core.ShellVariables.LauncherParentPidVariable)
+            && name != PsBash.Core.ShellVariables.LauncherParentPidVariable && name != PsBash.Core.ShellVariables.ShellChildVariable)
             entries.Add(new KeyValuePair<string, string>(name, e.Value as string ?? string.Empty));
     }
+    // Everything this shell runs descends from a ps-bash shell: a nested launcher must not run its text as PowerShell.
+    entries.Add(new KeyValuePair<string, string>(PsBash.Core.ShellVariables.ShellChildVariable, "1"));
     if (dashC) entries.Add(new KeyValuePair<string, string>("PSBASH_DASH_C", "1"));
     if (readsStdin) entries.Add(new KeyValuePair<string, string>("PSBASH_STDIN_SHELL", "1"));
     // $PPID is the process that started this shell, which only the launcher knows (ShellVariables.SeedShellStart).

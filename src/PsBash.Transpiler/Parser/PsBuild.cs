@@ -1580,7 +1580,9 @@ public static class PsBuild
         + "$__psbash_eval_src, [PsBash.Core.Transpiler.TranspileContext, PsBash.Transpiler]::Eval" + localsArg
         + ", ($null -ne (Get-Variable -Name __BashStdIn -Scope Global -ValueOnly -ErrorAction SilentlyContinue))) } "
         + "catch { Write-Error -Message (" + DiagnosticPrefix + " + '" + label + ": ' + $(if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message })) -ErrorAction Continue; $global:LASTEXITCODE = 2 }; "
-        + "if ($null -ne $__psbash_eval_pwsh) { " + EvalReturnVar + " = $false; " + EvalLinesScope("Invoke-Expression $__psbash_eval_pwsh") + " }";
+        // "" is text with no command (a comment): nothing runs, status 0 (Invoke-Expression refuses an empty string).
+        + "if ($__psbash_eval_pwsh) { " + EvalReturnVar + " = $false; " + EvalLinesScope("Invoke-Expression $__psbash_eval_pwsh") + " } "
+        + "elseif ($null -ne $__psbash_eval_pwsh) { $global:LASTEXITCODE = 0 }";
 
     /// <summary>
     /// The body of the script block Resolve-BashCommand (and <c>command</c> / <c>builtin</c>) runs for a builtin named at

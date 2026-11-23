@@ -204,7 +204,11 @@ public static class BashTranspiler
         bool debug = IsDebug;
         try
         {
-            var emitted = PsEmitter.Transpile(bashCommand, context) ?? bashCommand;
+            // Text with no command (empty, blanks, comments only) runs nothing: "". REGRESSION: it returned the bash text
+            // itself, which then ran as PowerShell, and PowerShell ends a `#` comment at a lone CR
+            // (`x=$'#\rWrite-Output PWNED'; bash -c "$x"` ran Write-Output). Guard BashTextNeverRunsAsPowerShellTests.
+            if (PsEmitter.Transpile(bashCommand, context) is not { } emitted)
+                return "";
             return WrapWithTrapEpilogue(bashCommand, emitted);
         }
         catch (ParseException ex)

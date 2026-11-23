@@ -5125,11 +5125,14 @@ public static partial class PsEmitter
                 var rawCmd = ExtractSingleQuotedOrLiteralValue(pair.Value);
                 if (rawCmd is not null)
                 {
-                    var transpiledCmd = Transpile(rawCmd) ?? rawCmd;
+                    // No command (a comment): nothing runs. The bash text itself is never PowerShell code.
+                    var transpiledCmd = Transpile(rawCmd) ?? "";
                     var scriptBody = PsBuild.EscapeForSingleQuote(transpiledCmd);
                     // The variable too: $PROMPT_COMMAND reads it, and ps-bash's own prompt loops (REPL, piped -i) run it.
                     sb.Append("$env:PROMPT_COMMAND = ").Append(PsBuild.SingleQuote(rawCmd)).Append("; ");
-                    sb.Append($"Register-BashPromptHook -Name 'prompt-command' -ScriptBlock {{ Invoke-Expression '{scriptBody}' }}");
+                    sb.Append(transpiledCmd.Length == 0
+                        ? "Register-BashPromptHook -Name 'prompt-command' -ScriptBlock { }"
+                        : $"Register-BashPromptHook -Name 'prompt-command' -ScriptBlock {{ Invoke-Expression '{scriptBody}' }}");
                 }
                 else
                 {
@@ -7367,7 +7370,8 @@ public static partial class PsEmitter
                 result = EmitTrapDebugUnregister(rawCmd);
                 return true;
             }
-            var transpiledCmd = Transpile(rawCmd) ?? rawCmd;
+            // No command (a comment): nothing runs. The bash text itself is never PowerShell code.
+            var transpiledCmd = Transpile(rawCmd) ?? "";
             result = EmitTrapDebugRegister(rawCmd, transpiledCmd);
             return true;
         }
@@ -15173,7 +15177,9 @@ public static partial class PsEmitter
         var scriptBody = PsBuild.EscapeForSingleQuote(transpiledCmd);
         return
             $"{warnLine}; " +
-            $"Register-BashChpwdHook -Name '{hookName}' -ScriptBlock {{ Invoke-Expression '{scriptBody}' }}";
+            (transpiledCmd.Length == 0
+                ? $"Register-BashChpwdHook -Name '{hookName}' -ScriptBlock {{ }}"
+                : $"Register-BashChpwdHook -Name '{hookName}' -ScriptBlock {{ Invoke-Expression '{scriptBody}' }}");
     }
 
     /// <summary>
