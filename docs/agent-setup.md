@@ -211,8 +211,9 @@ Dockerfile `RUN` step is a new container and pays it every time; merge short ste
   written and are no longer killed after `PSBASH_TIMEOUT`.
 - **Background jobs.** `cmd &` output appears as the job runs. It used to appear at `wait`.
 - **Busy hosts.** When every executor slot of the session has been busy for 2 s (several long
-  builds), the next command runs on a private host that exits with it, instead of waiting. A
-  session runs at most 2 such hosts at once; past that, a command waits for a slot.
+  builds), the next command runs on an overflow host instead of waiting. Overflow hosts stay warm
+  for 60 s, so the commands after it do not each start a host. A session runs at most 2 of them;
+  past that, a command waits for a slot.
   `PSBASH_EXEC_OVERFLOW_MS` sets the 2 s wait and `PSBASH_EXEC_OVERFLOW_MAX` the host limit.
 
 Open items an agent can hit are in [Known Issues](known-issues.md).

@@ -29,11 +29,15 @@ path would overflow). Slots are separate daemons started on demand and kept warm
 - **Contended** (an unrelated launcher): back off briefly and retry slot 0; after the spill delay (default 250 ms,
   `PSBASH_EXEC_SPILL_MS`) move to a healthy slot, or start one. **Overflow:** if every slot stays busy past the grace
   (`PSBASH_EXEC_OVERFLOW_MS`, default 2000) and one of the session's overflow tickets is free (`ExecOverflowTicket`,
-  `PSBASH_EXEC_OVERFLOW_MAX`, default 2; an OS file lock held for the command, dropped on exit or death), run on a
-  private per-invocation host that ends with the command. Otherwise go round again. Memory bound per session: 7 slot
-  hosts + the ticket cap. A fresh host (an overflow host never outlives its command) is ~70-150 MB private; a
-  long-lived slot host can grow toward ~840 MB warm, capped by `HostMemoryGuard`. REGRESSION: going round was the only option, so six long
-  builds made every further `bash -c` wait minutes.
+  `PSBASH_EXEC_OVERFLOW_MAX`, default 2, at most 16; an OS file lock held for the command, dropped on exit or death),
+  run on that ticket's **overflow slot** `-x<MaxExecSlots+1+i>` (`IpcTransportFactory.OverflowSlot`): a slot daemon
+  like the others (session anchor, 60 s idle window), so the next overflow command reuses it warm. Only the ticket
+  holder sends it commands; BUSY there is the previous holder's command still stopping, so the launcher waits on it.
+  Otherwise go round again. Memory bound per session: 7 slot hosts + the ticket cap. A slot host is ~70-150 MB
+  private fresh and can grow toward ~840 MB warm, capped by `HostMemoryGuard`. REGRESSION: going round was the only
+  option, so six long builds made every further `bash -c` wait minutes. REGRESSION: the overflow then ran on a
+  private host started and killed for the one command (~3 CPU-seconds, ~5 s of wall each); one Claude session running
+  ~7 agents keeps its 7 slots busy with long commands and started 60-310 of them an hour, hooks included.
 - **Stateful** hosts (named sessions with one pinned runspace) never receive spill from unrelated launchers; a nested
   launcher still spills, because it cannot wait on its own parent.
 - The slot choice is sticky for the life of the launcher process.
