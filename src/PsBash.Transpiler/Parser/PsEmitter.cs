@@ -2598,80 +2598,6 @@ public static partial class PsEmitter
         }
     }
 
-    /// <summary>
-    /// Normalize a raw case pattern (as sliced from the token stream, quotes and all)
-    /// into a PowerShell <c>switch -Wildcard</c> clause pattern. Bash REMOVES the quote
-    /// characters from a case pattern — <c>"foo"</c> matches the string <c>foo</c>, not
-    /// the 5-char literal <c>"foo"</c> — but a glob metacharacter that was INSIDE quotes
-    /// is literal, so it is backtick-escaped (the PowerShell wildcard escape, preserved
-    /// verbatim inside the single-quoted clause). Glob metacharacters OUTSIDE quotes stay
-    /// active (<c>"foo"*</c> → <c>foo*</c>). Backslash escapes the next char in both
-    /// contexts. (A pattern holding an expansion — <c>$pat</c> — goes through
-    /// <see cref="EmitCasePatternTest"/> instead.)
-    /// </summary>
-    private static string NormalizeCasePattern(string raw)
-    {
-        var sb = new StringBuilder(raw.Length);
-        char quote = '\0';
-        for (int i = 0; i < raw.Length; i++)
-        {
-            char c = raw[i];
-            if (quote != '\0')
-            {
-                if (c == quote) { quote = '\0'; continue; }      // drop closing quote
-                if (quote == '"' && c == '\\' && i + 1 < raw.Length)
-                {
-                    AppendLiteralWildcardChar(sb, raw[++i]);      // "\x" → literal x
-                    continue;
-                }
-                AppendLiteralWildcardChar(sb, c);                 // quoted glob char is literal
-                continue;
-            }
-            if (c is '\'' or '"') { quote = c; continue; }        // drop opening quote
-            if (c == '\\' && i + 1 < raw.Length)
-            {
-                AppendLiteralWildcardChar(sb, raw[++i]);          // \x → literal x
-                continue;
-            }
-            sb.Append(c);                                          // unquoted: glob stays active
-        }
-        return sb.ToString();
-    }
-
-    /// <summary>
-    /// The bash PATTERN text of a word whose value is static (literals, quotes, glob parts), for
-    /// <see cref="BashPattern"/>: unquoted literal text is backslash-escaped char by char, quoted
-    /// text likewise (both are literal in a pattern), glob/extglob parts keep their raw spelling.
-    /// False when the word holds an expansion — its pattern is only known at run time.
-    /// </summary>
-    private static bool TryGetStaticPatternText(CompoundWord word, out string raw)
-    {
-        var sb = new StringBuilder();
-        raw = "";
-        foreach (var part in word.Parts)
-        {
-            switch (part)
-            {
-                case WordPart.GlobPart g:
-                    if (IsDynamicExtglob(g.Pattern)) return false;
-                    sb.Append(g.Pattern);
-                    break;
-                case WordPart.Literal or WordPart.EscapedLiteral or WordPart.SingleQuoted
-                    or WordPart.AnsiCQuoted or WordPart.DoubleQuoted:
-                    if (!TryGetPureLiteralText(ImmutableArray.Create(part), out var lit)) return false;
-                    foreach (char c in lit)
-                    {
-                        if (!char.IsLetterOrDigit(c)) sb.Append('\\');
-                        sb.Append(c);
-                    }
-                    break;
-                default: return false;
-            }
-        }
-        raw = sb.ToString();
-        return true;
-    }
-
     /// <summary>An extglob (<c>@(a|$b)</c>) whose arms hold an expansion or a backtick substitution.</summary>
     private static bool IsDynamicExtglob(string pattern) =>
         pattern.Length > 1 && pattern[1] == '(' && pattern.AsSpan().IndexOfAny('$', '`') >= 0;
@@ -2752,14 +2678,6 @@ public static partial class PsEmitter
         return result;
     }
 
-    private static void AppendLiteralWildcardChar(StringBuilder sb, char c)
-    {
-        // Backtick is the PowerShell -Wildcard escape; it survives verbatim inside the
-        // single-quoted clause string the caller wraps this in.
-        if (c is '*' or '?' or '[' or ']') sb.Append('`');
-        sb.Append(c);
-    }
-
     /// <summary>
     /// The test of one case pattern against <c>$_</c>. A pattern holding an expansion (<c>$i</c>,
     /// <c>"$i"</c>, <c>$(cmd)</c>) is only known at run time: an unquoted expansion's value is pattern
@@ -2767,16 +2685,11 @@ public static partial class PsEmitter
     /// </summary>
     private static string EmitCasePatternTest(string raw)
     {
-        // A leading ~ expands in a case pattern too (`case /home/u in ~)`).
-        if (raw.IndexOfAny(['$', '`']) >= 0 || raw.StartsWith('~'))
-        {
-            var word = new CompoundWord(BashParser.DecomposeWord(raw));
-            if (!TryGetStaticPatternText(word, out _))
-                return PsBuild.DynamicPatternTest("$_", EmitGlobPatternExpr(word, mapPaths: false));
-        }
-        return PsBuild.PatternTest("$_", BashPattern.ToAnchoredRegex(raw));
+        // A static pattern is canonical text as well: quoted parts escaped, glob parts as written (no brace expansion;
+        // a leading ~ expands). The one compiler (BashPattern) matches it at run time, cached per pattern text.
+        var word = new CompoundWord(BashParser.DecomposeWord(raw, braceExpansion: false));
+        return PsBuild.PatternTest("$_", EmitGlobPatternExpr(word, mapPaths: false));
     }
-
     private static string EmitCase(Command.Case caseCmd)
     {
         // Every arm matches through BashPattern (bash glob/extglob → anchored regex) tested by the
@@ -4300,26 +4213,17 @@ public static partial class PsEmitter
                     string left = lhs.StartsWith("$(", StringComparison.Ordinal) ? $"(@({lhs}) -join \"`n\")" : lhs;
                     return $"{left} {(negate ? "-cne" : "-ceq")} {EmitTestOperand(words[2])}";
                 }
-                // A static RHS — literal, quoted segments (`"http"*` is the pattern http* with the
-                // quoted chars literal), glob, extglob — is one BashPattern regex.
-                if (TryGetStaticPatternText(words[2], out var patText))
-                {
-                    string test = PsBuild.PatternTest(lhs, BashPattern.ToAnchoredRegex(patText));
-                    return negate ? $"(-not {test})" : test;
-                }
                 // A wholly double-quoted run-time RHS ("$B") is literal text: plain string equality.
                 if (words[2].Parts is [WordPart.DoubleQuoted])
                 {
                     string eq = PsBuild.StringEqualsTest(lhs, EmitTestOperand(words[2]));
                     return negate ? $"(-not {eq})" : eq;
                 }
-                // Any other run-time RHS is a pattern assembled at run time: an UNQUOTED expansion's
-                // value is pattern text (oracle: B='a*'; [[ abc == $B ]] is true), quoted parts are
-                // escaped. It compared literally (StringEquals), or through case-insensitive -like.
-                string dyn = PsBuild.DynamicPatternTest(lhs, EmitGlobPatternExpr(words[2], mapPaths: false));
-                return negate ? $"(-not {dyn})" : dyn;
+                // Any other RHS is a pattern word: quoted parts literal, an UNQUOTED expansion's value pattern text
+                // (oracle: B='a*'; [[ abc == $B ]] is true). Static or not, it reaches the one compiler as canonical text.
+                string test = PsBuild.PatternTest(lhs, EmitGlobPatternExpr(words[2], mapPaths: false));
+                return negate ? $"(-not {test})" : test;
             }
-
             // In [[ ]], < and > are lexicographic string comparisons.
             // In [ ], they don't appear (bash uses -lt/-gt for numeric).
             if (extended && op is "<" or ">")
@@ -10988,14 +10892,7 @@ public static partial class PsEmitter
     private static string StaticExtglobArm(string arm)
     {
         var sb = new StringBuilder(arm.Length + 4);
-        void Quoted(string text)
-        {
-            foreach (char c in text)
-            {
-                if (c is '*' or '?' or '[' or ']' or '\\' or '|' or '(' or ')') sb.Append('\\');
-                sb.Append(c);
-            }
-        }
+        void Quoted(string text) => sb.Append(BashPattern.EscapeLiteral(text));
         foreach (var part in BashParser.DecomposeWord(arm))
         {
             switch (part)
@@ -11014,18 +10911,7 @@ public static partial class PsEmitter
         return sb.ToString();
     }
 
-    private static string EscapeGlobLiteral(string text)
-    {
-        if (text.AsSpan().IndexOfAny("*?[]\\") < 0) return text;
-        var sb = new StringBuilder(text.Length + 4);
-        foreach (char c in text)
-        {
-            if (c is '*' or '?' or '[' or ']' or '\\') sb.Append('\\');
-            sb.Append(c);
-        }
-        return sb.ToString();
-    }
-
+    private static string EscapeGlobLiteral(string text) => BashPattern.EscapeLiteral(text);
     /// <summary>
     /// A word with a brace expansion AND a glob (<c>*.{c,h}</c>, <c>sub/{a,b}*</c>) made only of plain literals,
     /// brace parts and glob parts. bash expands the braces first; the emitter's brace array carries each
@@ -11070,7 +10956,8 @@ public static partial class PsEmitter
     /// <param name="word">The glob word.</param>
     /// <param name="mapPaths">False for a pattern that is not a path (<c>[[ $p == /tmp/$x ]]</c> compares
     /// text): no <c>/tmp/</c> or drive-prefix mapping.</param>
-    private static string EmitGlobPatternExpr(CompoundWord word, bool mapPaths = true)
+    /// <param name="parenSafe">The expression sits inside a PowerShell <c>"$( )"</c> string: no literal piece carries a raw paren.</param>
+    private static string EmitGlobPatternExpr(CompoundWord word, bool mapPaths = true, bool parenSafe = false)
     {
         const string Escape = "[PsBash.Cmdlets.BashGlobText]::Escape(";
         var pieces = new List<string>();
@@ -11079,7 +10966,8 @@ public static partial class PsEmitter
         void Flush()
         {
             if (lit.Length == 0) return;
-            pieces.Add(PsBuild.SingleQuote(lit.ToString()));
+            string quoted = PsBuild.SingleQuote(lit.ToString());
+            pieces.Add(parenSafe ? PsBuild.ParenSafeLiteral(quoted) : quoted);
             lit.Clear();
         }
         void Dynamic(string expr)
@@ -11120,7 +11008,7 @@ public static partial class PsEmitter
                     foreach (var (text, isOperator) in SplitExtglob(gp.Pattern))
                     {
                         if (isOperator) lit.Append(text);
-                        else Dynamic(EmitGlobPatternExpr(new CompoundWord(BashParser.DecomposeWord(text)), mapPaths: false));
+                        else Dynamic(EmitGlobPatternExpr(new CompoundWord(BashParser.DecomposeWord(text)), mapPaths: false, parenSafe: parenSafe));
                     }
                     break;
                 case WordPart.GlobPart gp when gp.Pattern.Length > 1 && gp.Pattern[1] == '(' && gp.Pattern.AsSpan().IndexOfAny('\'', '"') >= 0:
@@ -11159,6 +11047,8 @@ public static partial class PsEmitter
         }
         Flush();
 
+        if (pieces.Count == 0)
+            return "''"; // an empty pattern (`case x in "")`)
         if (pieces.Count == 1)
             return pieces[0];
         // A leading '' forces string concatenation when the first piece is an expression.
@@ -11375,162 +11265,6 @@ public static partial class PsEmitter
         return (s, "");
     }
 
-    /// <summary>
-    /// A glob pattern with its quotes removed and every QUOTED character backslash-escaped so it stays literal
-    /// (<c>[^'&gt;&lt;+-.,[]']</c>). Null when there is nothing to do: no quotes, a <c>$</c> expansion, or no unquoted glob character.
-    /// </summary>
-    private static string? UnquoteGlobPattern(string raw)
-    {
-        if (raw.IndexOfAny(['\'', '"']) < 0 || raw.IndexOf('$') >= 0) return null;
-        var sb = new StringBuilder(raw.Length + 8);
-        bool anyGlob = false;
-        for (int i = 0; i < raw.Length; i++)
-        {
-            char c = raw[i];
-            if (c == '\\' && i + 1 < raw.Length) { sb.Append(c).Append(raw[++i]); continue; }
-            if (c is '\'' or '"')
-            {
-                int end = raw.IndexOf(c, i + 1);
-                if (end < 0) return null;
-                for (int j = i + 1; j < end; j++)
-                {
-                    if (!char.IsAsciiLetterOrDigit(raw[j])) sb.Append('\\');
-                    sb.Append(raw[j]);
-                }
-                i = end;
-                continue;
-            }
-            if (c is '*' or '?' or '[') anyGlob = true;
-            sb.Append(c);
-        }
-        return anyGlob ? sb.ToString() : null;
-    }
-
-    /// <summary>
-    /// The text of a <c>${v/find/rep}</c> operand that carries quoting or a variable (<c>$'\n'</c>, <c>'x'</c>,
-    /// <c>"x"</c>, <c>$nl</c>, <c>${nl}</c>) as one PowerShell string expression, so the match is the quote-removed
-    /// value and not the raw source text. Null when the operand has none of these (the plain literal path applies)
-    /// or contains an unquoted glob character (kept on the pattern path).
-    /// </summary>
-    /// <summary>
-    /// A glob pattern with its quoting removed: <c>$'b'*</c> / <c>'a'*</c> / <c>"x"?</c> become the pattern text
-    /// where the QUOTED characters are backslash-escaped (literal) and the bare <c>* ? [</c> keep their meaning.
-    /// A pattern with an expansion in it (or no quote at all) is returned unchanged.
-    /// </summary>
-    private static string UnquoteForGlob(string raw)
-    {
-        if (raw.IndexOfAny(['\'', '"']) < 0) return raw;
-        var sb = new StringBuilder(raw.Length + 4);
-        void Lit(string s) { foreach (char ch in s) { if (ch is '*' or '?' or '[' or ']' or '\\') sb.Append('\\'); sb.Append(ch); } }
-        for (int i = 0; i < raw.Length; i++)
-        {
-            char c = raw[i];
-            if (c == '$' && i + 1 < raw.Length && raw[i + 1] == '\'')
-            {
-                int end = raw.IndexOf('\'', i + 2);
-                while (end > 0 && raw[end - 1] == '\\' && (end < 2 || raw[end - 2] != '\\')) end = raw.IndexOf('\'', end + 1);
-                if (end < 0) return raw;
-                Lit(ExpandAnsiCEscapes(raw[(i + 2)..end]));
-                i = end;
-            }
-            else if (c == '\'')
-            {
-                int end = raw.IndexOf('\'', i + 1);
-                if (end < 0) return raw;
-                Lit(raw[(i + 1)..end]);
-                i = end;
-            }
-            else if (c == '"')
-            {
-                int end = raw.IndexOf('"', i + 1);
-                if (end < 0 || raw.AsSpan(i + 1, end - i - 1).IndexOf('$') >= 0) return raw;
-                Lit(raw[(i + 1)..end]);
-                i = end;
-            }
-            else if (c == '\\' && i + 1 < raw.Length) { sb.Append(c).Append(raw[++i]); }
-            else sb.Append(c);
-        }
-        return sb.ToString();
-    }
-
-    private static string? TryEmitSubstitutionOperand(string raw, bool backslashEscapes = false)
-    {
-        if (raw.IndexOfAny(backslashEscapes ? ['$', '\'', '"', '\\'] : ['$', '\'', '"']) < 0) return null;
-        var segs = new List<string>();
-        var lit = new StringBuilder();
-        void Flush() { if (lit.Length > 0) { segs.Add(PsBuild.SingleQuote(lit.ToString())); lit.Clear(); } }
-        for (int i = 0; i < raw.Length; i++)
-        {
-            char c = raw[i];
-            if (c == '$' && i + 1 < raw.Length && raw[i + 1] == '\'')
-            {
-                int end = raw.IndexOf('\'', i + 2);
-                while (end > 0 && raw[end - 1] == '\\' && (end < 2 || raw[end - 2] != '\\')) end = raw.IndexOf('\'', end + 1);
-                if (end < 0) return null;
-                lit.Append(ExpandAnsiCEscapes(raw[(i + 2)..end]));
-                i = end;
-            }
-            else if (c == '\'')
-            {
-                int end = raw.IndexOf('\'', i + 1);
-                if (end < 0) return null;
-                lit.Append(raw, i + 1, end - i - 1);
-                i = end;
-            }
-            else if (c == '"')
-            {
-                int end = -1;
-                for (int j = i + 1; j < raw.Length && end < 0; j++)
-                {
-                    if (raw[j] == '"') end = j;
-                    else if (raw[j] == '$' && j + 1 < raw.Length && raw[j + 1] == '{')
-                    {
-                        j = FindBraceEnd(raw, j + 1);
-                        if (j < 0) return null;
-                    }
-                }
-                if (end < 0) return null;
-                string inner = raw[(i + 1)..end];
-                if (inner.IndexOf('$') >= 0)
-                {
-                    // "${s%%[![:space:]]*}" / "$x-$y": expanded by the shell, then matched as literal text.
-                    if (BashParser.Parse("echo \"" + inner + "\"") is not Command.Simple { Words.Length: 2 } echoCmd) return null;
-                    Flush(); segs.Add("[string](" + EmitWord(echoCmd.Words[1]) + ")");
-                }
-                else lit.Append(inner);
-                i = end;
-            }
-            else if (c == '$' && i + 1 < raw.Length && (char.IsAsciiLetter(raw[i + 1]) || raw[i + 1] == '_' || raw[i + 1] == '{'))
-            {
-                int s = i + 1, e;
-                if (raw[s] == '{')
-                {
-                    e = raw.IndexOf('}', s);
-                    if (e < 0) return null;
-                    string name = raw[(s + 1)..e];
-                    if (name.Length == 0 || !name.All(ch => char.IsAsciiLetterOrDigit(ch) || ch == '_')) return null;
-                    Flush(); segs.Add("[string](" + EmitSimpleVar(name, strict: true) + ")");
-                    i = e;
-                }
-                else
-                {
-                    e = s;
-                    while (e < raw.Length && (char.IsAsciiLetterOrDigit(raw[e]) || raw[e] == '_')) e++;
-                    Flush(); segs.Add("[string](" + EmitSimpleVar(raw[s..e], strict: true) + ")");
-                    i = e - 1;
-                }
-            }
-            else if (c == '\\' && backslashEscapes)
-            {
-                // Quote removal: `\\` is one backslash, `\"` a quote, `\*` a literal star, `\n` the letter n.
-                if (i + 1 < raw.Length) lit.Append(raw[++i]); else lit.Append(c);
-            }
-            else if (c is '*' or '?' or '[' or '\\' or '$') return null;
-            else lit.Append(c);
-        }
-        Flush();
-        return segs.Count == 0 ? "''" : "(-join @(" + string.Join(", ", segs) + "))";
-    }
     // `${!a[1]}`: the indirection's reference is the value of ONE array element (the parser keeps `a[1]` as the name).
     private static string IndirectRef(string name, bool strict)
     {
@@ -12017,103 +11751,10 @@ public static partial class PsEmitter
         if (suffix.StartsWith("?"))
             return $"{open}{varRef} ?? {ParamErrorThrow(varRef, suffix.Length == 1 ? "'parameter not set'" : ArgVal(suffix[1..]))})";
 
-        // Remove suffix: ${VAR%%pattern} (longest) / ${VAR%pattern} (shortest).
-        // Both anchor the pattern at end-of-string ($). For the LONGEST match a
-        // greedy pattern starting at the leftmost feasible position is correct.
-        // For the SHORTEST suffix a lazy quantifier does NOT help — the match
-        // still starts at the leftmost position, so `foo.bar.baz` %`.*` wrongly
-        // gave `foo` instead of `foo.bar`. Instead capture a GREEDY prefix and
-        // keep it: `^(.*)PAT$` -> `$1` leaves the shortest trailing match for PAT.
-        // Every embed below lands inside a PowerShell single-quoted string, so any literal
-        // ' in the pattern/replacement (e.g. from a $'…' word inside ${VAR##pat}) must be
-        // doubled or it breaks out and emits unparseable PowerShell (grammar-fuzz find).
-        // A quoted / expanded pattern (`${s#"${s%%[![:space:]]*}"}`, `${f%"$ext"}`) is the quote-removed VALUE, matched
-        // literally (its glob characters are quoted); an empty one removes nothing.
-        // A leading unquoted `~` / `~/` of a removal pattern is the home directory, matched literally (``).
-        if (suffix.Length > 1 && suffix[0] is '%' or '#')
-        {
-            int skip = suffix[1] == suffix[0] ? 2 : 1;
-            var removalPat = suffix[skip..];
-            if (removalPat.IndexOfAny(['*', '?', '[', '\\', '\'', '"']) < 0 && TildeFind(removalPat) is var homePat && !ReferenceEquals(homePat, removalPat))
-                suffix = suffix[..skip] + homePat;
-        }
-        if ((suffix.StartsWith("%%") || suffix.StartsWith("##") ? suffix[2..] : suffix.StartsWith("%") || suffix.StartsWith("#") ? suffix[1..] : null)
-                is { } stripPat && suffix[0] is '%' or '#' && TryEmitSubstitutionOperand(stripPat) is { } stripExpr)
-        {
-            string esc = $"[regex]::Escape({stripExpr})";
-            string guard = $"$(if ({stripExpr}) {{ {esc} }} else {{ '(?!)' }})";
-            return suffix[0] == '#'
-                ? $"{open}{varRef} -creplace ('^' + {guard}), '')"
-                : suffix.StartsWith("%%")
-                    ? $"{open}{varRef} -creplace ({guard} + '$'), '')"
-                    : $"{open}{varRef} -creplace ('^(.*)' + {guard} + '$'), '$1')";
-        }
-        if (suffix.StartsWith("%%"))
-            return $"{open}{varRef} -creplace '{SqEsc(GlobToRegex(UnquoteForGlob(suffix[2..]), lazy: false))}$','')";
-        if (suffix.StartsWith("%"))
-            return $"{open}{varRef} -creplace '^(.*){SqEsc(GlobToRegex(UnquoteForGlob(suffix[1..]), lazy: false))}$','$1')";
-
-        // Remove prefix: ${VAR##pattern} (greedy) / ${VAR#pattern} (lazy).
-        if (suffix.StartsWith("##"))
-            return $"{open}{varRef} -creplace '^{SqEsc(GlobToRegex(UnquoteForGlob(suffix[2..]), lazy: false))}','')";
-        if (suffix.StartsWith("#"))
-            return $"{open}{varRef} -creplace '^{SqEsc(GlobToRegex(UnquoteForGlob(suffix[1..]), lazy: true))}','')";
-
-        // Replace first: ${VAR/find/replace} — instance overload .Replace(str, rep, 1).
-        if (suffix.StartsWith("/") && !suffix.StartsWith("//"))
-        {
-            var (find, replace) = SplitPatsubOperands(suffix[1..]);
-            return SubstituteExpr(open, varRef, TildeFind(find), replace, first: true);
-        }
-        // Replace all: ${VAR//find/replace} — escape find literally; 2-arg overload = all.
-        if (suffix.StartsWith("//"))
-        {
-            var (find, replace) = SplitPatsubOperands(suffix[2..]);
-            return SubstituteExpr(open, varRef, TildeFind(find), replace, first: false);
-        }
-
-        // A leading unquoted `~` / `~/` of the pattern is the home directory (matched literally).
-        static string TildeFind(string find)
-            => find == "~" || find.StartsWith("~/", StringComparison.Ordinal) ? "\"$HOME\"" + find[1..] : find;
-
-        // A quoted / variable operand (`$'\n'`, `$nl`, `'x'`) is the quote-removed VALUE, matched literally; `$` in the
-        // replacement is doubled because .NET reads `$1` / `$&` there.
-        static string SubstituteExpr(string open, string varRef, string find, string replace, bool first)
-        {
-            // BashLocale.Replace: the match is on characters, or on bytes in the C locale (`?` is one byte).
-            string tail = first ? ", 1" : ", -1";
-            // A quoted glob (`[^'><+-.,[]']`): quotes come off, the quoted characters stay literal.
-            if (UnquoteGlobPattern(find) is { } unquotedFind) find = unquotedFind;
-            string? findExpr = TryEmitSubstitutionOperand(find, backslashEscapes: true);
-            string? repExpr = TryEmitSubstitutionOperand(replace, backslashEscapes: true);
-            if (findExpr is null && repExpr is null)
-                return $"{open}[PsBash.Cmdlets.BashLocale]::Replace({ReplaceFindRegex(find)}, {varRef}, '{SqEsc(replace)}'{tail}))";
-            // An unquoted `$g` is a PATTERN (`g='*'; ${v//$g/-}` replaces the whole value); "$g" is the literal text.
-            string regex = findExpr is null ? ReplaceFindRegex(find)
-                : System.Text.RegularExpressions.Regex.IsMatch(find, @"^\$(\w+|\{\w+\})$")
-                    ? $"$(if ({findExpr}) {{ '(?:(?=[\\s\\S])|\\A)(?:' + [PsBash.Core.Parser.BashPattern]::ToRegex([string]({findExpr}), $false, $false) + ')' }} else {{ '(?!)' }})"
-                    : $"$(if ({findExpr}) {{ [regex]::Escape({findExpr}) }} else {{ '(?!)' }})";
-            string rep = repExpr is null ? $"'{SqEsc(replace)}'" : $"({repExpr}).Replace('$', '$$')";
-            return $"{open}[PsBash.Cmdlets.BashLocale]::Replace({regex}, {varRef}, {rep}{tail}))";
-        }
-        // The `find` of ${VAR/find/rep}: an extglob pattern is matched as one (`${v//@(a|z)/Y}`);
-        // anything else stays the historical LITERAL match (plain-glob find is not modelled).
-        // A leading `#` / `%` anchors the match to the start / end of the value (`${s/#xx/yy}`, `${s/%xx/yy}`); a
-        // plain-glob `*` `?` `[` is matched as a glob (`${v/c*/XX}`), longest-first like bash.
-        static string ReplaceFindRegex(string find)
-        {
-            string pre = "", post = "";
-            if (find.Length > 0 && find[0] == '#') { pre = "^"; find = find[1..]; }
-            else if (find.Length > 0 && find[0] == '%') { post = "$"; find = find[1..]; }
-            bool isGlob = BashPattern.HasExtGlob(find) || find.IndexOfAny(['*', '?', '[']) >= 0;
-            if (!isGlob && pre.Length == 0 && post.Length == 0)
-                return $"[regex]::Escape('{SqEsc(find)}')";
-            string body = isGlob ? SqEsc(BashPattern.ToRegex(find)) : SqEsc(System.Text.RegularExpressions.Regex.Escape(find));
-            // `${v//*/-}`: no empty match at the end of the value (bash replaces once, .NET would twice).
-            string noEmptyTail = isGlob && pre.Length == 0 && post.Length == 0 && find.Trim('*').Length == 0 ? "(?:(?=[\\s\\S])|\\A)" : "";
-            return $"'(?s){noEmptyTail}{pre}{body}{post}'";
-        }
-
+        // The pattern operators # ## % %% / // /# /%: the operand is a pattern word, matched by the one compiler at
+        // run time (PsEmitter.Patterns.cs).
+        if (suffix.Length > 0 && suffix[0] is '#' or '%' or '/' && TryEmitPatternOperator(varRef, suffix, inDoubleQuote) is { } patternOp)
+            return patternOp;
         // Slice: ${VAR:offset:length} or ${VAR:offset}. The body is trimmed so a
         // negative offset written with the disambiguating space — ${VAR: -2}
         // (without the space it would be the ${VAR:-default} operator) — parses.
@@ -12172,18 +11813,10 @@ public static partial class PsEmitter
             }
         }
 
-        // Case conversion: ${VAR^^} ${VAR,,} ${VAR^} ${VAR,}
-        // An optional glob PATTERN (`${x,A}`, `${x^^[a-c]}`) limits the conversion to characters it matches;
-        // an unset variable converts to the empty string.
-        if (suffix.Length > 0 && suffix[0] is '^' or ',')
-        {
-            bool all = suffix.Length > 1 && suffix[1] == suffix[0];
-            string pat = suffix[(all ? 2 : 1)..];
-            string re = "(?s)" + (pat.Length == 0 ? "." : "(?:" + GlobToRegex(UnquoteForGlob(pat), lazy: false) + ")");
-            string conv = suffix[0] == '^' ? "ToUpper" : "ToLower";
-            return $"{open}([regex]'{SqEsc(re)}').Replace([string]({varRef}), {{ $args[0].Value.{conv}() }}{(all ? "" : ", 1")}))";
-        }
-
+        // Case conversion: ${VAR^^} ${VAR,,} ${VAR^} ${VAR,}. An optional pattern (`${x,A}`, `${x^^[a-c]}`) limits it to
+        // the characters that match it whole; an unset variable converts to the empty string.
+        if (suffix.Length > 0 && suffix[0] is '^' or ',' && TryEmitPatternOperator(varRef, suffix, inDoubleQuote) is { } caseOp)
+            return caseOp;
         // Transform operators ${VAR@op} (bash 4.4+/5.1). @Q (quote-for-reuse) and the case
         // transforms map cleanly; @E/@P/@A/@a have no PowerShell equivalent and degrade to
         // the bare value (documented gap, emitter-strategy.md §6) — never silently dropped.
@@ -15503,131 +15136,4 @@ public static partial class PsEmitter
 
     // Double ' for safe embedding inside a PowerShell single-quoted string literal.
     private static string SqEsc(string s) => PsBuild.EscapeForSingleQuote(s);
-
-    /// <summary>
-    /// Translates a bash glob pattern to a .NET regex pattern suitable for use in
-    /// PowerShell's <c>-replace</c> operator.
-    /// <para>
-    /// Bash glob special characters:
-    /// <list type="bullet">
-    ///   <item><c>*</c> → <c>.*</c> (greedy) or <c>.*?</c> (lazy)</item>
-    ///   <item><c>?</c> → <c>.</c></item>
-    ///   <item><c>[...]</c> → passed through unchanged (already valid regex)</item>
-    ///   <item>All other regex metacharacters are escaped.</item>
-    /// </list>
-    /// </para>
-    /// </summary>
-    /// <param name="glob">Bash glob pattern (e.g. <c>.*</c>, <c>*.c</c>, <c>?x</c>).</param>
-    /// <param name="lazy">
-    /// When <c>true</c>, <c>*</c> translates to <c>.*?</c> (lazy/shortest match).
-    /// When <c>false</c>, <c>*</c> translates to <c>.*</c> (greedy/longest match).
-    /// </param>
-    /// <summary>
-    /// The regex for a glob, with every literal parenthesis written as <c>\x28</c> / <c>\x29</c>: the pattern is emitted inside
-    /// <c>"$( … )"</c>, whose closing paren PowerShell finds by counting parens even inside quotes (see the naive-scan memory).
-    /// </summary>
-    private static string GlobToRegex(string glob, bool lazy)
-    {
-        string re = GlobToRegexCore(glob, lazy);
-        if (re.IndexOf("\\(", StringComparison.Ordinal) < 0 && re.IndexOf("\\)", StringComparison.Ordinal) < 0) return re;
-        var sb = new StringBuilder(re.Length + 8);
-        for (int i = 0; i < re.Length; i++)
-        {
-            if (re[i] == '\\' && i + 1 < re.Length)
-            {
-                char n = re[++i];
-                sb.Append(n == '(' ? "\\x28" : n == ')' ? "\\x29" : "\\" + n);
-            }
-            else sb.Append(re[i]);
-        }
-        return sb.ToString();
-    }
-
-    private static string GlobToRegexCore(string glob, bool lazy)
-    {
-        // Extglob forms (`${v%.@(gz|bz2)}`, `${v##+(a)}`) — the shared converter. Plain globs keep
-        // the historical translation below.
-        if (BashPattern.HasExtGlob(glob))
-            return BashPattern.ToRegex(glob, lazy);
-
-        var sb = new StringBuilder(glob.Length * 2);
-        int i = 0;
-        while (i < glob.Length)
-        {
-            char c = glob[i];
-            if (c == '*')
-            {
-                sb.Append(lazy ? ".*?" : ".*");
-                i++;
-            }
-            else if (c == '?')
-            {
-                sb.Append('.');
-                i++;
-            }
-            else if (c == '[')
-            {
-                // A bracket expression is nearly valid regex: `[!x]` negates (regex `[^x]`), a leading `]` is
-                // literal, and `[:space:]` inside it is a POSIX class (so the first `]` is not always the close).
-                int close = -1, j = i + 1;
-                if (j < glob.Length && glob[j] is '!' or '^') j++;
-                if (j < glob.Length && glob[j] == ']') j++;
-                for (; j < glob.Length && close < 0; j++)
-                {
-                    if (glob[j] == '\\' && j + 1 < glob.Length) j++; // an escaped ] [ - stays inside the bracket
-                    else if (glob[j] == '[' && j + 1 < glob.Length && glob[j + 1] == ':' && glob.IndexOf(":]", j + 2, StringComparison.Ordinal) is > 0 and var pe) j = pe + 1;
-                    else if (glob[j] == ']') close = j;
-                }
-                if (close >= 0)
-                {
-                    string body = glob[(i + 1)..close];
-                    if (body.Length > 0 && body[0] is '!' or '^') body = "^" + body[1..];
-                    int lead = body.StartsWith('^') ? 1 : 0;
-                    if (body.Length > lead && body[lead] == ']') body = body[..lead] + "\\]" + body[(lead + 1)..];
-                    sb.Append('[').Append(BashParser.TranslatePosixClassesForRegex(body)).Append(']');
-                    i = close + 1;
-                }
-                else
-                {
-                    // Unclosed bracket — escape the [ and continue.
-                    sb.Append("\\[");
-                    i++;
-                }
-            }
-            else if (c == '\\')
-            {
-                // In a bash pattern `\X` means the LITERAL character X (it strips X's
-                // glob meaning) — it does not mean "a backslash then X". Emitting `\\`
-                // here made `${value%\'}` compile to the regex `^(.*)\\'$`, which
-                // requires an actual backslash before the quote and so never matched:
-                // the quote-stripping idiom silently did nothing. Oracle-verified:
-                // `value="'hi'"; value="${value%\'}"` yields `'hi`.
-                if (i + 1 < glob.Length)
-                {
-                    sb.Append(System.Text.RegularExpressions.Regex.Escape(
-                        glob[i + 1].ToString()));
-                    i += 2;
-                }
-                else
-                {
-                    // Trailing lone backslash — the literal character itself.
-                    sb.Append("\\\\");
-                    i++;
-                }
-            }
-            else if ("^$.|+(){}".IndexOf(c) >= 0)
-            {
-                // Regex metacharacter — escape it.
-                sb.Append('\\');
-                sb.Append(c);
-                i++;
-            }
-            else
-            {
-                sb.Append(c);
-                i++;
-            }
-        }
-        return sb.ToString();
-    }
 }

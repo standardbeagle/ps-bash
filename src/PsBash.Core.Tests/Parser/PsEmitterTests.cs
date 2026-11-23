@@ -41,7 +41,7 @@ public class PsEmitterTests
     public void Transpile_PrefixStripWithBracketPattern_IsAStripNotAnElementLength(string src)
     {
         var ps = PsEmitter.Transpile(src)!;
-        Assert.Contains("-creplace '^[", ps);
+        Assert.Contains("[PsBash.Cmdlets.BashPatternMatch]::Remove($env:foo, '[", ps);
         Assert.DoesNotContain(".Length", ps);
     }
 
@@ -188,8 +188,8 @@ public class PsEmitterTests
     {
         // A raw `\(` inside "$( … )" unbalances PowerShell's naive paren scan ("missing the closing ')'").
         var result = PsEmitter.Transpile("echo \"${line##*([}\"");
-        Assert.DoesNotContain("\\(", result);
-        Assert.Contains("\\x28", result);
+        Assert.DoesNotContain("'*(", result);
+        Assert.Contains("Remove($env:line, ('*' + [char]40 + '['), $false, $true)", result);
     }
 
     [Theory]
@@ -2390,24 +2390,25 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo ${VAR%%pattern}");
 
-        Assert.Contains("$env:VAR -creplace 'pattern$',''", result); // the result is then word-split (unquoted)
+        // The one pattern compiler at run time (suffix, longest); the result is then word-split (unquoted).
+        Assert.Contains("[PsBash.Cmdlets.BashPatternMatch]::Remove($env:VAR, 'pattern', $true, $true)", result);
     }
 
     [Theory]
     // In a bash PATTERN, `\X` means the LITERAL character X — it strips X's glob
-    // meaning, it does not mean "a backslash then X". GlobToRegex escaped the
-    // backslash itself, so `${value%\'}` compiled to `^(.*)\\'$`, which requires an
-    // actual backslash before the quote and therefore NEVER matched: the standard
-    // quote-stripping idiom silently did nothing.
+    // meaning, it does not mean "a backslash then X". The old translator escaped the
+    // backslash itself, so `${value%\'}` never matched: the standard quote-stripping
+    // idiom silently did nothing. The canonical pattern text keeps a quote as itself
+    // and a pattern character backslash-escaped.
     // Oracle: `value="'hi'"; value="${value%\'}"; value="${value#\'}"` -> `hi`.
-    [InlineData(@"echo ${VAR%\'}", @"-creplace '^(.*)''$','$1'")]
-    [InlineData(@"echo ${VAR#\'}", @"-creplace '^''',''")]
-    [InlineData(@"echo ${VAR%\""}", @"-creplace '^(.*)""$','$1'")]
+    [InlineData(@"echo ${VAR%\'}", @"Remove($env:VAR, '''', $true, $false)")]
+    [InlineData(@"echo ${VAR#\'}", @"Remove($env:VAR, '''', $false, $false)")]
+    [InlineData(@"echo ${VAR%\""}", @"Remove($env:VAR, '""', $true, $false)")]
     // An escaped glob metachar becomes a literal one, not a wildcard.
-    [InlineData(@"echo ${VAR%\*}", @"-creplace '^(.*)\*$','$1'")]
-    [InlineData(@"echo ${VAR%\?}", @"-creplace '^(.*)\?$','$1'")]
+    [InlineData(@"echo ${VAR%\*}", @"Remove($env:VAR, '\*', $true, $false)")]
+    [InlineData(@"echo ${VAR%\?}", @"Remove($env:VAR, '\?', $true, $false)")]
     // An escaped backslash is one literal backslash.
-    [InlineData(@"echo ${VAR%\\}", @"-creplace '^(.*)\\$','$1'")]
+    [InlineData(@"echo ${VAR%\\}", @"Remove($env:VAR, '\\', $true, $false)")]
     public void Transpile_BracedVarPatternWithEscape_TreatsNextCharAsLiteral(
         string bash, string expected)
     {
@@ -2419,7 +2420,7 @@ public class PsEmitterTests
     {
         // Guard the narrow claim: only a BACKSLASH-escaped metachar becomes literal;
         // an unescaped one keeps its glob meaning.
-        Assert.Contains("-creplace '^(.*).*$','$1'", PsEmitter.Transpile("echo ${VAR%*}"));
+        Assert.Contains("Remove($env:VAR, '*', $true, $false)", PsEmitter.Transpile("echo ${VAR%*}"));
     }
 
     [Fact]
@@ -2427,7 +2428,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo ${VAR##pattern}");
 
-        Assert.Contains("$env:VAR -creplace '^pattern',''", result);
+        Assert.Contains("[PsBash.Cmdlets.BashPatternMatch]::Remove($env:VAR, 'pattern', $false, $true)", result);
     }
 
     [Fact]
@@ -2900,7 +2901,7 @@ public class PsEmitterTests
 
         // `==` matches through the runtime BashPatternMatch (case-sensitive, honours nocasematch);
         // PowerShell's -eq is case-INSENSITIVE, so `[[ foo == FOO ]]` used to be true.
-        Assert.Equal("$(if (([PsBash.Cmdlets.BashPatternMatch]::IsMatch($env:var, '(?s)^(?:foo)\\z'))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        Assert.Equal("$(if (([PsBash.Cmdlets.BashPatternMatch]::StringEquals($env:var, 'foo'))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -3443,7 +3444,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("[[ $a == foo* ]]");
 
         // -like is case-INSENSITIVE; bash's [[ == ]] glob is not (`[[ FOOx == foo* ]]` is false).
-        Assert.Equal("$(if (([PsBash.Cmdlets.BashPatternMatch]::IsMatch($env:a, '(?s)^(?:foo.*)\\z'))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        Assert.Equal("$(if (([PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($env:a, 'foo*'))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -3459,7 +3460,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a == \"x\" || $b == \"y\" ]]");
 
-        Assert.Equal("$(if ((([PsBash.Cmdlets.BashPatternMatch]::IsMatch($env:a, '(?s)^(?:x)\\z')) -or ([PsBash.Cmdlets.BashPatternMatch]::IsMatch($env:b, '(?s)^(?:y)\\z')))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        Assert.Equal("$(if ((([PsBash.Cmdlets.BashPatternMatch]::StringEquals($env:a, 'x')) -or ([PsBash.Cmdlets.BashPatternMatch]::StringEquals($env:b, 'y')))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -3467,7 +3468,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a != \"bar\" ]]");
 
-        Assert.Equal("$(if (((-not [PsBash.Cmdlets.BashPatternMatch]::IsMatch($env:a, '(?s)^(?:bar)\\z')))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        Assert.Equal("$(if (((-not [PsBash.Cmdlets.BashPatternMatch]::StringEquals($env:a, 'bar')))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -3800,7 +3801,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("case $x in a) echo a;; b) echo b;; esac");
 
-        Assert.Equal("switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:a)\\z') } { Invoke-BashEcho a; break } { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:b)\\z') } { Invoke-BashEcho b; break } default { $global:LASTEXITCODE = 0 } }", result);
+        Assert.Equal("switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($_, 'a') } { Invoke-BashEcho a; break } { [PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($_, 'b') } { Invoke-BashEcho b; break } default { $global:LASTEXITCODE = 0 } }", result);
     }
 
     [Fact]
@@ -3808,23 +3809,23 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("case $x in a|b) echo ab;; esac");
 
-        Assert.Equal("switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:a)\\z') } { Invoke-BashEcho ab; break } { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:b)\\z') } { Invoke-BashEcho ab; break } default { $global:LASTEXITCODE = 0 } }", result);
+        Assert.Equal("switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($_, 'a') } { Invoke-BashEcho ab; break } { [PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($_, 'b') } { Invoke-BashEcho ab; break } default { $global:LASTEXITCODE = 0 } }", result);
     }
 
     [Fact]
     public void Transpile_CaseExtGlobArm_MatchesEveryArmAsAnchoredRegex()
     {
-        // PowerShell wildcards have no extglob; every arm (extglob or not — `x*` too) is an anchored
-        // regex matched case-sensitively by BashPatternMatch, tested in bash's order (`*)` = { $true }).
+        // PowerShell wildcards have no extglob; every arm (extglob or not — `x*` too) is its canonical pattern text,
+        // matched case-sensitively by the one compiler (BashPatternMatch), tested in bash's order (`*)` = { $true }).
         var result = PsEmitter.Transpile("case $x in @(a|b)) echo ab;; x*) echo x;; *) echo other;; esac");
 
-        Assert.Equal("switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:(?:a|b))\\z') } { Invoke-BashEcho ab; break } { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:x.*)\\z') } { Invoke-BashEcho x; break } { $true } { Invoke-BashEcho other; break } default { $global:LASTEXITCODE = 0 } }", result);
+        Assert.Equal("switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($_, '@(a|b)') } { Invoke-BashEcho ab; break } { [PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($_, 'x*') } { Invoke-BashEcho x; break } { $true } { Invoke-BashEcho other; break } default { $global:LASTEXITCODE = 0 } }", result);
     }
 
     [Theory]
-    [InlineData("[[ $x == @(a|b) ]]", "[PsBash.Cmdlets.BashPatternMatch]::IsMatch($env:x, '(?s)^(?:(?:a|b))\\z')")]
-    [InlineData("[[ $x != !(*.log) ]]", "-not [PsBash.Cmdlets.BashPatternMatch]::IsMatch($env:x, '(?s)^(?:(?<psbx0>.*)")]
-    [InlineData("[[ $x == 'v'@(1|2) ]]", "IsMatch($env:x, '(?s)^(?:v(?:1|2))\\z')")]
+    [InlineData("[[ $x == @(a|b) ]]", "[PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($env:x, '@(a|b)')")]
+    [InlineData("[[ $x != !(*.log) ]]", "-not [PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($env:x, '!(*.log)')")]
+    [InlineData("[[ $x == 'v'@(1|2) ]]", "MatchesPattern($env:x, 'v@(1|2)')")]
     public void Transpile_DoubleBracketExtGlobRhs_EmitsAnchoredRegexMatch(string bash, string fragment)
         => Assert.Contains(fragment, PsEmitter.Transpile(bash));
 
@@ -3865,7 +3866,7 @@ public class PsEmitterTests
     [InlineData("[[ x{1,2} == y ]]")]
     [InlineData("[[ x\\{1,2} == y ]]")]
     public void Transpile_TestOperandWithBraces_IsSingleQuotedText(string bash)
-        => Assert.Contains("IsMatch('x{1,2}',", PsEmitter.Transpile(bash));
+        => Assert.Contains("MatchesPattern('x{1,2}',", PsEmitter.Transpile(bash));
 
     [Theory]
     [InlineData("@($a|b)", new[] { "@(", "$a", "|", "b", ")" })]
@@ -3877,9 +3878,9 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_DoubleBracketPlainGlobRhs_IsCaseSensitivePatternMatchNotLike()
     {
-        // -like is case-INSENSITIVE (`[[ ABC == a* ]]` matched); the RHS glob is a case-sensitive regex.
+        // -like is case-INSENSITIVE (`[[ ABC == a* ]]` matched); the RHS glob goes to the case-sensitive compiler.
         var result = PsEmitter.Transpile("[[ $x == a* ]]");
-        Assert.Contains("[PsBash.Cmdlets.BashPatternMatch]::IsMatch($env:x, '(?s)^(?:a.*)\\z')", result);
+        Assert.Contains("[PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($env:x, 'a*')", result);
         Assert.DoesNotContain("-like", result);
     }
 
@@ -3888,7 +3889,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("case $x in a) echo a;; *) echo other;; esac");
 
-        Assert.Equal("switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:a)\\z') } { Invoke-BashEcho a; break } { $true } { Invoke-BashEcho other; break } default { $global:LASTEXITCODE = 0 } }", result);
+        Assert.Equal("switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($_, 'a') } { Invoke-BashEcho a; break } { $true } { Invoke-BashEcho other; break } default { $global:LASTEXITCODE = 0 } }", result);
     }
 
     [Fact]
@@ -3900,7 +3901,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("case $x in a) echo a ;& b) echo b;; esac");
 
         Assert.Equal(
-            "switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:a)\\z') } { Invoke-BashEcho a; Invoke-BashEcho b; break } { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:b)\\z') } { Invoke-BashEcho b; break } default { $global:LASTEXITCODE = 0 } }",
+            "switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($_, 'a') } { Invoke-BashEcho a; Invoke-BashEcho b; break } { [PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($_, 'b') } { Invoke-BashEcho b; break } default { $global:LASTEXITCODE = 0 } }",
             result);
     }
 
@@ -3933,7 +3934,7 @@ public class PsEmitterTests
 
         // The ;;& arm 'a' emits no break (continue testing); the trailing ;; arm 'b' does.
         Assert.Equal(
-            "switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:a)\\z') } { Invoke-BashEcho a } { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:b)\\z') } { Invoke-BashEcho b; break } default { $global:LASTEXITCODE = 0 } }",
+            "switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($_, 'a') } { Invoke-BashEcho a } { [PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($_, 'b') } { Invoke-BashEcho b; break } default { $global:LASTEXITCODE = 0 } }",
             result);
     }
 
@@ -3944,7 +3945,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("case $x in a) echo a ;& b) echo b ;& c) echo c;; esac");
 
         Assert.Equal(
-            "switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:a)\\z') } { Invoke-BashEcho a; Invoke-BashEcho b; Invoke-BashEcho c; break } { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:b)\\z') } { Invoke-BashEcho b; Invoke-BashEcho c; break } { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:c)\\z') } { Invoke-BashEcho c; break } default { $global:LASTEXITCODE = 0 } }",
+            "switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($_, 'a') } { Invoke-BashEcho a; Invoke-BashEcho b; Invoke-BashEcho c; break } { [PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($_, 'b') } { Invoke-BashEcho b; Invoke-BashEcho c; break } { [PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($_, 'c') } { Invoke-BashEcho c; break } default { $global:LASTEXITCODE = 0 } }",
             result);
     }
 
@@ -3955,7 +3956,7 @@ public class PsEmitterTests
             "case $x in a) case $y in b) echo b;; esac;; esac");
 
         Assert.Equal(
-            "switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:a)\\z') } { switch ($env:y) { { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:b)\\z') } { Invoke-BashEcho b; break } default { $global:LASTEXITCODE = 0 } }; break } default { $global:LASTEXITCODE = 0 } }",
+            "switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($_, 'a') } { switch ($env:y) { { [PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($_, 'b') } { Invoke-BashEcho b; break } default { $global:LASTEXITCODE = 0 } }; break } default { $global:LASTEXITCODE = 0 } }",
             result);
     }
 
@@ -3965,7 +3966,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("case $f in *.txt) echo text;; *) echo other;; esac");
 
         Assert.Equal(
-            "switch ($env:f) { { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:.*\\.txt)\\z') } { Invoke-BashEcho text; break } { $true } { Invoke-BashEcho other; break } default { $global:LASTEXITCODE = 0 } }",
+            "switch ($env:f) { { [PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($_, '*.txt') } { Invoke-BashEcho text; break } { $true } { Invoke-BashEcho other; break } default { $global:LASTEXITCODE = 0 } }",
             result);
     }
 
@@ -6290,10 +6291,9 @@ public class PsEmitterTests
     public void Transpile_ParamReplaceFirst_EmitsRegexReplace()
     {
         var result = PsEmitter.Transpile("echo ${str/foo/bar}");
-        // Uses instance overload ([regex]pattern).Replace(str, rep, count=1) for first-only replacement
-        Assert.Contains("[regex]", result);
-        Assert.Contains("foo", result);
-        Assert.Contains("bar", result);
+        // The first match (mode 0 = SubstituteForm.First), the replacement a bash template (`&`), never .NET's `$1`.
+        Assert.Contains("[PsBash.Cmdlets.BashPatternMatch]::Substitute($env:str, 'foo', 'bar', 0)", result);
+        Assert.DoesNotContain("[regex]", result);
     }
 
     // ${str//foo/bar} -> replace all (literal find, escaped)
@@ -6301,7 +6301,7 @@ public class PsEmitterTests
     public void Transpile_ParamReplaceAll_EmitsEscapedLiteralReplace()
     {
         var result = PsEmitter.Transpile("echo ${str//foo/bar}");
-        Assert.Contains("([PsBash.Cmdlets.BashLocale]::Replace([regex]::Escape('foo'), $env:str, 'bar', -1))", result);
+        Assert.Contains("[PsBash.Cmdlets.BashPatternMatch]::Substitute($env:str, 'foo', 'bar', 1)", result);
     }
 
     // ${p//./_} -> the dot must be a LITERAL, not a regex "any char". Regression for
@@ -6310,7 +6310,9 @@ public class PsEmitterTests
     public void Transpile_ParamReplaceAllRegexMetachar_EscapesFind()
     {
         var result = PsEmitter.Transpile("echo ${p//./_}");
-        Assert.Contains("([PsBash.Cmdlets.BashLocale]::Replace([regex]::Escape('.'), $env:p, '_', -1))", result);
+        // `.` is no pattern character: the canonical text is `.` and the compiler matches it literally.
+        Assert.Contains("[PsBash.Cmdlets.BashPatternMatch]::Substitute($env:p, '.', '_', 1)", result);
+        Assert.DoesNotContain("-replace", result);
     }
 
     // ${name:0:2} -> substring
@@ -6333,11 +6335,9 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_ParamRemoveShortestSuffix_KeepsGreedyPrefix()
     {
-        // ${p%.*} removes the SHORTEST suffix matching `.*` -> keep `foo.bar`,
-        // not `foo`. Emitted as `^(.*)\..*$` -> `$1` (greedy prefix capture).
+        // ${p%.*} removes the SHORTEST suffix matching `.*` -> keep `foo.bar`, not `foo` (suffix, shortest).
         var result = PsEmitter.Transpile("echo ${p%.*}");
-        Assert.Contains("-creplace '^(.*)", result);
-        Assert.Contains("$1", result);
+        Assert.Contains("[PsBash.Cmdlets.BashPatternMatch]::Remove($env:p, '.*', $true, $false)", result);
     }
 
     // ${str^^} -> ToUpper
@@ -6345,7 +6345,7 @@ public class PsEmitterTests
     public void Transpile_ParamUpperCase_EmitsToUpper()
     {
         var result = PsEmitter.Transpile("echo ${str^^}");
-        Assert.Contains(".ToUpper()", result);
+        Assert.Contains("[PsBash.Cmdlets.BashPatternMatch]::ModifyCase($env:str, $null, $true, $true)", result);
     }
 
     // ${str,,} -> ToLower
@@ -6353,7 +6353,7 @@ public class PsEmitterTests
     public void Transpile_ParamLowerCase_EmitsToLower()
     {
         var result = PsEmitter.Transpile("echo ${str,,}");
-        Assert.Contains(".ToLower()", result);
+        Assert.Contains("[PsBash.Cmdlets.BashPatternMatch]::ModifyCase($env:str, $null, $false, $true)", result);
     }
 
     // ${!arr[@]} -> .Keys
@@ -6466,9 +6466,9 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_BracedVarSuffixRemovalInsideDoubleQuotes_EmitsSubexpression()
     {
-        // GlobToRegex translates glob * to regex .* so l* becomes l.* (greedy longest suffix).
+        // The pattern text goes to the one compiler at run time (suffix, longest).
         var result = PsEmitter.Transpile("echo \"${FOO%%l*}\"");
-        Assert.Equal("Invoke-BashEcho \"$($env:FOO -creplace 'l.*$','')\"", result);
+        Assert.Equal("Invoke-BashEcho \"$([PsBash.Cmdlets.BashPatternMatch]::Remove($env:FOO, 'l*', $true, $true))\"", result);
     }
 
     [Fact]
@@ -6481,9 +6481,9 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_BracedVarPrefixRemovalInsideDoubleQuotes_EmitsSubexpression()
     {
-        // GlobToRegex translates glob * to regex .* so */ becomes .* + / = .*/ (greedy longest prefix).
+        // The pattern text goes to the one compiler at run time (prefix, longest).
         var result = PsEmitter.Transpile("echo \"${PATH##*/}\"");
-        Assert.Equal("Invoke-BashEcho \"$($env:PATH -creplace '^.*/','')\"", result);
+        Assert.Equal("Invoke-BashEcho \"$([PsBash.Cmdlets.BashPatternMatch]::Remove($env:PATH, '*/', $false, $true))\"", result);
     }
 
     [Fact]
@@ -7809,11 +7809,13 @@ public class PsEmitterTests
     [Theory]
     // Oracle-verified: inside [[ ]] both == and != GLOB-match, and quoting is
     // per-SEGMENT — bash drops the quotes and the quoted chars stay literal.
-    [InlineData("[[ \"$x\" != \"http\"* ]]", "-not [PsBash.Cmdlets.BashPatternMatch]::IsMatch($env:x, '(?s)^(?:http.*)\\z')")]
-    [InlineData("[[ \"$x\" == \"http\"* ]]", "IsMatch($env:x, '(?s)^(?:http.*)\\z')")]
-    [InlineData("[[ \"$x\" == http* ]]", "IsMatch($env:x, '(?s)^(?:http.*)\\z')")]
-    // A fully-quoted pattern is LITERAL: `*` must be escaped, not left active.
-    [InlineData("[[ \"$x\" == \"a*b\" ]]", "IsMatch($env:x, '(?s)^(?:a\\*b)\\z')")]
+    [InlineData("[[ \"$x\" != \"http\"* ]]", "-not [PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($env:x, 'http*')")]
+    [InlineData("[[ \"$x\" == \"http\"* ]]", "MatchesPattern($env:x, 'http*')")]
+    [InlineData("[[ \"$x\" == http* ]]", "MatchesPattern($env:x, 'http*')")]
+    // A fully-quoted pattern is LITERAL: a string compare, the `*` never active.
+    [InlineData("[[ \"$x\" == \"a*b\" ]]", "StringEquals($env:x, 'a*b')")]
+    // A quoted `*` beside an active one: escaped in the canonical pattern text.
+    [InlineData("[[ \"$x\" == \"a*\"* ]]", "MatchesPattern($env:x, 'a\\**')")]
     public void Transpile_ExtendedTestGlob_NormalizesPatternPerSegment(
         string bash, string expected)
         => Assert.Contains(expected, PsEmitter.Transpile(bash));

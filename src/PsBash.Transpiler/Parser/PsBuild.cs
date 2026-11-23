@@ -1426,13 +1426,45 @@ public static class PsBuild
 
     // ───────────────────────────── Bash pattern tests ─────────────────────────────
 
+    // Every bash pattern context goes to the runtime with the pattern as CANONICAL text (BashPattern: quoted parts
+    // backslash-escaped, an unquoted expansion's value active), built by PsEmitter.EmitGlobPatternExpr; the one
+    // compiler matches it there. No context builds a regex here (guard PatternCompilerGuardTests).
+
     /// <summary>
-    /// <c>[PsBash.Cmdlets.BashPatternMatch]::IsMatch(value, 'regex')</c>: a bash pattern test (case arm,
+    /// <c>[PsBash.Cmdlets.BashPatternMatch]::MatchesPattern(value, pattern)</c>: a bash pattern test (case arm,
     /// <c>[[ == ]]</c>) — case-sensitive unless <c>shopt -s nocasematch</c> is on at run time.
-    /// <paramref name="anchoredRegex"/> comes from <c>BashPattern.ToAnchoredRegex</c>.
     /// </summary>
-    public static string PatternTest(string valueExpr, string anchoredRegex) =>
-        "[PsBash.Cmdlets.BashPatternMatch]::IsMatch(" + valueExpr + ", " + SingleQuote(anchoredRegex) + ")";
+    public static string PatternTest(string valueExpr, string patternExpr) =>
+        "[PsBash.Cmdlets.BashPatternMatch]::MatchesPattern(" + valueExpr + ", " + patternExpr + ")";
+
+    /// <summary><c>${v#p}</c> <c>${v##p}</c> (<paramref name="suffix"/> false) and <c>${v%p}</c> <c>${v%%p}</c>.</summary>
+    public static string PatternRemove(string valueExpr, string patternExpr, bool suffix, bool longest) =>
+        "[PsBash.Cmdlets.BashPatternMatch]::Remove(" + valueExpr + ", " + patternExpr + ", "
+        + (suffix ? "$true" : "$false") + ", " + (longest ? "$true" : "$false") + ")";
+
+    /// <summary>Which <c>${v/p/r}</c> form <see cref="PatternSubstitute"/> emits.</summary>
+    public enum SubstituteForm { First = 0, All = 1, Start = 2, End = 3 }
+
+    /// <summary><c>${v/p/r}</c> and its <c>// /# /%</c> forms; <paramref name="templateExpr"/> is the replacement template
+    /// (literal parts escaped with <c>BashPattern.EscapeReplacement</c>, a bare <c>&amp;</c> the match).</summary>
+    public static string PatternSubstitute(string valueExpr, string patternExpr, string templateExpr, SubstituteForm form) =>
+        "[PsBash.Cmdlets.BashPatternMatch]::Substitute(" + valueExpr + ", " + patternExpr + ", " + templateExpr + ", "
+        + ((int)form).ToString(System.Globalization.CultureInfo.InvariantCulture) + ")";
+
+    /// <summary><c>${v^p}</c> <c>${v^^p}</c> <c>${v,p}</c> <c>${v,,p}</c>; <paramref name="patternExpr"/> null when no
+    /// pattern was written.</summary>
+    public static string PatternCaseModify(string valueExpr, string? patternExpr, bool upper, bool all) =>
+        "[PsBash.Cmdlets.BashPatternMatch]::ModifyCase(" + valueExpr + ", " + (patternExpr ?? "$null") + ", "
+        + (upper ? "$true" : "$false") + ", " + (all ? "$true" : "$false") + ")";
+
+    /// <summary>An unquoted expansion's value in a replacement template (inserted as it is while
+    /// <c>patsub_replacement</c> is on).</summary>
+    public static string ReplacementText(string valueExpr) =>
+        "[PsBash.Cmdlets.BashPatternMatch]::ReplacementText(" + valueExpr + ")";
+
+    /// <summary>A quoted run-time part of a replacement template: its literal text.</summary>
+    public static string LiteralReplacement(string valueExpr) =>
+        "[PsBash.Cmdlets.BashPatternMatch]::LiteralReplacement(" + valueExpr + ")";
 
     /// <summary>
     /// <c>[[ a == b ]]</c> with a run-time RHS: ordinal string equality, ignore-case under
@@ -1440,13 +1472,6 @@ public static class PsBuild
     /// </summary>
     public static string StringEqualsTest(string leftExpr, string rightExpr) =>
         "[PsBash.Cmdlets.BashPatternMatch]::StringEquals(" + leftExpr + ", " + rightExpr + ")";
-
-    /// <summary>
-    /// <c>[[ a == $pat ]]</c> with a pattern known only at run time: <c>MatchesPattern(value, text)</c>
-    /// converts the bash pattern text (quoted parts backslash-escaped by the caller) at run time.
-    /// </summary>
-    public static string DynamicPatternTest(string valueExpr, string patternExpr) =>
-        "[PsBash.Cmdlets.BashPatternMatch]::MatchesPattern(" + valueExpr + ", " + patternExpr + ")";
 
     /// <summary>
     /// A <c>[ ]</c> expression whose words are only known at run time, evaluated by the runtime <c>test</c> as a

@@ -179,8 +179,8 @@ public class BashTranspilerTests
     public void Transpile_CaseArms_EmitBreakSoOnlyFirstMatchRuns()
     {
         var result = BashTranspiler.Transpile("case $x in a) echo A;; b) echo B;; esac");
-        Assert.Contains("IsMatch($_, '(?s)^(?:a)\\z') } { Invoke-BashEcho A; break }", result);
-        Assert.Contains("IsMatch($_, '(?s)^(?:b)\\z') } { Invoke-BashEcho B; break }", result);
+        Assert.Contains("MatchesPattern($_, 'a') } { Invoke-BashEcho A; break }", result);
+        Assert.Contains("MatchesPattern($_, 'b') } { Invoke-BashEcho B; break }", result);
     }
 
     [Fact]
@@ -189,11 +189,12 @@ public class BashTranspilerTests
         var result = BashTranspiler.Transpile("[[ $x == \"a'*\" ]]");
         // The embedded single quote is doubled so the PS clause literal does not
         // break out. The `*` is inside DOUBLE QUOTES, so bash treats it as a
-        // LITERAL asterisk (oracle: `x="a'zzz"` does NOT match `"a'*"`), hence the
-        // regex escape `\*`. This previously asserted an unescaped `*`, i.e. an
-        // active wildcard — a silent wrong-match that the quote-per-segment
-        // pattern normalization fixed.
-        Assert.Contains("IsMatch($env:x, '(?s)^(?:a''\\*)\\z')", result);
+        // LITERAL asterisk (oracle: `x="a'zzz"` does NOT match `"a'*"`): a wholly
+        // quoted RHS is a string compare. This once asserted an unescaped `*`, i.e. an
+        // active wildcard — a silent wrong-match.
+        Assert.Contains("StringEquals($env:x, 'a''*')", result);
+        // Beside an unquoted part it is pattern text, the quoted `*` escaped.
+        Assert.Contains("MatchesPattern($env:x, 'a''\\**')", BashTranspiler.Transpile("[[ $x == \"a'*\"* ]]"));
     }
 
     [Fact]
@@ -202,7 +203,7 @@ public class BashTranspilerTests
         var result = BashTranspiler.Transpile("case $x in \"a'b\") echo hi;; esac");
         // Bash strips the pattern's quotes ("a'b" matches the string a'b); the embedded
         // single quote is doubled so the PS clause literal does not break out.
-        Assert.Contains("'(?s)^(?:a''b)\\z'", result);
+        Assert.Contains("MatchesPattern($_, 'a''b')", result);
     }
 
     [Fact]
