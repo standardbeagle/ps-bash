@@ -31,6 +31,13 @@ defaults {
     // 2026-10-01) — so it would look like protection without being any.
 
     retain "24h"
+
+    // Machine queue: a build/test books the box's tman queue "default" (~/.tman/tman.kdl, every fleet box)
+    // exactly once, from the INNER gated run tman-job.ps1 starts (`--queue default`). The aliases below are
+    // `no-queue true` because their outer run only waits (checkout lock, then the machine gate): booked, it
+    // would hold room while idle and then count the inner run's whole tree a second time. No `queue` here
+    // either: naming one a machine does not declare is exit 127. Linux fleet runs (no pwsh, so no aliases)
+    // join the queue through scripts/remote-test.sh.
 }
 
 // All verbs run scripts/tman-job.ps1 (see its header). Three reasons, all measured:
@@ -47,16 +54,19 @@ defaults {
 alias "build" {
     command "pwsh"
     args "-NoProfile" "-File" "scripts/tman-job.ps1" "build"
+    no-queue true
 }
 
 alias "test" {
     command "pwsh"
     args "-NoProfile" "-File" "scripts/tman-job.ps1" "test"
+    no-queue true
 }
 
 alias "test-proj" {
     command "pwsh"
     args "-NoProfile" "-File" "scripts/tman-job.ps1" "test-proj"
+    no-queue true
 }
 
 // Ad-hoc probe of this checkout's dev build: `tman dev -c 'snippet'` / `tman dev script.sh`.
@@ -64,10 +74,12 @@ alias "test-proj" {
 alias "dev" {
     command "pwsh"
     args "-NoProfile" "-File" "scripts/tman-job.ps1" "dev"
+    no-queue true
 }
 
 // Release-blocking Pester gate (scripts/pester.ps1: builds cmdlets, refreshes beside-module DLLs).
 alias "pester" {
     command "pwsh"
     args "-NoProfile" "-File" "scripts/tman-job.ps1" "pester"
+    no-queue true
 }

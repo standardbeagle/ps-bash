@@ -98,7 +98,13 @@ try {
             # 45m (Windows fleet: full Differential 27-40 min, cut off at 45:00 in g45 and s22f), so a caller that runs
             # one sets PSBASH_TMAN_MAX_TIME (tman duration, e.g. 100m).
             $maxTime = if ($env:PSBASH_TMAN_MAX_TIME) { $env:PSBASH_TMAN_MAX_TIME } else { '45m' }
-            & tman run --max-parallel $slots --queue-timeout 60m --stall 5m --max-time $maxTime -- `
+            # The machine queue: THIS run is the one that books the build/test in it (the .tman.kdl aliases
+            # wrapping it are `no-queue true`: they only wait, and their tree would count this run twice). Named
+            # only where ~/.tman/tman.kdl declares it (every fleet box), since naming an undeclared queue is exit 127.
+            $queue = @()
+            & tman queue default *> $null
+            if ($LASTEXITCODE -eq 0) { $queue = @('--queue', 'default') }
+            & tman run --max-parallel $slots --queue-timeout 60m --stall 5m --max-time $maxTime @queue -- `
                 pwsh -NoProfile -File $PSCommandPath $Verb @Rest
             $code = $LASTEXITCODE
         }
