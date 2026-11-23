@@ -29,6 +29,58 @@ public static class BashRuntime
     /// this path: <see cref="PsBash.Core.Platform.SystemTools.Resolve"/>.</summary>
     public static string SystemToolPath(string name) => PsBash.Core.Platform.SystemTools.Resolve(name);
 
+    /// <summary>The global holding <c>$SECONDS</c>' clock (a <see cref="SecondsClock"/>). Shell state: a subshell's
+    /// assignment ends with the subshell (<see cref="BashShellState"/>).</summary>
+    public const string SecondsClockVariable = PsBash.Core.ShellVariables.SecondsClockGlobal;
+
+    /// <summary>
+    /// <c>$SECONDS</c> counts from <see cref="Origin"/> (the shell's start, or the last assignment) up from
+    /// <see cref="Base"/> (0, or the value assigned). <see cref="Mark"/> is the variable's stored text when the clock was
+    /// last set, so a read can tell an assignment made by a path that did not report it (<c>(( SECONDS = 7 ))</c>,
+    /// <c>read SECONDS</c>). Immutable: a subshell's restore puts the parent's clock back.
+    /// </summary>
+    public sealed record SecondsClock(DateTime Origin, long Base, string? Mark);
+
+    /// <summary>
+    /// <c>$SECONDS</c>: whole seconds since the shell started, or since the last assignment plus the value assigned.
+    /// REGRESSION: it counted from the module's load (a host's warm runspace is loaded long before its shell starts:
+    /// <c>[ $SECONDS -ge 10 ]</c> was true ~2 s into a script) and ignored assignment (<c>SECONDS=100</c> read back 0).
+    /// </summary>
+    public static long Seconds(SessionState session)
+    {
+        var now = DateTime.UtcNow;
+        var clock = SecondsClockOf(session.PSVariable, now);
+        string? stored = BashVariableStore.Get("SECONDS");
+        if (!string.Equals(stored, clock.Mark, StringComparison.Ordinal))
+            clock = SetSecondsClock(session.PSVariable, stored, now);
+        return clock.Base + (long)Math.Floor((now - clock.Origin).TotalSeconds);
+    }
+
+    /// <summary>Emitted after a script assigns SECONDS: the count restarts from the value assigned, now.</summary>
+    public static void SecondsAssigned(SessionState session)
+        => SetSecondsClock(session.PSVariable, BashVariableStore.Get("SECONDS"), DateTime.UtcNow);
+
+    private static SecondsClock SecondsClockOf(PSVariableIntrinsics variables, DateTime now)
+    {
+        object? v = null;
+        try { v = variables.GetValue("global:" + SecondsClockVariable); } catch (InvalidOperationException) { }
+        if ((v is PSObject p ? p.BaseObject : v) is SecondsClock clock) return clock;
+        object? start = null;
+        try { start = variables.GetValue("global:" + PsBash.Core.ShellVariables.ShellStartGlobal); } catch (InvalidOperationException) { }
+        // Whatever SECONDS held when the shell started (an inherited environment value) is not an assignment.
+        clock = new SecondsClock((start is PSObject s ? s.BaseObject : start) as DateTime? ?? now, 0, BashVariableStore.Get("SECONDS"));
+        variables.Set("global:" + SecondsClockVariable, clock);
+        return clock;
+    }
+
+    private static SecondsClock SetSecondsClock(PSVariableIntrinsics variables, string? value, DateTime now)
+    {
+        // bash evaluates the assigned text arithmetically; a plain integer is what scripts assign, anything else counts as 0.
+        var clock = new SecondsClock(now, long.TryParse(value?.Trim(), out var n) ? n : 0, value);
+        variables.Set("global:" + SecondsClockVariable, clock);
+        return clock;
+    }
+
     /// <summary>The scope variable holding a subshell's nesting depth, <c>$BASH_SUBSHELL</c> (set beside
     /// <see cref="SubshellPidVariable"/> by <see cref="BashShellState.Save"/>).</summary>
     public const string SubshellDepthVariable = "__psbash_subshell";

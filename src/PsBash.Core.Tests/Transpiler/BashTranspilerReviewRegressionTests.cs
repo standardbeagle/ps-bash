@@ -635,7 +635,7 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_ComputedSpecialVarInArithmetic_IsReadFromTheShell(string bash, bool expanded)
     {
         string ps = BashTranspiler.Transpile(bash);
-        Assert.Equal(expanded, ps.Contains("Get-Random") || ps.Contains("[DateTime]") || ps.Contains("BashStartTime"));
+        Assert.Equal(expanded, ps.Contains("Get-Random") || ps.Contains("[DateTime]") || ps.Contains(PsBuild.SecondsRead));
     }
     // function returns (it was never run). A function with no trap carries no wrapper.
 

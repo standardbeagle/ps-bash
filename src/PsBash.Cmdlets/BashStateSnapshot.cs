@@ -22,7 +22,9 @@ public static class BashStateSnapshot
     internal static readonly string[] NotInherited =
         ["BashTrapHandlers", "__BashTrapERR", "__BashTrapEXIT", "__BashTrapRETURN", "BashBgLastPid",
          // A job starts with no history list (a List<string> does not survive the job prelude's literal).
-         "__BashHistoryList"];
+         "__BashHistoryList",
+         // A record does not survive the prelude's literal either; a job's $SECONDS counts from its own start.
+         BashRuntime.SecondsClockVariable];
 
     /// <summary>Functions PowerShell or the runspace setup define; they exist in the job's runspace already.</summary>
     private static readonly HashSet<string> RunspaceFunctions = new(StringComparer.OrdinalIgnoreCase)

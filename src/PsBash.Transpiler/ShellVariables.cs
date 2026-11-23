@@ -83,6 +83,15 @@ public static class ShellVariables
     }
 
     /// <summary>
+    /// The PowerShell globals behind <c>$SECONDS</c>: the shell's start time, and the clock an assignment sets
+    /// (<c>BashRuntime.Seconds</c>). A host starts a new shell per command in a warm runspace, so it resets them
+    /// (<see cref="ShellStartGlobal"/> to now, <see cref="SecondsClockGlobal"/> removed) when it seeds the shell.
+    /// </summary>
+    public const string ShellStartGlobal = "BashStartTime";
+    /// <inheritdoc cref="ShellStartGlobal"/>
+    public const string SecondsClockGlobal = "__BashSecondsClock";
+
+    /// <summary>
     /// A shell starts (the process environment is the launcher's block, and <see cref="ShellExports.Reset"/> has
     /// marked all of it exported): bind every seeded variable as bash does, with bash's export attribute. A name bound
     /// only when unset keeps an inherited value, and its attribute (exported).

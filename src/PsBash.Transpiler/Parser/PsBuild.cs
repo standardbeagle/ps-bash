@@ -417,6 +417,12 @@ public static class PsBuild
     /// <summary>Follows every bash write to PATH: on Windows the <c>:</c> separators a script wrote become <c>;</c>.</summary>
     public const string NormalizePathVariable = "[PsBash.Cmdlets.BashRuntime]::NormalizePathVariable()";
 
+    /// <summary><c>$SECONDS</c> (<c>BashRuntime.Seconds</c>): since the shell started, or the last assignment.</summary>
+    public const string SecondsRead = "$([PsBash.Cmdlets.BashRuntime]::Seconds($ExecutionContext.SessionState))";
+
+    /// <summary>Emitted after a write to SECONDS: the count restarts from the value assigned (<c>BashRuntime.SecondsAssigned</c>).</summary>
+    public const string SecondsAssigned = "[PsBash.Cmdlets.BashRuntime]::SecondsAssigned($ExecutionContext.SessionState)";
+
     // ─────────────────── the export attribute (PsBash.Core.ShellExports, via BashVariableStore) ───────────────────
     // Every scalar variable is `$env:NAME`, exported or not; these calls are what makes one exported. The only
     // text the emitter writes for the attribute (guard: ChildEnvironmentGuardTests).
@@ -2587,7 +2593,7 @@ public static class PsBuild
             case "_":
                 return braced ? "${global:BashLastArg}" : "$global:BashLastArg";
             case "SECONDS":
-                return "$([math]::Floor(([DateTime]::UtcNow - $global:BashStartTime).TotalSeconds))";
+                return SecondsRead;
             case "PPID":
                 // Bound at shell start (ShellVariables.SeedShellStart); the parent of this process outside a shell host.
                 return "$(if ($null -ne $env:PPID) { $env:PPID } else { (Get-Process -Id $PID -ErrorAction SilentlyContinue).Parent.Id })";

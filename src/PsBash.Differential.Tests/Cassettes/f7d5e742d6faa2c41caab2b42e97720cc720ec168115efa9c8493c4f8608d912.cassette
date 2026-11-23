@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.3.9(1)-release
+exit-code: 0
+script-length: 80
+stdout-length: 24
+stderr-length: 0
+==== SCRIPT ====
+( SECONDS=500; echo "in=$SECONDS" ); [ $SECONDS -lt 5 ] && echo parent-untouched
+==== STDOUT ====
+in=500
+parent-untouched
+
+==== STDERR ====
+

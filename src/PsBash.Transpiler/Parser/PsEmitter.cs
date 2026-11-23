@@ -5553,6 +5553,10 @@ public static partial class PsEmitter
         // a bare `export PATH` leaves the value as it was (bash), even when the inherited PATH is not in `;` form.
         if (cmd.Pairs.Any(p => p.Name == "PATH" && p.ArrayValue is null && p.Value is not null))
             sb.Append("; ").Append(PsBuild.NormalizePathVariable);
+        // `SECONDS=n` restarts the count from n now. Reported at the write: a read only sees a CHANGED value, and
+        // `SECONDS=0; ...; SECONDS=0` must restart the count too.
+        if (cmd.Pairs.Any(p => p.Name == "SECONDS" && p.ArrayValue is null && p.Value is not null))
+            sb.Append("; ").Append(PsBuild.SecondsAssigned);
         // `export X=1` / `export X` / `local -x X`: the names get the export attribute (a child process sees exported
         // variables only); `export -n X` / `typeset +x X` take it away. After the assignment, and after a local's frame.
         int exportAttr = cmd.ExportAttr != 0 ? cmd.ExportAttr : cmd.IsExport && !cmd.IsLocal ? 1 : 0;
@@ -5952,6 +5956,7 @@ public static partial class PsEmitter
                 // A name from word text, not from an AST record: map it here (`export path=x` is not PATH, BashNameCase).
                 sbOut.Append("$env:").Append(BashNameCase.ToStore(staticName)).Append(" = ").Append(EmitAssignmentValue(staticValue)).Append("; ");
                 if (staticName == "PATH") sbOut.Append(PsBuild.NormalizePathVariable).Append("; ");
+                if (staticName == "SECONDS") sbOut.Append(PsBuild.SecondsAssigned).Append("; ");
                 continue;
             }
             string expr = "[string](" + EmitWord(w) + ")";
@@ -6911,6 +6916,7 @@ public static partial class PsEmitter
             result = "$env:" + exprName + " = "
                 + (intAttr ? "[string](Invoke-BashArith ([string](" + value + ")))" : CaseAttr(exprName, value))
                 + (exprName == "PATH" ? "; " + PsBuild.NormalizePathVariable : "")
+                + (exprName == "SECONDS" ? "; " + PsBuild.SecondsAssigned : "")
                 + "; " + PsBuild.SetStatus(0);
             return true;
         }

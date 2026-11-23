@@ -250,7 +250,7 @@ function Get-BashIndirectValue {
     switch -CaseSensitive ($n) {
         'LINENO' { if ($Line -gt 0) { return [string]$Line } }
         'RANDOM' { return [string](Get-Random -Maximum 32768) }
-        'SECONDS' { return [string][math]::Floor(([DateTime]::UtcNow - $global:BashStartTime).TotalSeconds) }
+        'SECONDS' { return [string][PsBash.Cmdlets.BashRuntime]::Seconds($ExecutionContext.SessionState) }
         'EPOCHSECONDS' { return [string][DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
         'EPOCHREALTIME' { $us = [long](([DateTimeOffset]::UtcNow - [DateTimeOffset]::UnixEpoch).Ticks / 10); return ('{0}.{1:D6}' -f [long][math]::Floor($us / 1000000), ($us % 1000000)) }
         'SRANDOM' { return [string][System.BitConverter]::ToUInt32([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(4), 0) }

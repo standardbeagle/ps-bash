@@ -284,7 +284,10 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         // A shell whose environment is not reset per command (a stateful session, the in-process interactive shell)
         // starts once: bash's own variables are bound before its first command.
         if ((environment is null || StatefulSession) && Interlocked.Exchange(ref s_shellVariablesSeeded, 1) == 0)
+        {
             PsBash.Core.ShellVariables.SeedShellStart();
+            StartShellClock();
+        }
         if (environment is not null)
         {
             // A stateful session owns its environment: the launcher's block only carries PSBASH_*
@@ -299,6 +302,8 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
                 PsBash.Core.ShellExports.Reset();
                 // ... and bash binds its own variables (IFS, PPID, SHLVL, OPTIND, ...: one table, ShellVariables).
                 PsBash.Core.ShellVariables.SeedShellStart();
+                // $SECONDS counts from this shell's start, not the warm runspace's load (BashRuntime.Seconds).
+                StartShellClock();
             }
             SyncHomeToEnvironment();
         }
@@ -951,6 +956,14 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
     /// absent). Must be called while holding the host's execution lease — the
     /// environment is process-global and pooled runspaces share it.
     /// </summary>
+    /// <summary>A new shell starts in this (warm) runspace: <c>$SECONDS</c> counts from now (ShellVariables.ShellStartGlobal).</summary>
+    private void StartShellClock()
+    {
+        var variables = _ps.Runspace.SessionStateProxy.PSVariable;
+        variables.Set("global:" + PsBash.Core.ShellVariables.ShellStartGlobal, DateTime.UtcNow);
+        variables.Remove("global:" + PsBash.Core.ShellVariables.SecondsClockGlobal);
+    }
+
     private static void ResetEnvironment(IReadOnlyList<KeyValuePair<string, string>> environment)
     {
         // R06: variable names are case-insensitive on Windows, so compare the

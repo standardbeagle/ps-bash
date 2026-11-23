@@ -25,7 +25,7 @@ public class ShellStateInventoryGuardTests
         ["BashVersionInfo"] = "constant, set at module load",
         ["BASH_VERSINFO"] = "constant alias of BashVersionInfo, set at module load (so declare -p sees it)",
         ["BashVersion"] = "constant, set at module load",
-        ["BashStartTime"] = "constant, set at module load (SECONDS base)",
+        ["BashStartTime"] = "the shell's start (SECONDS base): set at module load and again by the host as each new shell starts; a script never writes it",
         ["__PsBashCwd"] = "host plumbing: the worker's working-directory request",
         ["__psbashBgRunspace"] = "marks a background job's pooled runspace (set once there, never in a shell); BashShellState.Restore reads it",
         ["__psbashJobClock"] = "a background job's launch clock (JobClock), set by the job wrapper in the job's runspace only and removed with the job's globals",

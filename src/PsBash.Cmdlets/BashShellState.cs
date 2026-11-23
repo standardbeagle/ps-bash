@@ -304,6 +304,8 @@ public static class BashShellState
         // The session history list (InvokeBashHistoryCommand.StateVariable): `( history -s x )`, `fc -s | cat` change only the
         // subshell's copy (bash 5.2).
         "__BashHistoryList",
+        // $SECONDS' clock: `( SECONDS=5 )` leaves the shell's count alone (BashRuntime.SecondsClock).
+        BashRuntime.SecondsClockVariable,
     ];
 
     /// <summary>Every shell-state global, for the inventory guard (<see cref="BashStateSnapshot"/>).</summary>
