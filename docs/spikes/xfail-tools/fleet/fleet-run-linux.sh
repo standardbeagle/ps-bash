@@ -7,7 +7,7 @@
 # FILTER (a dotnet test --filter applied to every project) — for smaller runs on the lighter fleet hosts.
 # Every build and test step runs in the box's tman machine queue "default" when tman is there (every fleet box),
 # so a gate waits for room instead of piling onto whatever else the box runs. Linux-only agent runs on build3 or
-# build2 use scripts/remote-test.sh instead (own worktree, same queue).
+# beagle-ab use fleet-run (dev-setup) instead (own worktree, same queue).
 BUNDLE=$1 TAG=$2 OUT=$3 PROJECTS=${4:-Core,Security,Cmdlets,Differential} FILTER=${5:-}
 mkdir -p "$OUT"; SUM="$OUT/summary.txt"
 s() { echo "$(date +%H:%M:%S) $*" >> "$SUM"; }

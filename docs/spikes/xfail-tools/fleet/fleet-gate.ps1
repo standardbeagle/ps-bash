@@ -4,7 +4,7 @@
 #   fleet-gate.ps1 -Tag t -Status                                          print both summaries
 #   fleet-gate.ps1 -Tag t -Fetch                                           copy the result folders back here
 #
-# For Linux-only runs on build3/build2 use scripts/remote-test.sh instead: one worktree per agent, run inside the
+# For Linux-only runs use fleet-run (dev-setup) instead: it picks build3 or beagle-ab, one worktree per agent, run in the
 # box's tman queue, and it returns when the run ends (no -Status polling). This script is for the Windows side.
 # Wait on -Status from a Monitor until-loop, never foreground sleeps.
 #

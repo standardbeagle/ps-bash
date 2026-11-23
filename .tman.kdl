@@ -37,7 +37,7 @@ defaults {
     // `no-queue true` because their outer run only waits (checkout lock, then the machine gate): booked, it
     // would hold room while idle and then count the inner run's whole tree a second time. No `queue` here
     // either: naming one a machine does not declare is exit 127. Linux fleet runs (no pwsh, so no aliases)
-    // join the queue through scripts/remote-test.sh.
+    // join the queue through fleet-run (dev-setup).
 }
 
 // All verbs run scripts/tman-job.ps1 (see its header). Three reasons, all measured:
