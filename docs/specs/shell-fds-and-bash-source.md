@@ -68,6 +68,22 @@ ONE table per shell, fds 0..N, as bash has one per process (`Cmdlets/BashFdTable
   (`ConvertTo-BashCapture`) ARE fd 1 / 2 of the command under them: they `Register` their target for the command's
   duration. So `{ exec 3>&1; } >f; echo x >&3` writes x to f (the copy keeps f open), and `x=$(exec >f; echo a)` writes a
   to f: a record that arrives after its fd moved goes where the table says.
+- A bare `2>&1` stage (`Invoke-BashRedirect -MergeErrors`) is fd 1 AND fd 2 of its command: `BashFdTable.RegisterMerge`
+  registers one Merge entry on both, so fd 2 is a copy of fd 1 made before the command runs (dup2). An exec inside moves
+  fd 1 only: `{ exec >log; echo err >&2; } 2>&1` prints err where fd 1 was, out goes to log, and log stays fd 1 after
+  the group (the fd 1 registration is `Keep`). What the command writes to the merge entry through the table
+  (`exec 3>&1` inside, then `>&3`) is passed on in order with its records.
+- Registrations stack (`Table.Active`, oldest first). A record a stage receives is its own unless the command moved
+  its fd (`BashFdTable.Moved`); a later registration on the same fd (a nested redirection, capture or merge) routed the
+  record already. While stages are registered, what the host offers the divert came out of them, so it goes where the
+  fd was below the first of them (`cmd 2>&1 >f`: stderr where fd 1 was, not into f).
+- A reader of the file the shell's fd 1 names (`BashFdTable.StdoutFilePath`, after a persisting `exec >log`): GNU
+  `cat` refuses it (`cat: log: input file is output file`, status 1; also `cat < log`, as `-`) while it has unread data;
+  GNU `grep` refuses it (`grep: log: input file is also the output`, status 2, `-s` drops the message) unless it writes
+  nothing per line (`-q`, `-c`, `-l`, `-L`) or at most one match (`-m1`) (`BashCmdlet.ReadsTheShellsOutput`; the
+  `< f` feeder passes the path with `RegularStdin`). Every other reader (`sed`, `awk`, `cut`, `head`, `tail`, `sort`,
+  `uniq`, `wc`) reads the file as it was when opened (`BashFileSystem.OpenRead` caps the stream at that length): each
+  line ps-bash writes as it is made would land after what the reader has left, and the read never ended.
 - A subshell gets a COPY (`BashShellState.Save` / `Restore` carry `BashFdTable.Save` / `Restore`): `( exec 3>g )` leaves
   the parent's 3 alone; what the subshell opened is closed when it ends. An in-process background job gets a copy at the
   `&` (`BashFdTable.AttachCopy`, `BashJobRunspaces`) and lets it go when it ends.
@@ -97,11 +113,13 @@ Gaps (each a known difference, not a model):
   order) is right.
 - A pipe stage, and a native's own `>$null` / `2>$null`, are not registered: an `exec 3>&1` inside `{ …; } | cat` copies
   the shell's stdout, not the pipe.
-- A `2>&1` merge on a compound is not registered either: it joins stderr to the stdout stream, so after
-  `{ exec >log; echo err >&2; } 2>&1` the err goes to log (bash: fd 2 was copied before the exec, err on the terminal).
-- `cat F` where F is the file the shell's fd 1 names (`exec >log` in a function, then `cat log`) is refused,
-  `cat: log: input file is output file`, status 1, as GNU cat does (`BashFdTable.StdoutFilePath`); it would read what
-  it writes for ever. Other readers (`grep`, `sed`, `wc`) of that file are not checked.
+- Inside a `2>&1` merge: an `exec 2>elog` then `>&2 2>&1` on the same compound (`{ exec 2>elog; …; } >&2 2>&1`), and
+  an inner `cmd 2>&1` after an `exec 2>` in the body, follow the stream, not the table. An exec copy of the merge entry
+  (`exec 4>&1` inside) that outlives the stage writes nowhere.
+- An empty file on stdin (`grep a < log`, `cat < log` with log empty) is not checked: the feeder writes no record to
+  carry its path (GNU grep refuses it, GNU cat reads it).
+- A program's stdout is a pipe the host reads, never the file fd 1 names: a native reader of that file
+  (`sh -c 'cat < log'`) reads it and is not refused (GNU cat under bash: refused, status 1).
 - `<&-` and `0<&N` on a compound are not modelled; `cmd 4>&3-` does not close 3 for the command (see the table above).
 
 ### Using a descriptor

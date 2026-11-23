@@ -121,6 +121,24 @@ public sealed class InvokeBashGrepCommand : BashCmdlet
     /// </summary>
     private bool _operandReadError;
 
+    // `grep a < log` with the shell's fd 1 on log (RegularStdin offers the file behind the first record).
+    private bool _stdinChecked, _stdinRefused;
+
+    /// <summary>
+    /// GNU grep's check: an input that is also its output is refused (<c>grep: log: input file is also the output</c>, status
+    /// 2), unless nothing is written per line (<c>-q</c>, <c>-c</c>, <c>-l</c>, <c>-L</c>) or at most one match is
+    /// (<c>-m 1</c>). An empty file is refused too (GNU does not look at its size).
+    /// </summary>
+    private bool RefusesOwnOutput(string path, string shown)
+    {
+        var plan = _plan;
+        if (plan.Quiet || plan.Count || plan.FilesWith || plan.FilesWithout || plan.MaxMatches <= 1) return false;
+        if (!ReadsTheShellsOutput(path, unreadOnly: false)) return false;
+        if (!plan.NoMessages) FileSystemHelpers.WriteBashError(this, $"grep: {shown}: input file is also the output");
+        _operandReadError = true;
+        return true;
+    }
+
     private const string OptBasic = "G", OptExtended = "E", OptFixed = "F", OptPerl = "P",
         OptRegexp = "regexp", OptFile = "file", OptIgnoreCase = "ignore-case",
         OptNoIgnoreCase = "no-ignore-case", OptWord = "word", OptLineRegexp = "line-regexp",
@@ -467,6 +485,14 @@ public sealed class InvokeBashGrepCommand : BashCmdlet
 
     protected override void ProcessRecord()
     {
+        if (!_stdinChecked && InputObject is not null && _plan is not null)
+        {
+            _stdinChecked = true;
+            if (RegularStdin.TryClaim(InputObject, out _, out string? file) && file is not null
+                && RefusesOwnOutput(file, _plan.Label ?? StdinLabel))
+                _stdinRefused = true;
+        }
+        if (_stdinRefused) return;
         if (_lines.Feed(InputObject) is { } record) { InputObject = record; ProcessInputRecord(); }
     }
 
@@ -733,7 +759,7 @@ public sealed class InvokeBashGrepCommand : BashCmdlet
         _pFinished = true;
         _feeder!.Flush();
         _scanner!.End();
-        FileSystemHelpers.SetLastExitCode(this, _scanner.AnyMatch ? 0 : 1);
+        FileSystemHelpers.SetLastExitCode(this, _stdinRefused ? 2 : _scanner.AnyMatch ? 0 : 1);
     }
 
     // ---- file mode -------------------------------------------------------------------------------
@@ -832,6 +858,7 @@ public sealed class InvokeBashGrepCommand : BashCmdlet
     private void SearchStdinOperand(bool showName)
     {
         var scanner = _scanner!;
+        if (_stdinRefused) return;
         scanner.Begin(_plan.Label ?? StdinLabel, showName, startBinary: false, sizeHint: -1);
         var feeder = new GrepStdinFeeder(scanner, _plan.NullData);
         foreach (var record in _stdinBuffer)
@@ -849,6 +876,7 @@ public sealed class InvokeBashGrepCommand : BashCmdlet
     {
         var scanner = _scanner!;
         var plan = _plan;
+        if (RefusesOwnOutput(path, shown)) return;
         bool failed = false;
         try
         {

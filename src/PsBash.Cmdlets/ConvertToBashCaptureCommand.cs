@@ -93,7 +93,8 @@ public sealed class ConvertToBashCaptureCommand : BashCmdlet
         // when that text already ends in one (`$(jq -r . <<<'"a\n"'; echo .)` is "a\n\n.").
         var text = BashRuntime.RecordBytes(InputObject);
         // The command moved its fd 1 away from this substitution (`exec >f`, `exec >&2`): the record goes there.
-        if (_reg is { } reg && reg.Current is var current && !ReferenceEquals(current, reg.Handle))
+        // A stage between the command and this one (`$(cmd 2>&1 >f)`, a nested `2>&1`) routed the record already.
+        if (_reg is { } reg && BashFdTable.Moved(reg, out var current))
         {
             int std;
             try { std = current is null ? 1 : BashFdTable.WriteHandle(current, text); }

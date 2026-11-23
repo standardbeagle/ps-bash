@@ -379,7 +379,7 @@ public static partial class PsEmitter
     private static bool HasOwnStdin(ImmutableArray<Redirect> redirects) =>
         HasInputRedirect(redirects)
         || !redirects.IsDefaultOrEmpty && redirects.Any(r => r.Fd == 0 && r.Op == "<&" && r.FdVar is null
-            && GetLiteralValue(r.Target) is { } t && IsAllDigits(t) && int.TryParse(t, out int n) && n >= 3);
+            && TryParseDescriptor(GetLiteralValue(r.Target), out int n) && n >= 3);
 
     /// <summary>
     /// A compound command that is given its own stdin (<c>&lt; file</c>, <c>&lt;&lt;&lt;</c>) emits its
@@ -3384,8 +3384,7 @@ public static partial class PsEmitter
 
     /// <summary>The descriptor M of a move, <c>N&gt;&amp;M-</c> / <c>N&lt;&amp;M-</c> (bash: dup M onto N, then close M); null otherwise.</summary>
     private static int? MovedFd(Redirect r) =>
-        r.Op is ">&" or "<&" && GetLiteralValue(r.Target) is { Length: > 1 } t && t[^1] == '-' && IsAllDigits(t[..^1])
-        && int.TryParse(t.AsSpan(0, t.Length - 1), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int m)
+        r.Op is ">&" or "<&" && GetLiteralValue(r.Target) is { Length: > 1 } t && t[^1] == '-' && TryParseDescriptor(t[..^1], out int m)
             ? m : null;
 
     /// <summary>A move on stdout / stderr (<c>&gt;&amp;3-</c>) as the dup it is for this command's output (the close of 3 is not modelled).</summary>
@@ -7003,7 +7002,7 @@ public static partial class PsEmitter
         foreach (var r in cmd.Redirects)
         {
             var target = GetLiteralValue(r.Target);
-            if (target is not null && IsAllDigits(target) && int.TryParse(target, out var n) && n >= 3)
+            if (TryParseDescriptor(target, out var n) && n >= 3)
             {
 
                 if (r.Op == "<&" && r.Fd == 0) { inFd = n; continue; }
@@ -13419,7 +13418,7 @@ public static partial class PsEmitter
                         _ => fd2,
                     };
                     break;
-                case ">&" when IsAllDigits(target) && int.TryParse(target, out int fromFd) && fromFd >= 3:
+                case ">&" when TryParseDescriptor(target, out int fromFd) && fromFd >= 3:
                     // `2>&3`, `>&3`: a copy of what descriptor N names at this point (the table's, or what this list set).
                     if (r.Fd == 1) fd1 = RelativeTo(1, AbsoluteDest(fromFd, fd1, fd2, high));
                     else fd2 = RelativeTo(2, AbsoluteDest(fromFd, fd1, fd2, high));

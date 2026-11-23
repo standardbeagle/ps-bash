@@ -95,7 +95,7 @@ public static partial class PsEmitter
         foreach (var r in execRedirects)
         {
             bool dup = r.Op is ">&" or "<&" && GetLiteralValue(r.Target) is { } t && IsAllDigits(t);
-            if (!dup && GetLiteralValue(r.Target) != "/dev/null") return false;
+            if (!dup && DevicePath.Classify(GetLiteralValue(r.Target), windows: false, out _) != DeviceKind.Null) return false;
         }
         return true;
     }
@@ -174,9 +174,23 @@ public static partial class PsEmitter
         if (r.Op is ">&" or "<&" && GetLiteralValue(r.Target) is { } t)
         {
             if (t == "-") dest = new FdDest(FdDestKind.Closed);
-            else if (IsAllDigits(t) && int.TryParse(t, out int m) && m != 0) dest = AbsoluteDest(m, fd1, fd2, high);
+            else if (TryParseDescriptor(t, out int m) && m != 0) dest = AbsoluteDest(m, fd1, fd2, high);
         }
         (high ??= new Dictionary<int, FdDest>())[r.Fd] = dest;
+    }
+
+    /// <summary>
+    /// A redirection target read as a descriptor number: ASCII digits only, decimal (<c>&gt;&amp;3</c>, <c>&lt;&amp;010</c> is
+    /// descriptor 10, the M of <c>&gt;&amp;M-</c>). A descriptor is not an arithmetic operand: bash reads it with its own
+    /// digit loop, never as octal. Every redirect-target fd parse goes through here (ArithmeticOperandGuardTests).
+    /// </summary>
+    private static bool TryParseDescriptor(string? text, out int fd)
+    {
+        fd = -1;
+        if (string.IsNullOrEmpty(text)) return false;
+        foreach (char c in text)
+            if (c is < '0' or > '9') return false;
+        return int.TryParse(text, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out fd);
     }
 
     /// <summary>True when the final fd 1 / fd 2 need the route stage: a table descriptor, a closed stdout, or a swap.</summary>

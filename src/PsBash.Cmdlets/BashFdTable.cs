@@ -47,6 +47,11 @@ internal static class BashFdTable
         ShellStdin,
         /// <summary>The output of a command substitution.</summary>
         Capture,
+        /// <summary>
+        /// The stream a <c>2&gt;&amp;1</c> stage passes on (<see cref="RegisterMerge"/>): fd 1 of the command under it, and
+        /// fd 2 as its copy. What is written to it through the table is passed on by the stage.
+        /// </summary>
+        Merge,
     }
 
     internal sealed class Handle
@@ -71,6 +76,9 @@ internal static class BashFdTable
         internal readonly Dictionary<int, Handle> Fds = new();
         internal bool Job;
         internal Func<int, string, bool>? Divert;
+        /// <summary>The registrations in force, oldest first (<see cref="Register"/>): the stages a running command is under.</summary>
+        internal readonly List<Registration> Active = new();
+        internal int ActiveCount;
     }
 
     /// <summary>A copy of the table (<see cref="Save"/>): one reference to each entry.</summary>
@@ -90,6 +98,9 @@ internal static class BashFdTable
         internal required int Fd { get; init; }
         internal required Handle Handle { get; init; }
         internal Handle? Prior { get; init; }
+        /// <summary>The stage does not redirect this descriptor, it only passes the stream on (the fd 1 of a
+        /// <c>2&gt;&amp;1</c>): an <c>exec</c> inside that moved it stays when the stage ends, as in bash.</summary>
+        internal bool Keep { get; init; }
         /// <summary>The descriptor's entry now (null = the original), without the lock: a stage checks it per record.</summary>
         internal Handle? Current => Volatile.Read(ref Table.Low[Fd]);
         internal bool Done;
@@ -264,6 +275,8 @@ internal static class BashFdTable
 
     private static void CloseAllLocked(Table t)
     {
+        t.Active.Clear();
+        t.ActiveCount = 0;
         for (int fd = 0; fd < 3; fd++) PutLocked(t, fd, null);
         foreach (var fd in t.Fds.Keys.ToArray()) PutLocked(t, fd, null);
     }
@@ -279,7 +292,7 @@ internal static class BashFdTable
     public static string? StdoutFilePath()
     {
         var t = Current;
-        lock (Gate) return t.Low[1] is { Kind: Kind.File, FilePath: { } file } ? file : null;
+        lock (Gate) return ResolveLocked(t, 1, t.Low[1]) is { Kind: Kind.File, FilePath: { } file } ? file : null;
     }
 
     /// <summary>True when <paramref name="fd"/> is a name for the shell's own stdin (<see cref="Dup"/> of 0): its reader
@@ -417,19 +430,44 @@ internal static class BashFdTable
     internal static Registration Register(int fd, Handle handle)
     {
         var t = Current;
+        lock (Gate) return RegisterLocked(t, fd, handle, keep: false);
+    }
+
+    /// <summary>
+    /// <c>cmd 2&gt;&amp;1</c>: fd 1 of the command is the stream the stage passes on, and fd 2 is COPIED from it before the
+    /// command runs, as bash's dup2 does: <c>{ exec &gt;log; echo e &gt;&amp;2; } 2&gt;&amp;1</c> still prints e where fd 1 was.
+    /// <paramref name="sink"/> takes what is written to that stream through the table (<c>exec 3&gt;&amp;1</c> inside, then
+    /// <c>&gt;&amp;3</c>). Both registrations are the caller's to <see cref="Unregister"/>; fd 1's keeps an exec inside.
+    /// </summary>
+    internal static (Registration Out, Registration Err) RegisterMerge(Action<string> sink)
+    {
+        var h = new Handle { Kind = Kind.Merge, Sink = sink };
+        var t = Current;
         lock (Gate)
         {
-            var prior = t.Low[fd];
-            handle.Refs++;
-            Volatile.Write(ref t.Low[fd], handle);
-            UpdateDivertLocked(t);
-            return new Registration { Table = t, Fd = fd, Handle = handle, Prior = prior };
+            var outReg = RegisterLocked(t, 1, h, keep: true);
+            h.Refs++;   // the caller's reference for the second registration (each Unregister lets one go)
+            var errReg = RegisterLocked(t, 2, h, keep: false);
+            return (outReg, errReg);
         }
+    }
+
+    private static Registration RegisterLocked(Table t, int fd, Handle handle, bool keep)
+    {
+        var prior = t.Low[fd];
+        handle.Refs++;
+        Volatile.Write(ref t.Low[fd], handle);
+        var reg = new Registration { Table = t, Fd = fd, Handle = handle, Prior = prior, Keep = keep };
+        t.Active.Add(reg);
+        Volatile.Write(ref t.ActiveCount, t.Active.Count);
+        UpdateDivertLocked(t);
+        return reg;
     }
 
     /// <summary>Put back the entry <see cref="Register"/> displaced (whatever the command left in the descriptor is released),
     /// then let go of the caller's own reference: the target closes once no descriptor names it
-    /// (<c>{ exec 3&gt;&amp;1; } &gt;f</c> keeps f open as fd 3). Once only.</summary>
+    /// (<c>{ exec 3&gt;&amp;1; } &gt;f</c> keeps f open as fd 3). Once only. A <see cref="Registration.Keep"/> descriptor that an
+    /// exec moved keeps what the exec put there.</summary>
     internal static void Unregister(Registration reg)
     {
         lock (Gate)
@@ -437,11 +475,43 @@ internal static class BashFdTable
             if (reg.Done) return;
             reg.Done = true;
             var t = reg.Table;
+            t.Active.Remove(reg);
+            Volatile.Write(ref t.ActiveCount, t.Active.Count);
             var current = t.Low[reg.Fd];
-            Volatile.Write(ref t.Low[reg.Fd], reg.Prior);
-            if (current is not null) ReleaseLocked(current);
+            if (reg.Keep && !ReferenceEquals(current, reg.Handle))
+            {
+                if (reg.Prior is not null) ReleaseLocked(reg.Prior);
+            }
+            else
+            {
+                Volatile.Write(ref t.Low[reg.Fd], reg.Prior);
+                if (current is not null) ReleaseLocked(current);
+            }
             UpdateDivertLocked(t);
             ReleaseLocked(reg.Handle);
+        }
+    }
+
+    /// <summary>
+    /// Where a record that reached <paramref name="reg"/>'s stage on its descriptor goes: false when it is the stage's
+    /// own; true, with the entry it goes to (null = the shell's original descriptor), when the command moved the
+    /// descriptor away (<c>{ exec &gt;g; echo x; } &gt;f</c> writes x to g). A stage registered after this one on the same
+    /// descriptor (a nested redirection, capture or <c>2&gt;&amp;1</c>) sits between the command and this stage and already
+    /// sent the record where it belongs: the record is this stage's.
+    /// </summary>
+    internal static bool Moved(Registration reg, out Handle? to)
+    {
+        to = reg.Current;
+        if (ReferenceEquals(to, reg.Handle)) return false;
+        lock (Gate)
+        {
+            to = null;
+            if (reg.Done) return false;
+            var active = reg.Table.Active;
+            for (int i = active.Count - 1; i >= 0 && !ReferenceEquals(active[i], reg); i--)
+                if (active[i].Fd == reg.Fd) return false;
+            to = reg.Table.Low[reg.Fd];
+            return !ReferenceEquals(to, reg.Handle);
         }
     }
 
@@ -566,7 +636,7 @@ internal static class BashFdTable
                 return 0;
             case Kind.Null:
                 return 0;
-            case Kind.Capture:
+            case Kind.Capture or Kind.Merge:
                 h.Sink!(text);
                 return 0;
             case Kind.File when h.Writer is { } writer:
@@ -578,9 +648,16 @@ internal static class BashFdTable
     }
 
     // The host offers what reaches the shell's original fd 1 / 2 (ShellStdio.Divert, set while 1 or 2 has an entry).
+    // While stages are registered on that descriptor, what reaches the host came out of them (or out of a pipe stage
+    // after them), which routed it already: it goes where the descriptor was when the first of them began
+    // (`{ exec >log; echo e >&2; } 2>&1` prints e; `cmd 2>&1 >f` puts cmd's stderr where fd 1 was, not in f).
     private static bool DivertCore(Table t, int fd, string text)
     {
-        if (fd is not (1 or 2) || Volatile.Read(ref t.Low[fd]) is not { } h) return false;
+        if (fd is not (1 or 2)) return false;
+        Handle? h;
+        if (Volatile.Read(ref t.ActiveCount) == 0) h = Volatile.Read(ref t.Low[fd]);
+        else lock (Gate) h = OuterLocked(t, fd);
+        if (h is null) return false;
         if (h.Kind == Kind.Terminal && h.Term == fd) return false;
         if (h.Kind == Kind.Closed)
         {
@@ -594,6 +671,28 @@ internal static class BashFdTable
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException) { }
         return true;
+    }
+
+    // What fd names below every stage registered on it: the entry the first of them displaced.
+    private static Handle? OuterLocked(Table t, int fd)
+    {
+        foreach (var r in t.Active)
+            if (r.Fd == fd) return ResolveLocked(t, fd, r.Prior);
+        return ResolveLocked(t, fd, t.Low[fd]);
+    }
+
+    // A 2>&1 stage's stream is where that stage passes it on: the entry its registration displaced.
+    private static Handle? ResolveLocked(Table t, int fd, Handle? h)
+    {
+        while (h is { Kind: Kind.Merge })
+        {
+            Registration? owner = null;
+            foreach (var r in t.Active)
+                if (r.Fd == fd && ReferenceEquals(r.Handle, h)) { owner = r; break; }
+            if (owner is null) break;
+            h = owner.Prior;
+        }
+        return h;
     }
 
     private static Handle? GetLocked(Table t, int fd)

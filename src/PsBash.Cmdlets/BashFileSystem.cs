@@ -53,8 +53,64 @@ public static class BashFileSystem
         // A `> f` redirect still running may hold f's latest output in its buffer: bash would already have written it
         // (`{ echo a; echo b; cat f; } > f`). One volatile read when nothing is buffered.
         RedirectFileWriter.FlushPending();
-        return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, BinaryProbeBytes,
+        var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, BinaryProbeBytes,
             FileOptions.SequentialScan);
+        return ReadsShellsOutput(path) ? new SnapshotLengthStream(fs, fs.Length) : fs;
+    }
+
+    /// <summary>
+    /// <paramref name="path"/> is the regular file the shell's fd 1 names (<c>exec &gt;log; sed p log</c>): what the reader
+    /// writes lands at the end of what it reads. A GNU reader reads what was there (its output stays in its buffer until
+    /// it ends); here each line is written as it is made, so an unbounded read never reached the end. cat and grep refuse
+    /// such an input before opening it (<see cref="BashCmdlet"/>); every other reader reads the file as it was when opened.
+    /// </summary>
+    private static bool ReadsShellsOutput(string path)
+    {
+        if (BashFdTable.StdoutFilePath() is not { } outPath) return false;
+        try { return FileIdentity.SameFileFollowingLinks(path, outPath); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>A read-only view of a file that ends at the length it had when opened (<see cref="ReadsShellsOutput"/>).</summary>
+    private sealed class SnapshotLengthStream(FileStream inner, long length) : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => true;
+        public override bool CanWrite => false;
+        public override long Length => length;
+
+        public override long Position
+        {
+            get => inner.Position;
+            set => inner.Position = value;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+
+        public override int Read(Span<byte> buffer)
+        {
+            long left = length - inner.Position;
+            if (left <= 0) return 0;
+            if (buffer.Length > left) buffer = buffer[..(int)left];
+            return inner.Read(buffer);
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => origin == SeekOrigin.End
+            ? inner.Seek(length + offset, SeekOrigin.Begin)
+            : inner.Seek(offset, origin);
+
+        public override void Flush() { }
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) inner.Dispose();
+            base.Dispose(disposing);
+        }
     }
 
     // -- Binary detection ---------------------------------------------------

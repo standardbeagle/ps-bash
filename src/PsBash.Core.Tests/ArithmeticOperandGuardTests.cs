@@ -57,9 +57,8 @@ public class ArithmeticOperandGuardTests
 
     private static readonly Site[] s_csInventory =
     [
-        new("PsEmitter.cs", "int.TryParse(t, out int n) && n >= 3", "a redirection's fd number"),
-        new("PsEmitter.cs", "int.TryParse(target, out var n) && n >= 3", "a duplicated fd number (>&N)"),
-        new("PsEmitter.cs", "int.TryParse(t.AsSpan(0, t.Length - 1)", "a moved fd number (>&M-), digits only"),
+        new("PsEmitter.ExecRedirect.cs", "return int.TryParse(text, System.Globalization.NumberStyles.None",
+            "TryParseDescriptor: every redirection target read as an fd number (>&N, <&N, >&M-), digits only, decimal"),
         new("PsEmitter.cs", "int.TryParse(countText,","break / continue N (a loop count, not arithmetic in bash)"),
         new("PsEmitter.cs", "long.TryParse(retLiteral,", "return N (a status)"),
         new("PsEmitter.cs", "long.TryParse(exitLiteral,", "exit N (a status)"),

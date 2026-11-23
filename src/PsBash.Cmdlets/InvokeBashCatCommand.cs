@@ -234,6 +234,8 @@ public sealed class InvokeBashCatCommand : BashCmdlet
     private bool _midLine;
 
     private bool _hadError;
+    // The first stdin record was looked at for the shell's own output file; it was (the rest are dropped).
+    private bool _stdinChecked, _stdinRefused;
 
     // The pipeline waits for its operand's turn: a file operand comes before the first `-`.
     private bool _bufferStdin;
@@ -281,7 +283,21 @@ public sealed class InvokeBashCatCommand : BashCmdlet
         if (InputObject == null) return;
 
         ParseOnce();
-        if (_suppressStdin) return;
+        if (_suppressStdin || _stdinRefused) return;
+        // `cat < log` (or `cat -`) after `exec >log`: stdin is the shell's own output file. GNU cat refuses it
+        // ("cat: -: input file is output file", status 1) instead of reading what it writes, for ever.
+        if (!_stdinChecked)
+        {
+            _stdinChecked = true;
+            if (RegularStdin.TryClaim(InputObject, out _, out string? file) && file is not null
+                && ReadsTheShellsOutput(file, unreadOnly: true))
+            {
+                FileSystemHelpers.WriteBashError(this, "cat: -: input file is output file");
+                _hadError = true;
+                _stdinRefused = true;
+                return;
+            }
+        }
         if (_bufferStdin) { _stdinBuffer.Add(InputObject); return; }
         EmitStdinRecord(InputObject);
     }
@@ -351,7 +367,7 @@ public sealed class InvokeBashCatCommand : BashCmdlet
             }
             foreach (var filePath in FileSystemHelpers.ClaimedReaderPaths(this, new[] { operand }))
             {
-                if (ReadsItsOwnOutput(filePath))
+                if (ReadsTheShellsOutput(filePath, unreadOnly: true))
                 {
                     FileSystemHelpers.WriteBashError(this, $"cat: {operand}: input file is output file");
                     _hadError = true;
@@ -363,27 +379,6 @@ public sealed class InvokeBashCatCommand : BashCmdlet
         if (_hadError)
         {
             FileSystemHelpers.SetLastExitCode(this, 1);
-        }
-    }
-
-    /// <summary>
-    /// <c>fx() { exec &gt;log; }; fx; cat log</c>: cat's output is the shell's fd 1, the file it would read, which grows
-    /// as it reads (it never ended). GNU cat refuses a regular input that is its own output while unread data remains.
-    /// Only bash's last stage writes the shell's fd 1 (a stage before it writes the next one; a redirection stage after
-    /// it, <c>cat log 2&gt;e</c>, is part of cat's command, and one that took fd 1 left no file entry there).
-    /// </summary>
-    private bool ReadsItsOwnOutput(string filePath)
-    {
-        if (BashFdTable.StdoutFilePath() is not { } outPath) return false;
-        if (MyInvocation is { } me && me.PipelinePosition < me.PipelineLength && !OnlyStatusTransparentStagesAfter(me))
-            return false;
-        try
-        {
-            return new FileInfo(filePath).Length > 0 && FileIdentity.SameFileFollowingLinks(filePath, outPath);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-        {
-            return false;
         }
     }
 
@@ -403,7 +398,7 @@ public sealed class InvokeBashCatCommand : BashCmdlet
                     if (offer)
                     {
                         offer = false;
-                        RegularStdin.Offer(record, new FileInfo(filePath).Length);
+                        RegularStdin.Offer(record, new FileInfo(filePath).Length, filePath);
                     }
                     WriteObject(record);
                 }

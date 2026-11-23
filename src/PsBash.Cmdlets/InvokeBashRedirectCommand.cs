@@ -147,6 +147,17 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
 
     private void RegisterTargets()
     {
+        // A bare `2>&1` (-MergeErrors): fd 2 is a copy of fd 1, the stream this stage passes on, made before the command
+        // runs. An `exec >log` inside then moves fd 1 only (`{ exec >log; echo e >&2; } 2>&1` prints e; bash's dup2).
+        if (MergeErrors && !MyInvocation.BoundParameters.ContainsKey(nameof(Path))
+            && !MyInvocation.BoundParameters.ContainsKey(nameof(ErrorPath)))
+        {
+            (_outReg, _errReg) = BashFdTable.RegisterMerge(text =>
+            {
+                lock (_writtenGate) (_written ??= new System.Text.StringBuilder()).Append(text);
+            });
+            return;
+        }
         if (_stdoutToFile && _outDevice is DeviceKind.None or DeviceKind.Null)
         {
             _outReg = BashFdTable.Register(1, BashFdTable.ForStage(_stream));
@@ -157,19 +168,37 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
         }
     }
 
+    // What the command wrote to a merge's stream through the table (`exec 3>&1; echo x >&3` inside the `2>&1`): it
+    // arrives on another command's call, so it is queued and passed on in order with the records.
+    private readonly object _writtenGate = new();
+    private System.Text.StringBuilder? _written;
+
+    private void DrainWritten()
+    {
+        string? text = null;
+        lock (_writtenGate)
+        {
+            if (_written is { Length: > 0 }) { text = _written.ToString(); _written.Clear(); }
+        }
+        if (text is not null) foreach (var line in BashRuntime.EmitBashLines(text)) WriteObject(line);
+    }
+
     /// <summary>
     /// A record for fd <paramref name="fd"/> after the command moved that descriptor (<c>{ exec &gt;g; echo x; } &gt;f</c>
-    /// writes x to g): written where the table says. True when it was; false when the descriptor is still this stage's.
+    /// writes x to g): written where the table says (BashFdTable.Moved). True when it was; false when the descriptor is
+    /// still this stage's.
     /// </summary>
-    private bool TryDivert(int fd, string payload)
+    private bool TryDivert(int fd, object record)
     {
-        if ((fd == 1 ? _outReg : _errReg) is not { } reg) return false;
-        var current = reg.Current;
-        if (ReferenceEquals(current, reg.Handle)) return false;
-        int std = fd;
+        if ((fd == 1 ? _outReg : _errReg) is not { } reg || !BashFdTable.Moved(reg, out var current)) return false;
+        string payload = record is ErrorRecord er ? ErrorPayload(er) : BashRuntime.RecordFilePayload((PSObject)record);
+        int std;
         try
         {
-            if (current is not null) std = BashFdTable.WriteHandle(current, payload);
+            // No entry: the shell's original descriptor (`exec >&5` with 5 a copy of it), past this stage.
+            std = current is null
+                ? (PsBash.Core.Stdio.ShellStdio.WriteTerminal(fd, payload) ? 0 : fd)
+                : BashFdTable.WriteHandle(current, payload);
         }
         catch (InvalidOperationException) { return true; }   // a closed descriptor: the write fails
         if (std == 1) foreach (var line in BashRuntime.EmitBashLines(payload)) WriteObject(line);
@@ -376,9 +405,10 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
     protected override void ProcessRecord()
     {
         if (InputObject is null || _openFailed) return;
+        DrainWritten();
         if (InputObject.BaseObject is ErrorRecord er)
         {
-            if (_errReg is not null && TryDivert(2, ErrorPayload(er))) return;
+            if (_errReg is not null && TryDivert(2, er)) return;
             if (_stderrToFile) { WriteTarget(_errorStream, _errDevice, ErrorPayload(er)); return; }
             // `2> /dev/stderr`: stays stderr (as stderr, not an ErrorRecord object a downstream stage would read as a
             // line). `2> /dev/stdout`: stdout, i.e. like `2>&1` at that point.
@@ -409,8 +439,8 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
         }
         // `echo msg > /dev/stderr`: the exact bytes on the command's stderr.
         if (_outDevice == DeviceKind.Stderr) { FileSystemHelpers.WriteStderrBytes(this, BashRuntime.RecordFilePayload(InputObject)); return; }
+        if (_outReg is not null && TryDivert(1, InputObject)) return;
         if (!_stdoutToFile) { WriteObject(InputObject); return; }
-        if (_outReg is not null && TryDivert(1, BashRuntime.RecordFilePayload(InputObject))) return;
         // Same per-record rule as tee: record boundary "\n" unless the record is marked
         // NoTrailingNewline (printf x / echo -n x), so `printf x > f` writes exactly "x".
         WriteTarget(_stream, _outDevice, BashRuntime.RecordFilePayload(InputObject));
@@ -450,6 +480,7 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
 
     protected override void EndProcessing()
     {
+        DrainWritten();
         Close();
         // A failed open stopped upstream, but a stage that already finished may have reset the
         // status; the failed redirect is the pipeline's status, so `$?` and `set -e` see 1.

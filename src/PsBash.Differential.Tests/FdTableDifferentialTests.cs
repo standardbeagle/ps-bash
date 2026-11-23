@@ -63,6 +63,58 @@ public class FdTableDifferentialTests
     public Task Job_GetsACopyOfTheTable(string script)
         => AssertOracle.EqualAsync(Prelude + script);
 
+    // `cmd 2>&1` copies fd 1 into fd 2 BEFORE cmd runs (dup2): an exec of fd 1 inside moves fd 1 only, and stderr still
+    // goes where fd 1 was. The merge was a pipeline join, so stderr followed the exec into log.
+    [SkippableTheory]
+    [InlineData("exec 5>&1\n{ exec >log; echo out; echo err >&2; } 2>&1\nexec >&5 5>&-\necho log:\ncat log")]
+    [InlineData("exec 5>&1\nfx() { exec >log; echo err >&2; }\nfx 2>&1\ns=$?\nexec >&5 5>&-\necho \"s=$s\"\necho log:\ncat log")]
+    [InlineData("exec 5>&1\nfor i in 1; do exec >log; echo e$i >&2; done 2>&1\nexec >&5 5>&-\necho log:\ncat log")]
+    [InlineData("( exec >log; echo err >&2 ) 2>&1\necho log:\ncat log")]
+    [InlineData("{ exec >log; echo err >&2; } 2>&1 | sed 's/^/P:/'\necho log:\ncat log")]
+    [InlineData("x=$({ exec >log; echo o; echo e >&2; } 2>&1)\necho \"x=$x\"\necho log:\ncat log")]
+    [InlineData("{ { exec >log; echo o; echo e >&2; } 2>&1; } >f\necho f:\ncat f\necho log:\ncat log")]
+    [InlineData("exec 5>&1\n{ { exec >log; echo e >&2; } 2>&1; echo e2 >&2; } 2>&1\nexec >&5 5>&-\necho log:\ncat log")]
+    [InlineData("{ exec 3>&1; echo t >&3; } 2>&1 | sed 's/^/P:/'")]
+    [InlineData("exec 5>&1\n{ exec 3>&1; exec >log; echo out; echo err >&2; echo t >&3; exec 3>&-; } 2>&1\nexec >&5 5>&-\necho log:\ncat log")]
+    [InlineData("{ echo o; echo e >&2; } 2>&1 >f\necho f:\ncat f")]
+    [InlineData("x=$({ echo o; echo e >&2; } 2>&1 >f)\necho \"x=$x\"\necho f:\ncat f")]
+    [InlineData("exec 5>&1\nexec >log\n{ echo o; echo e >&2; } 2>&1 >f\nexec >&5 5>&-\necho log:\ncat log\necho f:\ncat f")]
+    public Task Merge_CopiesStderrFromStdoutBeforeTheCommandRuns(string script)
+        => AssertOracle.EqualAsync(Prelude + script);
+
+    // A reader of the file the shell's fd 1 names (`exec >log` persists): GNU cat and grep refuse it (grep unless it
+    // writes nothing per line or one match at most); every other reader reads what was there. Each line ps-bash wrote
+    // as it was made landed after what the reader had left, so it read for ever.
+    private const string Reader = "R() { exec 5>&1; fx() { exec >log; }; fx; echo a; eval \"$1\" 2>e; s=$?; exec >&5 5>&-; "
+        + "echo \"s=$s\"; err e; echo log:; cat log; }\n";
+
+    [SkippableTheory]
+    [InlineData("R 'grep a log'")]
+    [InlineData("R 'grep -n a log'")]
+    [InlineData("R 'grep zzz log'")]
+    [InlineData("R 'grep -s a log'")]
+    [InlineData("R 'grep -c a log'")]
+    [InlineData("R 'grep -q a log'")]
+    [InlineData("R 'grep -l a log'")]
+    [InlineData("R 'grep -m1 a log'")]
+    [InlineData("R 'grep -m2 a log'")]
+    [InlineData("R 'grep a < log'")]
+    [InlineData("R 'cat < log'")]
+    [InlineData("R 'cat - < log'")]
+    [InlineData("R 'cat -n log'")]
+    [InlineData("R 'cat log | cat'")]
+    [InlineData("R 'sed -n p log'")]
+    [InlineData("R 'sed -n p < log'")]
+    [InlineData("R 'awk 1 log'")]
+    [InlineData("R 'cut -c1 log'")]
+    [InlineData("R 'head -n 5 log'")]
+    [InlineData("R 'tail -n 5 log'")]
+    [InlineData("R 'uniq log'")]
+    [InlineData("R 'sort log'")]
+    [InlineData("R 'wc -l log'")]
+    public Task Reader_OfTheShellsOwnOutputFile_IsRefusedOrReadsWhatWasThere(string script)
+        => AssertOracle.EqualAsync(Prelude + Reader + script);
+
     // R6: a closed descriptor fails the write.
     [SkippableTheory]
     [InlineData("( echo hi >&- ) 2>e12\necho \"s=$?\"\nerr e12")]

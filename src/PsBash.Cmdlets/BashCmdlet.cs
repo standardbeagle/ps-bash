@@ -94,6 +94,29 @@ public abstract class BashCmdlet : PSCmdlet, IDisposable
         return true;
     }
 
+    /// <summary>
+    /// <paramref name="filePath"/> is the regular file the shell's fd 1 names (<c>fx() { exec &gt;log; }; fx; grep a log</c>)
+    /// and this stage's output goes there: a reader of it would read what it writes, for ever. GNU cat and grep refuse such
+    /// an input (cat: input file is output file; grep: input file is also the output). Only bash's last stage writes the
+    /// shell's fd 1 (a stage before it writes the next one; a redirection stage after it, <c>cat log 2&gt;e</c>, is part of
+    /// its command, and one that took fd 1 left no file entry there). <paramref name="unreadOnly"/>: cat refuses only
+    /// while unread data remains (an empty file is read, as it is).
+    /// </summary>
+    private protected bool ReadsTheShellsOutput(string filePath, bool unreadOnly)
+    {
+        if (BashFdTable.StdoutFilePath() is not { } outPath) return false;
+        if (MyInvocation is { } me && me.PipelinePosition < me.PipelineLength && !OnlyStatusTransparentStagesAfter(me))
+            return false;
+        try
+        {
+            return (!unreadOnly || new FileInfo(filePath).Length > 0) && FileIdentity.SameFileFollowingLinks(filePath, outPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
     /// <summary><paramref name="them"/> is a stage before <paramref name="me"/> in the same pipeline statement.</summary>
     internal static bool IsAheadInMyPipeline(InvocationInfo? them, InvocationInfo me)
         => them is not null
