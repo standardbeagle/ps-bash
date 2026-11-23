@@ -194,6 +194,9 @@ internal sealed class Program
         HostLog.SetEndpoint(scheme, endpoint);
         HostLog.Write($"start launcher-pid={GetNonInteractiveLauncherPid(args)?.ToString() ?? "-"} exe={Environment.ProcessPath}");
 
+        // Whatever cancels the host (idle timeout, session gone, launcher gone, Ctrl-C), the process then ends.
+        ShutdownBackstop.Arm(cts.Token, ShutdownBackstop.Deadline);
+
         var idleTimeout = IdleShutdown.TimeoutFor(args);
         using var idle = new IdleShutdown(cts, idleTimeout);
 
