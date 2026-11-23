@@ -171,8 +171,7 @@ public class VariableExpansionDifferentialTests
 
     /// <summary>
     /// ${var%%pat} — remove longest suffix match.
-    /// Fixed: GlobToRegex now translates `*` → `.*` and `.` → `\.` so that
-    /// `%%.*` becomes regex `\..*` (greedy), giving "a" from "a.b.c".
+    /// The longest suffix that matches `.*` (BashPattern, the one compiler), giving "a" from "a.b.c".
     /// </summary>
     [SkippableFact]
     public async Task Differential_SuffixRemove_Longest()
@@ -195,8 +194,7 @@ public class VariableExpansionDifferentialTests
 
     /// <summary>
     /// ${var##pat} — remove longest prefix match.
-    /// Fixed: GlobToRegex now translates `*` → `.*` and `.` → `\.` so that
-    /// `##*.` becomes regex `.*\.` (greedy), giving "c" from "a.b.c".
+    /// The longest prefix that matches `*.` (BashPattern, the one compiler), giving "c" from "a.b.c".
     /// </summary>
     [SkippableFact]
     public async Task Differential_PrefixRemove_Longest()
