@@ -24,7 +24,7 @@ public static class CommandNotFoundReport
     /// </summary>
     public static (string Message, int Status) Describe(string name, Func<string, bool> directoryExists)
     {
-        if (name.IndexOfAny(['/', '\\']) < 0) return ($"{name}: command not found", 127);
+        if (name.IndexOfAny(['/', '\\']) < 0) return (NotFoundMessage(name), 127);
         if (RawBytes.GetByteCount(name) >= PathMax) return ($"{name}: File name too long", 126);
         var parts = name.Split('/', '\\');
         string prefix = "";
@@ -37,6 +37,21 @@ public static class CommandNotFoundReport
         }
         if (parts[^1].Length > 0 && SafeExists(directoryExists, name)) return ($"{name}: Is a directory", 126);
         return ($"{name}: No such file or directory", 127);
+    }
+
+    /// <summary>
+    /// bash's <c>NAME: command not found</c> (no source prefix). A name with a character that does not print (a
+    /// newline, a CR, an invalid byte) is shown in the <c>$'...'</c> form, as bash does (<c>$'a\nb': command not
+    /// found</c>), so the message is one line that says which word was not found.
+    /// </summary>
+    public static string NotFoundMessage(string name)
+    {
+        for (int i = 0; i < name.Length; i++)
+        {
+            if (name[i] < ' ' || name[i] == '\u007f' || RawBytes.IsMarkerAt(name, i))
+                return InvokeBashPrintfCommand.ShellQuote(name) + ": command not found";
+        }
+        return name + ": command not found";
     }
 
     /// <summary>

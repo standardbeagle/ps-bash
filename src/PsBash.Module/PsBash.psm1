@@ -443,7 +443,7 @@ function Resolve-BashCommand {
         $app = Get-Command -Name ([WildcardPattern]::Escape($Name)) -CommandType Application -ErrorAction Ignore | Select-Object -First 1
         if ($app) { return $app.Source }
         return {
-            Write-Error -Message ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + "${Name}: command not found") -Category ObjectNotFound -TargetObject $Name -ErrorAction Continue
+            Write-Error -Message ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + [PsBash.Cmdlets.CommandNotFoundReport]::NotFoundMessage($Name)) -Category ObjectNotFound -TargetObject $Name -ErrorAction Continue
             $global:LASTEXITCODE = 127
         }.GetNewClosure()
     }

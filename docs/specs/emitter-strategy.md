@@ -1561,6 +1561,21 @@ temp-binding "Temp bindings with unset"). The one exception is a declaration nam
 `PsBuild.PersistSameScope` has one caller) and `Differential.Tests/TempBindingDifferentialTests` (each form, at
 top level, in a function called twice, over a `local`, with and without POSIX mode).
 
+## 7a0. A command word is never an expression
+
+PowerShell reads the first element of a statement as an EXPRESSION when it is a quoted string, a variable or a
+parenthesized expression, and prints its value. A bash command word emitted in that form ran as "print this
+text": `$'\nWrite-Output X'` printed itself with status 0 (bash: `$'\nWrite-Output X': command not found`, 127),
+because `IsExpandedCommandWord` knew every quoted part but `$'…'`. `EmitGeneralCommand` therefore checks the
+EMITTED word with `PsBuild.CommandWordReadsAsExpression` whatever spelling produced it, and puts `& ` in front
+(multi-part words flattened to one string); after `& ` the word is a name, and a missing one reaches the host's
+not-found handler. The not-found message shows a name that does not print in bash's `$'…'` form
+(`CommandNotFoundReport.NotFoundMessage`). Guard: `CommandWordExpressionGuardTests` (PowerShell's parser reads
+the transpiled text of many spellings; none may stand as an expression statement).
+
+A `${v/p/r}` operand in double quotes gets double-quote quote removal (`\" \\ \$ \``) in
+`TryEmitSubstitutionOperand`: `${v/b/"a\"b"}` replaces with `a"b`, not `"a\"b"`.
+
 ## 7a. PowerShell statement keywords are not commands
 
 `exit`, `return`, `break`, `continue`, `throw` are PowerShell **statements**, not

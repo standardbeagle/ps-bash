@@ -22,6 +22,21 @@ public class CommandNotFoundReportTests
     public void Describe_MissingFile_ReportsLikeBash(string name, string message, int status)
         => Assert.Equal((message, status), CommandNotFoundReport.Describe(name, OnlyDot));
 
+    // bash 5.2 shows a name that does not print in the $'...' form (ansic_quote): one line naming the word. REGRESSION:
+    // `$'\nWrite-Output X'` was reported as two lines, the second looking like a command.
+    [Theory]
+    [InlineData("a\nWrite-Output X", "$'a\\nWrite-Output X': command not found")]
+    [InlineData("\n$(x)", "$'\\n$(x)': command not found")]
+    [InlineData("a\n\"b", "$'a\\n\"b': command not found")]
+    [InlineData("a\rb", "$'a\\rb': command not found")]
+    [InlineData("it's", "it's: command not found")]
+    [InlineData("a b", "a b: command not found")]
+    public void NotFoundMessage_NameThatDoesNotPrint_IsAnsiCQuoted(string name, string message)
+    {
+        Assert.Equal(message, CommandNotFoundReport.NotFoundMessage(name));
+        Assert.Equal((message, 127), CommandNotFoundReport.Describe(name, OnlyDot));
+    }
+
     [Fact]
     public void Describe_OverlongComponentInAnExistingDirectory_IsFileNameTooLong()
         => Assert.Equal(($"./{Long}: File name too long", 126), CommandNotFoundReport.Describe("./" + Long, OnlyDot));

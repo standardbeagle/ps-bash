@@ -352,15 +352,13 @@ public static class HostProtocol
                 AppendSessionHeader(sb, cmd.Session);
                 AppendEnvironmentHeaders(sb, cmd.Environment);
                 if (cmd.StdinFollows) sb.Append(StdinFeedHeader).Append('\n');
-                sb.Append(cmd.Body);
-                if (!cmd.Body.EndsWith('\n')) sb.Append('\n');
+                AppendCommandBody(sb, cmd.Body);
                 break;
             case Mode.Stdin stdin:
                 sb.Append(ModeHeaderPrefix).Append("Stdin").Append('\n');
                 AppendSessionHeader(sb, stdin.Session);
                 AppendEnvironmentHeaders(sb, stdin.Environment);
-                sb.Append(stdin.Body);
-                if (!stdin.Body.EndsWith('\n')) sb.Append('\n');
+                AppendCommandBody(sb, stdin.Body);
                 break;
             case Mode.Script script:
                 sb.Append(ModeHeaderPrefix).Append("Script").Append('\n');
@@ -447,6 +445,54 @@ public static class HostProtocol
             default:
                 throw new IOException($"Unknown MODE kind: {kind}");
         }
+    }
+
+    /// <summary>
+    /// The body of a Command / Stdin frame, delivered to the host EXACTLY. As raw lines it is read back line by line,
+    /// and a line reader drops a CR before each LF (<c>v=$'a\r\nb'</c> lost its CR, so <c>[[ $v == $'a\r\nb' ]]</c>
+    /// failed), a line that is <see cref="EndSentinel"/> ends the frame early, and a first line that looks like a
+    /// header is read as one. Such a body travels as <see cref="BodyHeaderPrefix"/> lines instead (base64, one or more
+    /// chunks, each under <see cref="MaxLineBytes"/>); any other body stays raw lines, byte-identical to the older wire.
+    /// As raw lines, a final LF is the line's end, not body text: an encoded body leaves it off the same way.
+    /// </summary>
+    private static void AppendCommandBody(StringBuilder sb, string body)
+    {
+        if (!BodyNeedsEncoding(body))
+        {
+            sb.Append(body);
+            if (!body.EndsWith('\n')) sb.Append('\n');
+            return;
+        }
+        string payload = body.EndsWith('\n') ? body[..^1] : body;
+        for (int at = 0; at < payload.Length;)
+        {
+            int take = Math.Min(MaxResponseChunkChars, payload.Length - at);
+            if (at + take < payload.Length && char.IsHighSurrogate(payload[at + take - 1])) take--;
+            sb.Append(BodyHeaderPrefix).Append(EncodeBase64(payload.Substring(at, take))).Append('\n');
+            at += take;
+        }
+        if (payload.Length == 0) sb.Append(BodyHeaderPrefix).Append('\n');
+    }
+
+    /// <summary>True when <paramref name="body"/> as raw lines would not read back as itself (see <see cref="AppendCommandBody"/>).</summary>
+    internal static bool BodyNeedsEncoding(string body)
+    {
+        if (body.Contains('\r')) return true;
+        int firstEnd = body.IndexOf('\n');
+        var first = firstEnd < 0 ? body.AsSpan() : body.AsSpan(0, firstEnd);
+        if (first.StartsWith(SessionHeaderPrefix, StringComparison.Ordinal)
+            || first.StartsWith(EnvironmentHeaderPrefix, StringComparison.Ordinal)
+            || first.StartsWith(BodyHeaderPrefix, StringComparison.Ordinal)
+            || first.SequenceEqual(StdinFeedHeader))
+            return true;
+        for (int at = 0; at <= body.Length;)
+        {
+            int end = body.IndexOf('\n', at);
+            if (end < 0) end = body.Length;
+            if (body.AsSpan(at, end - at).SequenceEqual(EndSentinel)) return true;
+            at = end + 1;
+        }
+        return false;
     }
 
     /// <summary>
@@ -555,6 +601,8 @@ public static class HostProtocol
         // The STDIN-FEED header follows the same rule.
         var inHeaderBlock = true;
         var stdinFollows = false;
+        // BODY: lines (AppendCommandBody) carry the whole body, base64 in chunks; no raw body line follows them.
+        StringBuilder? encoded = null;
         if (carryover is not null)
         {
             if (carryover == EndSentinel) return (string.Empty, session, null, false);
@@ -562,6 +610,8 @@ public static class HostProtocol
                 (environment ??= new()).Add(ParseEnvironmentLine(carryover));
             else if (carryover == StdinFeedHeader)
                 stdinFollows = true;
+            else if (carryover.StartsWith(BodyHeaderPrefix, StringComparison.Ordinal))
+                (encoded = new()).Append(DecodeBodyChunk(carryover));
             else
             {
                 lines.Add(carryover);
@@ -573,6 +623,13 @@ public static class HostProtocol
             var line = await reader.ReadLineAsync(ct).ConfigureAwait(false)
                 ?? throw new IOException("Request stream closed before END sentinel");
             if (line == EndSentinel) break;
+            if (encoded is not null)
+            {
+                if (!line.StartsWith(BodyHeaderPrefix, StringComparison.Ordinal))
+                    throw new IOException($"Expected '{BodyHeaderPrefix}' or END sentinel after an encoded body, got a raw line");
+                encoded.Append(DecodeBodyChunk(line));
+                continue;
+            }
             if (inHeaderBlock && line.StartsWith(EnvironmentHeaderPrefix, StringComparison.Ordinal))
             {
                 (environment ??= new()).Add(ParseEnvironmentLine(line));
@@ -583,10 +640,27 @@ public static class HostProtocol
                 stdinFollows = true;
                 continue;
             }
+            if (inHeaderBlock && line.StartsWith(BodyHeaderPrefix, StringComparison.Ordinal))
+            {
+                (encoded = new()).Append(DecodeBodyChunk(line));
+                continue;
+            }
             lines.Add(line);
             inHeaderBlock = false;
         }
-        return (string.Join('\n', lines), session, BuildEnvironmentBlock(environment), stdinFollows);
+        return (encoded?.ToString() ?? string.Join('\n', lines), session, BuildEnvironmentBlock(environment), stdinFollows);
+    }
+
+    private static string DecodeBodyChunk(string line)
+    {
+        try
+        {
+            return DecodeBase64(line[BodyHeaderPrefix.Length..]);
+        }
+        catch (FormatException ex)
+        {
+            throw new IOException($"Malformed {BodyHeaderPrefix} line: invalid base64", ex);
+        }
     }
 
     private static async Task<string> ReadBodyUntilEndAsync(StreamLineReader reader, CancellationToken ct)

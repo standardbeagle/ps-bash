@@ -676,6 +676,17 @@ BOM). A request frame carries headers then a body then `<<<END>>>`:
 | `<<<HOST-EXITING>>>` | host → launcher | PTY-6: host is about to exit; launcher restores the terminal. Emitted **before** the host closes its stream. **Interactive mode only.** |
 | `<<<SIGNAL-DELIVERED:NAME>>>` | host → launcher | PTY-5: host acknowledges a forwarded signal (`SignalDeliveredPrefix` + `Suffix`). Canonical token for a future framed interactive channel; unused in today's raw-pump path. |
 
+**A Command / Stdin body arrives exact.** The body is raw lines after the headers, and the reader drops a CR
+before each LF, ends the frame at a `<<<END>>>` line and reads a first line shaped like a header (`ENV:`,
+`SESSION:`, `STDIN-FEED:1`, `BODY:`) as one. A body any of that would change (`HostProtocol.BodyNeedsEncoding`:
+it holds a CR, a `<<<END>>>` line or such a first line) is sent instead as one or more `BODY:<base64>` header
+lines (chunks of at most `MaxResponseChunkChars` chars, each line under `MaxLineBytes`), and no raw line follows
+them. Every other body keeps the raw-line wire byte for byte (`protocol-request-c.bin`). One writer,
+`HostProtocol.AppendCommandBody`; tests `HostProtocolTests.RoundTrip_CommandAndStdin_BodyIsExact`. Before this a
+script `v=$'a\r\nb'` (whose transpiled text holds a CR) lost the CR on the way to the host, and
+`[[ $v == $'a\r\nb' ]]` failed. A launcher speaking this to an older host is caught by the build identity in the
+health payload (the host is Obsolete and replaced).
+
 **Session-mode gating.** `PromptReady` / `Busy` / `HostExiting` /
 `SignalDelivered` are emitted **only** under `SESSION:Interactive`. Under
 `SESSION:Framed` (the default, and what every non-interactive launcher uses)
