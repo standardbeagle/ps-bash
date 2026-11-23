@@ -203,7 +203,7 @@ public sealed class InvokeBashCommandCommand : BashCmdlet
 
     private static readonly InnerCommand.Wrapper CommandWrapper = new("command", static (cmdlet, name) =>
     {
-        FileSystemHelpers.WriteBashError(cmdlet, ShellDiagnostic.Prefix(cmdlet.SessionState) + $"{name}: command not found");
+        FileSystemHelpers.WriteBashError(cmdlet, ShellDiagnostic.Prefix(cmdlet.SessionState) + CommandNotFoundReport.NotFoundMessage(name));
         FileSystemHelpers.SetLastExitCode(cmdlet, 127);
     }, ShellBuiltins: true);
 

@@ -52,6 +52,78 @@ public class HostProtocolTests
         Assert.Equal(body, stdin.Body);
     }
 
+    // A Command / Stdin body reaches the host EXACTLY. As raw lines a CR before an LF was dropped (`v=$'a\r\nb'`
+    // then failed `[[ $v == $'a\r\nb' ]]`), a line equal to the END sentinel ended the frame, and a first line shaped
+    // like a header was read as one.
+    [Theory]
+    [InlineData("$v = \"a\r\nb\"")]
+    [InlineData("line1\r\nline2\r\n\r\n")]
+    [InlineData("a\rb")]
+    [InlineData("\r")]
+    [InlineData("echo 1\n<<<END>>>\necho 2")]
+    [InlineData("ENV:eA==,eQ==\necho hi")]
+    [InlineData("STDIN-FEED:1\necho hi")]
+    [InlineData("SESSION:Interactive\necho hi")]
+    [InlineData("BODY:ZWNobyBoaQ==")]
+    public async Task RoundTrip_CommandAndStdin_BodyIsExact(string body)
+    {
+        foreach (var mode in new Mode[] { new Mode.Command(body), new Mode.Stdin(body) })
+        {
+            await using var ms = new MemoryStream();
+            await HostProtocol.WriteRequestAsync(ms, mode);
+            ms.Position = 0;
+            var decoded = await HostProtocol.ReadRequestAsync(ms);
+            // As raw lines a final LF is the line end, not body text (RoundTrip_Command_PreservesBody); the same here.
+            string expected = body.EndsWith('\n') ? body[..^1] : body;
+            Assert.Equal(expected, decoded switch { Mode.Command c => c.Body, Mode.Stdin s => s.Body, _ => null });
+        }
+    }
+
+    [Fact]
+    public async Task RoundTrip_Command_CrBodyWithEnvironmentAndStdinFeed()
+    {
+        var env = new List<KeyValuePair<string, string>> { new("A", "1") };
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteRequestAsync(ms, new Mode.Command("x\r\ny", SessionMode.Framed, env, StdinFollows: true));
+        ms.Position = 0;
+        var cmd = Assert.IsType<Mode.Command>(await HostProtocol.ReadRequestAsync(ms));
+        Assert.Equal("x\r\ny", cmd.Body);
+        Assert.True(cmd.StdinFollows);
+        Assert.Equal("1", Assert.Single(cmd.Environment!).Value);
+    }
+
+    [Fact]
+    public async Task RoundTrip_Command_LargeCrBodyIsChunkedUnderTheLineCap()
+    {
+        // Larger than one base64 line may be (1 MB): it travels as several BODY: chunks, none over the cap.
+        var body = string.Concat(Enumerable.Repeat("Write-Output 'a\r\nb' # é\U0001F600\n", 60_000));
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteRequestAsync(ms, new Mode.Command(body));
+        var wire = Utf8NoBom.GetString(ms.ToArray()).Split('\n');
+        Assert.True(wire.Count(l => l.StartsWith("BODY:", StringComparison.Ordinal)) > 1);
+        Assert.All(wire, l => Assert.True(Utf8NoBom.GetByteCount(l) < 1024 * 1024));
+        ms.Position = 0;
+        var cmd = Assert.IsType<Mode.Command>(await HostProtocol.ReadRequestAsync(ms));
+        Assert.Equal(body[..^1], cmd.Body);
+    }
+
+    [Fact]
+    public async Task WriteRequest_Command_PlainBodyStaysRawLines()
+    {
+        // Only a body raw lines cannot carry is encoded: the wire of every other body is unchanged.
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteRequestAsync(ms, new Mode.Command("echo a\necho b\n"));
+        Assert.Equal(Utf8NoBom.GetBytes("MODE:Command\necho a\necho b\n<<<END>>>\n"), ms.ToArray());
+    }
+
+    [Fact]
+    public async Task ReadRequest_RawLineAfterEncodedBody_ThrowsIOException()
+    {
+        var bytes = Utf8NoBom.GetBytes("MODE:Command\nBODY:ZWNobyBoaQ==\necho x\n<<<END>>>\n");
+        await using var ms = new MemoryStream(bytes);
+        await Assert.ThrowsAsync<IOException>(() => HostProtocol.ReadRequestAsync(ms));
+    }
+
     [Fact]
     public async Task RoundTrip_Script_ArgvWithNewlinesAndQuotes()
     {

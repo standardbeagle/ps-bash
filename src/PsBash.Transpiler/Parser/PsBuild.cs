@@ -212,6 +212,17 @@ public static class PsBuild
     /// </summary>
     public static bool IsBareIntegerValue(string text) => PsNumberLiteral.IsCanonicalInteger(text);
 
+    /// <summary>
+    /// True when emitted command-word text, standing first in a PowerShell statement, is an EXPRESSION, a value
+    /// PowerShell prints instead of a name it runs: a quoted string (<c>"`nWrite-Output x"</c> from <c>$'\nWrite-Output x'</c>),
+    /// a variable, a parenthesized expression. Such a word runs only after <c>&amp; </c>: then it is a command name, and
+    /// one bash would not find is "command not found" (127). (A number-shaped name is quoted before it gets here.)
+    /// </summary>
+    public static bool CommandWordReadsAsExpression(string commandWord) =>
+        commandWord.Length > 0
+        && (commandWord[0] is '\'' or '"' or '$' or '('
+            || IsSingleQuoteMark(commandWord[0]) || IsDoubleQuoteMark(commandWord[0]));
+
     /// <summary>True for a character that opens or closes a PowerShell single-quoted string.</summary>
     public static bool IsSingleQuoteMark(char c) => SingleQuoteMarks.Contains(c);
 

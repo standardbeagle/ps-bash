@@ -507,7 +507,25 @@ diff <(cmd1) <(cmd2)   # Two Word tokens containing process substitutions
 cmd > file             # Great + Word("file") -- normal redirect
 ```
 
-### 6.5 Double-Quote Backslash Rules
+### 6.5 Array Subscripts
+
+A subscript ends at the `]` that closes its `[`, found by ONE scanner, `BashLexer.SubscriptClose` (bash
+`skipsubscript`): brackets nest, and quoted text (`'…'`, `"…"`, `$'…'`), a backslash-escaped character and
+`$( )` / `${ }` / `` `…` `` are taken whole, so a `]` or `=` inside them is subscript text. Its readers: the lexer
+(`OpenSubscriptEnd`, `ClassifyWord`), the parser (`FindAssignmentEquals` for `NAME[sub]=v`, the `[KEY]=` split of
+an array-literal element in `ParseAssignmentWordWithArray`) and the emitter, which reads an element's parts through
+`ArraySubscript.TrySplit` (literal and glob text scanned, every other part one opaque character) and a
+`declare a[x]=y` operand through `TrySplitElementInitializer`.
+
+```bash
+declare -A m=(['a]=b']=c)   # key a]=b, value c   (the first `]=` gave key 'a, value b']=c)
+m['x]=y']=1                 # key x]=y
+```
+
+Guard: `ArraySubscriptTests.Transpiler_FindsNoSubscriptEndOutsideTheOneScanner` (no `"]="` search, no
+`…+\]=` regex in transpiler code).
+
+### 6.6 Double-Quote Backslash Rules
 
 Inside double quotes, backslash is only special before `$`, `` ` ``, `"`, `\`, and newline. Before any other character, the backslash is literal:
 

@@ -5739,12 +5739,7 @@ public static partial class PsEmitter
         int i = 0;
         while (i < s.Length && (char.IsAsciiLetterOrDigit(s[i]) || s[i] == '_')) i++;
         if (i == 0 || char.IsAsciiDigit(s[0]) || i >= s.Length || s[i] != '[') return false;
-        int depth = 0, close = -1;
-        for (int j = i; j < s.Length; j++)
-        {
-            if (s[j] == '[') depth++;
-            else if (s[j] == ']' && --depth == 0) { close = j; break; }
-        }
+        int close = BashLexer.SubscriptClose(s, i);
         if (close < 0 || close == i + 1) return false;
         int eq = close + 1;
         if (eq + 1 < s.Length && s[eq] == '+' && s[eq + 1] == '=') { op = AssignOp.PlusEqual; eq += 2; }
@@ -8147,6 +8142,16 @@ public static partial class PsEmitter
                 ? TransformWordPath(
                     FlattenPartsToDoubleQuotedString(cmd.Words[0].Parts))
                 : EmitWord(cmd.Words[0]);
+        // The one rule for every spelling: a command word PowerShell would read as an expression (a string, a
+        // variable, a number) printed itself instead of naming a command; after `& ` it is a name, and one that is
+        // not found is bash's "command not found" (127). `$'\nWrite-Output x'` once ran as a string statement.
+        if (!isScriptCommand && !needsCallOperator && !arrayName && !braceName && PsBuild.CommandWordReadsAsExpression(commandWordText))
+        {
+            needsCallOperator = true;
+            leading = "& ";
+            if (cmd.Words[0].Parts.Length > 1)
+                commandWordText = TransformWordPath(FlattenPartsToDoubleQuotedString(cmd.Words[0].Parts));
+        }
 
         if (arrayName || braceName)
         {
@@ -8728,25 +8733,8 @@ public static partial class PsEmitter
                 entries.Add("(" + EmitAssignmentValue(new CompoundWord(keyParts)) + ")");
                 continue;
             }
-            string? first = elem.Parts.IsDefaultOrEmpty ? null : elem.Parts[0] switch
-            {
-                WordPart.Literal l => l.Value,
-                WordPart.GlobPart g => g.Pattern,
-                _ => null,
-            };
-            if (first is not { Length: > 2 } || first[0] != '[') return false;
-            string key, head;
-            ImmutableArray<WordPart> parts;
-            if (first[^1] == ']' && elem.Parts.Length > 1 && elem.Parts[1] is WordPart.Literal { Value: var eqTail } && eqTail.StartsWith('='))
-            {
-                key = first[1..^1]; head = eqTail[1..]; parts = elem.Parts.RemoveRange(0, 2);
-            }
-            else
-            {
-                int close = first.IndexOf("]=", StringComparison.Ordinal);
-                if (close < 2) return false;
-                key = first[1..close]; head = first[(close + 2)..]; parts = elem.Parts.RemoveAt(0);
-            }
+            if (!ArraySubscript.TrySplit(elem, out var subscript, out var head, out var parts)
+                || ArraySubscript.PlainText(subscript) is not { } key) return false;
             if (key.Length == 0 || key.Length > 9 || !key.All(char.IsDigit)) return false;
             if (head.Length > 0) parts = parts.Insert(0, new WordPart.Literal(head));
             entries.Add(PsBuild.SingleQuote(key));
@@ -8774,16 +8762,10 @@ public static partial class PsEmitter
         var elems = ImmutableArray.CreateBuilder<CompoundWord>(array.Elements.Length);
         foreach (var elem in array.Elements)
         {
-            string? first = elem.Parts.IsDefaultOrEmpty ? null : elem.Parts[0] switch
-            {
-                WordPart.Literal l => l.Value,
-                WordPart.GlobPart g => g.Pattern,
-                _ => null,
-            };
-            bool keyed = first is { Length: > 2 } && first[0] == '['
-                && (first.Contains("]=", StringComparison.Ordinal)
-                    || first[^1] == ']' && elem.Parts.Length > 1 && elem.Parts[1] is WordPart.Literal { Value: var eq } && eq.StartsWith('='));
+            // Keyed when the subscript (as ArraySubscript reads it) closes in the first part: `[k]=-{a,b}-`.
+            bool keyed = ArraySubscript.TrySplit(elem, out _, out _, out _, out int closePart) && closePart == 0;
             if (!keyed) { elems.Add(elem); continue; }
+            string first = ArraySubscript.TextOf(elem.Parts[0])!;
             if (!elem.Parts.Any(p => p is WordPart.BracedTuple or WordPart.BracedRange)) return null;
             any = true;
             elems.Add(new CompoundWord(elem.Parts.SetItem(0, new WordPart.SingleQuoted(first!))));
@@ -8796,16 +8778,9 @@ public static partial class PsEmitter
     {
         foreach (var elem in array.Elements)
         {
-            string? first = elem.Parts.IsDefaultOrEmpty ? null : elem.Parts[0] switch
-            {
-                WordPart.Literal l => l.Value,
-                WordPart.GlobPart g => g.Pattern,
-                _ => null,
-            };
-            if (first is not { Length: > 2 } || first[0] != '[') continue;
-            int close = first.IndexOf(']');
-            if (close > 1 && !first.AsSpan(1, close - 1).ContainsAnyExceptInRange('0', '9')) continue;
-            if (close > 1) return true;
+            if (ArraySubscript.TrySplit(elem, out var key, out _, out _) && ArraySubscript.PlainText(key) is { } text
+                && text.AsSpan().ContainsAnyExceptInRange('0', '9'))
+                return true;
         }
         return false;
     }
@@ -8852,42 +8827,23 @@ public static partial class PsEmitter
     {
         key = head = "";
         parts = default;
-        // The lexer reads the subscript `[k1]` as a glob part, then `=v1` as a literal; a single-quoted key
-        // (`['$k']=v`) arrives as `[`, the quoted part, then `]=v`: join the run up to the `]=`.
-        var firstText = new StringBuilder();
-        int used = 0;
-        while (used < elem.Parts.Length)
+        // The subscript's parts as ArraySubscript reads them (`[k1]`, `['a]=b']`, `[` 'k' `]`): its raw text, a
+        // single-quoted part quoted again, for the quote removal below. An expansion makes it no static key.
+        if (!ArraySubscript.TrySplit(elem, out var keyParts, out head, out parts)) return false;
+        var keyText = new StringBuilder();
+        foreach (var part in keyParts)
         {
-            string? piece = elem.Parts[used] switch
+            string? piece = part switch
             {
                 WordPart.Literal l => l.Value,
                 WordPart.GlobPart g => g.Pattern,
-                WordPart.SingleQuoted sq when used > 0 => "'" + sq.Value + "'",
+                WordPart.SingleQuoted sq => "'" + sq.Value + "'",
                 _ => null,
             };
-            if (piece is null) break;
-            firstText.Append(piece);
-            used++;
-            if (piece.Contains("]=", StringComparison.Ordinal)
-                || (piece.EndsWith(']') && used < elem.Parts.Length && elem.Parts[used] is WordPart.Literal { Value: var nx } && nx.StartsWith('=')))
-                break;
+            if (piece is null) return false;
+            keyText.Append(piece);
         }
-        string first = firstText.ToString();
-        if (used == 0 || first.Length <= 2 || first[0] != '[') return false;
-        if (first[^1] == ']' && elem.Parts.Length > used && elem.Parts[used] is WordPart.Literal { Value: var eqTail } && eqTail.StartsWith('='))
-        {
-            key = first[1..^1];
-            head = eqTail[1..];
-            parts = elem.Parts.RemoveRange(0, used + 1);
-        }
-        else
-        {
-            int close = first.IndexOf("]=", StringComparison.Ordinal);
-            if (close < 2) return false;
-            key = first[1..close];
-            head = first[(close + 2)..];
-            parts = elem.Parts.RemoveRange(0, used);
-        }
+        key = keyText.ToString();
         // `['a+1']=c` / `["q r"]=2` / `["k\"j"]=v`: the subscript is raw text, so it gets bash's quote removal
         // (BashQuoting); stripping only the outer quotes kept `k\"j` as the key.
         if (key.Length == 0 || (!numericKeysAllowed && key.All(char.IsDigit))) return false;
@@ -8905,46 +8861,18 @@ public static partial class PsEmitter
     {
         keyExpr = head = "";
         parts = default;
-        var keyParts = ImmutableArray.CreateBuilder<WordPart>();
+        if (!ArraySubscript.TrySplit(elem, out var subscript, out head, out parts)) return false;
         bool expands = false;
-        for (int used = 0; used < elem.Parts.Length; used++)
+        var keyParts = ImmutableArray.CreateBuilder<WordPart>(subscript.Length);
+        foreach (var p in subscript)
         {
-            var p = elem.Parts[used];
-            string? text = p switch { WordPart.Literal l => l.Value, WordPart.GlobPart g => g.Pattern, _ => null };
-            if (used == 0)
-            {
-                if (text is not { Length: > 0 } || text[0] != '[') return false;
-                text = text[1..];
-            }
-            if (text is null)
-            {
-                if (p is not (WordPart.SingleQuoted or WordPart.EscapedLiteral)) expands = true;
-                keyParts.Add(p);
-                continue;
-            }
-            int close = text.IndexOf("]=", StringComparison.Ordinal);
-            if (close >= 0)
-            {
-                if (close > 0) keyParts.Add(new WordPart.Literal(text[..close]));
-                head = text[(close + 2)..];
-                parts = elem.Parts.RemoveRange(0, used + 1);
-            }
-            else if (text.EndsWith(']') && used + 1 < elem.Parts.Length && elem.Parts[used + 1] is WordPart.Literal { Value: var eq } && eq.StartsWith('='))
-            {
-                if (text.Length > 1) keyParts.Add(new WordPart.Literal(text[..^1]));
-                head = eq[1..];
-                parts = elem.Parts.RemoveRange(0, used + 2);
-            }
-            else
-            {
-                if (text.Length > 0) keyParts.Add(new WordPart.Literal(text));
-                continue;
-            }
-            if (!expands || keyParts.Count == 0) return false;
-            keyExpr = "([string](" + FlattenPartsToDoubleQuotedString(keyParts.ToImmutable()) + "))";
-            return true;
+            if (p is not (WordPart.Literal or WordPart.GlobPart or WordPart.SingleQuoted or WordPart.EscapedLiteral)) expands = true;
+            // A glob part's text is plain here: the subscript expands like a double-quoted word.
+            keyParts.Add(p is WordPart.GlobPart g ? new WordPart.Literal(g.Pattern) : p);
         }
-        return false;
+        if (!expands || keyParts.Count == 0) return false;
+        keyExpr = "([string](" + FlattenPartsToDoubleQuotedString(keyParts.ToImmutable()) + "))";
+        return true;
     }
     private static string EmitAssignmentValue(CompoundWord? value)
     {
@@ -14877,7 +14805,7 @@ public static partial class PsEmitter
             if (part is WordPart.SimpleVarSub or WordPart.BracedVarSub
                      or WordPart.CommandSub or WordPart.ArithSub
                      or WordPart.TildeSub
-                     or WordPart.SingleQuoted or WordPart.DoubleQuoted)
+                     or WordPart.SingleQuoted or WordPart.DoubleQuoted or WordPart.AnsiCQuoted)
                 return true;
         }
         return false;

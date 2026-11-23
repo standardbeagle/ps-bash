@@ -951,22 +951,64 @@ public static class BashLexer
         if (i >= end || !(char.IsAsciiLetter(input[i]) || input[i] == '_')) return 0;
         while (i < end && (char.IsAsciiLetterOrDigit(input[i]) || input[i] == '_')) i++;
         if (i >= end || input[i] != '[') return 0;
-        int depth = 0;
-        for (int j = i; j < input.Length; j++)
+        int close = SubscriptClose(input, i);
+        return close < 0 ? -1 : close < end ? 0 : close + 1;
+    }
+
+    /// <summary>
+    /// THE reader of an array subscript: for the <c>[</c> at <paramref name="open"/>, the index of the <c>]</c> that
+    /// closes it, or -1 when nothing does. As bash's <c>skipsubscript</c>: brackets nest, and quoted text
+    /// (<c>'…'</c>, <c>"…"</c>, <c>$'…'</c>), a backslash-escaped character and <c>$( )</c> / <c>${ }</c> / <c>`…`</c>
+    /// are taken whole, so a <c>]</c> or <c>=</c> inside them is subscript text (<c>m['a]=b']=c</c> keys <c>a]=b</c>).
+    /// Every reader of a <c>NAME[subscript]=</c> word or an array literal's <c>[KEY]=</c> element (lexer, parser,
+    /// emitter: <see cref="ArraySubscript"/>) finds the close here; a scan of its own for <c>]=</c> or <c>]</c> was
+    /// quote-blind (guard ArraySubscriptGuardTests).
+    /// </summary>
+    internal static int SubscriptClose(string text, int open)
+    {
+        int len = text.Length, depth = 0;
+        for (int i = open; i < len; i++)
         {
-            char c = input[j];
-            if (j >= end && depth == 0) return 0;
+            char c = text[i];
             switch (c)
             {
-                case '\\': j++; break;
-                case '\'' or '"':
-                    int q = input.IndexOf(c, j + 1);
-                    if (q < 0) return -1;
-                    j = q;
+                case '\\':
+                    i++;
                     break;
-                case '[': depth++; break;
+                case '$' when i + 1 < len && text[i + 1] == '\'':
+                    // $'…': a backslash escapes the next character, so `\'` does not close it.
+                    for (i += 2; i < len && text[i] != '\''; i++)
+                        if (text[i] == '\\') i++;
+                    if (i >= len) return -1;
+                    break;
+                case '$' when i + 1 < len && text[i + 1] == '(':
+                    i = ScanDollarParen(text, i) - 1;
+                    break;
+                case '$' when i + 1 < len && text[i + 1] == '{':
+                    i = ScanDollarBrace(text, i) - 1;
+                    break;
+                case '`':
+                    i = ScanBacktick(text, i) - 1;
+                    break;
+                case '\'':
+                {
+                    int next = ScanSingleQuoted(text, i, out bool closed);
+                    if (!closed) return -1;
+                    i = next - 1;
+                    break;
+                }
+                case '"':
+                {
+                    int next = ScanDoubleQuoted(text, i, out bool closed);
+                    if (!closed) return -1;
+                    i = next - 1;
+                    break;
+                }
+                case '[':
+                    depth++;
+                    break;
                 case ']':
-                    if (--depth == 0) return j < end ? 0 : j + 1;
+                    if (--depth == 0) return i;
                     break;
             }
         }
@@ -1296,22 +1338,8 @@ public static class BashLexer
             // quotes or a nested `[` does not close it.
             if (i < value.Length && value[i] == '[')
             {
-                int depth = 0;
-                while (i < value.Length)
-                {
-                    char c = value[i];
-                    if (c == '\\') { i += 2; continue; }
-                    if (c is '\'' or '"')
-                    {
-                        int j = i + 1;
-                        while (j < value.Length && value[j] != c) j += c == '"' && value[j] == '\\' ? 2 : 1;
-                        i = j + 1;
-                        continue;
-                    }
-                    if (c == '[') depth++;
-                    else if (c == ']' && --depth == 0) { i++; break; }
-                    i++;
-                }
+                int close = SubscriptClose(value, i);
+                i = close < 0 ? value.Length : close + 1;
             }
 
             // Support += as well as plain =

@@ -232,7 +232,8 @@ $ExecutionContext.InvokeCommand.CommandNotFoundAction = {
     # Edge case (accepted): a user who literally types `Get-Foo` for a nonexistent
     # cmdlet sees `bash: Foo: command not found`. In a bash-emulation shell that
     # form is vanishingly rare, and parity for real bash commands is the priority.
-    $name = if ($CommandName -match '^[Gg]et-(.+)$') { $Matches[1] } else { $CommandName }
+    # (?s): a name with a newline (`$'a\nb'`) is de-mangled too; `.` stopped at the newline and `get-a` was reported.
+    $name = if ($CommandName -match '(?s)^[Gg]et-(.+)$') { $Matches[1] } else { $CommandName }
     $wslHint = Get-BashWslPathHint
     # A word with a slash names a file: bash reports the exec error (No such file or directory 127, Is a directory
     # 126, File name too long 126), not "command not found".
@@ -240,13 +241,12 @@ $ExecutionContext.InvokeCommand.CommandNotFoundAction = {
     # one builder (ShellDiagnostic); the line is the one the emitted code recorded for the running statement.
     $prefix = 'bash: '
     try { $prefix = [PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) } catch { }
+    # A name that does not print (`$'a\nb'`) is shown the way bash shows it: CommandNotFoundReport.NotFoundMessage.
     $msg = "${prefix}${name}: command not found"; $notFoundStatus = 127
-    if ($name.IndexOfAny([char[]]'/\') -ge 0) {
-        try {
-            $report = [PsBash.Cmdlets.CommandNotFoundReport]::DescribeIn($name, $ExecutionContext.SessionState.Path.CurrentFileSystemLocation.ProviderPath)
-            $msg = $prefix + [string]$report[0]; $notFoundStatus = [int]$report[1]
-        } catch { }   # the cmdlets assembly not loaded yet: keep "command not found"
-    }
+    try {
+        $report = [PsBash.Cmdlets.CommandNotFoundReport]::DescribeIn($name, $ExecutionContext.SessionState.Path.CurrentFileSystemLocation.ProviderPath)
+        $msg = $prefix + [string]$report[0]; $notFoundStatus = [int]$report[1]
+    } catch { }   # the cmdlets assembly not loaded yet: keep "command not found"
     $EventArgs.CommandScriptBlock = {
         # The status first, kept as this pipeline stage's own: under `2>&1` the message is the stage's output, and a later
         # stage that has what it needs (`nosuchcmd 2>&1 | head -1`) stops this one inside that write, so a status set after

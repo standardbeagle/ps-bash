@@ -887,11 +887,14 @@ public sealed partial class BashParser
                         wordToken = wordToken with { Value = elementText };
                     // [k]=~ / [k]=a:~: the value of a subscripted element is an assignment value, so a tilde at its start
                     // or after a : expands (bash), which a plain word decomposition would leave literal.
-                    var subscript = System.Text.RegularExpressions.Regex.Match(wordToken.Value, @"^\[[^\[\]]+\]=");
-                    if (subscript.Success && subscript.Length < wordToken.Value.Length)
+                    // The subscript ends at the `]` BashLexer.SubscriptClose finds (quotes taken whole: `['a]=b']=c`).
+                    string ev = wordToken.Value;
+                    int close = ev.Length > 2 && ev[0] == '[' ? BashLexer.SubscriptClose(ev, 0) : -1;
+                    int headLength = close + 2;
+                    if (close > 1 && headLength < ev.Length && ev[close + 1] == '=')
                     {
-                        var elemParts = DecomposeWord(subscript.Value).ToBuilder();
-                        elemParts.AddRange(DecomposeAssignmentValue(wordToken.Value[subscript.Length..]));
+                        var elemParts = DecomposeWord(ev[..headLength]).ToBuilder();
+                        elemParts.AddRange(DecomposeAssignmentValue(ev[headLength..]));
                         elements.Add(new CompoundWord(elemParts.ToImmutable()));
                     }
                     else
@@ -999,26 +1002,21 @@ public sealed partial class BashParser
     }
 
     /// <summary>
-    /// Locate the '=' that starts an assignment word's value, skipping any '=' that
-    /// appears inside an unclosed <c>[...]</c> array subscript (e.g. <c>map[a=b]=c</c> is
-    /// the key <c>a=b</c> assigned <c>c</c>, not the key <c>map[a</c> assigned <c>b]=c</c>).
-    /// Falls back to the first '=' if brackets never close (defensive; keeps prior behavior
+    /// Locate the '=' that starts an assignment word's value, skipping any '=' inside the
+    /// <c>NAME[...]</c> array subscript (e.g. <c>map[a=b]=c</c> is the key <c>a=b</c> assigned
+    /// <c>c</c>, not the key <c>map[a</c> assigned <c>b]=c</c>; <c>m['a]=b']=c</c> is the key
+    /// <c>a]=b</c>): the subscript ends where <see cref="BashLexer.SubscriptClose"/> says.
+    /// Falls back to the first '=' if the subscript never closes (defensive; keeps prior behavior
     /// for malformed input rather than throwing).
     /// </summary>
     private static int FindAssignmentEquals(string raw)
     {
-        int depth = 0;
-        for (int i = 0; i < raw.Length; i++)
-        {
-            char c = raw[i];
-            if (c == '[')
-                depth++;
-            else if (c == ']' && depth > 0)
-                depth--;
-            else if (c == '=' && depth == 0)
-                return i;
-        }
-        return raw.IndexOf('=');
+        int open = raw.IndexOfAny(['[', '=']);
+        if (open < 0 || raw[open] == '=') return open < 0 ? raw.IndexOf('=') : open;
+        int close = BashLexer.SubscriptClose(raw, open);
+        if (close < 0) return raw.IndexOf('=');
+        int eq = raw.IndexOf('=', close + 1);
+        return eq >= 0 ? eq : raw.IndexOf('=');
     }
 
     /// <summary>
