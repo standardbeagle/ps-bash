@@ -58,6 +58,8 @@ internal static class BashFdTable
         public StreamWriter? Writer { get; set; }
         public RedirectFileWriter? Out { get; init; }
         public Action<string>? Sink { get; init; }
+        /// <summary>The file a <see cref="Kind.File"/> entry opened (full path), null for a device or text.</summary>
+        public string? FilePath { get; init; }
         public int Refs { get; set; } = 1;
     }
 
@@ -186,7 +188,7 @@ internal static class BashFdTable
         catch (UnauthorizedAccessException) { return $"{path}: Permission denied"; }
         catch (IOException ex) { return $"{path}: {ex.Message}"; }
 
-        var handle = new Handle { Kind = Kind.File, Stream = fs, Writer = writer };
+        var handle = new Handle { Kind = Kind.File, Stream = fs, Writer = writer, FilePath = kind == PsBash.Core.DeviceKind.None ? path : null };
         if (fs is not null)
             handle.Reader = new StreamReader(fs, PsBash.Core.RawBytes.Encoding, false, 4096, leaveOpen: true);
 
@@ -270,6 +272,14 @@ internal static class BashFdTable
     {
         var t = Current;
         lock (Gate) return fd < 3 ? GetLocked(t, fd) is not { Kind: Kind.Closed } : t.Fds.ContainsKey(fd);
+    }
+
+    /// <summary>The full path of the regular file the shell's fd 1 names (<c>fx() { exec &gt;log; }</c>), else null: a
+    /// reader of that same file would read what it writes, for ever (<c>cat log</c>; GNU: input file is output file).</summary>
+    public static string? StdoutFilePath()
+    {
+        var t = Current;
+        lock (Gate) return t.Low[1] is { Kind: Kind.File, FilePath: { } file } ? file : null;
     }
 
     /// <summary>True when <paramref name="fd"/> is a name for the shell's own stdin (<see cref="Dup"/> of 0): its reader

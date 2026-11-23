@@ -97,6 +97,11 @@ Gaps (each a known difference, not a model):
   order) is right.
 - A pipe stage, and a native's own `>$null` / `2>$null`, are not registered: an `exec 3>&1` inside `{ …; } | cat` copies
   the shell's stdout, not the pipe.
+- A `2>&1` merge on a compound is not registered either: it joins stderr to the stdout stream, so after
+  `{ exec >log; echo err >&2; } 2>&1` the err goes to log (bash: fd 2 was copied before the exec, err on the terminal).
+- `cat F` where F is the file the shell's fd 1 names (`exec >log` in a function, then `cat log`) is refused,
+  `cat: log: input file is output file`, status 1, as GNU cat does (`BashFdTable.StdoutFilePath`); it would read what
+  it writes for ever. Other readers (`grep`, `sed`, `wc`) of that file are not checked.
 - `<&-` and `0<&N` on a compound are not modelled; `cmd 4>&3-` does not close 3 for the command (see the table above).
 
 ### Using a descriptor
