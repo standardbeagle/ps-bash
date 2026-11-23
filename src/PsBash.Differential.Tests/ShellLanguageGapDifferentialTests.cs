@@ -599,6 +599,93 @@ public class ShellLanguageGapDifferentialTests
         """);
 
     /// <summary>
+    /// The stages of a pipeline run interleaved, each a subshell that started with the shell's arrays as they were; none
+    /// of their writes outlives the pipeline, whichever stage ends first. REGRESSION: the loop's journal kept the
+    /// upstream's write as the value to put back, so <c>a=(0); { a+=(u); echo 1; } | while read x; do a+=(d); done</c>
+    /// left <c>0 u</c>.
+    /// </summary>
+    [SkippableFact]
+    public Task Pipeline_InterleavedStagesArrayWrites_AreAllUndone() => SameAsScript(
+        """
+        {
+        a=(0); { a+=(u); echo 1; } | while read x; do a+=(d); done; echo "1 ${a[*]}"
+        a=(0); { a+=(u); echo 1; echo 2; } | while read x; do a+=(d); done; echo "2 ${a[*]}"
+        a=(0); { a+=(u); echo 1; } | { a+=(m); cat; } | while read x; do a+=(d); done; echo "3 ${a[*]}"
+        a=(0); { echo 1; a+=(u); } | while read x; do a+=(d); done; echo "4 ${a[*]}"
+        declare -A m=([k]=0); { m[u]=1; echo 1; } | while read x; do m[d]=2; done; echo "5 ${#m[@]} ${!m[*]}"
+        } 2>&1
+        """);
+
+    /// <summary>
+    /// Whether a subshell's array write ends with it is decided by the variable written, not by the name: a function
+    /// called in the subshell that lists the name as <c>local</c> (but never ran it), or whose scalar <c>local</c> an
+    /// array builtin wrote around, still leaves the shell's array to be put back. REGRESSION: the name alone decided, so
+    /// <c>( g )</c> with <c>g() { if false; then local -a a; fi; h; }</c> and <c>h() { a+=(3); }</c> kept the 3.
+    /// </summary>
+    [SkippableFact]
+    public Task Subshell_AWriteToTheShellsArray_IsUndoneWhateverLocalsTheCallsName() => SameAsScript(
+        """
+        {
+        a=(1 2); h() { a+=(3); }; g() { if false; then local -a a; fi; h; }; ( g ); echo "1 ${a[*]}"
+        a=(1 2); g2() { local a; mapfile -t a <<< x; }; ( g2 ); echo "2 ${a[*]}"
+        a=(1); f3() { local -a a=(9); declare -g a=(2); }; ( f3 ); echo "3 ${a[*]}"
+        a=(1 2); g4() { local a; mapfile -t a <<< x; echo "4 in ${a[*]}"; }; echo q | { g4; cat; }; echo "4 ${a[*]}"
+        } 2>&1
+        """);
+
+    /// <summary>
+    /// A subshell assigns an array to a name PowerShell owns (<c>Error</c>, <c>Matches</c>, <c>input</c>) as to any
+    /// other: its own, gone when it ends. REGRESSION: the journaled write went to PowerShell's global and failed ("Cannot
+    /// overwrite variable Error because it is read-only or constant"); before the journal, a loop's <c>input+=</c>
+    /// appended to PowerShell's input enumerator (2, not 1).
+    /// </summary>
+    [SkippableFact]
+    public Task Subshell_AnArrayNamedLikeAPowerShellVariable_IsItsOwn() => SameAsScript(
+        """
+        {
+        ( Error=(e); Error+=(f); echo "1 ${Error[*]}" )
+        ( Matches=(m n); echo "2 ${Matches[*]}" )
+        } 2>&1
+        echo x | while read l; do input+=("$l"); echo "3 ${#input[@]}"; done
+        """);
+
+    /// <summary>
+    /// <c>unset NAME</c> in a function unsets the variable the function sees: a calling function's local goes, and the
+    /// shell's array of the name shows again; the shell's own array goes entirely (<c>declare -p</c> finds nothing).
+    /// REGRESSION: the array was emptied in place, so the empty local still hid the global (<c>[]</c>, bash <c>[G]</c>).
+    /// </summary>
+    [SkippableFact]
+    public Task Unset_InAFunction_RemovesTheVariableItSees() => SameAsScript(
+        """
+        {
+        a=(G); g() { unset a; }; f() { local -a a=(1); g; echo "1 [${a[*]}]"; }; f
+        a=(1 2); f2() { unset a; }; f2; echo "2 ${a+set}|${#a[@]}"; declare -p a
+        a=(G); g3() { unset a; echo "3 g ${a+set}"; }; f3() { local -a a=(1); g3; echo "3 [${a[*]}]"; }; ( f3 ); echo "3 ${a[*]}"
+        a=(1 2); ( unset a; echo "4 in ${a+set}|${#a[@]}" ); echo "4 ${a[*]}"
+        f5() { local -a a; a+=(x); unset a; echo "5 f [${a[*]}]"; }; a=(G); f5; echo "5 ${a[*]}"
+        f6() { local -a a=(1); unset a; echo "6 f [${a[*]}]"; }; unset a; f6; echo "6 [${a[*]}]"
+        } 2>&1 | sed 's/^[^ ]*: line [0-9]*: /SRC: /'
+        """);
+
+    /// <summary>
+    /// An array a function declares local at run time (<c>local -a "$1"</c>) and eval'd text writes is that local, gone
+    /// with the call, in a subshell or a pipe stage as anywhere. REGRESSION: eval'd text wrote the shell's global
+    /// directly, past the local and past the subshell's journal, so <c>( f a )</c> left the shell's a with x.
+    /// </summary>
+    [SkippableFact]
+    public Task Subshell_RunTimeLocalArrays_EndWithTheCall() => SameAsScript(
+        """
+        {
+        f() { local -a "$1"; eval "$1+=(x)"; echo "in ${a[*]}"; }
+        a=(1); ( f a ); echo "1 ${a[*]}"
+        a=(1); echo q | { f a; cat; }; echo "2 ${a[*]}"
+        a=(1); seq 2 | while read n; do f a; done; echo "3 ${a[*]}"
+        g() { local -a "$1"; h "$1"; }; h() { eval "$1+=(y)"; }; a=(1); ( g a ); echo "4 ${a[*]}"
+        k() { eval 'local -a p'; read -ra p <<< "a b"; echo "5 ${#p[@]}"; }; p=(o); seq 2 | while read n; do k; done; echo "5 ${p[*]}"
+        } 2>&1
+        """);
+
+    /// <summary>
     /// <c>exec CMD</c> reads its own here-string / <c>&lt;</c> file when it has one, else the stdin it inherits (a pipe, a
     /// group's redirect, a subshell's), and ends only its subshell. REGRESSION: <c>echo q | exec cat</c> and
     /// <c>{ exec cat; } &lt; f</c> printed nothing; the fix's first cut displaced <c>( exec cat &lt;&lt;&lt; q )</c>'s own input.

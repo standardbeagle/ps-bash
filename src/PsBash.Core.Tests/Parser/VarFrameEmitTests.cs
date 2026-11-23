@@ -110,7 +110,11 @@ public class VarFrameEmitTests
         Assert.Contains("if ([PsBash.Cmdlets.VarFrameStack]::Current.Depth -gt 0) { ", ps);
         Assert.Contains(PsBuild.LocalArrays([name]), ps);
         Assert.Contains("} else { ", ps);
-        if (bash.StartsWith("declare")) Assert.Contains("$global:" + name, ps);   // the top-level form (`local` there is an error)
+        // The top-level form (`local` there is an error) is the shell's array: the global, or the slot that finds it so a
+        // subshell's journal puts it back (`( eval 'declare -a g=(1 2)' )` leaves no g).
+        if (bash.StartsWith("declare"))
+            Assert.True(ps.Contains("$global:" + name, StringComparison.Ordinal)
+                || ps.Contains("VarFrameStack]::ArraySlot($ExecutionContext.SessionState, '" + name + "')", StringComparison.Ordinal), ps);
     }
 
     // Oracle: `f(){ eval "$1"; }; f 'local -a a=(1 2); a+=(3); declare -A m; m[k]=v'` leaves no a or m after f, and so

@@ -96,6 +96,77 @@ public class ArrayWriteJournalTests
         Assert.Equal("x", back[5L]);
     }
 
+    // `a=(0); { a+=(u); echo 1; } | while read x; do a+=(d); done; echo "${a[@]}"` prints 0 in bash: both stages are
+    // subshells that started with a=(0). REGRESSION: the loop's journal kept (0 u) as its "before" and put it back last.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void InterleavedSiblingStages_PutBackTheValueFromBeforeThePipeline(bool upstreamEndsFirst)
+    {
+        var frames = new VarFrameStack();
+        var upstream = new BashVariableLookup.ArrayWriteJournal(frames, 0);
+        var downstream = new BashVariableLookup.ArrayWriteJournal(frames, 0);
+        var a = new PSVariable("a", new object[] { "0" });
+        upstream.Note(a, made: null);
+        a.Value = new object[] { "0", "u" };
+        downstream.Note(a, made: null);
+        a.Value = new object[] { "0", "u", "d" };
+        if (upstreamEndsFirst) { upstream.Undo(null); downstream.Undo(null); }
+        else { downstream.Undo(null); upstream.Undo(null); }
+        Assert.Equal(new object[] { "0" }, (object[])a.Value!);
+        Assert.Empty(frames.OpenJournals);
+    }
+
+    [Fact]
+    public void InterleavedSiblingStages_AnAssociativeArrayChangedInPlace_IsPutBackAsItWas()
+    {
+        // `declare -A m=([k]=0); { m[u]=1; echo 1; } | while read x; do m[d]=2; done`: bash leaves m with k only.
+        var frames = new VarFrameStack();
+        var upstream = new BashVariableLookup.ArrayWriteJournal(frames, 0);
+        var downstream = new BashVariableLookup.ArrayWriteJournal(frames, 0);
+        var m = new PSVariable("m", new BashAssoc { ["k"] = "0" });
+        upstream.Note(m, made: null);
+        ((BashAssoc)m.Value!)["u"] = "1";
+        downstream.Note(m, made: null);
+        ((BashAssoc)m.Value!)["d"] = "2";
+        upstream.Undo(null);
+        ((BashAssoc)m.Value!)["late"] = "3";   // the loop goes on after the upstream ended, writing what is there now
+        downstream.Undo(null);
+        var back = Assert.IsType<BashAssoc>(m.Value);
+        Assert.Single(back);
+        Assert.Equal("0", back["k"]);
+    }
+
+    [Fact]
+    public void ANestedSubshell_PutsBackTheValueItStartedWith()
+    {
+        // `a=(0); ( a+=(o); ( a+=(i) ); echo "${a[@]}" )` prints "0 o": the inner subshell started after the outer's write.
+        var frames = new VarFrameStack();
+        var outer = new BashVariableLookup.ArrayWriteJournal(frames, 0);
+        var a = new PSVariable("a", new object[] { "0" });
+        outer.Note(a, made: null);
+        a.Value = new object[] { "0", "o" };
+        var inner = new BashVariableLookup.ArrayWriteJournal(frames, 0);
+        inner.Note(a, made: null);
+        a.Value = new object[] { "0", "o", "i" };
+        inner.Undo(null);
+        Assert.Equal(new object[] { "0", "o" }, (object[])a.Value!);
+        outer.Undo(null);
+        Assert.Equal(new object[] { "0" }, (object[])a.Value!);
+    }
+
+    [Fact]
+    public void Clear_EndsTheLocalArraysAndTheOpenJournals()
+    {
+        var frames = new VarFrameStack();
+        frames.Enter();
+        frames.AddLocalArrays(["p"]);
+        _ = new BashVariableLookup.ArrayWriteJournal(frames, 0);
+        frames.Clear();
+        Assert.False(frames.IsLocalArray("p"));
+        Assert.Empty(frames.OpenJournals);
+    }
+
     [Fact]
     public void AVariableThatCannotBePutBack_LeavesTheOthersPutBack()
     {

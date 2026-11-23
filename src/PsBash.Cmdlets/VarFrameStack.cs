@@ -187,14 +187,25 @@ public sealed class VarFrameStack
         return false;
     }
 
-    /// <summary>The depth of the innermost active function holding <paramref name="name"/> as a local array, else -1.</summary>
-    public int InnermostLocalArrayDepth(string name)
+    /// <summary>
+    /// The depths of the innermost and outermost active functions that name <paramref name="name"/> as a local array
+    /// (their prologue does, whether or not the <c>local</c> ran); both -1 when none does.
+    /// </summary>
+    public void LocalArrayDepths(string name, out int innermost, out int outermost)
     {
-        int depth = -1;
+        innermost = -1;
+        outermost = int.MaxValue;
         foreach (var held in _localArrays)
-            if (held.Depth > depth && string.Equals(held.Name, name, StringComparison.OrdinalIgnoreCase)) depth = held.Depth;
-        return depth;
+        {
+            if (!string.Equals(held.Name, name, StringComparison.OrdinalIgnoreCase)) continue;
+            if (held.Depth > innermost) innermost = held.Depth;
+            if (held.Depth < outermost) outermost = held.Depth;
+        }
+        if (innermost < 0) outermost = -1;
     }
+
+    /// <summary>The subshells' array-write journals open now, oldest first (concurrent pipe stages each have one).</summary>
+    internal List<BashVariableLookup.ArrayWriteJournal> OpenJournals { get; } = new();
 
     /// <summary>The declare attributes (<see cref="BashShellState.MarkAttribute"/>) each function's locals hid, put back at its return.</summary>
     private readonly List<(int Depth, string Name, string? Attrs, bool Readonly, string? Nameref)> _localAttrs = new();
@@ -328,7 +339,7 @@ public sealed class VarFrameStack
         }
     }
 
-    public void Clear() { _frames.Clear(); _bindings.Clear(); _tempExports.Clear(); _unsetTemps.Clear(); _callLines.Clear(); _callLineBases.Clear(); _funcSources.Clear(); _lineScopes.Clear(); Line = 0; LineBase = 0; Depth = 0; }
+    public void Clear() { _frames.Clear(); _bindings.Clear(); _tempExports.Clear(); _unsetTemps.Clear(); _callLines.Clear(); _callLineBases.Clear(); _funcSources.Clear(); _lineScopes.Clear(); _localArrays.Clear(); _localAttrs.Clear(); OpenJournals.Clear(); Line = 0; LineBase = 0; Depth = 0; }
 
     /// <summary>A copy of the frames, for a subshell to put back when it ends (BashShellState.Save/Restore).</summary>
     public sealed class Saved
@@ -377,6 +388,12 @@ public sealed class VarFrameStack
         to._callLineBases.AddRange(from._callLineBases);
         to._funcSources.Clear();
         to._funcSources.AddRange(from._funcSources);
+        // The local arrays and attributes each active function holds: a subshell's own calls end with it, and the parent's
+        // come back (else a stale entry made a later write of that name look local to a function no longer running).
+        to._localArrays.Clear();
+        to._localArrays.AddRange(from._localArrays);
+        to._localAttrs.Clear();
+        to._localAttrs.AddRange(from._localAttrs);
         to.LineBase = from.LineBase;
         // Ids stay unique across the restore: a frame pushed after it never reuses one a saved frame holds.
         to._nextId = Math.Max(to._nextId, from._nextId);
