@@ -47,6 +47,20 @@ Guard: `Core.Tests/ProgramFileGuardTests` checks that every product file naming 
 reason because it never starts the file (`type`, `hash`, `test -x`, completion). Behavior against bash:
 `Differential.Tests/ScriptFileExecutionDifferentialTests`.
 
+## Opening a script file (`ps-bash FILE`, `bash FILE`)
+
+The launcher checks FILE through one primitive, `PsBash.Shell.ScriptFile`, on the run path and the `-n` path alike
+(bash `open_shell_script`):
+
+| FILE | Status | Message |
+|---|---|---|
+| missing | 127 | `ps-bash: FILE: No such file or directory` |
+| a directory | 126 | `FILE: FILE: Is a directory` (bash names it by `$0`, already the script) |
+| unreadable, or any other read failure | 126 | `ps-bash: FILE: Permission denied` / the error |
+| a NUL before the first newline in the first 80 chars | 126 | `cannot execute binary file` |
+
+Guard: `Shell.Tests/ScriptFileTests.Launcher_ChecksTheScriptFileOnlyThroughScriptFile`.
+
 ## Cost
 
 A `#!` sh script costs one nested ps-bash launcher, a new process plus a host start, exactly like `bash FILE`. The spec

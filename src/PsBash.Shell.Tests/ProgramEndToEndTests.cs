@@ -562,15 +562,52 @@ public class ProgramEndToEndTests
         }
     }
 
-    // M3: file-arg mode — nonexistent script exits 2 with specific stderr message.
+    // M3: file-arg mode — a nonexistent script exits 127 like bash (oracle: `bash /nonexist.sh; echo $?` -> 127).
     // Does not require pwsh because the missing-file check runs before worker spawn.
     [Fact]
-    public async Task ScriptFile_DoesNotExist_Exits2WithStderrMessage()
+    public async Task ScriptFile_DoesNotExist_Exits127WithStderrMessage()
     {
         var (exitCode, _, stderr) = await RunShellAsync("nonexistent.sh");
 
-        Assert.Equal(2, exitCode);
+        Assert.Equal(127, exitCode);
         Assert.Contains("ps-bash: nonexistent.sh: No such file or directory", stderr);
+    }
+
+    // A directory as the script is 126 "Is a directory" (oracle: `d=$(mktemp -d); bash $d; echo $?` -> 126).
+    [Fact]
+    public async Task ScriptFile_IsADirectory_Exits126()
+    {
+        var dir = Directory.CreateTempSubdirectory("ps-bash-scriptdir-").FullName;
+        try
+        {
+            var (exitCode, _, stderr) = await RunShellAsync(dir);
+
+            Assert.Equal(126, exitCode);
+            Assert.Contains("Is a directory", stderr);
+        }
+        finally
+        {
+            Directory.Delete(dir);
+        }
+    }
+
+    // `bash -n` takes the same open check: missing is 127, a directory 126.
+    [Fact]
+    public async Task NoExec_ScriptFile_OpenFailuresMatchTheRunPath()
+    {
+        var (missing, _, _) = await RunShellAsync("-n", "nonexistent.sh");
+        Assert.Equal(127, missing);
+
+        var dir = Directory.CreateTempSubdirectory("ps-bash-scriptdir-").FullName;
+        try
+        {
+            var (isDir, _, _) = await RunShellAsync("-n", dir);
+            Assert.Equal(126, isDir);
+        }
+        finally
+        {
+            Directory.Delete(dir);
+        }
     }
 
     // M3: .sh file execution ─────────────────────────────────────────────────

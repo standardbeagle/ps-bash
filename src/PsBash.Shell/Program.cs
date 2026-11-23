@@ -86,12 +86,21 @@ if (shellArgs.NoExec && !shellArgs.Interactive)
     string? text = shellArgs.Command;
     if (text is null && shellArgs.ScriptPath is not null)
     {
-        if (!File.Exists(shellArgs.ScriptPath))
+        if (ScriptFile.CheckOpenable(shellArgs.ScriptPath) is { } noexecOpen)
         {
-            Console.Error.WriteLine($"ps-bash: {shellArgs.ScriptPath}: No such file or directory");
-            return 127;
+            Console.Error.WriteLine(noexecOpen.Message);
+            return noexecOpen.Status;
         }
-        text = await File.ReadAllTextAsync(shellArgs.ScriptPath);
+        try
+        {
+            text = await File.ReadAllTextAsync(shellArgs.ScriptPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            var failure = ScriptFile.ReadFailure(shellArgs.ScriptPath, ex);
+            Console.Error.WriteLine(failure.Message);
+            return failure.Status;
+        }
     }
     if (text is null && Console.IsInputRedirected) text = await Console.In.ReadToEndAsync();
     if (text is null) return 0;
@@ -202,10 +211,10 @@ Func<Task<IWorker>> workerFactory = async () =>
 // stdin redirection so `ps-bash script.sh < /dev/null` does not enter stdin mode.
 if (shellArgs.ScriptPath is not null)
 {
-    if (!File.Exists(shellArgs.ScriptPath))
+    if (ScriptFile.CheckOpenable(shellArgs.ScriptPath) is { } scriptOpen)
     {
-        Console.Error.WriteLine($"ps-bash: {shellArgs.ScriptPath}: No such file or directory");
-        return 2;
+        Console.Error.WriteLine(scriptOpen.Message);
+        return scriptOpen.Status;
     }
 
     if (shellArgs.ScriptPath.EndsWith(".ps1", StringComparison.OrdinalIgnoreCase))
@@ -232,10 +241,11 @@ if (shellArgs.ScriptPath is not null)
             MaxCommandInputChars,
             "script exceeds the maximum supported command input size.").ConfigureAwait(false);
     }
-    catch (IOException ex)
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
     {
-        Console.Error.WriteLine($"ps-bash: {shellArgs.ScriptPath}: {ex.Message}");
-        return 2;
+        var failure = ScriptFile.ReadFailure(shellArgs.ScriptPath, ex);
+        Console.Error.WriteLine(failure.Message);
+        return failure.Status;
     }
 
     if (ScriptFile.LooksBinary(scriptContent))

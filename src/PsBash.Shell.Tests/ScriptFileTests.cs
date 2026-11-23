@@ -24,4 +24,66 @@ public sealed class ScriptFileTests
         Assert.True(ScriptFile.LooksBinary(new string('a', 79) + "\0"));
         Assert.False(ScriptFile.LooksBinary(new string('a', 80) + "\0"));
     }
+
+    // bash open_shell_script: ENOENT -> 127, a directory -> 126 "Is a directory" (oracle: `bash /nonexist.sh` -> 127,
+    // `bash "$(mktemp -d)"` -> 126). The launcher once answered 2 on the run path and 127 on the `-n` path.
+    [Fact]
+    public void CheckOpenable_MissingFile_Is127()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"ps-bash-missing-{Guid.NewGuid():N}.sh");
+        var failure = ScriptFile.CheckOpenable(path);
+        Assert.NotNull(failure);
+        Assert.Equal(127, failure.Value.Status);
+        Assert.EndsWith(": No such file or directory", failure.Value.Message);
+    }
+
+    [Fact]
+    public void CheckOpenable_Directory_Is126()
+    {
+        var dir = Directory.CreateTempSubdirectory("ps-bash-scriptdir-").FullName;
+        try
+        {
+            var failure = ScriptFile.CheckOpenable(dir);
+            Assert.NotNull(failure);
+            Assert.Equal(126, failure.Value.Status);
+            Assert.Equal($"{dir}: {dir}: Is a directory", failure.Value.Message);
+        }
+        finally
+        {
+            Directory.Delete(dir);
+        }
+    }
+
+    [Fact]
+    public void CheckOpenable_ExistingFile_IsNull()
+    {
+        var path = Path.GetTempFileName();
+        try { Assert.Null(ScriptFile.CheckOpenable(path)); }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void ReadFailure_OnlyAMissingFileIs127()
+    {
+        Assert.Equal(127, ScriptFile.ReadFailure("s", new FileNotFoundException()).Status);
+        Assert.Equal(127, ScriptFile.ReadFailure("s", new DirectoryNotFoundException()).Status);
+        Assert.Equal(126, ScriptFile.ReadFailure("s", new UnauthorizedAccessException()).Status);
+        Assert.Equal(126, ScriptFile.ReadFailure("s", new IOException("sharing violation")).Status);
+    }
+
+    // Guard: every `ps-bash FILE` path checks FILE through ScriptFile, so the run and `-n` paths cannot drift apart again.
+    [Fact]
+    public void Launcher_ChecksTheScriptFileOnlyThroughScriptFile()
+    {
+        var dir = new DirectoryInfo(Path.GetDirectoryName(typeof(ScriptFileTests).Assembly.Location)!);
+        while (dir is not null && dir.Name != "src" && dir.Parent is not null)
+            dir = dir.Parent;
+        var programPath = Path.Combine(dir!.FullName, "PsBash.Shell", "Program.cs");
+        Assert.True(File.Exists(programPath), $"Could not find {programPath}");
+
+        var src = File.ReadAllText(programPath);
+        Assert.DoesNotContain("File.Exists(shellArgs.ScriptPath)", src);
+        Assert.DoesNotContain("Directory.Exists(shellArgs.ScriptPath)", src);
+        Assert.DoesNotContain("File.ReadAllTextAsync(shellArgs.ScriptPath);\n        }\n        catch (IOException", src);
+    }
 }
