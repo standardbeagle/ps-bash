@@ -775,6 +775,42 @@ public class ShellLanguageGapDifferentialTests
         """);
 
     /// <summary>
+    /// A command fed a pipe or its own <c>&lt;</c> file whose emission is a statement list (exec's, an env prefix's) or an
+    /// expression (<c>true</c>) reads that input, and exec still ends its subshell. REGRESSION (ec198f16): the stage after the
+    /// file was wrapped in <c>&amp; { }</c>, whose statements never saw it: <c>( exec cat &lt; &lt;(echo q3) )</c> printed
+    /// nothing and <c>( exec cat &lt; f; echo after )</c> printed only "after"; <c>echo q | { X=1 cat; }</c> printed nothing.
+    /// </summary>
+    [SkippableFact]
+    public Task FedStatementListStage_ReadsItsInput() => SameAsScript(
+        """
+        {
+        printf 'f1\nf2\n' > f
+        echo "1:$( ( exec cat < <(echo q3) ) )"
+        echo "2:$( ( exec cat < f; echo after ) | tr '\n' ' ')"
+        echo "3:$( ( exec 2>/dev/null cat < f; echo after ) | tr '\n' ' ')"
+        y=$(exec cat < f); echo "4:$y" | tr '\n' ' '; echo
+        echo "5:$( ( exec tr a-z A-Z < <(echo low) ) )"
+        echo "6:$(X=1 exec cat < f | tr '\n' ' ')"
+        echo "7:$(exec cat < <(echo ps))"
+        k() { exec cat < f; echo notreached; }
+        echo "8:$( ( k ) | tr '\n' ' ')"
+        echo "9:$( exec cat < f 2>/dev/null | tr '\n' ' ')"
+        echo "10:$( ( exec cat <<< hs ) )"
+        echo "11:$(echo q | exec cat)"
+        echo "12:$(cat f | { exec cat; } | tr '\n' ' ')"
+        echo "13:$(set -o pipefail; echo q | exec 2>/dev/null cat)"
+        echo "14:$(echo q | { X=1 cat; })"
+        echo "15:$(echo q | { X=1 tr a-z A-Z; })"
+        echo "16:$(echo q | ( X=1 cat ))"
+        echo "17:$(while read -r l; do X=1 cat; echo "r=$l"; done < f | tr '\n' ' ')"
+        true < f; echo "18:$?"; : < f; echo "19:$?"; false < f; echo "20:$?"
+        g() { echo q | return 3; }; g; echo "21:$?"
+        echo "22:$(fn() { cat; }; fn < f | tr '\n' ' ')"
+        ( exec cat < missing; echo after ) 2>/dev/null; echo "23:$?"
+        } 2>&1
+        """);
+
+    /// <summary>
     /// <c>break</c> / <c>continue</c> / <c>return</c> / <c>exit</c> / <c>shift</c> / <c>history</c> with a bad operand report
     /// with the shell prefix and the line they are on: "numeric argument required" (break/continue end the shell with 128;
     /// return and exit 2; shift 1, the line goes on), a loop jump with no loop warns. REGRESSION: no prefix, an earlier
