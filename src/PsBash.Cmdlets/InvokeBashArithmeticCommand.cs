@@ -49,6 +49,16 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
     [Parameter]
     public string? Label { get; set; }
 
+    /// <summary>
+    /// The parameter expansion whose slice bound the expression is (<c>s</c>, <c>a[@]</c>, <c>@</c>), which bash names
+    /// in an error as a <see cref="Label"/> is named: <c>s.sh: line 2: s: 08: value too great for base</c>. Unlike a
+    /// label it names no command: the bound is part of a WORD, so a failure abandons the command (or drops the line) as
+    /// <c>$(( 08 ))</c> does. REGRESSION: slices passed the name as <c>-Label</c>, which made every slice error a
+    /// command's, and <c>x=${s:08}; echo same</c> printed same.
+    /// </summary>
+    [Parameter]
+    public string? Expansion { get; set; }
+
     /// <summary>The expression is an array subscript (<c>${a[1/0]}</c>, <c>a[1/0]=x</c>): see
     /// <see cref="FileSystemHelpers.MarkExpansionFailed(PSCmdlet, bool)"/>.</summary>
     [Parameter]
@@ -56,7 +66,7 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
 
     /// <summary>Every arithmetic error is the shell's diagnostic: its prefix, then the label (<see cref="ShellDiagnostic"/>).</summary>
     private void ReportError(string body)
-        => FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + (Label is null ? "" : Label + ": ") + body);
+        => FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + ((Label ?? Expansion) is { } named ? named + ": " : "") + body);
 
     protected override void EndProcessing()
     {
@@ -106,12 +116,14 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
     /// <c>$__psbash_av = Invoke-BashArith ...</c>). The command and condition forms (<c>(( expr ))</c>,
     /// <c>[[ a -eq b ]]</c>: <c>@(Invoke-BashArith ...)</c>, <c>[long](Invoke-BashArith ...)</c>) are not words:
     /// only a failed WORD abandons the command it belongs to. A <see cref="Label"/> names the COMMAND evaluating the
-    /// expression (<c>((</c>, <c>let</c>, <c>[[</c>), so a labelled call is never a word, whatever text surrounds it.
+    /// expression (<c>((</c>, <c>let</c>, <c>[[</c>), so a labelled call is never a word, whatever text surrounds it;
+    /// a slice bound (<see cref="Expansion"/>) always is one.
     /// REGRESSION: under a nounset-capable script every arithmetic call is wrapped as <c>$__psbash_av = ...</c>, so
     /// <c>(( 1/0 )) 2>/dev/null; echo x</c> was taken for a failed word and the echo was dropped.
     /// </summary>
     private bool IsWordExpansion()
     {
+        if (Expansion is not null) return true;
         if (Label is not null) return false;
         var before = (MyInvocation.Line ?? "").AsSpan();
         int at = MyInvocation.OffsetInLine - 1;

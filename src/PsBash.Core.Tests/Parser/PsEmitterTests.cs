@@ -677,12 +677,11 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_ArithNestedArithSub_StaysOnTheLiteralEvaluatorPath()
     {
-        // `$((…))` inside arithmetic is a NESTED arithmetic expansion, not a
-        // subshell command substitution: dropping the `$` leaves `((…))`, which the
-        // evaluator's existing paren grouping already handles. It must NOT be
-        // mistaken for a command sub and shelled out.
+        // `$((…))` inside arithmetic is a NESTED arithmetic expansion, not a subshell command substitution: it must NOT
+        // be shelled out. It is a word of its own, evaluated first and pasted into the outer expression as text (bash:
+        // `x$((1))` is the name x1; `1 + $((08))` fails as `08: ...` and drops the line). ArithmeticWordGuardTests.
         var result = PsEmitter.Transpile("echo $(( $((2+3)) * 4 ))");
-        Assert.Equal(PsBuild.DiscardLineScope(ArithEcho("$(Invoke-BashArith '$((2+3)) * 4 ')")), result);
+        Assert.Equal(PsBuild.DiscardLineScope(ArithEcho("$(Invoke-BashArith ('' + $(Invoke-BashArith '2+3') + ' * 4 '))")), result);
     }
 
     [Fact]
