@@ -35,9 +35,8 @@ public class LsEnvironmentTests : IClassFixture<SharedPwshFixture>
 
     private static void With(string name, string? value, Action body)
     {
-        var old = Environment.GetEnvironmentVariable(name);
-        try { Environment.SetEnvironmentVariable(name, value); body(); }
-        finally { Environment.SetEnvironmentVariable(name, old); }
+        using var env = PsBash.Testing.ProcessEnv.Set(name, value);
+        body();
     }
 
     [Fact]

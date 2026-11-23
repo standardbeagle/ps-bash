@@ -1,4 +1,5 @@
 using PsBash.Host.Runtime;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Host.Tests.Runtime;
@@ -12,14 +13,22 @@ namespace PsBash.Host.Tests.Runtime;
 ///
 /// Oracle note (qa-rubric Directive 1): ps-bash-specific host behavior (no bash
 /// oracle in-process); hand-written asserts are justified per the exception list.
+/// <para>A command given a block REPLACES this process's environment, and the scripts set <c>$env:</c> names they
+/// build: the class runs alone (which also keeps it off the SdkHost lane) and puts the whole environment back.</para>
 /// </summary>
-[Collection("SdkHost")]
+[Collection(ProcessEnvironmentCollection.Name)]
 public class SdkWorkerEnvironmentTests : IAsyncLifetime
 {
     private readonly HostWorkerFixture _fixture = new();
+    private readonly ProcessEnv _env = ProcessEnv.PreserveAll();
 
     public Task InitializeAsync() => _fixture.InitializeAsync();
-    public Task DisposeAsync() => _fixture.DisposeAsync();
+
+    public async Task DisposeAsync()
+    {
+        await _fixture.DisposeAsync();
+        _env.Dispose();
+    }
 
     /// <summary>
     /// Build a realistic launcher environment block: the current process

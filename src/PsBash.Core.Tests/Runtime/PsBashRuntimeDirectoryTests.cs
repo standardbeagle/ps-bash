@@ -11,7 +11,7 @@ namespace PsBash.Core.Tests.Runtime;
 /// and every use must verify the owner is the current uid and the mode is not
 /// group/world-writable. Windows <c>%TEMP%</c> is already per-user and unaffected.
 /// </summary>
-[Collection("EnvVar")]
+[Collection(ProcessEnvironmentCollection.Name)]
 public class PsBashRuntimeDirectoryTests : IDisposable
 {
     private static readonly UnixFileMode PrivateMode =

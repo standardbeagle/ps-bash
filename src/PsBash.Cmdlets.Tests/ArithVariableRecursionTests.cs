@@ -7,15 +7,20 @@ namespace PsBash.Cmdlets.Tests;
 /// <c>loop='i&lt;=100&amp;&amp;(s+=i,i++,loop)' s=0 i=0; echo $((a=loop,s))</c> is 5050, and a cycle
 /// (<c>a=b b=a; $((a))</c>) fails with "expression recursion level exceeded", status 1. A seen-names guard read the second
 /// mention of a name as 0: the recursion stopped after one step, and <c>b+b</c> counted b once.
+/// The scripts set <c>$env:zz*</c> in the process environment, so the class runs alone and restores them.
 /// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
 public class ArithVariableRecursionTests : IClassFixture<SharedPwshFixture>
 {
     private readonly SharedPwshFixture _fixture;
 
     public ArithVariableRecursionTests(SharedPwshFixture fixture) { _fixture = fixture; }
 
-    private CmdResult Run(string script) => CmdResult.Run(_fixture.AcquireFresh(),
-        "try { " + script + " } finally { Remove-Item env:zzloop, env:zzs, env:zzi, env:zza, env:zzb, env:zzc -ErrorAction Ignore }");
+    private CmdResult Run(string script)
+    {
+        using var env = PsBash.Testing.ProcessEnv.Preserve("zzloop", "zzs", "zzi", "zza", "zzb", "zzc");
+        return CmdResult.Run(_fixture.AcquireFresh(), script);
+    }
 
     [Fact]
     public void Arith_SelfReferencingLoopVariable_RecursesToTheEnd()

@@ -1,7 +1,14 @@
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Cmdlets.Tests;
 
+/// <summary>
+/// A sourced file's <c>export</c> lands in the process environment (the variable store), and the knobs these cases
+/// turn (<c>PSBASH_UNIX_PATHS</c>, the whole-document cap) are process-wide: the class runs alone and every case
+/// restores what it touched.
+/// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
 public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
 {
     private readonly SharedPwshFixture _fixture;
@@ -17,9 +24,9 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         var pwsh = _fixture.AcquireFresh();
         var tempFile = Path.Combine(Path.GetTempPath(), $"psbash_source_test_{Guid.NewGuid()}.env");
         File.WriteAllText(tempFile, "export PSBASH_SOURCE_TEST_FOO=bar");
+        using var env = ProcessEnv.Set("PSBASH_SOURCE_TEST_FOO", null);
         try
         {
-            Environment.SetEnvironmentVariable("PSBASH_SOURCE_TEST_FOO", null);
             pwsh.AddScript($"Invoke-BashSource '{tempFile.Replace("'", "''")}'").Invoke();
             pwsh.Commands.Clear();
             var result = pwsh.AddScript("$env:PSBASH_SOURCE_TEST_FOO").Invoke();
@@ -28,7 +35,6 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
-            Environment.SetEnvironmentVariable("PSBASH_SOURCE_TEST_FOO", null);
             File.Delete(tempFile);
         }
     }
@@ -57,9 +63,9 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         var pwsh = _fixture.AcquireFresh();
         var tempFile = Path.Combine(Path.GetTempPath(), $"psbash_source_test_{Guid.NewGuid()}.ps1");
         File.WriteAllText(tempFile, "$env:PSBASH_SOURCE_PS1_TEST = 'fromps1'");
+        using var env = ProcessEnv.Set("PSBASH_SOURCE_PS1_TEST", null);
         try
         {
-            Environment.SetEnvironmentVariable("PSBASH_SOURCE_PS1_TEST", null);
             pwsh.AddScript($"Invoke-BashSource '{tempFile.Replace("'", "''")}'").Invoke();
             pwsh.Commands.Clear();
             var result = pwsh.AddScript("$env:PSBASH_SOURCE_PS1_TEST").Invoke();
@@ -68,7 +74,6 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
-            Environment.SetEnvironmentVariable("PSBASH_SOURCE_PS1_TEST", null);
             File.Delete(tempFile);
         }
     }
@@ -79,9 +84,9 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         var pwsh = _fixture.AcquireFresh();
         var tempFile = Path.Combine(Path.GetTempPath(), $"psbash_source_test_{Guid.NewGuid()}.sh");
         File.WriteAllText(tempFile, "export PSBASH_SOURCE_ARG_TEST=$1");
+        using var env = ProcessEnv.Set("PSBASH_SOURCE_ARG_TEST", null);
         try
         {
-            Environment.SetEnvironmentVariable("PSBASH_SOURCE_ARG_TEST", null);
             pwsh.AddScript(
                 $"Invoke-BashSource '{tempFile.Replace("'", "''")}' hello")
                 .Invoke();
@@ -92,7 +97,6 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
-            Environment.SetEnvironmentVariable("PSBASH_SOURCE_ARG_TEST", null);
             File.Delete(tempFile);
         }
     }
@@ -103,9 +107,9 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         var pwsh = _fixture.AcquireFresh();
         var tempFile = Path.Combine(Path.GetTempPath(), $"psbash_source_test_{Guid.NewGuid()}.sh");
         File.WriteAllText(tempFile, "export PSBASH_SOURCE_BASH_TEST=baz");
+        using var env = ProcessEnv.Set("PSBASH_SOURCE_BASH_TEST", null);
         try
         {
-            Environment.SetEnvironmentVariable("PSBASH_SOURCE_BASH_TEST", null);
             pwsh.AddScript($"Invoke-BashSource '{tempFile.Replace("'", "''")}'").Invoke();
             pwsh.Commands.Clear();
             var result = pwsh.AddScript("$env:PSBASH_SOURCE_BASH_TEST").Invoke();
@@ -114,7 +118,6 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
-            Environment.SetEnvironmentVariable("PSBASH_SOURCE_BASH_TEST", null);
             File.Delete(tempFile);
         }
     }
@@ -125,10 +128,9 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         var pwsh = _fixture.AcquireFresh();
         var tempFile = Path.Combine(Path.GetTempPath(), $"psbash_source_large_{Guid.NewGuid()}.sh");
         File.WriteAllText(tempFile, new string('#', 2048));
-        var priorCap = Environment.GetEnvironmentVariable("PSBASH_WHOLE_DOCUMENT_MAX_CHARS");
+        using var env = ProcessEnv.Set("PSBASH_WHOLE_DOCUMENT_MAX_CHARS", "1024");
         try
         {
-            Environment.SetEnvironmentVariable("PSBASH_WHOLE_DOCUMENT_MAX_CHARS", "1024");
             pwsh.Streams.Error.Clear();
             pwsh.AddScript($"Invoke-BashSource '{tempFile.Replace("'", "''")}'; $global:LASTEXITCODE").Invoke();
             pwsh.Commands.Clear();
@@ -139,7 +141,6 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
-            Environment.SetEnvironmentVariable("PSBASH_WHOLE_DOCUMENT_MAX_CHARS", priorCap);
             File.Delete(tempFile);
         }
     }
@@ -189,10 +190,9 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         File.Delete(translatedPath);
         pwsh.Streams.Error.Clear();
 
-        var oldUnixPaths = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
+        using var env = ProcessEnv.Set("PSBASH_UNIX_PATHS", "1");
         try
         {
-            Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
             pwsh.AddScript($"Invoke-BashSource '/tmp/{snapshotName}'").Invoke();
             pwsh.Commands.Clear();
 
@@ -201,7 +201,6 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
-            Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", oldUnixPaths);
             File.Delete(translatedPath);
         }
     }
@@ -216,11 +215,9 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         File.WriteAllText(translatedPath, "export PSBASH_SOURCE_UNIX_TMP_TEST=ok");
         pwsh.Streams.Error.Clear();
 
-        var oldUnixPaths = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
+        using var env = ProcessEnv.Set(("PSBASH_SOURCE_UNIX_TMP_TEST", null), ("PSBASH_UNIX_PATHS", "1"));
         try
         {
-            Environment.SetEnvironmentVariable("PSBASH_SOURCE_UNIX_TMP_TEST", null);
-            Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
             pwsh.AddScript($"Invoke-BashSource '/tmp/{fileName}'").Invoke();
             pwsh.Commands.Clear();
 
@@ -231,8 +228,6 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
-            Environment.SetEnvironmentVariable("PSBASH_SOURCE_UNIX_TMP_TEST", null);
-            Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", oldUnixPaths);
             File.Delete(translatedPath);
         }
     }
@@ -249,9 +244,9 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         var scriptName = "rel_source_test.sh";
         var scriptPath = Path.Combine(tempDir, scriptName);
         File.WriteAllText(scriptPath, "export PSBASH_REL_SOURCE_TEST=relative_ok");
+        using var env = ProcessEnv.Set("PSBASH_REL_SOURCE_TEST", null);
         try
         {
-            Environment.SetEnvironmentVariable("PSBASH_REL_SOURCE_TEST", null);
             // Change PS working directory to tempDir, then source by bare filename.
             pwsh.AddScript($"Set-Location '{tempDir.Replace("'", "''")}'").Invoke();
             pwsh.Commands.Clear();
@@ -263,7 +258,6 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
-            Environment.SetEnvironmentVariable("PSBASH_REL_SOURCE_TEST", null);
             File.Delete(scriptPath);
             Directory.Delete(tempDir);
         }
@@ -279,10 +273,9 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         var tempFile = Path.Combine(Path.GetTempPath(), $"psbash_source_multiarg_{Guid.NewGuid()}.sh");
         // Script exports FIRST=$1 and SECOND=$2 so caller can inspect both.
         File.WriteAllText(tempFile, "export PSBASH_MULTIARG_FIRST=$1\nexport PSBASH_MULTIARG_SECOND=$2");
+        using var env = ProcessEnv.Set(("PSBASH_MULTIARG_FIRST", null), ("PSBASH_MULTIARG_SECOND", null));
         try
         {
-            Environment.SetEnvironmentVariable("PSBASH_MULTIARG_FIRST", null);
-            Environment.SetEnvironmentVariable("PSBASH_MULTIARG_SECOND", null);
             pwsh.AddScript(
                 $"Invoke-BashSource '{tempFile.Replace("'", "''")}' alpha beta")
                 .Invoke();
@@ -297,8 +290,6 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
-            Environment.SetEnvironmentVariable("PSBASH_MULTIARG_FIRST", null);
-            Environment.SetEnvironmentVariable("PSBASH_MULTIARG_SECOND", null);
             File.Delete(tempFile);
         }
     }
@@ -318,9 +309,9 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         File.WriteAllText(scriptBPath, "export PSBASH_NESTED_TEST=from_b");
         // Script A sources script B using its absolute path.
         File.WriteAllText(scriptAPath, $"source '{scriptBPath.Replace("'", "\\'")}'");
+        using var env = ProcessEnv.Set("PSBASH_NESTED_TEST", null);
         try
         {
-            Environment.SetEnvironmentVariable("PSBASH_NESTED_TEST", null);
             pwsh.AddScript($"Invoke-BashSource '{scriptAPath.Replace("'", "''")}'").Invoke();
             pwsh.Commands.Clear();
             var result = pwsh.AddScript("$env:PSBASH_NESTED_TEST").Invoke();
@@ -329,7 +320,6 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
-            Environment.SetEnvironmentVariable("PSBASH_NESTED_TEST", null);
             File.Delete(scriptAPath);
             File.Delete(scriptBPath);
         }

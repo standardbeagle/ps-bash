@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using PsBash.Core.Runtime;
 using PsBash.Core.Runtime.Ipc;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Host.Tests.Server;
@@ -58,8 +59,7 @@ public sealed class HostStartupStressTests
         Skip.If(hostBinary is null, "ps-bash-host binary not found — build src/PsBash.Host first");
 
         var (spec, scheme, endpoint) = NewIsolatedEndpoint("herd");
-        var prior = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
-        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, spec);
+        using var env = ProcessEnv.Set(IpcTransportFactory.EndpointEnvVar, spec);
         var spawnKey = $"{scheme}:{endpoint}";
         IpcWorker.SpawnCounts.TryRemove(spawnKey, out _);
 
@@ -114,7 +114,6 @@ public sealed class HostStartupStressTests
                 catch { /* already gone */ }
             }
             IpcWorker.SpawnCounts.TryRemove(spawnKey, out _);
-            Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, prior);
             CleanupEndpoint(scheme, endpoint);
         }
     }
@@ -133,8 +132,7 @@ public sealed class HostStartupStressTests
         Skip.If(hostBinary is null, "ps-bash-host binary not found — build src/PsBash.Host first");
 
         var (spec, scheme, endpoint) = NewIsolatedEndpoint("killed");
-        var prior = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
-        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, spec);
+        using var env = ProcessEnv.Set(IpcTransportFactory.EndpointEnvVar, spec);
         var spawnKey = $"{scheme}:{endpoint}";
         IpcWorker.SpawnCounts.TryRemove(spawnKey, out _);
 
@@ -175,7 +173,6 @@ public sealed class HostStartupStressTests
             }
             PendingHostSpawn.Clear(endpoint);
             IpcWorker.SpawnCounts.TryRemove(spawnKey, out _);
-            Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, prior);
             CleanupEndpoint(scheme, endpoint);
         }
     }

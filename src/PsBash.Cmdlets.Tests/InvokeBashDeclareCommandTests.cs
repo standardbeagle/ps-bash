@@ -8,12 +8,18 @@ namespace PsBash.Cmdlets.Tests;
 /// (`f(){ :; }; declare -f f` → "f () ", "{ ", "    :", "}", exit 0; `declare -f nosuch` → no output, exit 1;
 /// `declare -F f` → "f"; `declare -F` → "declare -f f"; `declare -p x` → `declare -- x="1"`).
 /// The body is the function's emitted PowerShell (bash source is not kept) — hand-asserted for that reason.
+/// The scripts set <c>$env:psbvar_*</c>/<c>$env:PSModulePath</c> in the process environment, so the class runs alone
+/// and each test puts the whole environment back.
 /// </summary>
-public class InvokeBashDeclareCommandTests : IClassFixture<SharedPwshFixture>
+[Collection(ProcessEnvironmentCollection.Name)]
+public class InvokeBashDeclareCommandTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
     private readonly SharedPwshFixture _fixture;
+    private readonly PsBash.Testing.ProcessEnv _env = PsBash.Testing.ProcessEnv.PreserveAll();
 
     public InvokeBashDeclareCommandTests(SharedPwshFixture fixture) => _fixture = fixture;
+
+    public void Dispose() => _env.Dispose();
 
     /// <summary>A function exactly as the transpiler defines a bash function.</summary>
     private static string BashFunction(string name, string body) =>

@@ -62,8 +62,7 @@ public class AwkPipeStopTests : IClassFixture<SharedPwshFixture>
         var dir = Path.Combine(Path.GetTempPath(), "ps-bash", "awk-stop-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         var pidFile = Path.Combine(dir, "cmd.pid");
-        var previous = Environment.GetEnvironmentVariable("PSBASH_NESTED_EXE");
-        Environment.SetEnvironmentVariable("PSBASH_NESTED_EXE", ShellExe());
+        using var env = PsBash.Testing.ProcessEnv.Set("PSBASH_NESTED_EXE", ShellExe());
         int pid = 0;
         try
         {
@@ -80,7 +79,6 @@ public class AwkPipeStopTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
-            Environment.SetEnvironmentVariable("PSBASH_NESTED_EXE", previous);
             try { Directory.Delete(dir, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
     }

@@ -1,6 +1,7 @@
 using System.Text;
 using PsBash.Core.Transpiler;
 using PsBash.Host.Runtime;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Host.Tests.Runtime;
@@ -15,23 +16,22 @@ namespace PsBash.Host.Tests.Runtime;
 /// <c>BackgroundJobDifferentialTests</c>; these probe the in-host properties the oracle cannot see (stream routing,
 /// frames, queue bound, teardown of a blocked job).</para>
 /// </summary>
-[Collection("SdkHost")]
+[Collection(ProcessEnvironmentCollection.Name)] // PSBASH_BG_MODE; runs alone, so off the SdkHost lane too
 public class BackgroundJobLiveOutputTests : IAsyncLifetime
 {
     private readonly HostWorkerFixture _fixture = new();
-    private string? _bgMode;
+    private ProcessEnv? _env;
 
     public async Task InitializeAsync()
     {
         // The default runspace-pool job (no extra process); `-Isolated` jobs would otherwise need ps-bash-host.exe.
-        _bgMode = Environment.GetEnvironmentVariable("PSBASH_BG_MODE");
-        Environment.SetEnvironmentVariable("PSBASH_BG_MODE", "inproc");
+        _env = ProcessEnv.Set("PSBASH_BG_MODE", "inproc");
         await _fixture.InitializeAsync();
     }
 
     public async Task DisposeAsync()
     {
-        Environment.SetEnvironmentVariable("PSBASH_BG_MODE", _bgMode);
+        _env?.Dispose();
         await _fixture.DisposeAsync();
     }
 

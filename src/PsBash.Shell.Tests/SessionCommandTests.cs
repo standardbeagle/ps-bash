@@ -1,5 +1,6 @@
 using BrokerState = PsBash.Shell.Sessions.TerminalClient.BrokerState;
 using TerminalClient = PsBash.Shell.Sessions.TerminalClient;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Shell.Tests;
@@ -85,16 +86,19 @@ public sealed class SessionCommandTests
             await TerminalClient.ProbeAsync(
                 Path.Combine(Path.GetTempPath(), "psb-no-such-" + Guid.NewGuid().ToString("N")[..8] + "-t.sock"),
                 CancellationToken.None));
+}
 
+/// <summary>
+/// <see cref="SessionCommandTests"/>' environment-gated case: <c>PSBASH_SESSION</c> is process environment, so it runs
+/// alone (<see cref="ProcessEnvironmentCollection"/>) and restores it.
+/// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
+public sealed class SessionCommandEnvironmentTests
+{
     [Fact]
     public void IsStatefulSessionActive_WithoutANamedSession_IsFalse()
     {
-        var saved = Environment.GetEnvironmentVariable("PSBASH_SESSION");
-        try
-        {
-            Environment.SetEnvironmentVariable("PSBASH_SESSION", null);
-            Assert.False(SessionCommands.IsStatefulSessionActive());
-        }
-        finally { Environment.SetEnvironmentVariable("PSBASH_SESSION", saved); }
+        using var env = ProcessEnv.Set("PSBASH_SESSION", null);
+        Assert.False(SessionCommands.IsStatefulSessionActive());
     }
 }

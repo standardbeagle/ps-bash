@@ -16,7 +16,12 @@ public class ConvertToBashWordsTests : IClassFixture<SharedPwshFixture>
 
     public ConvertToBashWordsTests(SharedPwshFixture fixture) => _fixture = fixture;
 
-    private CmdResult Run(string script) => CmdResult.Run(_fixture.AcquireFresh(), script);
+    // Some scripts set $env:IFS / $env:PSB_ENVTEST (the class runs alone in the cwd collection); the scope restores them.
+    private CmdResult Run(string script)
+    {
+        using var env = PsBash.Testing.ProcessEnv.Preserve("IFS", "PSB_ENVTEST");
+        return CmdResult.Run(_fixture.AcquireFresh(), script);
+    }
 
     // ───────────── pure splitter ─────────────
 

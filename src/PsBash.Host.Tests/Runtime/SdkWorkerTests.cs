@@ -1,4 +1,5 @@
 using PsBash.Host.Runtime;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Host.Tests.Runtime;
@@ -233,49 +234,6 @@ public class SdkWorkerTests : IAsyncLifetime
         Assert.Contains(run.Lines, l => l.Contains("USB Root Hub") && l.Contains("OK"));
     }
 
-    // Opt-in styled default output: with PSBASH_DEFAULT_FORMAT=styled, the same native
-    // PSObject pipeline is rendered by Format-Styled (Strata/Spectre) instead of Out-String,
-    // so the output carries ANSI SGR escapes and NOT the stock formatter's dashed separator.
-    // Oracle note (Directive 1): ps-bash-specific (no bash equivalent) — asserts on the
-    // cmdlet surface. Env-gated and restored so no other test sees the flag.
-    [SkippableFact]
-    public async Task ExecuteAsync_StyledDefaultFlag_RendersNativePSObjectsWithAnsi()
-    {
-        Skip.IfNot(
-            PsBash.Core.Runtime.ModuleExtractor.ExtractEmbedded() is not null
-            && Directory.GetFiles(Path.GetDirectoryName(PsBash.Core.Runtime.ModuleExtractor.GetCmdletsDllPath())!, "Strata.*.dll").Length > 0,
-            "Strata is not built in (UseStrata=false): Format-Styled is compiled out.");
-        var priorFormat = Environment.GetEnvironmentVariable("PSBASH_DEFAULT_FORMAT");
-        var priorNoColor = Environment.GetEnvironmentVariable("NO_COLOR");
-        try
-        {
-            Environment.SetEnvironmentVariable("PSBASH_DEFAULT_FORMAT", "styled");
-            Environment.SetEnvironmentVariable("NO_COLOR", null); // ensure ANSI is emitted
-
-            var script = @"
-                [PSCustomObject]@{ FriendlyName = 'Intel USB 3.10'; Status = 'OK' }
-                [PSCustomObject]@{ FriendlyName = 'USB Root Hub';   Status = 'OK' }
-            ";
-            var run = await _fixture.ExecuteCapturedAsync(script);
-            Assert.Equal(0, run.ExitCode);
-            Assert.NotEmpty(run.Lines);
-
-            var joined = string.Join("\n", run.Lines);
-            // Strata/Spectre emitted ANSI styling — the styled path, not Out-String.
-            Assert.Matches("\\x1b\\[[0-9;]*m", joined);
-            // The data is still present (styled, not lost).
-            Assert.Contains("Intel USB 3.10", joined);
-            Assert.Contains("USB Root Hub", joined);
-            // The stock Out-String formatter's dashed header separator must be ABSENT.
-            Assert.DoesNotContain(run.Lines, l => l.Contains("------------") && l.Contains("------"));
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("PSBASH_DEFAULT_FORMAT", priorFormat);
-            Environment.SetEnvironmentVariable("NO_COLOR", priorNoColor);
-        }
-    }
-
     // BashText-bearing objects must continue to stream as plain text and must
     // NOT be re-rendered through the formatter (which would add headers like
     // "BashText" and a separator). This is the regression bar for the existing
@@ -337,6 +295,99 @@ public class SdkWorkerTests : IAsyncLifetime
         Assert.DoesNotContain(run.Lines, l => l.StartsWith("@{"));
     }
 
+    // Regression guard: the discovery fallback must NOT swallow genuine unknowns —
+    // a command no module exports still exits 127 (bash "command not found").
+    [Fact]
+    public async Task ExecuteAsync_GenuineUnknownCommand_StillExits127()
+    {
+        var missing = "pbnope" + Guid.NewGuid().ToString("N")[..8];
+        var run = await _fixture.ExecuteCapturedAsync(missing);
+        Assert.Equal(127, run.ExitCode);
+    }
+
+    // P3: the live CompleteInput path must run PowerShell's own completion engine against the
+    // runspace and honor Register-ArgumentCompleter — the parameter-value mechanism the
+    // interactive completion engine uses for dynamic values.
+    [Fact]
+    public async Task CompleteInput_HonorsRegisterArgumentCompleter()
+    {
+        var worker = _fixture.CreateWorker();
+        await worker.ExecuteAsync(
+            "function Test-Paint { param([string]$Color) }; " +
+            "Register-ArgumentCompleter -CommandName Test-Paint -ParameterName Color -ScriptBlock { " +
+            "  param($commandName,$parameterName,$wordToComplete,$commandAst,$fakeBound) " +
+            "  'crimson','cobalt','coral' | Where-Object { $_ -like \"$wordToComplete*\" } | " +
+            "  ForEach-Object { [System.Management.Automation.CompletionResult]::new($_) } }");
+
+        var completer = (ICompletionWorker)worker;
+        const string fragment = "Test-Paint -Color co";
+        var matches = await completer.CompleteInputAsync(fragment, fragment.Length);
+
+        Assert.Contains("cobalt", matches);
+        Assert.Contains("coral", matches);
+        Assert.DoesNotContain("crimson", matches); // does not match the "co" word
+    }
+}
+
+/// <summary>
+/// <see cref="SdkWorkerTests"/>' environment-gated case: <c>PSBASH_DEFAULT_FORMAT</c> and <c>NO_COLOR</c> are process
+/// environment, so it runs alone (<see cref="ProcessEnvironmentCollection"/>, which also keeps it off the SdkHost lane)
+/// and restores both.
+/// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
+public class SdkWorkerStyledDefaultTests : IAsyncLifetime
+{
+    private readonly HostWorkerFixture _fixture = new();
+
+    public Task InitializeAsync() => _fixture.InitializeAsync();
+    public Task DisposeAsync() => _fixture.DisposeAsync();
+
+    // Opt-in styled default output: with PSBASH_DEFAULT_FORMAT=styled, the same native
+    // PSObject pipeline is rendered by Format-Styled (Strata/Spectre) instead of Out-String,
+    // so the output carries ANSI SGR escapes and NOT the stock formatter's dashed separator.
+    // Oracle note (Directive 1): ps-bash-specific (no bash equivalent) — asserts on the
+    // cmdlet surface.
+    [SkippableFact]
+    public async Task ExecuteAsync_StyledDefaultFlag_RendersNativePSObjectsWithAnsi()
+    {
+        Skip.IfNot(
+            PsBash.Core.Runtime.ModuleExtractor.ExtractEmbedded() is not null
+            && Directory.GetFiles(Path.GetDirectoryName(PsBash.Core.Runtime.ModuleExtractor.GetCmdletsDllPath())!, "Strata.*.dll").Length > 0,
+            "Strata is not built in (UseStrata=false): Format-Styled is compiled out.");
+        using var env = ProcessEnv.Set(("PSBASH_DEFAULT_FORMAT", "styled"), ("NO_COLOR", null)); // NO_COLOR unset: ANSI is emitted
+
+        var script = @"
+            [PSCustomObject]@{ FriendlyName = 'Intel USB 3.10'; Status = 'OK' }
+            [PSCustomObject]@{ FriendlyName = 'USB Root Hub';   Status = 'OK' }
+        ";
+        var run = await _fixture.ExecuteCapturedAsync(script);
+        Assert.Equal(0, run.ExitCode);
+        Assert.NotEmpty(run.Lines);
+
+        var joined = string.Join("\n", run.Lines);
+        // Strata/Spectre emitted ANSI styling — the styled path, not Out-String.
+        Assert.Matches("\\x1b\\[[0-9;]*m", joined);
+        // The data is still present (styled, not lost).
+        Assert.Contains("Intel USB 3.10", joined);
+        Assert.Contains("USB Root Hub", joined);
+        // The stock Out-String formatter's dashed header separator must be ABSENT.
+        Assert.DoesNotContain(run.Lines, l => l.Contains("------------") && l.Contains("------"));
+    }
+}
+
+/// <summary>
+/// <see cref="SdkWorkerTests"/>' module-discovery cases: each script prepends a temp module root to
+/// <c>$env:PSModulePath</c>, and the SDK runspace is in this process, so that is the process environment. They run
+/// alone (<see cref="ProcessEnvironmentCollection"/>, which also keeps them off the SdkHost lane) and restore it.
+/// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
+public class SdkWorkerModulePathTests : IAsyncLifetime
+{
+    private readonly HostWorkerFixture _fixture = new();
+
+    public Task InitializeAsync() => _fixture.InitializeAsync();
+    public Task DisposeAsync() => _fixture.DisposeAsync();
+
     // Regression: an auto-loadable *alias* must resolve via the CommandNotFoundAction
     // discovery fallback. The SDK runspace bypasses the normal module auto-loader (to
     // dodge the v5 PSSnapIn TypeLoadException), which left alias-triggered auto-load
@@ -349,6 +400,7 @@ public class SdkWorkerTests : IAsyncLifetime
     public async Task ExecuteAsync_AutoloadableAlias_ResolvesViaDiscoveryFallback()
     {
         var token = Guid.NewGuid().ToString("N")[..8];
+        using var env = ProcessEnv.Preserve("PSModulePath"); // the script prepends a temp module root
         var modName = "PbAutoload" + token;
         var funcName = "Get-PbProbe" + token;
         var aliasName = "pbalias" + token;
@@ -399,6 +451,7 @@ public class SdkWorkerTests : IAsyncLifetime
     public async Task ExecuteAsync_BareWordMatchingExportOnlyByCase_Is127()
     {
         var token = Guid.NewGuid().ToString("N")[..8];
+        using var env = ProcessEnv.Preserve("PSModulePath"); // the script prepends a temp module root
         var modName = "PbCase" + token;
         var funcName = "Pbcase" + token;            // exported capitalised; the script calls it lower-case
         var root = Path.Combine(Path.GetTempPath(), "psbash-autoload-" + token);
@@ -433,38 +486,5 @@ public class SdkWorkerTests : IAsyncLifetime
         {
             try { Directory.Delete(root, recursive: true); } catch { /* best effort */ }
         }
-    }
-
-    // Regression guard: the discovery fallback must NOT swallow genuine unknowns —
-    // a command no module exports still exits 127 (bash "command not found").
-    [Fact]
-    public async Task ExecuteAsync_GenuineUnknownCommand_StillExits127()
-    {
-        var missing = "pbnope" + Guid.NewGuid().ToString("N")[..8];
-        var run = await _fixture.ExecuteCapturedAsync(missing);
-        Assert.Equal(127, run.ExitCode);
-    }
-
-    // P3: the live CompleteInput path must run PowerShell's own completion engine against the
-    // runspace and honor Register-ArgumentCompleter — the parameter-value mechanism the
-    // interactive completion engine uses for dynamic values.
-    [Fact]
-    public async Task CompleteInput_HonorsRegisterArgumentCompleter()
-    {
-        var worker = _fixture.CreateWorker();
-        await worker.ExecuteAsync(
-            "function Test-Paint { param([string]$Color) }; " +
-            "Register-ArgumentCompleter -CommandName Test-Paint -ParameterName Color -ScriptBlock { " +
-            "  param($commandName,$parameterName,$wordToComplete,$commandAst,$fakeBound) " +
-            "  'crimson','cobalt','coral' | Where-Object { $_ -like \"$wordToComplete*\" } | " +
-            "  ForEach-Object { [System.Management.Automation.CompletionResult]::new($_) } }");
-
-        var completer = (ICompletionWorker)worker;
-        const string fragment = "Test-Paint -Color co";
-        var matches = await completer.CompleteInputAsync(fragment, fragment.Length);
-
-        Assert.Contains("cobalt", matches);
-        Assert.Contains("coral", matches);
-        Assert.DoesNotContain("crimson", matches); // does not match the "co" word
     }
 }

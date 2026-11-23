@@ -22,9 +22,10 @@ namespace PsBash.Cmdlets.Tests;
 /// literal match, ignore-case, invert, fixed, count-only, line-numbers,
 /// only-matching, files-with-matches, pipeline + file dual mode, multi-
 /// file, CRLF, missing target (axis 14), alias, <c>--help</c>, and an
-/// injection probe per Directive 12.
+/// injection probe per Directive 12. The <c>PSBASH_SEARCH_NO_IGNORE</c> case sets the process
+/// environment, so the class runs alone.
 /// </summary>
-[Collection("PsBashSearchEnv")]
+[Collection(ProcessEnvironmentCollection.Name)]
 public class InvokeBashRgCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
     private readonly SharedPwshFixture _fixture;
@@ -230,16 +231,9 @@ public class InvokeBashRgCommandTests : IDisposable, IClassFixture<SharedPwshFix
         Directory.CreateDirectory(obj);
         File.WriteAllText(Path.Combine(obj, "artifact.txt"), "match\n");
 
-        Environment.SetEnvironmentVariable("PSBASH_SEARCH_NO_IGNORE", "1");
-        try
-        {
-            var lines = RunLines($"Invoke-BashRg match '{Q(_tmpDir)}'");
-            Assert.Equal(2, lines.Length);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("PSBASH_SEARCH_NO_IGNORE", null);
-        }
+        using var env = PsBash.Testing.ProcessEnv.Set("PSBASH_SEARCH_NO_IGNORE", "1");
+        var lines = RunLines($"Invoke-BashRg match '{Q(_tmpDir)}'");
+        Assert.Equal(2, lines.Length);
     }
 
     [Fact]

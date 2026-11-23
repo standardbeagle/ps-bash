@@ -5,9 +5,9 @@ using Xunit;
 
 namespace PsBash.Core.Tests.Runtime;
 
-// Reads PsBashRuntimeDirectory.GetPath(), which honours the process-wide TempPathOverride that the "EnvVar"
-// classes set. Without sharing their collection this test raced them and saw a foreign temp root (Windows CI).
-[Collection("EnvVar")]
+// Reads PsBashRuntimeDirectory.GetPath(), which honours the process-wide TempPathOverride and TEMP that the
+// ProcessEnvironmentCollection classes set. Outside it this test raced them and saw a foreign temp root (Windows CI).
+[Collection(ProcessEnvironmentCollection.Name)]
 public class FailureTeeTests
 {
     [Fact]

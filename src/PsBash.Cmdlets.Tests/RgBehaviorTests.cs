@@ -7,8 +7,9 @@ namespace PsBash.Cmdlets.Tests;
 /// calls (Pester shape). Oracle: ripgrep 14.1.0 (`wsl rg`): exit 0 match / 1 none / 2 error, -e
 /// patterns, repeatable/negated -g, last-wins case flags. `-N` keeps the assertions independent of
 /// this engine's default line-number prefix. Runs with the native passthrough OFF (PSBASH_RG_NATIVE unset).
+/// The terminal cases set $env:PSBASH_RG_TTY in the process environment, so the class runs alone.
 /// </summary>
-[Collection("PsBashSearchEnv")]
+[Collection(ProcessEnvironmentCollection.Name)]
 public class RgBehaviorTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
     private readonly SharedPwshFixture _fixture;
@@ -28,7 +29,12 @@ public class RgBehaviorTests : IClassFixture<SharedPwshFixture>, IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch { /* best-effort */ }
     }
 
-    private CmdResult Run(string script) => CmdResult.Run(_fixture.AcquireFresh(), script);
+    // Tty() scripts write $env:PSBASH_RG_TTY; the scope puts back whatever value was there before.
+    private CmdResult Run(string script)
+    {
+        using var env = PsBash.Testing.ProcessEnv.Preserve("PSBASH_RG_TTY");
+        return CmdResult.Run(_fixture.AcquireFresh(), script);
+    }
 
     private string F(string name, string content)
     {

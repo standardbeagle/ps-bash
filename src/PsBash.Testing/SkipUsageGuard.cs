@@ -1,6 +1,4 @@
 using System.Reflection;
-using System.Reflection.Emit;
-using System.Runtime.CompilerServices;
 
 namespace PsBash.Testing;
 
@@ -32,8 +30,6 @@ public static class SkipUsageGuard
         "Xunit.FactAttribute",
         "Xunit.TheoryAttribute",
     };
-
-    private static readonly Dictionary<short, OpCode> OpCodesByValue = BuildOpCodeTable();
 
     /// <summary>
     /// One line per plain <c>[Fact]</c>/<c>[Theory]</c> that can reach a skip, naming the
@@ -131,7 +127,7 @@ public static class SkipUsageGuard
             try
             {
                 List<string>? found = null;
-                foreach (var callee in Callees(method))
+                foreach (var callee in IlScan.Callees(method))
                 {
                     if (IsSkipCall(callee))
                     {
@@ -165,69 +161,5 @@ public static class SkipUsageGuard
                 _ => declaring == "Xunit.Skip" && callee.Name is "If" or "IfNot",
             };
         }
-
-        // Every method the IL of `method` calls, constructs, or takes a delegate to, plus the
-        // MoveNext of its async/iterator state machine.
-        private static IEnumerable<MethodBase> Callees(MethodBase method)
-        {
-            foreach (var attr in method.GetCustomAttributes<StateMachineAttribute>(inherit: false))
-            {
-                var moveNext = attr.StateMachineType.GetMethod("MoveNext",
-                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                if (moveNext is not null) yield return moveNext;
-            }
-
-            byte[]? il;
-            try { il = method.GetMethodBody()?.GetILAsByteArray(); }
-            catch (Exception) { il = null; }
-            if (il is null) yield break;
-
-            Type[]? typeArgs = method.DeclaringType is { IsGenericType: true } dt ? dt.GetGenericArguments() : null;
-            Type[]? methodArgs = method is MethodInfo { IsGenericMethod: true } mi ? mi.GetGenericArguments() : null;
-
-            var pos = 0;
-            while (pos < il.Length)
-            {
-                short value = il[pos++];
-                if (value == 0xFE && pos < il.Length) value = (short)(0xFE00 | il[pos++]);
-                if (!OpCodesByValue.TryGetValue(value, out var op)) yield break; // unknown opcode: stop, don't guess
-
-                if (op.OperandType == OperandType.InlineMethod)
-                {
-                    var token = BitConverter.ToInt32(il, pos);
-                    var callee = Resolve(method.Module, token, typeArgs, methodArgs);
-                    if (callee is not null) yield return callee;
-                }
-                pos += OperandSize(op.OperandType, il, pos);
-            }
-        }
-
-        private static MethodBase? Resolve(Module module, int token, Type[]? typeArgs, Type[]? methodArgs)
-        {
-            try { return module.ResolveMethod(token, typeArgs, methodArgs); }
-            catch (Exception)
-            {
-                try { return module.ResolveMethod(token); }
-                catch (Exception) { return null; }
-            }
-        }
-    }
-
-    private static int OperandSize(OperandType type, byte[] il, int pos) => type switch
-    {
-        OperandType.InlineNone => 0,
-        OperandType.ShortInlineBrTarget or OperandType.ShortInlineI or OperandType.ShortInlineVar => 1,
-        OperandType.InlineVar => 2,
-        OperandType.InlineI8 or OperandType.InlineR => 8,
-        OperandType.InlineSwitch => 4 + 4 * BitConverter.ToInt32(il, pos),
-        _ => 4,
-    };
-
-    private static Dictionary<short, OpCode> BuildOpCodeTable()
-    {
-        var table = new Dictionary<short, OpCode>();
-        foreach (var field in typeof(OpCodes).GetFields(BindingFlags.Public | BindingFlags.Static))
-            if (field.GetValue(null) is OpCode op) table[op.Value] = op;
-        return table;
     }
 }

@@ -15,9 +15,9 @@ namespace PsBash.Cmdlets.Tests;
 /// matches, recursive, context (-A/-B/-C), word-regexp, multi-pattern,
 /// pipeline + file dual mode, multi-file file:line:match format, CRLF, missing
 /// target (axis 14), alias, <c>--help</c>, and an injection probe per
-/// Directive 12.
+/// Directive 12. The <c>PSBASH_SEARCH_NO_IGNORE</c> cases set the process environment, so the class runs alone.
 /// </summary>
-[Collection("PsBashSearchEnv")]
+[Collection(ProcessEnvironmentCollection.Name)]
 public class InvokeBashGrepCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
     private readonly string _tmpDir;
@@ -456,16 +456,9 @@ public class InvokeBashGrepCommandTests : IDisposable, IClassFixture<SharedPwshF
         var bin = Path.Combine(_tmpDir, "blob.bin");
         File.WriteAllBytes(bin, new byte[] { 0, (byte)'m', (byte)'a', (byte)'t', (byte)'c', (byte)'h', (byte)'\n' });
 
-        Environment.SetEnvironmentVariable("PSBASH_SEARCH_NO_IGNORE", "1");
-        try
-        {
-            var lines = RunLines($"Invoke-BashGrep -r match '{Q(_tmpDir)}' 2>&1");
-            Assert.Contains(lines, l => l.Contains("blob.bin") && l.Contains("binary file matches"));
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("PSBASH_SEARCH_NO_IGNORE", null);
-        }
+        using var env = PsBash.Testing.ProcessEnv.Set("PSBASH_SEARCH_NO_IGNORE", "1");
+        var lines = RunLines($"Invoke-BashGrep -r match '{Q(_tmpDir)}' 2>&1");
+        Assert.Contains(lines, l => l.Contains("blob.bin") && l.Contains("binary file matches"));
     }
 
     [Fact]
@@ -478,16 +471,9 @@ public class InvokeBashGrepCommandTests : IDisposable, IClassFixture<SharedPwshF
         Directory.CreateDirectory(bin);
         File.WriteAllText(Path.Combine(bin, "artifact.txt"), "match\n");
 
-        Environment.SetEnvironmentVariable("PSBASH_SEARCH_NO_IGNORE", "1");
-        try
-        {
-            var lines = RunLines($"Invoke-BashGrep -r match '{Q(_tmpDir)}'");
-            Assert.Equal(2, lines.Length);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("PSBASH_SEARCH_NO_IGNORE", null);
-        }
+        using var env = PsBash.Testing.ProcessEnv.Set("PSBASH_SEARCH_NO_IGNORE", "1");
+        var lines = RunLines($"Invoke-BashGrep -r match '{Q(_tmpDir)}'");
+        Assert.Equal(2, lines.Length);
     }
 
     [Fact]

@@ -598,32 +598,6 @@ public class BashRuntimeTests
     }
 
     [Fact]
-    public void RunChildProcess_OutputAboveCaptureLimit_IsTruncatedButStillDrained()
-    {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_CHILD_CAPTURE_MAX_CHARS");
-        Environment.SetEnvironmentVariable("PSBASH_CHILD_CAPTURE_MAX_CHARS", "4096");
-        try
-        {
-            const string pad = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
-            var (file, args) = OperatingSystem.IsWindows()
-                ? ("cmd.exe", new[] { "/c", $"for /L %i in (1,1,6000) do @echo {pad}" })
-                : ("/bin/sh", new[] { "-c", $"i=0; while [ $i -lt 6000 ]; do echo {pad}; i=$((i+1)); done" });
-
-            var result = BashRuntime.RunChildProcess(file, args, TimeSpan.FromSeconds(30));
-
-            Assert.False(result.TimedOut, "draining beyond the capture cap must still let the child exit");
-            Assert.Equal(0, result.ExitCode);
-            Assert.True(result.StdoutTruncated, "stdout should report truncation at the configured cap");
-            Assert.False(result.StderrTruncated);
-            Assert.Equal(4096, result.Stdout.Length);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("PSBASH_CHILD_CAPTURE_MAX_CHARS", prior);
-        }
-    }
-
-    [Fact]
     public void RunChildProcess_ChildReadsStdin_GetsEofAndDoesNotHang()
     {
         // The child blocks trying to read a line of stdin. RunChildProcess must
@@ -638,5 +612,28 @@ public class BashRuntimeTests
 
         Assert.False(result.TimedOut, "closed stdin must give the child EOF so it does not hang");
         Assert.Contains("done-eof", result.Stdout);
+    }
+}
+
+/// <summary><see cref="BashRuntime"/> cases that set a process-wide <c>PSBASH_*</c> knob: they run alone.</summary>
+[Collection(ProcessEnvironmentCollection.Name)]
+public class BashRuntimeEnvironmentTests
+{
+    [Fact]
+    public void RunChildProcess_OutputAboveCaptureLimit_IsTruncatedButStillDrained()
+    {
+        using var env = PsBash.Testing.ProcessEnv.Set("PSBASH_CHILD_CAPTURE_MAX_CHARS", "4096");
+        const string pad = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+        var (file, args) = OperatingSystem.IsWindows()
+            ? ("cmd.exe", new[] { "/c", $"for /L %i in (1,1,6000) do @echo {pad}" })
+            : ("/bin/sh", new[] { "-c", $"i=0; while [ $i -lt 6000 ]; do echo {pad}; i=$((i+1)); done" });
+
+        var result = BashRuntime.RunChildProcess(file, args, TimeSpan.FromSeconds(30));
+
+        Assert.False(result.TimedOut, "draining beyond the capture cap must still let the child exit");
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(result.StdoutTruncated, "stdout should report truncation at the configured cap");
+        Assert.False(result.StderrTruncated);
+        Assert.Equal(4096, result.Stdout.Length);
     }
 }

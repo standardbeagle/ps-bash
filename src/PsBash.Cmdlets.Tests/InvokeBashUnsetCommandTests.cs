@@ -9,16 +9,22 @@ namespace PsBash.Cmdlets.Tests;
 /// removes the variable from the caller's scope AND the matching env var;
 /// function mode (<c>-f</c>) removes the function from <c>Function:\NAME</c>.
 /// Missing names silently ignored. <c>-v</c> prefix-collides with
-/// <c>-Verbose</c> — covered by the explicit <c>SwitchParameter V</c> binding.
+/// <c>-Verbose</c> — covered by the explicit <c>SwitchParameter V</c> binding. The scripts set
+/// <c>$env:PSBASH_*</c> in the process environment, so the class runs alone and each test puts the whole
+/// environment back.
 /// </summary>
-public class InvokeBashUnsetCommandTests : IClassFixture<SharedPwshFixture>
+[Collection(ProcessEnvironmentCollection.Name)]
+public class InvokeBashUnsetCommandTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
     private readonly SharedPwshFixture _fixture;
+    private readonly PsBash.Testing.ProcessEnv _env = PsBash.Testing.ProcessEnv.PreserveAll();
 
     public InvokeBashUnsetCommandTests(SharedPwshFixture fixture)
     {
         _fixture = fixture;
     }
+
+    public void Dispose() => _env.Dispose();
 
     private string? RunAndReadVar(string script, string varName)
     {
