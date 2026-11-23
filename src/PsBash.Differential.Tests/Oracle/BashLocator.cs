@@ -265,8 +265,21 @@ public static class BashLocator
     }
 
     /// <summary>
+    /// What the oracle bash runs: it closes descriptors 3..9 and execs <c>bash -c SCRIPT</c> (argv0 <c>bash</c>, so
+    /// <c>$0</c>, <c>SHLVL</c>, <c>$LINENO</c> and the <c>bash: line N:</c> prefix are a plain <c>bash -c</c>'s). The
+    /// script is the wrapper's <c>$0</c>, passed as its own argument: never spliced into the wrapper's text.
+    /// <para>A row whose fd 5 or 7 is "not open" depends on what the oracle inherited: <c>wsl.exe</c> on the s24u gate
+    /// host handed bash an open fd 7, so <c>{ true &gt;&amp;7; } 2&gt;/dev/null</c> recorded "open". ps-bash never starts
+    /// with a descriptor above 2 (its table is empty), so neither does the oracle. Guard:
+    /// <c>BashLocatorTests.BuildPsi_InheritedDescriptorAbove2_IsClosedBeforeTheScriptRuns</c>.</para>
+    /// </summary>
+    internal const string CloseInheritedDescriptors =
+        "exec 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&-; exec -a bash \"$BASH\" -c \"$0\"";
+
+    /// <summary>
     /// Builds a <see cref="ProcessStartInfo"/> configured to run a bash script
-    /// using the given <paramref name="host"/>. Returns null for Kind=None.
+    /// using the given <paramref name="host"/>. Returns null for Kind=None. The script runs with no descriptor above 2
+    /// open (<see cref="CloseInheritedDescriptors"/>).
     /// </summary>
     public static ProcessStartInfo? BuildPsi(BashHost host, string script)
     {
@@ -286,12 +299,14 @@ public static class BashLocator
             psi.ArgumentList.Add("-e");
             psi.ArgumentList.Add("bash");
             psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add(CloseInheritedDescriptors);
             psi.ArgumentList.Add(script);
         }
         else
         {
             psi.FileName = host.Path!;
             psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add(CloseInheritedDescriptors);
             psi.ArgumentList.Add(script);
         }
 

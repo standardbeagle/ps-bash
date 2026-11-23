@@ -78,7 +78,8 @@ public sealed class InvokeBashExecFdCommand : BashCmdlet
         }
         // `3>$v` with v='a b' (PsEmitter.FdOpenStep's stand-in): bash's "$v: ambiguous redirect", nothing opened.
         if (PsBash.Core.RedirectTarget.IsAmbiguous(Target, out string shown)) return $"{shown}: ambiguous redirect";
-        return BashFdTable.Open(fd, FileSystemHelpers.ProviderPath(this, Target ?? ""), Operator);
+        // The report names the target as the script wrote it (`/nonexist/f`), not the path opened (`C:\nonexist\f`).
+        return BashFdTable.Open(fd, FileSystemHelpers.ProviderPath(this, Target ?? ""), Operator, shown: Target ?? "");
     }
 }
 

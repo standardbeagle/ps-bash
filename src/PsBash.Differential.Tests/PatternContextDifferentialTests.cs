@@ -124,7 +124,9 @@ public class PatternContextDifferentialTests
     [SkippableTheory]
     [InlineData("touch Ab ab1; shopt -s nocaseglob; echo [[:upper:]]*; echo [[:lower:]]b; echo A*; shopt -u nocaseglob")]
     [InlineData("touch '@(abc)x' abc; echo \"@(abc)\"*; e=; echo \"@(abc)\"$e*; echo @(abc)")]
-    [InlineData("touch 'x(a|b)y' xa; d='(a|b)'; echo x\"$d\"*; echo x@(a|b)*")]
+    // A quoted extglob operator is literal in a file name (`x"$d"*` finds the file `x@(a)y`, not xa), an unquoted one
+    // alternates; a quoted `|` is literal in `[[ ]]`. Not a file named `x(a|b)y`: `|` cannot be in a Windows name.
+    [InlineData("touch 'x@(a)y' xa xb; d='@(a)'; echo x\"$d\"*; echo x@(a|b)*; e='(a|b)'; [[ 'x(a|b)y' == x\"$e\"* ]] && echo lit; [[ xay == x\"$e\"* ]] || echo inert")]
     [InlineData("mkdir -p sub/deep; touch sub/s1 sub/deep/d1; shopt -s globstar; echo sub/**/; echo **/; echo **/d1; echo sub/**")]
     [InlineData("touch one.txt two.md; mkdir foo; touch foo/two.txt; GLOBIGNORE='*.txt'; echo * */*; GLOBIGNORE='[!o]*'; echo *; GLOBIGNORE='f*'; echo */*")]
     [InlineData("echo $(compgen -W 'abc abd xyz a.c' -X 'a?c'); echo $(compgen -W 'abc abd xyz a.c' -X '!@(a*)'); echo $(compgen -W 'abc abd xyz' -X '[!a]*')")]

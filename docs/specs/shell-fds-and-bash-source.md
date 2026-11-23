@@ -43,7 +43,18 @@ raw slice, so `${BASH_SOURCE[0]:-$0}` printed a literal `$0`. (`BashParser.Words
 | `exec N<>file`, `{v}<>file` | opens N for reading AND writing, the file created when missing, one position for both (`Redirect.ReadWrite` -> `Invoke-BashExecFd N '<>'` -> `BashFdTable`); a device name is refused |
 
 Failure to open (`exec 3<missing`) writes `script: line N: missing: No such file or directory`, status 1, and the script
-goes on (bash does the same for a non-interactive shell without `set -e`).
+goes on (bash does the same for a non-interactive shell without `set -e`). INVARIANT: the report names the target as the
+script wrote it (`/nonexist/f`, `./nodir/f`), never the provider path the table opened (`C:\nonexist\f`, or the full path
+that `OperandDisplay` shortens to `nodir/f`): `BashFdTable.Open(fd, path, op, shown)` builds every open error from
+`shown`, which `Invoke-BashExecFd` passes as its `Target`. Guards: `Cmdlets.Tests/BashFdTableTests.Open_ATargetThatCannotBeOpened_IsNamedAsTheScriptWroteIt`,
+`ExecFd_ATargetThatCannotBeOpened_IsNamedAsTheScriptWroteIt`, `FdTableDifferentialTests.RedirectError_OpenOrAmbiguous_*`.
+
+A command's redirects are applied left to right and the first failure ends them all: `echo y >&5 2>e` (fd 5 closed)
+reports `5: Bad file descriptor` and never creates `e` (`2>/dev/null >&5 2>e`, `3>&5 2>e` alike). The
+`RedirectError_BadDescriptor` rows pin it; they rely on the oracle starting with fds 3..9 closed
+(`BashLocator.CloseInheritedDescriptors`), and their file names must not differ only in case, since on Windows `2>E`
+and `[ -e e ]` are one file (`ScriptPortability`, refused by `AssertOracle.EqualAsync`; the s24u gate's "e-made" was that,
+not a late redirect).
 
 A numbered descriptor on one command (`cmd 9>&1`, `cmd 9>f`, `read -u 7 l 7<f`, `cmd 3<&0`, `( … ) 3>log`) is opened before
 the command and put back after it (`PsEmitter.ScopedHighFdRedirects` / `WithScopedHighFds` -> `PsBuild.ScopedDescriptors`:

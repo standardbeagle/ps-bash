@@ -30,6 +30,10 @@ CANONICALIZE BEFORE DIFF:
 - TRAILING NEWLINE: PRESERVE. IT MATTERS.
 - DO NOT NORMALIZE CASE. DO NOT NORMALIZE PATH SEPARATORS UNLESS TEST SAYS PATH-AGNOSTIC.
 
+ONE SCRIPT, EVERY PLATFORM (cassette recorded on Linux, replayed on Windows/macOS):
+- ORACLE BASH STARTS WITH FDS 3..9 CLOSED (`BashLocator.CloseInheritedDescriptors`; wsl.exe left fd 7 open on s24u). GUARD `BashLocatorTests.BuildPsi_InheritedDescriptorAbove2_IsClosedBeforeTheScriptRuns`.
+- NO TWO FILE NAMES DIFFERING ONLY IN CASE (`2>E` + `2>e` = ONE FILE ON WINDOWS). NO NAME WINDOWS CANNOT HOLD (`| : * ? " < >`). `AssertOracle.EqualAsync` REFUSES BOTH (`ScriptPortability`, guard `ScriptPortabilityTests`).
+
 ## DIRECTIVE 2. NUMBERS OR IT DID NOT HAPPEN.
 
 NO PARITY CLAIM WITHOUT NUMBERS. WORDS LIE. NUMBERS DO NOT.

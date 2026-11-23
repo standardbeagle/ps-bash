@@ -213,6 +213,8 @@ public static class AssertOracle
         TimeSpan? timeout = null,
         bool liveOnly = false)
     {
+        // A script that means something else on a case-insensitive file system is not a row (ScriptPortability).
+        if (ScriptPortability.Refusal(script) is { } refusal) throw new XunitException("oracle: " + refusal);
         if (PsBash.Testing.ScriptCapture.TryCapture(script, liveOnly)) return;
         Skip.If(Fixture.PsBashPath is null, "ps-bash binary not found -- build PsBash.Shell first");
 

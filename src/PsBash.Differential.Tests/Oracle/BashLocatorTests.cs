@@ -116,9 +116,10 @@ public class BashLocatorTests
 
         Assert.NotNull(psi);
         Assert.Equal("/bin/bash", psi!.FileName);
-        Assert.Equal(2, psi.ArgumentList.Count);
+        Assert.Equal(3, psi.ArgumentList.Count);
         Assert.Equal("-c", psi.ArgumentList[0]);
-        Assert.Equal("echo hello", psi.ArgumentList[1]);
+        Assert.Equal(BashLocator.CloseInheritedDescriptors, psi.ArgumentList[1]);
+        Assert.Equal("echo hello", psi.ArgumentList[2]);
     }
 
     [Fact]
@@ -129,11 +130,53 @@ public class BashLocatorTests
 
         Assert.NotNull(psi);
         Assert.Equal("wsl.exe", psi!.FileName);
-        Assert.Equal(4, psi.ArgumentList.Count);
+        Assert.Equal(5, psi.ArgumentList.Count);
         Assert.Equal("-e", psi.ArgumentList[0]);
         Assert.Equal("bash", psi.ArgumentList[1]);
         Assert.Equal("-c", psi.ArgumentList[2]);
-        Assert.Equal("echo hello", psi.ArgumentList[3]);
+        Assert.Equal(BashLocator.CloseInheritedDescriptors, psi.ArgumentList[3]);
+        Assert.Equal("echo hello", psi.ArgumentList[4]);
+    }
+
+    // The oracle's descriptors above 2 are closed before the script runs, whatever bash inherited: wsl.exe on the s24u
+    // gate host handed bash an open fd 7, and `{ true >&7; } 2>/dev/null` recorded "open" where ps-bash (whose table
+    // starts empty) says closed. Here the oracle's psi runs under a bash that opened 5 and 7 first; the script must see
+    // neither, and still be a plain `bash -c` ($0, the `bash: line N:` prefix).
+    [SkippableFact]
+    public async Task BuildPsi_InheritedDescriptorAbove2_IsClosedBeforeTheScriptRuns()
+    {
+        var host = BashLocator.Find();
+        Skip.If(!host.IsAvailable, "oracle: no bash available");
+
+        const string probe = "for n in 3 4 5 6 7 8 9; do { : >&$n; } 2>/dev/null && echo \"open $n\"; done; echo \"0=$0\"; nosuch";
+        var oracle = BashLocator.BuildPsi(host, probe)!;
+
+        // The same command line, started by a bash that opened 5 and 7: `bash -c 'exec 5>... 7>...; exec "$@"' bash <argv>`.
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = oracle.FileName,
+            RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+            RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
+            RedirectStandardInput = true,
+            UseShellExecute = false,
+        };
+        var argv = oracle.ArgumentList.ToList();
+        if (host.Kind == BashHostKind.Wsl) { psi.ArgumentList.Add(argv[0]); argv.RemoveAt(0); }   // wsl.exe -e
+        else argv.Insert(0, oracle.FileName);
+        psi.ArgumentList.Add(host.Kind == BashHostKind.Wsl ? "bash" : "-c");
+        if (host.Kind == BashHostKind.Wsl) psi.ArgumentList.Add("-c");
+        psi.ArgumentList.Add("exec 5>/dev/null 7>/dev/null; exec \"$@\"");
+        psi.ArgumentList.Add("bash");
+        foreach (var a in argv) psi.ArgumentList.Add(a);
+
+        using var proc = System.Diagnostics.Process.Start(psi)!;
+        proc.StandardInput.Close();
+        var stdout = proc.StandardOutput.ReadToEndAsync();
+        var stderr = proc.StandardError.ReadToEndAsync();
+        await proc.WaitForExitAsync();
+
+        Assert.Equal("0=bash\n", (await stdout).Replace("\r\n", "\n"));
+        Assert.StartsWith("bash: line 1: nosuch", await stderr);
     }
 
     // ── Integration: Find() and actually run bash if available ───────────────

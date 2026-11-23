@@ -107,6 +107,24 @@ public class BashFdTableTests : IClassFixture<SharedPwshFixture>, IDisposable
         Assert.Empty(r.Lines);
     }
 
+    // `exec 3>/nonexist/f`: bash names the target as the script wrote it. The table opened the provider path and named
+    // that (`C:\nonexist\f` on Windows; OperandDisplay rewrites only a path under the working directory).
+    [Fact]
+    public void Open_ATargetThatCannotBeOpened_IsNamedAsTheScriptWroteIt()
+    {
+        Assert.Equal("/nonexist/f: No such file or directory", BashFdTable.Open(3, F("nodir/f"), ">", shown: "/nonexist/f"));
+        Assert.Equal("nodir/f: No such file or directory", BashFdTable.Open(1, F("nodir/f"), ">>", shown: "nodir/f"));
+        Assert.False(BashFdTable.IsOpen(3));
+    }
+
+    [Fact]
+    public void ExecFd_ATargetThatCannotBeOpened_IsNamedAsTheScriptWroteIt()
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashExecFd 3 '>' /nonexist-psb/f");
+        r.AssertFailed(1, "/nonexist-psb/f: No such file or directory");
+        Assert.DoesNotContain(@"nonexist-psb\f", r.Stderr);
+    }
+
     // `{ exec >log; echo e >&2; } 2>&1`: fd 2 is copied from fd 1 BEFORE the body runs (dup2), so the exec moves fd 1
     // only and e still goes where fd 1 was. fd 2 followed the exec into log (the merge read fd 1 at write time).
     [Fact]

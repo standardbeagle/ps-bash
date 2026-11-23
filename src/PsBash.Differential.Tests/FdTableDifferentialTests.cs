@@ -173,8 +173,9 @@ public class FdTableDifferentialTests
     [InlineData("{ ( echo y ) 2>/dev/null >&5; echo \"s=$?\"; } 2>E\nerr E")]
     [InlineData("{ echo y 2>/dev/null 1>&5 | cat; echo \"s=$?\"; } 2>E\nerr E")]
     [InlineData("{ x=$(echo y 2>/dev/null >&5); echo \"s=$? x=$x\"; } 2>E\nerr E")]
-    [InlineData("{ echo y 2>/dev/null >&5 2>e; echo \"s=$?\"; } 2>E\nerr E\n[ -e e ] && echo e-made || echo no-e")]
-    [InlineData("{ echo y >&5 2>e; echo \"s=$?\"; } 2>E\nerr E\n[ -e e ] && echo e-made || echo no-e")]
+    // The later target is `inner`, never `e` beside the outer `E`: on Windows those are one file (ScriptPortability).
+    [InlineData("{ echo y 2>/dev/null >&5 2>inner; echo \"s=$?\"; } 2>E\nerr E\n[ -e inner ] && echo inner-made || echo no-inner")]
+    [InlineData("{ echo y >&5 2>inner; echo \"s=$?\"; } 2>E\nerr E\n[ -e inner ] && echo inner-made || echo no-inner")]
     [InlineData("echo y 2>e 3>&5\necho \"s=$?\"\nerr e")]
     [InlineData("{ { echo y; } 2>/dev/null 3>&5; echo \"s=$?\"; } 2>E\nerr E")]
     [InlineData("{ echo y 3>&5; echo \"s=$?\"; } 2>E\nerr E")]
@@ -183,7 +184,7 @@ public class FdTableDifferentialTests
     [InlineData("exec 3>t\necho y 2>&3 >&5\necho \"s=$?\"\nexec 3>&-\necho t:\nerr t")]
     [InlineData("f() { read -r l <&5; echo \"l=$l s=$?\"; }\n{ f 2>/dev/null; } 2>E\nerr E")]
     [InlineData("{ while read l; do echo $l; done 2>/dev/null <&5; echo \"s=$?\"; } 2>E\nerr E")]
-    [InlineData("{ echo y 3>&5 2>e; echo \"s=$?\"; } 2>E\nerr E\n[ -e e ] && echo e-made || echo no-e")]
+    [InlineData("{ echo y 3>&5 2>inner; echo \"s=$?\"; } 2>E\nerr E\n[ -e inner ] && echo inner-made || echo no-inner")]
     [InlineData("{ true 3>&5 || echo caught; } 2>E\nerr E")]
     [InlineData("{ ( set -e; echo y 2>/dev/null >&5; echo after ); echo \"s=$?\"; } 2>E\nerr E")]
     [InlineData("{ ( set -e; echo y 2>/dev/null 3>&5; echo after ); echo \"s=$?\"; } 2>E\nerr E")]
@@ -212,6 +213,8 @@ public class FdTableDifferentialTests
     [InlineData("{ echo y 2>/dev/null 3>&5 4>/nonexist/f; echo \"s=$?\"; } 2>E\nerr E")]
     [InlineData("v=\"a b\"\n{ echo y 2>/dev/null 3>$v; echo \"s=$?\"; } 2>E\nerr E\nls")]
     [InlineData("v=\"a b\"\n{ echo y 3>$v; echo \"s=$?\"; } 2>E\nerr E\nls")]
+    // The report names the target as written: not the path opened (`C:\nonexist\f`, `/tmp/x/nodir/f` shown as nodir/f).
+    [InlineData("{ echo y 3>./nodir/f; echo \"s=$?\"; } 2>E\nerr E\n( exec >./nodir/g; echo x ) 2>E2\nerr E2\n{ exec 4>>./nodir/h; echo \"s=$?\"; } 2>E3\nerr E3")]
     public Task RedirectError_OpenOrAmbiguous_GoesWhereFd2PointsAtThatPoint(string script)
         => AssertOracle.EqualAsync(Prelude + script);
 }

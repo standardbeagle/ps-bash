@@ -150,9 +150,13 @@ internal static class BashFdTable
     }
 
     /// <summary>Open <paramref name="path"/> as <paramref name="fd"/> for <paramref name="op"/> (<c>&lt;</c>, <c>&gt;</c>,
-    /// <c>&gt;|</c>, <c>&gt;&gt;</c>, <c>&lt;&gt;</c>). Any descriptor already there is closed first. Null on success, else the error text.</summary>
-    public static string? Open(int fd, string path, string op)
+    /// <c>&gt;|</c>, <c>&gt;&gt;</c>, <c>&lt;&gt;</c>). Any descriptor already there is closed first. Null on success, else the error text.
+    /// The error names <paramref name="shown"/>, the target as the script wrote it (<c>3&gt;nodir/f</c> reports
+    /// <c>nodir/f: No such file or directory</c>), never the provider path opened (<c>/tmp/x/nodir/f</c>,
+    /// <c>C:\nonexist\f</c>); null shows <paramref name="path"/>.</summary>
+    public static string? Open(int fd, string path, string op, string? shown = null)
     {
+        string name = shown ?? path;
         if (fd == 0) return StdUnsupported;
         FileMode mode;
         FileAccess access;
@@ -175,7 +179,7 @@ internal static class BashFdTable
             // `exec 5</dev/stdin` is `exec 5<&0`. Reading the shell's stdout or stderr (`exec 5</dev/fd/1`) is not modelled.
             if (kind == PsBash.Core.DeviceKind.Stdin) return Dup(fd, 0);
             if (access == FileAccess.Read && deviceFd is 1 or 2)
-                return $"{PsBash.Core.BashPath.ToShell(path)}: the shell's own stdout/stderr cannot be opened for reading as a numbered descriptor";
+                return $"{name}: the shell's own stdout/stderr cannot be opened for reading as a numbered descriptor";
             return Dup(fd, deviceFd);
         }
 
@@ -185,7 +189,7 @@ internal static class BashFdTable
         {
             if (access == FileAccess.ReadWrite)
             {
-                if (kind != PsBash.Core.DeviceKind.None) return $"{PsBash.Core.BashPath.ToShell(path)}: cannot open a device for reading and writing";
+                if (kind != PsBash.Core.DeviceKind.None) return $"{name}: cannot open a device for reading and writing";
                 FileSystemHelpers.ThrowIfNotWritableName(path);   // `exec 3<> fx/`: "Is a directory"
                 fs = new FileStream(path, mode, access, FileShare.ReadWrite | FileShare.Delete);
                 // One file position, as one descriptor has: the writer writes where the stream is, flushed per write.
@@ -199,10 +203,10 @@ internal static class BashFdTable
             else
                 fs = new FileStream(path, mode, access, FileShare.ReadWrite | FileShare.Delete);
         }
-        catch (FileNotFoundException) { return $"{path}: No such file or directory"; }
-        catch (DirectoryNotFoundException) { return $"{path}: No such file or directory"; }
-        catch (UnauthorizedAccessException) { return $"{path}: Permission denied"; }
-        catch (IOException ex) { return $"{path}: {ex.Message}"; }
+        catch (FileNotFoundException) { return $"{name}: No such file or directory"; }
+        catch (DirectoryNotFoundException) { return $"{name}: No such file or directory"; }
+        catch (UnauthorizedAccessException) { return $"{name}: Permission denied"; }
+        catch (IOException ex) { return $"{name}: {ex.Message}"; }
 
         var handle = new Handle { Kind = Kind.File, Stream = fs, Writer = writer, FilePath = kind == PsBash.Core.DeviceKind.None ? path : null };
         if (fs is not null)
