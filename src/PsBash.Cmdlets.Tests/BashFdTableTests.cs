@@ -95,6 +95,18 @@ public class BashFdTableTests : IClassFixture<SharedPwshFixture>, IDisposable
         Assert.False(PsBash.Core.Stdio.ShellStdio.TryDivert(1, "x\n"));
     }
 
+    // `fx() { exec >log; }; fx; cat log`: cat's output is the file it reads. It read what it wrote and never ended (the
+    // exec used to end with the function, so cat wrote the terminal); GNU cat refuses it, status 1.
+    [Fact]
+    public void Cat_OfTheFileTheShellsStdoutNames_IsRefused()
+    {
+        File.WriteAllText(F("log"), "a\n");
+        var r = CmdResult.Run(_fixture.AcquireFresh(),
+            $"Invoke-BashExecFd 1 '>>' '{Q(F("log"))}'; Invoke-BashCat '{Q(F("log"))}'");
+        r.AssertFailed(1, "input file is output file");
+        Assert.Empty(r.Lines);
+    }
+
     // One table per shell: a descriptor this (runspace-less) code opened is not open in a runspace's shell. The table was
     // process-wide, so an in-process job's or a parallel runspace's redirection stage took over the other's fd 1.
     [Fact]

@@ -350,11 +350,40 @@ public sealed class InvokeBashCatCommand : BashCmdlet
                 continue;
             }
             foreach (var filePath in FileSystemHelpers.ClaimedReaderPaths(this, new[] { operand }))
+            {
+                if (ReadsItsOwnOutput(filePath))
+                {
+                    FileSystemHelpers.WriteBashError(this, $"cat: {operand}: input file is output file");
+                    _hadError = true;
+                    continue;
+                }
                 EmitFile(filePath);
+            }
         }
         if (_hadError)
         {
             FileSystemHelpers.SetLastExitCode(this, 1);
+        }
+    }
+
+    /// <summary>
+    /// <c>fx() { exec &gt;log; }; fx; cat log</c>: cat's output is the shell's fd 1, the file it would read, which grows
+    /// as it reads (it never ended). GNU cat refuses a regular input that is its own output while unread data remains.
+    /// Only bash's last stage writes the shell's fd 1 (a stage before it writes the next one; a redirection stage after
+    /// it, <c>cat log 2&gt;e</c>, is part of cat's command, and one that took fd 1 left no file entry there).
+    /// </summary>
+    private bool ReadsItsOwnOutput(string filePath)
+    {
+        if (BashFdTable.StdoutFilePath() is not { } outPath) return false;
+        if (MyInvocation is { } me && me.PipelinePosition < me.PipelineLength && !OnlyStatusTransparentStagesAfter(me))
+            return false;
+        try
+        {
+            return new FileInfo(filePath).Length > 0 && FileIdentity.SameFileFollowingLinks(filePath, outPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return false;
         }
     }
 

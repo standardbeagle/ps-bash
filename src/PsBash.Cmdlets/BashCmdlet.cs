@@ -83,7 +83,7 @@ public abstract class BashCmdlet : PSCmdlet, IDisposable
     /// only over a cmdlet ahead, and <c>./five | grep --bogus &gt; out</c> was 5 (bash 2): the program set 5 after grep's
     /// usage error. Unreadable pipeline internals answer no (the cmdlet-ahead rule).
     /// </summary>
-    private bool OnlyStatusTransparentStagesAfter(InvocationInfo me)
+    private protected bool OnlyStatusTransparentStagesAfter(InvocationInfo me)
     {
         Cmdlet stage = this;
         for (int n = me.PipelinePosition; n < me.PipelineLength; n++)

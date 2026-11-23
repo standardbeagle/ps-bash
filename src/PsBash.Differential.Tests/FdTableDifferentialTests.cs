@@ -31,6 +31,7 @@ public class FdTableDifferentialTests
     [InlineData("( exec >sub; echo in-sub )\necho after-sub\ncat sub")]
     [InlineData("x=$(exec >/dev/null; echo hidden)\necho \"x=[$x]\"")]
     [InlineData("( exec >/nonexist/f; echo x ) 2>e11\necho \"s=$?\"\nerr e11")]
+    [InlineData("exec 5>&1\nfx() { exec >log; }\nfx\necho a\ncat log 2>e\ns=$?\nexec >&5 5>&-\necho \"s=$s\"\nerr e\ncat log")]
     public Task Exec_OfAStandardDescriptor_IsPermanentInItsShell(string script)
         => AssertOracle.EqualAsync(Prelude + script);
 
