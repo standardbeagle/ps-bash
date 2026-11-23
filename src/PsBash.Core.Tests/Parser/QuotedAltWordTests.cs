@@ -48,10 +48,15 @@ public class QuotedAltWordTests
 
     // bash (extquote, on by default): `$'…'` in the word of a double-quoted `${e:-…}` is still ANSI-C quoting, so
     // `echo "${e:-$'t\x41'}"` prints tA; a plain `'…'` there is literal text, quotes included ('t\x41').
+    // The parser translates the `$'…'` first, so the first operand is quote-free and stays in the string. A quote
+    // mark in the operand makes the `${…}` leave the string (BracedVarLeavesString): it is a join segment, emitted
+    // in bare context as a double-quoted value that keeps the quotes.
     [Fact]
     public void Transpile_AnsiCQuoteInQuotedDefaultWord_IsDecoded()
     {
         Assert.Contains(": 'tA')", T("echo \"${e:-$'t\\x41'}\""));
-        Assert.Contains(": '''t\\x41''')", T("echo \"${e:-'t\\x41'}\""));
+        var literal = T("echo \"${e:-'t\\x41'}\"");
+        Assert.Contains("(-join @(", literal);
+        Assert.Contains(": \"'t\\x41'\")", literal);
     }
 }
