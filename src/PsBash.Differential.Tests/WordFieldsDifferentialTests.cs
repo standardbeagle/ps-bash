@@ -13,7 +13,8 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class WordFieldsDifferentialTests
 {
-    private const string P = "p() { printf '%s' \"$#:\"; [ $# -gt 0 ] && printf '<%s>' \"$@\"; echo; }; x='a b'; e=; g='*'; HOME=/home/hh\n";
+    // Each case runs in a fresh directory: the glob rows create files and list them.
+    private const string P = "cd \"$(mktemp -d)\"\np() { printf '%s' \"$#:\"; [ $# -gt 0 ] && printf '<%s>' \"$@\"; echo; }; x='a b'; e=; g='*'; HOME=/home/hh\n";
 
     // R2: two or more expansions in one word.
     [SkippableTheory]
@@ -35,6 +36,13 @@ public class WordFieldsDifferentialTests
     [InlineData(P + "set -- 'a b' '' c; p \"${@:-d}\"; set --; p \"${@:-d}\"; p \"${@:+alt}\"; p \"$@\"; p k\"$@\"")]
     [InlineData(P + "a=('a b' '' c); p \"${a[@]:-d}\"; p x\"${a[@]:+w}\"y; b=(); p \"${b[@]:-d}\"; p \"${b[@]:+w}\"")]
     public Task QuotedListForms_GiveOneFieldPerElement(string script) => AssertOracle.EqualAsync(script);
+
+    // An unset or empty array in quotes is no word ("${z[@]}" passed one null word: printf '%q' failed, $# was 1);
+    // beside text it is the text; "${z[*]}" is one empty word. BASH_REMATCH before any =~ is the same.
+    [SkippableTheory]
+    [InlineData(P + "unset z; p \"${z[@]}\"; p \"a${z[@]}b\"; p \"${z[*]}\"; p x\"${z[@]}\"; printf '%q,' \"${z[@]}\"; echo")]
+    [InlineData(P + "z=(); p \"${z[@]}\"; p \"a${z[@]}b\"; p \"${z[*]}\"; p \"${BASH_REMATCH[@]}\"; for w in \"${z[@]}\"; do echo \"[$w]\"; done; y=(\"${z[@]}\"); p \"${#y[@]}\"")]
+    public Task UnsetOrEmptyArrayInQuotes_IsNoWord(string script) => AssertOracle.EqualAsync(script);
 
     // R5: a default word keeps its own quoting; its unquoted expansions split. `:=` assigns and the result is split whole.
     [SkippableTheory]

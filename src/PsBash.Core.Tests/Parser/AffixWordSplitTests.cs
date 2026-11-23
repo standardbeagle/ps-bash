@@ -134,4 +134,13 @@ public class AffixWordSplitTests
     [InlineData("echo \"${a[*]:-d}\"")]
     public void Transpile_QuotedStarForm_JoinsWithTheFirstIfsCharacter(string bash)
         => Assert.Contains(PsBuild.IfsJoinSeparator, T(bash));
+
+    // bash: `unset z; f "${z[@]}"` passes no argument. The scalar fallback (`${s[@]}` of a scalar s is s) yielded one
+    // $null word for an unset name: `printf '%q,' "${z[@]}"` failed with a null reference, `$#` was 1.
+    [Theory]
+    [InlineData("f \"${z[@]}\"")]
+    [InlineData("f \"a${z[@]}b\"")]
+    [InlineData("f \"${BASH_REMATCH[@]}\"")]
+    public void Transpile_UnsetArrayInQuotes_IsNoWord(string bash)
+        => Assert.Contains(") -ne $null }", T(bash));
 }

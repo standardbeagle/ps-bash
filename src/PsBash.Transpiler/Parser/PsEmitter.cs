@@ -11002,10 +11002,11 @@ public static partial class PsEmitter
                     // ${arr[@]} -> $arr (whole array); an associative array (hashtable) yields its VALUES.
                     // "${a[*]}" joins with the first character of IFS ("${a[@]}" with a space).
                     // A SCALAR (`s=abc`) lives in the environment, not in a PowerShell variable: `${s[@]}` / `${s[0]}` are
-                    // the scalar itself (bash treats it as a one-element array).
+                    // the scalar itself (bash treats it as a one-element array). An unset name is no element at all:
+                    // `unset z; f "${z[@]}"` passes no argument (`-ne $null` drops the unset scalar, keeps an empty one).
                     string whole = bvs.Name.All(c => char.IsAsciiLetterOrDigit(c) || c == '_') && !char.IsAsciiDigit(bvs.Name[0])
                         && PsBuild.ShellArrayExpr(bvs.Name) is null
-                        ? $"$(if ($null -ne {arrayVar}) {{ {arrayVar} }} else {{ {EmitSimpleVar(bvs.Name)} }})"
+                        ? $"$(if ($null -ne {arrayVar}) {{ {arrayVar} }} else {{ @({EmitSimpleVar(bvs.Name)}) -ne $null }})"
                         : arrayVar;
                     if (subscript == "0" && !ReferenceEquals(whole, arrayVar))
                     {

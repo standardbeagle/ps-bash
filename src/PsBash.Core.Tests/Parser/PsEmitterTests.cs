@@ -5151,7 +5151,7 @@ public class PsEmitterTests
     public void Transpile_ArrayAllElements_EmitsPsArrayRef()
     {
         var result = PsEmitter.Transpile("echo ${arr[@]}");
-        Assert.Contains("$(if ($arr -is [System.Collections.IDictionary]) { $arr.Values } else { $(if ($null -ne $arr) { $arr } else { $env:arr }) })", result);
+        Assert.Contains("$(if ($arr -is [System.Collections.IDictionary]) { $arr.Values } else { $(if ($null -ne $arr) { $arr } else { @($env:arr) -ne $null }) })", result);
     }
 
     [Fact]
@@ -5167,7 +5167,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for item in ${arr[@]}; do echo $item; done");
         // Unquoted, each element is split and globbed again (arr=('a b' c) iterates a, b, c).
-        Assert.Contains(":__psbash_l0 foreach ($__psbash_lv0 in @(ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @($(if ($arr -is [System.Collections.IDictionary]) { $arr.Values } else { $(if ($null -ne $arr) { $arr } else { $env:arr }) })))) {", result);
+        Assert.Contains(":__psbash_l0 foreach ($__psbash_lv0 in @(ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @($(if ($arr -is [System.Collections.IDictionary]) { $arr.Values } else { $(if ($null -ne $arr) { $arr } else { @($env:arr) -ne $null }) })))) {", result);
         Assert.Contains("[PsBash.Cmdlets.BashVariableStore]::Set('item', [string]($__psbash_lv0)); Invoke-BashEcho $env:item }", result);
     }
 
