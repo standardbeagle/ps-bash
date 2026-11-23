@@ -158,12 +158,16 @@ internal static class BashGlob
     /// <summary>Matches of <paramref name="pattern"/>, resolved against <paramref name="cwd"/>; empty when nothing matches.</summary>
     /// <param name="skipDots"><c>globskipdots</c> (on by default): when off, a component that starts with a literal
     /// <c>.</c> also matches the entries <c>.</c> and <c>..</c> (<c>.*</c> lists <c>. ..</c> first).</param>
-    public static List<string> Expand(string pattern, string cwd, bool dotGlob, bool globStar = false, bool noCase = false, bool skipDots = true)
+    /// <param name="extGlob">The pattern's extglob operators are active: always for a word the script spelled
+    /// (ps-bash accepts them with <c>shopt extglob</c> off), <c>shopt extglob</c> for a word that came from an expansion
+    /// (bash's matcher reads <c>v='@(a|b)'; echo $v</c> literally while the option is off).</param>
+    public static List<string> Expand(string pattern, string cwd, bool dotGlob, bool globStar = false, bool noCase = false, bool skipDots = true,
+        bool extGlob = true)
     {
         var ignore = GlobIgnorePatterns();
-        if (ignore is null) return ExpandCore(pattern, cwd, dotGlob, globStar, noCase, skipDots);
+        if (ignore is null) return ExpandCore(pattern, cwd, dotGlob, globStar, noCase, skipDots, extGlob);
         // GLOBIGNORE set (non-empty): dotfiles become matchable, `.` / `..` never are, and matches equal to an ignore pattern drop out.
-        var all = ExpandCore(pattern, cwd, dotGlob: true, globStar, noCase, skipDots);
+        var all = ExpandCore(pattern, cwd, dotGlob: true, globStar, noCase, skipDots, extGlob);
         all.RemoveAll(m => { var b = m.TrimEnd('/'); b = b[(b.LastIndexOf('/') + 1)..]; return b is "." or ".." || ignore.Exists(p => IsIgnored(m, p)); });
         return all;
     }
@@ -187,9 +191,11 @@ internal static class BashGlob
         return list;
     }
 
-    // bash matches an ignore pattern against the whole result with FNM_PATHNAME: `*.txt` keeps `foo/two.txt`.
+    // bash matches an ignore pattern against the whole result with FNM_PATHNAME: `*.txt` keeps `foo/two.txt`. The
+    // pattern is a run-time value: its extglob operators count only while `shopt extglob` is on.
     private static bool IsIgnored(string match, string pattern)
-        => BashPatternMatch.Matches(match, pattern, PsBash.Core.Parser.BashPatternOptions.Pathname);
+        => BashPatternMatch.Matches(match, pattern, PsBash.Core.Parser.BashPatternOptions.Pathname
+            | (InvokeBashShoptCommand.IsEnabled("extglob") ? 0 : PsBash.Core.Parser.BashPatternOptions.NoExtGlob));
 
     /// <summary>Index of the <c>]</c> closing the bracket expression opened at <paramref name="open"/>; -1 when unclosed.</summary>
     internal static int BracketEnd(string text, int open)
@@ -210,7 +216,7 @@ internal static class BashGlob
         return -1;
     }
 
-    private static List<string> ExpandCore(string pattern, string cwd, bool dotGlob, bool globStar, bool noCase, bool skipDots)
+    private static List<string> ExpandCore(string pattern, string cwd, bool dotGlob, bool globStar, bool noCase, bool skipDots, bool extGlob)
     {
         string prefix = "";
         string dir = cwd;
@@ -282,7 +288,7 @@ internal static class BashGlob
 
                 foreach (var name in ListNames(fsDir, withDots: !skipDots && comp.StartsWith('.')))
                 {
-                    if (!LsGlob.Match(comp, name, dotGlob, noCase, extGlob: true)) continue;
+                    if (!LsGlob.Match(comp, name, dotGlob, noCase, extGlob)) continue;
                     string full = Path.Combine(fsDir, name);
                     if (!last || dirOnly)
                     {

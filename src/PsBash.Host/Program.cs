@@ -192,6 +192,8 @@ internal sealed class Program
 
         var (transport, scheme, endpoint) = CreateTransport(args);
         HostLog.SetEndpoint(scheme, endpoint);
+        // A bash pattern the time-boxed regex engine gave up on (it counted as no match) is worth a line.
+        PsBash.Core.Parser.BashPattern.Diagnostic = HostLog.Write;
         HostLog.Write($"start launcher-pid={GetNonInteractiveLauncherPid(args)?.ToString() ?? "-"} exe={Environment.ProcessPath}");
 
         var idleTimeout = IdleShutdown.TimeoutFor(args);

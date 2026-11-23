@@ -79,7 +79,7 @@ public sealed class ConvertToBashWordsCommand : BashCmdlet
         string cwd = SessionState.Path.CurrentFileSystemLocation.ProviderPath;
         var matches = BashGlob.Expand(pattern, cwd, InvokeBashShoptCommand.IsEnabled("dotglob"),
             InvokeBashShoptCommand.IsEnabled("globstar"), InvokeBashShoptCommand.IsEnabled("nocaseglob"),
-            skipDots: InvokeBashShoptCommand.IsEnabled("globskipdots"));
+            skipDots: InvokeBashShoptCommand.IsEnabled("globskipdots"), extGlob: InvokeBashShoptCommand.IsEnabled("extglob"));
         if (matches.Count > 0) return matches;
 
         if (InvokeBashShoptCommand.IsEnabled("failglob")) ConvertToBashGlobCommand.FailGlob(this, text);

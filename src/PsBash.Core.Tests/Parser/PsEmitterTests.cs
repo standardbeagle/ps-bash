@@ -187,10 +187,11 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_StripPatternWithLiteralParen_KeepsTheSubexpressionBalanced()
     {
-        // A raw `\(` inside "$( … )" unbalances PowerShell's naive paren scan ("missing the closing ')'").
+        // A raw `\(` inside "$( … )" unbalances PowerShell's naive paren scan ("missing the closing ')'"): an operand
+        // with a paren is emitted outside the string (PsBuild.HostileInStringSubexpression), where a paren is plain text.
         var result = PsEmitter.Transpile("echo \"${line##*([}\"");
-        Assert.DoesNotContain("'*(", result);
-        Assert.Contains("Remove($env:line, ('*' + [char]40 + '['), $false, $true)", result);
+        Assert.DoesNotContain("\"$(", result);
+        Assert.Contains("Remove($env:line, '*([', $false, $true)", result);
     }
 
     [Theory]

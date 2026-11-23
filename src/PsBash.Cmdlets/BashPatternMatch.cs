@@ -1,6 +1,4 @@
-using System.Collections.Concurrent;
 using System.Management.Automation;
-using System.Text.RegularExpressions;
 using PsBash.Core;
 using PsBash.Core.Parser;
 
@@ -17,13 +15,13 @@ namespace PsBash.Cmdlets;
 /// </summary>
 public static class BashPatternMatch
 {
-    // Regex.IsMatch's static cache holds 15 patterns; a script's case statements easily exceed it.
-    private static readonly ConcurrentDictionary<(string, bool), Regex> Cache = new();
-    // The host is long-lived and a run-time pattern can differ every iteration: bound the caches.
-    private const int MaxCached = 512;
-
     /// <summary>True when <c>shopt -s nocasematch</c> is set in the calling runspace.</summary>
     public static bool NoCase => InvokeBashShoptCommand.IsEnabled("nocasematch");
+
+    // The parameter-expansion operators read their whole pattern at run time, so `shopt extglob` decides whether its
+    // operators count (bash: `shopt -u extglob; v=+(a)x; echo ${v#+(a)}` prints x).
+    private static BashPatternOptions RunTimeExtGlob =>
+        InvokeBashShoptCommand.IsEnabled("extglob") ? BashPatternOptions.None : BashPatternOptions.NoExtGlob;
 
     /// <summary>
     /// <c>[[ s =~ re ]]</c>: <paramref name="input"/> against the <c>=~</c> word <paramref name="word"/>, built by the
@@ -53,6 +51,22 @@ public static class BashPatternMatch
             || (PsBash.Core.RuntimePath.TryUnmapTmp(text, out var bash) && Matches(bash, pat, opts));
     }
 
+    /// <summary><c>compgen -X</c>: <paramref name="input"/> against the filter pattern, a run-time value (extglob only
+    /// while <c>shopt extglob</c> is on; ignore-case under nocasematch).</summary>
+    public static bool MatchesFilter(string input, string pattern)
+        => Matches(input, pattern, (NoCase ? BashPatternOptions.NoCase : BashPatternOptions.None) | RunTimeExtGlob);
+
+    /// <summary>
+    /// An unquoted expansion's value spliced into the pattern of a <c>case</c> arm or a glob word: as it is while
+    /// <c>shopt extglob</c> is on, with its extglob syntax made literal while it is off (bash matches
+    /// <c>v='+(a)'; case '+(a)' in $v)</c> literally then). The words the script spelled keep their extglob operators.
+    /// </summary>
+    public static string ValuePattern(object? value)
+    {
+        string s = Text(value);
+        return InvokeBashShoptCommand.IsEnabled("extglob") ? s : BashPattern.ValueWithoutExtGlob(s);
+    }
+
     /// <summary>One whole-string match in the shell's locale: in C / POSIX the subject and pattern are bytes.</summary>
     internal static bool Matches(string text, string pattern, BashPatternOptions options)
     {
@@ -74,7 +88,7 @@ public static class BashPatternMatch
     {
         string pat = Text(pattern);
         bool bytes = BashLocale.IsByteLocale();
-        var program = Program(pat, BashPatternOptions.None, bytes);
+        var program = Program(pat, RunTimeExtGlob, bytes);
         return Each(value, s =>
         {
             if (s.Length == 0 && pat.Length == 0) return s;
@@ -103,7 +117,7 @@ public static class BashPatternMatch
     {
         string pat = Text(pattern), template = Text(replacement);
         bool bytes = BashLocale.IsByteLocale();
-        var program = Program(pat, NoCase ? BashPatternOptions.NoCase : BashPatternOptions.None, bytes);
+        var program = Program(pat, (NoCase ? BashPatternOptions.NoCase : BashPatternOptions.None) | RunTimeExtGlob, bytes);
         bool amp = InvokeBashShoptCommand.IsEnabled("patsub_replacement");
         if (bytes) template = ToBytes(template);
         var m = (BashPattern.SubstituteMode)mode;
@@ -123,7 +137,7 @@ public static class BashPatternMatch
     {
         bool bytes = BashLocale.IsByteLocale();
         string? pat = pattern is null ? null : Text(pattern);
-        var program = pat is null ? null : Program(pat, BashPatternOptions.None, bytes);
+        var program = pat is null ? null : Program(pat, RunTimeExtGlob, bytes);
         return Each(value, s => BashPattern.ModifyCase(s, program, upper, all, asciiOnly: bytes));
     }
 

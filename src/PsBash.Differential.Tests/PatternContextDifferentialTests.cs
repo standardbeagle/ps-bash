@@ -129,6 +129,54 @@ public class PatternContextDifferentialTests
     [InlineData("touch one.txt two.md; mkdir foo; touch foo/two.txt; GLOBIGNORE='*.txt'; echo * */*; GLOBIGNORE='[!o]*'; echo *; GLOBIGNORE='f*'; echo */*")]
     [InlineData("echo $(compgen -W 'abc abd xyz a.c' -X 'a?c'); echo $(compgen -W 'abc abd xyz a.c' -X '!@(a*)'); echo $(compgen -W 'abc abd xyz' -X '[!a]*')")]
     [InlineData("touch ab ']x' 'x]' a1; echo [!]]*; echo [z-a]*; echo [[:foo:]]*; echo [\\]]*")]
+    [InlineData("touch .a b; echo @(.a|b) ?(.)a; echo @(b|.a); echo +(.)a; echo !(b)")]   // a dot-file through an arm's literal period
+    [InlineData("touch ab ac ba; echo !(a)*; echo !(a*)")]
     public Task Pathname_UsesTheSameCompiler(string script)
         => AssertOracle.EqualAsync(Prologue + "cd \"$(mktemp -d)\" || exit\n" + script);
+
+    /// <summary>A bracket assembled around an expansion is a bracket in every context (<c>[$c]</c>); a QUOTED
+    /// <c>! ^ -</c> inside it is a member, never a negation or a range (<c>["$x"a]</c> with x=!).</summary>
+    [SkippableTheory]
+    [InlineData("c=abc; v=xbyaz; [[ b == [$c] ]] && echo m; case b in [$c]) echo c;; esac; echo \"${v//[$c]/-}\" \"${v#*[$c]}\" \"${v%[$c]*}\" \"${v^^[$c]}\"")]
+    [InlineData("x='!'; [[ z == [\"$x\"a] ]] || echo lit; [[ '!' == [\"$x\"a] ]] && echo r1; x='^'; [[ z == [\"$x\"a] ]] || echo r2; [[ '^' == [\"$x\"a] ]] && echo r3")]
+    [InlineData("x='-'; [[ b == [a\"$x\"c] ]] || echo r4; [[ '-' == [a\"$x\"c] ]] && echo r5; x='a-c'; [[ b == [$x] ]] && echo r6; [[ b == [\"$x\"] ]] || echo r7")]
+    [InlineData("x='!a'; [[ b == [$x] ]] && echo r8; [[ b == [a\"-\"c] ]] || echo r9; d=bc; [[ b == [a$d] ]] && echo r11; [[ b == [$d]* ]] && echo r12; x=']'; [[ a == [ab$x ]] && echo r13")]
+    public Task BracketFromExpansion_IsABracket(string script)
+        => AssertOracle.EqualAsync(Prologue + script);
+
+    /// <summary><c>!( )</c> in the removal and substitution operators and nested (the one construct the backtracking
+    /// engine runs).</summary>
+    [SkippableTheory]
+    [InlineData("v=abcx; echo \"[${v##!(x)}]\" \"[${v#!(x)}]\"; v=xbca; echo \"[${v%%!(a)}]\" \"[${v%!(a)}]\"")]
+    [InlineData("for s in a b '' aa x; do [[ $s == !(!(a)) ]]; printf '%s' $?; done; echo; for s in a b ''; do [[ $s == @(!(a)) ]]; printf '%s' $?; done; echo")]
+    [InlineData("v=a; echo \"[${v#!(!(a))}]\" \"[${v##!(!(a))}]\"; v=abc; echo \"${v//!(b)/X}\" \"${v/!(a)/X}\"")]
+    public Task Negation_MatchesBash(string script)
+        => AssertOracle.EqualAsync(Prologue + script);
+
+    /// <summary>
+    /// Where an extglob list ends is bash's PATSCAN: any <c>(</c> nests, a bracket hides its <c>)</c> and <c>|</c>, and an
+    /// operator whose list never closes makes the rest of the pattern plain text. 40 and 2,000 unclosed <c>@(</c> answer
+    /// at once (it was 2^n work, then past the nesting bound).
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("t() { [[ $2 == $1 ]]; printf '%s' $?; }; t '@(a(b)c)' 'a(b)c'; t '@(a(b)c)' 'a(bc)'; t '@(a(x|y))' 'a(x|y)'; t '@(a(x|y))' ax; t '@(a[)]b)' 'a)b'; t '@(a\\)b)' 'a)b'; echo")]
+    [InlineData("t() { [[ $2 == $1 ]]; printf '%s' $?; }; t '@(a(b)' 'a(b'; t '@(a(b)' '@(a(b)'; t '@(a*(b)' '@(abb'; t '@(a*(b)' '@(a*(b)'; t '@(a?' '@(ab'; t '*@(a' 'z@(a'; t '*@(a' za; echo")]
+    [InlineData("p=$(printf '@(%.0s' {1..40}); [[ x == $p ]]; echo $?; [[ $p == $p ]]; echo $?; v=x; echo \"${v#$p}\"; case $p in $p) echo m;; esac; p=$(printf '@(%.0s' {1..2000}); [[ x == $p ]]; echo $?; [[ $p == $p ]]; echo $?")]
+    public Task ExtGlobListBounds_MatchBash(string script)
+        => AssertOracle.EqualAsync(Prologue + script);
+
+    /// <summary>
+    /// <c>shopt extglob</c> OFF (bash's default in a script): a run-time pattern value is matched without extglob in
+    /// <c>case</c>, the parameter-expansion operators, pathname expansion, GLOBIGNORE and <c>compgen -X</c>; <c>[[ ]]</c>
+    /// matches as if extglob were on (bash 5.2 manual, "Conditional Constructs").
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("v='+(a)'; case '+(a)' in $v) echo e1;; esac; case aa in $v) echo e2;; esac; [[ '+(a)' == $v ]] && echo e3; [[ aa == $v ]] && echo e4")]
+    [InlineData("v='+(a)'; w='+(a)x'; u=aax; echo \"${w#$v}\" \"${u#$v}\"; shopt -s extglob; echo \"${u#$v}\"; case aa in $v) echo e7;; esac")]
+    [InlineData("v=ab; echo \"${v#@(a)}\" \"${v/?(a)/X}\" \"${v/*(a)/X}\"; w='@(a)b'; echo \"${w#@(a)}\"")]
+    [InlineData("cd \"$(mktemp -d)\" || exit; touch aa ab; g='@(aa|ab)'; echo $g; shopt -s extglob; echo $g; shopt -u extglob; v='*(a)'; touch 'x(a)'; echo x$v; echo $v")]
+    [InlineData("cd \"$(mktemp -d)\" || exit; touch aa ab; GLOBIGNORE='+(a)'; echo *; shopt -s extglob; echo *")]
+    [InlineData("v='+(a)'; echo $(compgen -W 'aa ab +(a)' -X \"$v\"); shopt -s extglob; echo $(compgen -W 'aa ab +(a)' -X \"$v\")")]
+    public Task ExtGlobOff_RunTimeValues_MatchLikeBash(string script)
+        => AssertOracle.EqualAsync("export LC_ALL=C.UTF-8\n" + script);
 }
