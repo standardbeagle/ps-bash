@@ -524,9 +524,10 @@ public sealed class InvokeBashReadCommand : BashCmdlet
             if (!BashArrayElement.Assign(this, name, scalarValue, "read")) _assignFailed = true;
             return;
         }
-        // The array, and for the shell's global its element 0 as the shell variable (BashVariableLookup.SetWholeArray).
-        if (value is string[] elements) BashVariableLookup.SetWholeArray(SessionState, name, elements);
-        else BashVariableLookup.SetArray(SessionState, name, value);
+        // `-a`: the array, and no global scalar beside it (SetArray); `$x` reads its element 0. REGRESSION: the words
+        // joined were also stored as the scalar, so `x=X; read -ra x <<< "m n"; echo "$x"` printed `m n` (bash `m`), a
+        // child saw x exported, and a function's `local -a r; read -a r` left a global r.
+        BashVariableLookup.SetArray(SessionState, name, value);
     }
 
     /// <summary>

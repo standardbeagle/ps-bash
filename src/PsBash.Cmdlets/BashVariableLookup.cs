@@ -492,11 +492,27 @@ public static class BashVariableLookup
     /// Assign an array the way bash scopes it: the existing variable (in whichever scope owns it: a function writing
     /// a caller's array reaches the caller), else a new GLOBAL. A bare <c>PSVariable.Set</c> from a cmdlet creates the
     /// variable in the calling function's own scope, so <c>mapfile arr</c> / <c>read -a arr</c> inside a function
-    /// never reached the shell. True when the array written is the shell's global (not a function's local).
+    /// never reached the shell.
+    /// <para>A nameref writes its target (<c>read -a ref</c>, <c>mapfile ref</c>). When the array written is the shell's
+    /// global, the global scalar of the name is no longer its value and is removed: a scalar lives only in the store, an
+    /// array only as a PowerShell variable (<c>environment-model.md</c> section 8), and <c>$x</c> reads the array's
+    /// element 0 (the emitter marks <c>read -a NAME</c> / <c>mapfile NAME</c> operands as arrays). A function's local array
+    /// leaves the global scalar alone: it comes back when the function returns. No copy of element 0 goes to the store
+    /// either: it went stale on the next element write and a child saw it exported, where bash exports no array.
+    /// REGRESSION: <c>declare -n ref=x; x=X; read -ra ref &lt;&lt;&lt; "m n"</c> made an array named ref and left x X;
+    /// <c>read -a x</c> left x's old scalar (or the words joined) in the store, which <c>$x</c> and a child's environment
+    /// still read.</para>
     /// </summary>
-    public static bool SetArray(SessionState state, string name, object holder)
+    public static void SetArray(SessionState state, string name, object holder)
     {
+        if (BashShellState.ResolveNameref(name) is { } target && target.IndexOf('[') < 0) name = target;
         name = BashNameCase.ToStore(name);
+        if (WriteArray(state, name, holder) && BashVariableStore.Get(name) is not null) BashVariableStore.Set(name, null);
+    }
+
+    /// <summary>The write <see cref="SetArray"/> makes; true when the array written is the shell's global (not a function's local).</summary>
+    private static bool WriteArray(SessionState state, string name, object holder)
+    {
         PSVariable? existing = null;
         try { existing = state.PSVariable.Get(name); }
         catch (Exception e) when (e is ArgumentException or SessionStateException) { /* not a PowerShell name */ }
@@ -518,19 +534,6 @@ public static class BashVariableLookup
         return true;
     }
 
-    /// <summary>
-    /// <see cref="SetArray"/> for a builtin that fills a whole array (<c>read -a</c>, <c>mapfile</c>): when the array is
-    /// the shell's global, the shell variable of the name is its element 0 (<c>read -a r &lt;&lt;&lt; "x y"; echo $r</c>
-    /// prints x, also over an earlier <c>r=old</c>), unset when it has none. A function's local array gets no such copy:
-    /// it would be a global that outlives the local. REGRESSION: the JOINED value always went to the shell variable, so
-    /// <c>$r</c> printed <c>x y</c>, and after <c>f(){ local -a r; read -a r &lt;&lt;&lt; "x y"; }; f</c> a global r remained.
-    /// </summary>
-    public static void SetWholeArray(SessionState state, string name, string[] elements)
-    {
-        if (!SetArray(state, name, elements)) return;
-        try { BashVariableStore.Set(BashNameCase.ToStore(name), elements.Length > 0 ? elements[0] : null); }
-        catch (Exception) { /* a name the store refuses (restricted): the array stands, as before */ }
-    }
 
     /// <summary>
     /// Replace the array <paramref name="name"/> holds with <paramref name="holder"/> in the scope that owns it (the
