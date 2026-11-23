@@ -111,9 +111,34 @@ public static partial class PsEmitter
     {
         if (_stdinOpaque || simple.Words.IsDefaultOrEmpty) return;
         if (!simple.HereDocs.IsDefaultOrEmpty || HasInputRedirect(simple.Redirects)) return;
-        if (StdinOperands(simple) is not ({ } name, var args)) { _stdinOpaque = true; return; }
-        if (StdinReaders.Classify(name) == StdinReaders.Kind.Native && IsStdinFreeFunction(name)) return;
-        if (StdinReaders.MayReadStdin(name, args)) _stdinOpaque = true;
+        if (!IsProvenStdinFree(simple)) _stdinOpaque = true;
+    }
+
+    /// <summary>
+    /// True when the command, by its name and operands alone, is PROVEN not to read the stdin it is given: a static name
+    /// <see cref="StdinReaders.MayReadStdin"/> clears, or a function of this unit proven not to read. A function of this
+    /// unit that shadows a builtin name (<c>echo() { cat; }</c>) is judged as the function. Shared by the probe
+    /// (<see cref="NoteStdinUse"/>) and a here-text on a command that reads nothing (TryEmitHereDoc).
+    /// </summary>
+    private static bool IsProvenStdinFree(Command.Simple simple)
+    {
+        if (StdinOperands(simple) is not ({ } name, var args)) return false;
+        if (IsStdinFreeFunction(name)) return true;
+        if (_unitFunctions?.Contains(name) == true) return false;
+        return !StdinReaders.MayReadStdin(name, args);
+    }
+
+    /// <summary>
+    /// <see cref="IsProvenStdinFree"/> for every run-time value of the operands: an operand with an expansion may be
+    /// <c>-</c> (<c>g=-; cat $g &lt;&lt;&lt; x</c> reads x), so only a static command line, a never-reading command
+    /// (<see cref="StdinReaders.NeverReadsWhateverOperands"/>) or a proven function qualifies. The here-text test
+    /// (TryEmitHereDoc), which drops the command's stdin, needs this; the probe asks the weaker question.
+    /// </summary>
+    private static bool IsProvenStdinFreeWhateverOperands(Command.Simple simple)
+    {
+        if (!IsProvenStdinFree(simple)) return false;
+        var (name, args) = StdinOperands(simple);
+        return !args.Contains(null) || IsStdinFreeFunction(name!) || StdinReaders.NeverReadsWhateverOperands(name!);
     }
 
     /// <summary>
