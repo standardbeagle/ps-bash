@@ -163,10 +163,11 @@ public class InvokeBashTputCommandTests : IClassFixture<SharedPwshFixture>
     public void Tput_ViaAlias_ResolvesToCmdlet()
     {
         // The psm1 Set-Alias `tput -> Invoke-BashTput` must still resolve to
-        // the cmdlet now that the psm1 function is gone.
-        var lines = RunLines("tput bold");
-        Assert.Single(lines);
-        Assert.Equal("\x1B[1m", lines[0]);
+        // the cmdlet now that the psm1 function is gone. Asserted on the resolution, not on bytes: with a native
+        // tput on PATH (any Linux host) the bytes come from terminfo under the process-global TERM, which parallel
+        // test classes change (build3 full run: flaked; alone: passed).
+        var lines = RunLines("(Get-Command tput).ResolvedCommand.Name");
+        Assert.Equal(["Invoke-BashTput"], lines);
     }
 
     [Fact]
