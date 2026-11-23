@@ -221,7 +221,8 @@ public sealed class SessionAnchorWatcherTests
         catch (ArgumentException) { return false; }
     }
 
-    private static Process StartLongLivedProcess()
+    /// <summary>A stand-in session anchor: lives two minutes, killable at will.</summary>
+    internal static Process StartLongLivedProcess()
     {
         var si = OperatingSystem.IsWindows()
             ? new ProcessStartInfo("ping", "-n 120 127.0.0.1") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8 }

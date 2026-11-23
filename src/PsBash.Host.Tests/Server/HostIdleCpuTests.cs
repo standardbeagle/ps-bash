@@ -28,9 +28,7 @@ public sealed class HostIdleCpuTests
 
         // A live stand-in anchor (its pid+start time key an endpoint no other test uses): the watcher polls it every
         // second for the whole window.
-        using var anchorProc = Process.Start(OperatingSystem.IsWindows()
-            ? new ProcessStartInfo("ping", "-n 120 127.0.0.1") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true }
-            : new ProcessStartInfo("sleep", "120") { UseShellExecute = false })!;
+        using var anchorProc = SessionAnchorWatcherTests.StartLongLivedProcess();
         var anchor = new ProcessIdentity(anchorProc.Id, ProcessIdentity.StartTicksOf(anchorProc));
         using var env = ProcessEnv.Set(
             (IpcTransportFactory.EndpointEnvVar, null),
