@@ -26,6 +26,7 @@ public class ArraySubscriptTests
     [InlineData("[`echo ]`]=c", 9)]
     [InlineData("['a]", -1)]
     [InlineData("[a", -1)]
+    [InlineData("[}]", 2)]
     public void SubscriptClose_TakesQuotedTextWhole(string text, int close)
         => Assert.Equal(close, BashLexer.SubscriptClose(text, 0));
 
@@ -64,10 +65,13 @@ public class ArraySubscriptTests
 
     // GUARD: the subscript of a `NAME[...]=` word or a `[KEY]=` element is found by BashLexer.SubscriptClose only. A
     // search for `]=` (a string literal "]=", or a regex `...+\]=`) in transpiler code is a quote-blind second reader.
+    // The READ side too (`${m[k]}`, `${#m[k]}`, `${!m[k]}`, an arithmetic `a[i]`): a `]` depth counter or a skip-to-`]`
+    // loop of its own (`c == ']' && --depth == 0`, `while (… != ']') pos++`) ends `${m[$'a]b']}` / `${m[`echo ]`]}` early.
     [Fact]
     public void Transpiler_FindsNoSubscriptEndOutsideTheOneScanner()
     {
         var forbidden = new Regex(@"""\]=""|[+*\]]\\\]=", RegexOptions.CultureInvariant);
+        var readSide = new Regex(@"'\]'\s*&&\s*--\w+\s*==\s*0|while\s*\(.*!=\s*'\]'\)\s*$|!=\s*'\]'\)\s*\w+\+\+", RegexOptions.CultureInvariant);
         var hits = new List<string>();
         string root = Path.Combine(RepoRoot(), "src", "PsBash.Transpiler");
         foreach (var file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
@@ -76,12 +80,15 @@ public class ArraySubscriptTests
                 || file.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar, StringComparison.Ordinal)
                 || Path.GetFileName(file) == "ArraySubscript.cs")
                 continue;
+            // BashParser.Simple.cs: the scan for a subscript still open across WORDS (`a[5 + 1]=`) stops at a command
+            // metacharacter, which the subscript-only scanner cannot know.
+            bool checkReadSide = Path.GetFileName(file) != "BashParser.Simple.cs";
             var lines = File.ReadAllLines(file, Encoding.Latin1);
             for (int i = 0; i < lines.Length; i++)
             {
                 string code = lines[i].TrimStart();
                 if (code.StartsWith("//", StringComparison.Ordinal)) continue;
-                if (forbidden.IsMatch(code)) hits.Add($"{Path.GetFileName(file)}:{i + 1}: {code}");
+                if (forbidden.IsMatch(code) || (checkReadSide && readSide.IsMatch(code))) hits.Add($"{Path.GetFileName(file)}:{i + 1}: {code}");
             }
         }
         Assert.True(hits.Count == 0, "Find a subscript's end with BashLexer.SubscriptClose / ArraySubscript.TrySplit:\n" + string.Join("\n", hits));

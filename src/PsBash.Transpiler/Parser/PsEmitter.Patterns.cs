@@ -117,7 +117,7 @@ public static partial class PsEmitter
                     if (ts.SlashConsumed) lit.Append('/');
                     break;
                 case WordPart.TildeSub ts:
-                    lit.Append(BashPattern.EscapeReplacement("~" + ts.User));
+                    lit.Append(BashPattern.EscapeReplacement(ts.NamedText));
                     if (ts.SlashConsumed) lit.Append('/');
                     break;
                 case WordPart.CommandSub cs:

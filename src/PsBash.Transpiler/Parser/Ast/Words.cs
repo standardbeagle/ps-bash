@@ -64,8 +64,16 @@ public abstract record WordPart : BashNode
         public ArithSub(string expr) : this(BashArithmeticParser.Parse(expr)) { }
     }
 
-    /// <summary>A tilde substitution, e.g. <c>~</c> or <c>~user</c>.</summary>
-    public sealed record TildeSub(string? User, bool SlashConsumed = true) : WordPart;
+    /// <summary>
+    /// A tilde substitution, e.g. <c>~</c> or <c>~user</c>. <paramref name="Home"/> is a named user's home directory from
+    /// the passwd database (<c>Platform/UserHome</c>), null when the name has none (it then stays <c>~user</c>).
+    /// </summary>
+    public sealed record TildeSub(string? User, bool SlashConsumed = true, string? Home = null) : WordPart
+    {
+        /// <summary>The text a named-user tilde (<see cref="User"/> not null, <c>+</c> or <c>-</c>) becomes: its home,
+        /// or <c>~user</c> as written when unresolved.</summary>
+        public string NamedText => Home ?? "~" + User;
+    }
 
     /// <summary>
     /// A glob pattern fragment: <c>*</c>, <c>?</c>, <c>[abc]</c>, or an extglob
@@ -79,6 +87,10 @@ public abstract record WordPart : BashNode
     /// </summary>
     public sealed record BracedTuple(ImmutableArray<string> Items) : WordPart
     {
+        /// <summary>The brace text as written (<c>{'a',b}</c>): where brace expansion does not happen (an assignment
+        /// value, a diagnostic) the word keeps this text, never one rebuilt from the items.</summary>
+        public string? Source { get; init; }
+
         /// <summary>
         /// Indexes of items that are empty only because quotes held nothing (<c>{"",a}</c>, <c>{a,''}</c>). Bash keeps a
         /// word made from such an item and drops one made from a bare empty item (<c>{a,}</c>, <c>{,}</c>): an unquoted
@@ -96,7 +108,12 @@ public abstract record WordPart : BashNode
     /// <paramref name="Step"/> is the written increment (0 when none: a step of 1; its sign is ignored). The words are
     /// <see cref="BraceSequence"/>'s, the one sequence expander.
     /// </summary>
-    public sealed record BracedRange(int Start, int End, int ZeroPad, int Step = 0) : WordPart;
+    public sealed record BracedRange(int Start, int End, int ZeroPad, int Step = 0) : WordPart
+    {
+        /// <summary>The sequence text as written (<c>{-01..2}</c>, <c>{1..5..0}</c>): an assignment value keeps it
+        /// verbatim (it cannot be rebuilt from the numbers).</summary>
+        public string? Source { get; init; }
+    }
 
     /// <summary>
     /// A process substitution, e.g. <c>&lt;(cmd)</c> (input) or <c>&gt;(cmd)</c> (output).

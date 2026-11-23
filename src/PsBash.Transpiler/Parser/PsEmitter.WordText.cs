@@ -37,12 +37,9 @@ public static partial class PsEmitter
                     break;
                 case WordPart.TildeSub t: sb.Append('~').Append(t.User); break;
                 case WordPart.GlobPart g: sb.Append(g.Pattern); break;
-                case WordPart.BracedTuple bt: sb.Append('{').Append(string.Join(",", bt.Items)).Append('}'); break;
-                case WordPart.BracedRange r:
-                    sb.Append('{').Append(r.Start).Append("..").Append(r.End);
-                    if (r.Step != 0) sb.Append("..").Append(r.Step);
-                    sb.Append('}');
-                    break;
+                // As written: the parser keeps the brace's source text (`{-01..2}`, `{'a',b}`), never rebuilt from the items.
+                case WordPart.BracedTuple bt: sb.Append(bt.Source ?? "{" + string.Join(",", bt.Items) + "}"); break;
+                case WordPart.BracedRange r: sb.Append(r.Source ?? "{" + r.Start + ".." + r.End + "}"); break;
                 case WordPart.CommandSub: sb.Append("$(...)"); break;
                 case WordPart.ArithSub: sb.Append("$((...))"); break;
                 case WordPart.ProcessSub p: sb.Append(p.IsInput ? "<(...)" : ">(...)"); break;

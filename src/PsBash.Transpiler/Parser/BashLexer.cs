@@ -1087,6 +1087,15 @@ public static class BashLexer
         using var nesting = NestingGuard.Enter();
         int len = input.Length;
         int pos = dollar + 2; // skip ${
+        // `${m[}]}` / `${#m['}']}`: the subscript of a named array is one unit (bash 5.2), so its `}` is key text.
+        int name = pos < len && input[pos] is '#' or '!' ? pos + 1 : pos;
+        if (name < len && IsNameStart(input[name]))
+        {
+            int n = name + 1;
+            while (n < len && IsNameChar(input[n])) n++;
+            if (n < len && input[n] == '[' && SubscriptClose(input, n) is var subClose and >= 0)
+                pos = subClose + 1;
+        }
         while (pos < len)
         {
             char c = input[pos];

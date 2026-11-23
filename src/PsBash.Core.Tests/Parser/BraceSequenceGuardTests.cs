@@ -126,8 +126,41 @@ public class BraceSequenceGuardTests
     {
         Skip.If(OperatingSystem.IsWindows(), "Windows has no passwd database: ~root stays literal (intentional difference)");
         Skip.IfNot(UserHome.Lookup("root") is "/root", "this host has no root entry with home /root in /etc/passwd");
-        Assert.Equal(new WordPart.SingleQuoted("/root"), BashParser.DecomposeWord("~root/z")[0]);
-        Assert.IsNotType<WordPart.SingleQuoted>(BashParser.DecomposeWord("~nosuchuserx")[0]);
+        // The node stays a TildeSub carrying the home (an associative `[k]=~root` keeps the tilde as written); the `/`
+        // stays in the following text.
+        Assert.Equal(new WordPart.TildeSub("root", SlashConsumed: false, Home: "/root"), BashParser.DecomposeWord("~root/z")[0]);
+        Assert.Equal(new WordPart.Literal("/z"), BashParser.DecomposeWord("~root/z")[1]);
+        Assert.Equal(new WordPart.TildeSub("nosuchuserx", SlashConsumed: false), BashParser.DecomposeWord("~nosuchuserx")[0]);
+        Assert.Contains("/root/z", PsEmitter.Transpile("echo ~root/z")!, StringComparison.Ordinal);
+    }
+
+    // bash 5.2 leaves a tilde on the right of an ASSOCIATIVE `[k]=value` literal as written. REGRESSION: with ~user
+    // resolved to quoted text at parse time the emitter no longer saw a tilde there and stored /root.
+    [Fact]
+    public void Transpile_AssocLiteralNamedTilde_StaysAsWritten()
+    {
+        string ps = PsEmitter.Transpile("declare -A m=([k]=~root [j]=a:~root)")!;
+        Assert.Contains("~root", ps, StringComparison.Ordinal);
+        Assert.DoesNotContain("/root", ps, StringComparison.Ordinal);
+    }
+
+    // No brace expansion on the right of an assignment: the value is the brace text AS WRITTEN. REGRESSION: it was
+    // rebuilt from the parsed sequence (`{-01..2}` came out `{0-1..002}`, `{1..5..0}` lost its step, `{a..c..1}` became a list).
+    [Theory]
+    [InlineData("x={-01..2}", "{-01..2}")]
+    [InlineData("x={1..010}", "{1..010}")]
+    [InlineData("x={1..5..0}", "{1..5..0}")]
+    [InlineData("x={+1..3}", "{+1..3}")]
+    [InlineData("x=a{01..3}b", "a{01..3}b")]
+    [InlineData("x={a..c..1}", "{a..c..1}")]
+    public void Transpile_AssignmentBraceValue_IsTheSourceText(string script, string value)
+        => Assert.Contains(value, PsEmitter.Transpile(script)!, StringComparison.Ordinal);
+
+    [Fact]
+    public void BraceNodes_CarryTheirSourceText()
+    {
+        Assert.Equal("{-01..2}", Assert.IsType<WordPart.BracedRange>(Assert.Single(BashParser.DecomposeWord("{-01..2}"))).Source);
+        Assert.Equal("{'a',b}", Assert.IsType<WordPart.BracedTuple>(Assert.Single(BashParser.DecomposeWord("{'a',b}"))).Source);
     }
 
     // `w=a:~+:~-`: `$env:PWD:` in a PS string is a drive-qualified name that swallowed the colon.

@@ -937,18 +937,13 @@ public sealed partial class BashParser
     /// </summary>
     private static int FindExpansionEnd(string s, int dollar)
     {
+        // The lexer's extents (one scanner each): `${u:-"}"}` and `$(echo ")")` close where bash closes them, not at the
+        // first quoted `}` / `)`. Unterminated: the `$` is literal.
         char open = s[dollar + 1];
-        if (open is '{' or '(')
-        {
-            char close = open == '{' ? '}' : ')';
-            int depth = 0;
-            for (int i = dollar + 1; i < s.Length; i++)
-            {
-                if (s[i] == open) depth++;
-                else if (s[i] == close && --depth == 0) return i + 1;
-            }
-            return dollar; // unterminated — treat as literal
-        }
+        if (open == '{')
+            return BashLexer.DollarBraceClose(s, dollar) is var close and >= 0 ? close + 1 : dollar;
+        if (open == '(')
+            return BashLexer.ScanDollarParen(s, dollar) is var end and > 0 && end <= s.Length && s[end - 1] == ')' ? end : dollar;
 
         int j = dollar + 1;
         while (j < s.Length && (s[j] == '_' || char.IsLetterOrDigit(s[j]))) j++;

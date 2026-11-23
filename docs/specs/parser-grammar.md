@@ -97,9 +97,9 @@ Reserved words are recognized contextually by the parser, not as distinct token 
 | `WordPart.BracedVarSub` | `Name: string`, `Suffix: string?` | `${foo}`, `${foo:-default}`, `${#arr[@]}`, `${!arr[@]}`; a special parameter followed by an operator is that parameter (`${!:+pid}`, `${?:-q}`, `${#:-z}`, `${$%1}`: `BashParser.IsSpecialParameterWithOperator`), `${#!}` `${#$}` `${#?}` `${#-}` are its length (`#L`) |
 | `WordPart.CommandSub` | `Body: BashNode` | `$(cmd)` or `` `cmd` `` -- body is recursively parsed |
 | `WordPart.ArithSub` | `Expr: ArithmeticSyntax` | `$(( x + 1 ))` |
-| `WordPart.TildeSub` | `User: string?` | `~` (null user = current) or `~user` |
+| `WordPart.TildeSub` | `User: string?`, `SlashConsumed`, `Home: string?` | `~` (null user = current) or `~user` (`Home` = its passwd home, null when unresolved) |
 | `WordPart.GlobPart` | `Pattern: string` | `*`, `?`, `[abc]`, `+(*.py\|*.js)` |
-| `WordPart.BracedTuple` | `Items: string[]` | `{a,b,c}` |
+| `WordPart.BracedTuple` | `Items: string[]`, `Source` | `{a,b,c}` (`Source` = the text as written; `BracedRange` has it too) |
 | `WordPart.BracedRange` | `Start: int`, `End: int`, `ZeroPad: int`, `Step: int` | `{1..10}`, `{01..05}`, `{1..10..2}` |
 | `WordPart.ProcessSub` | `Body: BashNode`, `IsInput: bool` | `<(cmd)` (IsInput=true) or `>(cmd)` (IsInput=false) |
 
@@ -374,7 +374,11 @@ word_part     -> tilde_sub         (only at word start)
 ```
 
 A `$"…"` (locale quoting) or `$'…'` anywhere in a word is that quoting, not a literal `$`: `a$"*"` is `a*`,
-`a$'\x41'b` is `aAb`. Inside `"${v:-…}"` a `$'…'` keeps its ANSI-C meaning (bash `extquote`, on by default).
+`a$'\x41'b` is `aAb`. Inside `"…"` bash (`extquote`, on by default) translates every `$'…'` of a `${…}` while it reads
+it, and the translated TEXT is what expands (`ParseBracedVar` → `TranslateAnsiCQuotes`): `"${u:-$'a\x41'}"` is `aA`,
+`"${u:-$'\x24x'}"` is the value of `x`, `"${m[$'\x5d']}"` reads `${m[]]}` (a bad substitution), while unquoted
+`${m[$'\x5d']}` keys `]`. A heredoc body does not translate: its `${…}` operand words read as inside double quotes (a
+`'` is text, `\` escapes only `` $ ` " \ ``) and `${u:-$'a'}` is the text `$'a'` (`BashParser.DecomposeHereDocBracedVar`).
 
 #### Parameter expansion extent
 
@@ -383,19 +387,27 @@ parser (`ParseBracedVar` reads only inside that extent), assignment-value `:` sp
 `$( )` bodies and arithmetic. bash's rule (parse_matched_pair, P_FIRSTCLOSE): the FIRST unquoted, unescaped `}` closes
 it; a bare `{` in the operand does not nest, only a nested `${…}` does; quotes, `\x`, `$'…'`, `$( )`, `$(( ))` and
 backticks are taken whole. So `${x/ /{1,2\}}` is one expansion (replacement `{1,2}`), `${u:-{a,b}}` is `${u:-{a,b}`
-then a literal `}`, and `$(echo ${u:-)})` prints `)`. A single quote in the operand quotes even inside double quotes
+then a literal `}`, and `$(echo ${u:-)})` prints `)`. The subscript of a named array right after `${` (or `${#`,
+`${!`) is one unit, read by `BashLexer.SubscriptClose`: `${m[}]}` keys `}` and `${#m['}']}` is one expansion. A single quote in the operand quotes even inside double quotes
 or a heredoc (`${u:-it's}` there has no closing `}`; bash fails that heredoc's command with a bad substitution,
-ps-bash still prints the body with the `${` literal: open, the heredoc emitter has no command abandon for it). Brace expansion is different: its scan (bash brace_gobbler)
-counts a `${`'s braces as nesting, so `{a,${u:-{b}}` has no closing brace and stays literal. Guard
+ps-bash still prints the body with the `${` literal: open, the heredoc emitter has no command abandon for it). The `=~`
+regex word (`FindExpansionEnd`), the case-pattern arm scanner and arithmetic `16#${h}` use the same extents. Brace
+expansion is different: its scan (bash brace_gobbler, `BashParser.BraceClose`, the one brace-depth counter of that
+grammar) counts a `${`'s braces as ONE nesting level, so `{a,${u:-{b}}` has no closing brace and stays literal, and in
+`{a,${x:-{b,c}}}` the item `${x:-{b,c}}` is neither split at its comma nor brace-expanded (`a {b,c}`). Guard
 `DollarBraceExtentGuardTests` (lexer extent = parser extent = expected, and the text after the expansion is untouched,
-for generated operands with braces, escapes and quotes).
+for generated operands with braces, escapes and quotes; `Transpiler_CountsNoBraceDepthOutsideTheOneScanner`: no
+hand-rolled `{` depth counter outside the allow-listed `BraceClose` and PsBuild's PowerShell-text counter).
 
 #### Tilde prefixes
 
 `~`, `~/x`, `~+`, `~-` expand at the start of a word and, in an assignment value, after each unquoted `:`
 (`w=a:~+:~-` is `a:$PWD:$OLDPWD`). `~user` is that login's home directory from the passwd database
-(`Platform/UserHome`, `/etc/passwd`), a quoted text (not split or globbed); with no entry it stays `~user`. Windows has
-no passwd database: there only the current user's name resolves, to `$HOME` (docs/specs/intentional-differences.md).
+(`Platform/UserHome`, `/etc/passwd`, re-read when its write time or length changes, a miss never cached on its own),
+a quoted text (not split or globbed); with no entry it stays `~user`. The parser keeps the `TildeSub` node with the home
+in `Home`; the emitter reads it as single-quoted text (`PsEmitter.ResolveNamedTildes`) except where bash leaves a tilde
+as written: the value of an ASSOCIATIVE `[k]=~root` literal (an indexed one expands). Windows has no passwd database:
+there only the current user's name resolves, to `$HOME` (docs/specs/intentional-differences.md).
 
 ---
 
@@ -498,6 +510,12 @@ word, `{,}` none, `$e{a,}` none with `e` unset, while `{"",a}`, `''{a,}` and `{"
 rule, `PsEmitter.DropsEmptyBraceWord`, for every path of `EmitBraceExpandedWord`: a literal word is dropped at transpile
 time, a word holding an expansion when it runs. Tests: `PsEmitterTests.Transpile_EmptyBraceWord_DroppedUnlessQuoted`,
 `GlobBraceExpansionDifferentialTests.Differential_BraceTuple_TrailingComma_EmptyItem`.
+
+**Assignment values.** No brace expansion happens on the right of an assignment, and the value is the brace text AS
+WRITTEN: `BracedTuple.Source` / `BracedRange.Source` re-read without brace expansion (quote removal still applies, so
+`x={'a',b}` is `{a,b}`), never rebuilt from the items or numbers (`x={-01..2}`, `x={1..5..0}`, `x={+1..3}`,
+`x={a..c..1}` keep their text). Tests: `BraceSequenceGuardTests.Transpile_AssignmentBraceValue_IsTheSourceText`,
+`WordParseExtentDifferentialTests.AssignmentValue_BraceTextVerbatim`.
 ### 6.4 Process Substitution vs Redirect
 
 `<(` and `>(` are detected **before** the single-character `<`/`>` operator check. The entire `<(...)` or `>(...)` is consumed as a single `Word` token, then decomposed into `WordPart.ProcessSub` during word parsing.
@@ -515,7 +533,8 @@ A subscript ends at the `]` that closes its `[`, found by ONE scanner, `BashLexe
 (`OpenSubscriptEnd`, `ClassifyWord`), the parser (`FindAssignmentEquals` for `NAME[sub]=v`, the `[KEY]=` split of
 an array-literal element in `ParseAssignmentWordWithArray`) and the emitter, which reads an element's parts through
 `ArraySubscript.TrySplit` (literal and glob text scanned, every other part one opaque character) and a
-`declare a[x]=y` operand through `TrySplitElementInitializer`.
+`declare a[x]=y` operand through `TrySplitElementInitializer`. The read side uses it too: `${m[…]}`, `${#m[…]}`,
+`${!m[…]}` (`BashParser.FindSubscriptClose`) and an arithmetic `a[i]` operand.
 
 ```bash
 declare -A m=(['a]=b']=c)   # key a]=b, value c   (the first `]=` gave key 'a, value b']=c)
@@ -523,7 +542,7 @@ m['x]=y']=1                 # key x]=y
 ```
 
 Guard: `ArraySubscriptTests.Transpiler_FindsNoSubscriptEndOutsideTheOneScanner` (no `"]="` search, no
-`…+\]=` regex in transpiler code).
+`…+\]=` regex in transpiler code; on the read side no `]` depth counter and no skip-to-`]` loop).
 
 ### 6.6 Double-Quote Backslash Rules
 

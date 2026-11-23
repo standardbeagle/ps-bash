@@ -2747,16 +2747,9 @@ public static partial class PsEmitter
                         if (pattern[end] == '\\') end++;
                     break;
                 case '$' when i + 1 < pattern.Length && pattern[i + 1] is '(' or '{':
-                {
-                    char open = pattern[i + 1], close = open == '(' ? ')' : '}';
-                    int nest = 0;
-                    for (end = i + 1; end < pattern.Length; end++)
-                    {
-                        if (pattern[end] == open) nest++;
-                        else if (pattern[end] == close && --nest == 0) break;
-                    }
+                    // The lexer's extents: `${u:-"}"}` / `$(echo ")")` end where bash ends them.
+                    end = pattern[i + 1] == '{' ? BashLexer.DollarBraceClose(pattern, i) : BashLexer.ScanDollarParen(pattern, i) - 1;
                     break;
-                }
                 case '[':
                 {
                     int close = pattern.IndexOf(']', i + 2 < pattern.Length ? i + 2 : i + 1);
@@ -4600,7 +4593,7 @@ public static partial class PsEmitter
                 case WordPart.TildeSub ts:
                     // `[[ $HOME =~ ~ ]]`: the tilde expands to the home directory, matched as text (HOME='^a$' matches itself).
                     if (ts.User is null or "+" or "-") AddExpr(PsBuild.EreQuoted("[string](" + EmitWordPart(ts) + ")"));
-                    else AddText("~" + ts.User, quoted: true);
+                    else AddText(ts.NamedText, quoted: true);
                     if (ts.SlashConsumed) AddText("/", quoted: false);
                     break;
                 default: // an unquoted expansion: its VALUE is regex text
@@ -8588,7 +8581,7 @@ public static partial class PsEmitter
                         // whole ${...} and route through the real braced-var
                         // emitter, then wrap in $(...) so it expands inside the
                         // @"..."@ here-string.
-                        var parts = BashParser.DecomposeWord(body[pos..(close + 1)]);
+                        var parts = BashParser.DecomposeHereDocBracedVar(body[pos..(close + 1)]);
                         sb.Append("$(");
                         sb.Append(EmitWord(new CompoundWord(parts)));
                         sb.Append(')');
@@ -8859,15 +8852,17 @@ public static partial class PsEmitter
         if (value is null)
             return "\"\"";
 
-        // Brace expansion does not happen on the right of an assignment: `v={X,Y}` stores the text `{X,Y}`.
+        // Brace expansion does not happen on the right of an assignment: `v={X,Y}` stores the text `{X,Y}`, and
+        // `x={-01..2}` / `x={1..5..0}` the text as written. The word is re-read from the brace's SOURCE text (quote removal
+        // still applies, `x={'a',b}` is `{a,b}`), never rebuilt from the parsed items or numbers.
         if (value.Parts.Any(p => p is WordPart.BracedTuple or WordPart.BracedRange))
-            value = new CompoundWord(value.Parts.Select(p => p switch
+            value = new CompoundWord(value.Parts.SelectMany(p => p switch
             {
-                WordPart.BracedTuple t => (WordPart)new WordPart.Literal("{" + string.Join(",", t.Items) + "}"),
-                WordPart.BracedRange r => new WordPart.Literal("{" + r.Start.ToString().PadLeft(r.ZeroPad, '0') + ".." + r.End.ToString().PadLeft(r.ZeroPad, '0')
-                    + (r.Step != 0 ? ".." + r.Step : "") + "}"),
-                _ => p,
+                WordPart.BracedTuple { Source: { } src } => BashParser.DecomposeWord(src, braceExpansion: false),
+                WordPart.BracedRange { Source: { } src } => BashParser.DecomposeWord(src, braceExpansion: false),
+                _ => ImmutableArray.Create(p),
             }).ToImmutableArray());
+        value = ResolveNamedTildes(value);
 
         // If the value is a single double-quoted part, emit it directly (already has quotes).
         if (value.Parts.Length == 1 && value.Parts[0] is WordPart.DoubleQuoted)
@@ -9005,8 +9000,36 @@ public static partial class PsEmitter
     private static string EmitWord(CompoundWord word)
         => PsBuild.QuoteArgumentNumber(EmitWordText(word));
 
+    /// <summary>
+    /// A named-user tilde the parser resolved (<c>~root</c>: <see cref="WordPart.TildeSub.Home"/>) is quoted text, as
+    /// bash's tilde result is (never split or globbed). Words keep the node so a site where bash leaves the tilde as
+    /// written (an associative <c>[k]=~root</c>, TryEmitAssocLiteral) still sees it; every other path reads it here as
+    /// that SingleQuoted text.
+    /// </summary>
+    private static ImmutableArray<WordPart> ResolveNamedTildes(ImmutableArray<WordPart> parts)
+    {
+        if (parts.IsDefaultOrEmpty) return parts;
+        ImmutableArray<WordPart>.Builder? resolved = null;
+        for (int i = 0; i < parts.Length; i++)
+        {
+            if (parts[i] is WordPart.TildeSub { Home: { } home })
+            {
+                resolved ??= parts.ToBuilder();
+                resolved[i] = new WordPart.SingleQuoted(home);
+            }
+        }
+        return resolved?.ToImmutable() ?? parts;
+    }
+
+    private static CompoundWord ResolveNamedTildes(CompoundWord word)
+    {
+        var parts = ResolveNamedTildes(word.Parts);
+        return parts == word.Parts ? word : new CompoundWord(parts);
+    }
+
     private static string EmitWordText(CompoundWord word)
     {
+        word = ResolveNamedTildes(word);
         // `/tmp/…` words are rewritten from their PARTS (see TryEmitTmpRootedWord), before any
         // emitted text exists to splice into.
         if (TryEmitTmpRootedWord(word.Parts, out var tmpWord))
@@ -9157,6 +9180,7 @@ public static partial class PsEmitter
     /// </summary>
     private static string FlattenPartsToDoubleQuotedString(ImmutableArray<WordPart> parts)
     {
+        parts = ResolveNamedTildes(parts);
         if (TryEmitJoinedWord(parts, out var joined))
             return joined;
 
@@ -9778,6 +9802,7 @@ public static partial class PsEmitter
             // ~user / ~N (dirstack) have no faithful PowerShell equivalent; keep
             // the literal `~user` (degrade) rather than emitting a bogus var. Bash text: escaped
             // through PsBuild like any literal (a U+2019 in `~x` + U+2019 opened a PowerShell string).
+            _ when ts.Home is { } home => PsBuild.SingleQuote(home),
             _ => PsBuild.EscapeBareword("~" + ts.User, atWordStart: false),
         },
         WordPart.GlobPart gp => NormalizePosixGlobClasses(gp.Pattern),
@@ -10955,7 +10980,7 @@ public static partial class PsEmitter
                     if (ts.SlashConsumed) lit.Append('/');
                     break;
                 case WordPart.TildeSub ts:
-                    lit.Append(EscapeGlobLiteral("~" + ts.User));
+                    lit.Append(EscapeGlobLiteral(ts.NamedText));
                     if (ts.SlashConsumed) lit.Append('/');
                     break;
                 case WordPart.CommandSub cs:

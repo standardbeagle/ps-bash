@@ -302,13 +302,8 @@ public sealed class BashArithmeticParser
                 // `a[i]` / `m[$k]` / `c[x+1]++`: an array element is one operand; the evaluator's read / write callbacks resolve it.
                 if (i < source.Length && source[i] == '[')
                 {
-                    int depth = 0, j = i;
-                    for (; j < source.Length; j++)
-                    {
-                        if (source[j] == '[') depth++;
-                        else if (source[j] == ']' && --depth == 0) break;
-                    }
-                    if (j >= source.Length) throw new BashArithmeticParseException($"unterminated array subscript near '{source[start..]}'");
+                    int j = BashLexer.SubscriptClose(source, i);
+                    if (j < 0) throw new BashArithmeticParseException($"unterminated array subscript near '{source[start..]}'");
                     i = j + 1;
                 }
                 result.Add(new Tok(T.Ident, Text: source[start..i])); continue;
@@ -323,7 +318,7 @@ public sealed class BashArithmeticParser
                 if (text.EndsWith('#') && i < source.Length && source[i] == '$')
                 {
                     int pStart = i++;
-                    if (i < source.Length && source[i] == '{') { while (i < source.Length && source[i] != '}') i++; if (i < source.Length) i++; }
+                    if (i < source.Length && source[i] == '{') i = BashLexer.DollarBraceClose(source, pStart) is var close and >= 0 ? close + 1 : source.Length;
                     else while (i < source.Length && (source[i] == '_' || char.IsLetterOrDigit(source[i]))) i++;
                     result.Add(new Tok(T.Parameter, Text: text + source[pStart..i], Key: source[pStart..i].Trim('$', '{', '}')));
                     continue;
