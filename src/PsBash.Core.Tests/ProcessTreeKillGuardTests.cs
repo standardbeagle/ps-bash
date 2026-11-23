@@ -56,6 +56,7 @@ public class ProcessTreeKillGuardTests
         ["PsBash.Core/Runtime/Ipc/WindowsHostSpawn.cs"] = (1, "host lifecycle: a host whose spawn failed half-way"),
         ["PsBash.Shell/HostCommands.cs"] = (1, "`ps-bash host kill`: the user asks for the hosts to die"),
         ["PsBash.Shell/Sessions/TerminalBroker.cs"] = (1, "session broker: ends a terminal session's shell on request"),
+        ["PsBash.Host/Server/ShutdownBackstop.cs"] = (1, "host lifecycle: the host ends ITSELF when its shutdown hangs; its command children sit in kill-on-close jobs"),
         ["PsBash.Host/Shell/CommandAssistProvider.cs"] = (1, "AI assist helper CLI on its own time budget; not a user command, output never reaches a script"),
 
         // ---- test infrastructure shipped under src/ ----
