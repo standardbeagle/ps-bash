@@ -35,6 +35,44 @@ public class PsBuildTests
             + "if ($global:__BashRedirectFailed) { $global:__BashRedirectFailed = $false; $global:LASTEXITCODE = 1; CHECK }",
             PsBuild.RedirectFailureChecked("& { x } | Invoke-BashRedirect -Path f", "CHECK"));
 
+    // `export 1x=2 >f` / `local v=$(x) 2>/nodir/e`: the command's own status counts, so the check runs after it either way,
+    // on status 1 when the open failed. One check, never two (the ERR trap would run twice).
+    [Fact]
+    public void RedirectFailureChecked_StatusCounts_RunsTheCheckOnceAfterTheCommand()
+        => Assert.Equal(
+            "$global:__BashRedirectFailed = $false; CMD; "
+            + "if ($global:__BashRedirectFailed) { $global:__BashRedirectFailed = $false; $global:LASTEXITCODE = 1 }; CHECK",
+            PsBuild.RedirectFailureChecked("CMD", "CHECK", statusCounts: true));
+
+    // ─────────────── FdOpensGated ───────────────
+
+    // `cmd 3>a 4<b`: each open gates the rest; a failed one skips the command and raises the flag (bash runs nothing).
+    [Fact]
+    public void FdOpensGated_EachOpenGatesTheRestAndAFailureRaisesTheFlag()
+        => Assert.Equal(
+            "O3; if ($global:LASTEXITCODE -eq 0) { O4; if ($global:LASTEXITCODE -eq 0) { CMD; $global:__BashRedirectFailed = $false } "
+            + "else { $global:__BashRedirectFailed = $true } } else { $global:__BashRedirectFailed = $true }",
+            PsBuild.FdOpensGated(["O3", "O4"], "CMD", clearsNested: true));
+
+    [Fact]
+    public void FdOpensGated_CommandThatReportsItself_KeepsItsFlag()
+        => Assert.Equal(
+            "O3; if ($global:LASTEXITCODE -eq 0) { CMD } else { $global:__BashRedirectFailed = $true }",
+            PsBuild.FdOpensGated(["O3"], "CMD", clearsNested: false));
+
+    // `cmd 2>e 3>&5`: the scoped descriptors' open reports through its fail tail (the fd agent's one report path) AND
+    // raises the flag the one errexit / ERR check reads; the command runs only when every open worked.
+    [Fact]
+    public void ScopedDescriptors_AFailedOpenReportsAndRaisesTheFlag()
+    {
+        string withTail = PsBuild.ScopedDescriptors([3], [("O3", " | TAIL")], "CMD", clearsNested: true);
+        Assert.Contains("if ($__psbash_fdOk) { CMD; $global:__BashRedirectFailed = $false } else { $global:LASTEXITCODE = 1; "
+            + "$global:__BashRedirectFailed = $true }", withTail);
+        Assert.Contains(" | TAIL }", withTail);
+        Assert.Contains("if ($__psbash_fdOk) { CMD } else { $global:LASTEXITCODE = 1; $global:__BashRedirectFailed = $true }",
+            PsBuild.ScopedDescriptors([3], [("O3", null)], "CMD", clearsNested: false));
+    }
+
     // ─────────────── InheritErrexitCapture / PosixElse / SpecialBuiltinRedefined ───────────────
 
     // `shopt -s inherit_errexit`: a substitution keeps set -e only while the option is on; otherwise it runs suppressed,
@@ -190,6 +228,20 @@ public class PsBuildTests
         Assert.Equal("$(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue })",
             PsBuild.SignalFailIfFailed());
     }
+
+    [Theory]
+    [InlineData(false, "$(if ($global:__BashRedirectFailed) { $global:__BashRedirectFailed = $false; Write-Error '' -ErrorAction SilentlyContinue })")]
+    [InlineData(true, "$(if ($global:__BashRedirectFailed -or $global:LASTEXITCODE -ne 0) { $global:__BashRedirectFailed = $false; Write-Error '' -ErrorAction SilentlyContinue })")]
+    public void SignalFailIfOpenFailed_BridgesTheOpenersFlagAndClearsIt(bool orStatus, string expected)
+    {
+        // `x=1 >/nodir/f || echo c`: the assignment's status is the failed open's, raised as a flag; `export y=$(false)`
+        // leaves LASTEXITCODE 1 though the builtin's status is 0, so the status joins only when asked.
+        Assert.Equal(expected, PsBuild.SignalFailIfOpenFailed(orStatus));
+    }
+
+    [Fact]
+    public void StatusZeroUnlessExpansionFailed_LeavesAFailedExpansionsStatus()
+        => Assert.Equal("if (-not $global:__BashExpansionFailed) { $global:LASTEXITCODE = 0 }", PsBuild.StatusZeroUnlessExpansionFailed);
 
     // ─────────────── ExitCodeTest ───────────────
 
@@ -723,8 +775,9 @@ public class PsBuildTests
         Assert.Contains("throw 'fc: nesting depth limit (5) exceeded; possible infinite recursion'", ps);
         Assert.Contains("try { " + PsBuild.LoopModeSet(0) + "$__psbash_eval_pwsh = $null; ", ps);
         Assert.Contains("'fc: '", ps);
-        Assert.EndsWith("} finally { $global:__BashEvalDepth = $__psbash_eval_depth } CHECK }", ps);
-        Assert.EndsWith("} finally { $global:__BashEvalDepth = $__psbash_eval_depth } }", PsBuild.RunBashTextCall("eval", "", ", $null", ""));
+        // Blank text runs no command: status 0 (`false; e=''; eval "$e"`).
+        Assert.EndsWith("} finally { $global:__BashEvalDepth = $__psbash_eval_depth } CHECK } else { $global:LASTEXITCODE = 0 }", ps);
+        Assert.EndsWith("} finally { $global:__BashEvalDepth = $__psbash_eval_depth } } else { $global:LASTEXITCODE = 0 }", PsBuild.RunBashTextCall("eval", "", ", $null", ""));
     }
 
     [Theory]
@@ -747,7 +800,8 @@ public class PsBuildTests
     public void Transpile_FcWithARedirect_TakesAndRunsTheRerunInsideTheRedirectedBlock()
     {
         var ps = PsEmitter.Transpile("fc -s > out")!;
-        Assert.StartsWith(". { $global:__BashFcRerun = $null; Invoke-BashFc -s; $__psbash_eval_src = $global:__BashFcRerun; ", ps);
+        // fc's re-run may turn set -e on, so its redirect is checked (PsBuild.RedirectFailureChecked): after the flag reset.
+        Assert.StartsWith(PsBuild.RedirectFailedVariable + " = $false; . { $global:__BashFcRerun = $null; Invoke-BashFc -s; $__psbash_eval_src = $global:__BashFcRerun; ", ps);
         int run = ps.IndexOf("Invoke-Expression $__psbash_eval_pwsh", StringComparison.Ordinal);
         int redirect = ps.IndexOf("} | Invoke-BashRedirect -Path out", StringComparison.Ordinal);
         Assert.True(run > 0 && redirect > run, ps);

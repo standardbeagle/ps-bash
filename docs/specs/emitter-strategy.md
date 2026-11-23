@@ -258,19 +258,51 @@ return passes through; the one that is a block (`ErrexitFinalOperand`) goes thro
 `RedirectGroupGuardTests.ErrexitWrappersPassAReturnOrAreBlockMakers` (a PsBuild errexit wrapper that makes a block must
 be a listed block maker) and the condition shapes in `Transpile_ReturnInAnErrexitCondition_StaysAStatement`.
 
-**A redirected compound's failed open is checked after the statement.** Under errexit / an ERR trap, a compound
-command (brace group, if, while/until, for, for-arith, case) whose redirect opens a file, stdin, stdout or stderr
-(`PsEmitter.OpensFile`), is followed by `PsBuild.RedirectFailureChecked` (`PsEmitter.EmitRedirectedCompound`). So is a
-builtin or assignment whose own status errexit ignores (`: > /nodir/x`, `true < missing`, `local v=1 2>/nodir/e`); other
-simple commands are checked on their status. The open failure raises `PsBuild.RedirectFailedVariable`:
-Invoke-BashRedirect for an output file, the failure branch of `PsBuild.InputRedirectGuard` /
-`SimpleInputRedirectGuard` for `< file`. Invoke-BashRedirect does not decide errexit itself, so this check is the only
-errexit decision for a failed open. The exit/return is never inside the guard's `& { }` block, where it would leave only the
-block in a function or subshell. A nested failure the body handled (`{ { cat; } < missing || :; } < in`) is cleared by
-the outer command's own guard or Invoke-BashRedirect. REGRESSION: the input guard lost its errexit exit and nothing
-checked after the compound, so `set -e; { { cat; } < missing; } 2>/dev/null; echo no` printed no. Guard:
+**A failed open: one check after the statement.** A redirection that cannot be opened fails its command (status 1;
+the command never runs), and under errexit that ends the shell for EVERY command kind, operator and descriptor:
+`{ echo a; } 2>/nodir/f`, `for ...; done 3>/nodir/f`, `x=1 >/nodir/f`, `export y=1 >/nodir/f`, `local z=1 >/nodir/f`,
+`: 1<>/nodir/f`, `{ cat; } </nofile`. There is ONE decision, `PsEmitter.EmitCheckedStatement`, after each command at
+statement position: does its own status count (`StatusCounts`), and can one of its redirections fail to open
+(`HasOpenableRedirect`, `{name}` ones too, and a copy of a descriptor the list did not open: `>&5`, `<&5`, `3>&5`)? With
+no openable redirect it is `text; check`; with one it is
+`PsBuild.RedirectFailureChecked(text, check, statusCounts)`, which clears the flag, runs the command, and runs the
+errexit / ERR-trap check after it (when the status counts) or only on a failed open (when it does not, as for `:`,
+`true`, an assignment). The openers never decide errexit themselves: they only raise `PsBuild.RedirectFailedVariable`
+(`$global:__BashRedirectFailed`) — Invoke-BashRedirect (which also sets status 1), `PsBuild.InputRedirectGuard` /
+`SimpleInputRedirectGuard` for `< file`, `PsBuild.FdOpensGated` / `ScopedDescriptors` for `3>`, `{v}>`, and the
+read-write input open. How a failure is REPORTED (where fd 2 points at that point of the list, and which later opens
+are skipped) is a separate, single path, `PsBuild.RedirectFailure` (error-handling.md "Redirect open errors"); every
+kind it reports also raises the flag: a bad descriptor copy (the open plan's `dN` step in Invoke-BashRedirect,
+`PsBuild.DescriptorCheck` for `:`/`true`, `PsBuild.DescriptorInputGuard` for `<&N`), an ambiguous target, a numbered
+descriptor's own open (`ScopedDescriptors`). So the report and the errexit decision compose: the report happens where
+the redirect is, the decision once after the statement. A terminating throw from an opener ended the whole script from inside a subshell or an `||`
+operand, and an opener with its own check missed the others; the check's exit/return is never inside a guard's `& { }`
+block, where it would leave only the block. A nested failure the body handled (`{ { cat; } < missing || :; } < in`) is
+cleared by the outer command's own guard or Invoke-BashRedirect. In a non-final `&&`/`||` operand an assignment's failed
+open is bridged to the chain by `PsBuild.SignalFailIfOpenFailed` (`x=1 >/nodir/f || echo c` runs `echo c`). A later
+pipeline stage that opens its own descriptor (`echo a | cat 3>/nodir/f`, `PsEmitter.OpensDescriptorsAroundItself`)
+is emitted as `{ cmd; }`, whose own emission opens and restores the descriptor (raw, `3>` was PowerShell's warning
+stream). REGRESSION: `set -e; { { cat; } < missing; } 2>/dev/null; echo no` printed no, and so did the shapes above.
+Guards: Host.Tests `ErrexitRedirectFailureMatrixTests` (18 command kinds x 23 redirect shapes - every file operator and
+descriptor, a bad descriptor copy `>&5` / `2>&5` / `<&5` / `3>&5` / `3<&5`, an ambiguous `>$amb` / `3>$amb` - x 8 contexts, run under
+`set -e` in a real runspace: plain, with an ERR trap, and the exempt `||`, `&&`, `if`, `while`, `!` and
+function-called-as-operand contexts, where the shell goes on; expectations from bash 5.2 / 5.3),
 `RedirectGroupGuardTests.Transpile_RedirectedCompoundUnderErrexit_IsFollowedByTheOpenFailureCheck`; behavior
 `Differential.Tests/ErrexitInputRedirectTests`.
+
+**eval and sourced text inherit the caller's errexit.** The text of `eval`, `source` / `.` and the run-time eval
+(`PsBuild.RunBashTextAtRunTime`) is transpiled when it runs, with the shell's options at that moment
+(`RuntimeOptionHints.Apply` -> `PsEmitter.InheritedErrexit` / `InheritedErrTrap` / `InheritedErrtrace`): under
+`set -e` it gets its statements' checks even when the text itself cannot turn errexit on, so
+`eval "echo x >/nodir/f; echo still"` ends the shell as in bash.
+
+**How the check leaves** (`PsEmitter.InSubshellBody`). In a subshell's OWN body an exit, an errexit failure, a fatal
+error or a run-time `return` is a scoped PowerShell `return` that leaves the subshell's script block. In a function
+body — including a function defined inside a subshell, whose `return` would leave only the function — it is decided at
+run time (`PsBuild.DynamicExit`: throw `BashSubshellExitException` to the enclosing subshell scope, else `exit`).
+REGRESSION: `( f(){ exit 3; echo no; }; f; echo after )` printed after with status 0, `x=$( f(){ exit 7; }; f; echo no )`
+captured no, and `( trap 'echo E' ERR; set -e; f(){ false; }; f )` ran the caller's ERR trap bash never runs. Guard:
+Host.Tests `ErrexitRedirectFailureMatrixTests.ExitFromAFunctionDefinedInASubshell_EndsThatSubshell`.
 
 **errexit's final and-or operand streams.** Each and-or operand marks its own start (as `EmitCommand` does for a
 command), so only a return in THAT operand makes it pass one on. The operand stays the dot-sourced block
@@ -908,18 +940,56 @@ capture is cheap). Turning an option off (`set +o xtrace`, `+x`) never turns its
 for `grep -c pipefail f && echo y`; a regex for `set -x` missed `c=set; $c -x`. Guards:
 `Core.Tests/PipefailModeEmitterTests`, Differential `PipefailPositionDifferentialTests`,
 `DynamicBuiltinDifferentialTests.XtraceNounset_TurnedOnThroughARunTimeWord`.
-**errexit checks** (`PsEmitter.EmitStatement`, `PsBuild.Errexit*`). Emitted only when the script itself
-contains `set -e`/`-o errexit` (`PsEmitter.EnablesErrexit`); every other script is byte-identical. Each
+**errexit checks** (`PsEmitter.EmitStatement`, `PsBuild.Errexit*`). Emitted only when the unit CAN turn errexit
+on (`PsEmitter.DecideErrexitModes`: `CanSetErrexit` / `CanSetErrTrap` / `CanSetErrtrace` / `CanSetInheritErrexit`,
+the same `CanSetShellOption` predicate on the parsed commands). For errexit the options are "opaque": a word known
+only at run time (`set -$o`, `set -o $nm`), eval / `source` / `.` text, `fc` re-running a line (any `fc` without an
+`l` option) and a run-time command name all count, as their text cannot be judged here; a `trap` with only static
+words and no action (`trap - DEBUG`, `trap -p`) runs nothing. A text scan missed `set -$o` (errexit on, no checks
+emitted). Every unit that cannot is byte-identical to one without checks. Guards: `ErrexitModeEmitterTests`,
+`TranspileModeTextScanGuardTests` (a mode decided by searching the source text must be allow-listed with a reason;
+errexit, ERR, errtrace, inherit_errexit and assignment status may never be). The four modes are independent:
+`inherit_errexit` applies whether or not the unit can also set `-E` (it was ignored beside `set -E`). Each
 command at STATEMENT position (`EmitBody`/`EmitCommandList`: script top level, if/loop/case/function/group/
 subshell bodies) that bash's errexit applies to — a simple command (not a status-neutral builtin such as
 `export`/`local`/`set`), a pipeline (last stage's status), `[ ]`, `(( ))`, a subshell, `X=$(…)` — is followed by
 `if ($global:__BashErrexit -and -not $global:__BashErrexitSuppress -and $global:LASTEXITCODE -ne 0) { exit … }`
-(a scoped `return` inside a subshell). bash's exempt contexts emit no check inside (`_errexitExemptDepth`)
+(a scoped `return` in a subshell's own body; see "How the check leaves" below). bash's exempt contexts emit no check inside (`_errexitExemptDepth`)
 AND raise the runtime `$global:__BashErrexitSuppress` counter, so a FUNCTION called there runs past its
 own failures: if/elif/while/until conditions, non-final `&&`/`||` operands, `!`, pipeline stages, command
 and process substitutions. An `&&`/`||` list leaves only if its final command ran and failed
 (`$global:__BashErrexitTail`). An untaken `if` and a finished `while`/`until` set status 0, so a function
 ending in one does not leak the failed condition's code to its caller's check.
+
+**Every command sets the status, unconditionally.** The status a command leaves is read as `$?`, as a function's or
+loop's last status, by eval / a trap / a caller's errexit check, so it is never gated on the text holding `$?`:
+- a scalar assignment ends with `$global:LASTEXITCODE = 0` (a `$(…)` in its value leaves that command's status, as
+  bash; a failed arithmetic expansion leaves 1, `PsBuild.StatusZeroUnlessExpansionFailed`); an array assignment
+  `if ($?) { $global:LASTEXITCODE = 0 }` (`arr=( $(exit 3) )` is 3); a declaration (`declare -a`, `local`, `export`)
+  is prefixed with `PsBuild.SetStatus(0)` and fails through `ReadonlyGuardStatus` (`export -f nofn` is 1,
+  `PsBuild.FunctionExportCheck`) — unless a value reads the status from before it (`$?`, a substitution;
+  `PsEmitter.ValuesReadStatus`), when the 0 comes after the value. REGRESSION: the 0 came first, so `false; local rc=$?`
+  stored 0, as did every `rc=$?` in a unit that runs source/eval text (`PsBuild.AssignAttributed`). Guard: Host.Tests
+  `ErrexitRedirectFailureMatrixTests.AssignmentStatusAndFailedOpens_MatchBash`;
+- a function definition is 0 (`FunctionSources.Defined`, the one call every definition makes);
+- blank `eval` is 0; `kill -USR1 $$` sets kill's status before the trap runs; an arithmetic WORD (`$((1+1))`)
+  leaves the status alone, only `(( ))` / `let` set it;
+- `shift` past the end is status 1, reported only under `shopt -s shift_verbose`.
+The status was once reset only when the script's text contained `$?`: `f() { [ -n "" ] || y=def; }; if f` was false.
+Differential: `ErrexitStatusDifferentialTests`.
+
+**A failing builtin is a failing command.** A builtin the emitter writes out as statements (`cd`, `set`, `export`,
+`source`, `fc`, …) gets the same `PsBuild.ErrexitCheck` (and ERR trap) after it as a cmdlet: `cd /nodir` under `set -e`
+ends the shell. A redirect-only command (`x=1 > /nodir/x`, `: 2>/dev/null > /nodir/x`) fails with status 1.
+
+**A statement builtin takes stream redirects as a compound does.** Fed stdin (`<`, `<>`, a here-document, a here-string)
+or with stdout duplicated (`1>&2`), a builtin from `BashBuiltins.RunAsSource` / `CallStackBuiltins` (also through
+`builtin` / `command`; not eval / source / `.`, whose stdin path is their own, not `readarray`, not a redirect-only
+`exec`) has its redirects applied by `ApplyCompoundRedirects` around its statements
+(`PsEmitter.InlineBuiltinStreamRedirects`). Piped into or out of statement text, `true < f`, `cd 1>&2` and
+`return <<< w` were not valid PowerShell and the WHOLE script failed to parse. Guard (every builtin x every redirect
+operator, bare / with an argument / in a pipe / followed by a command): Host.Tests
+`BuiltinRedirectParseabilityTests.Transpile_BuiltinWithAnyRedirectOperator_EmitsParseablePowerShell`.
 
 **A stage inherits `-e`.** A compound or function stage of a pipeline at an armed statement is a subshell that
 inherits `-e`: its statements carry checks, and the stage lifts the pipeline's suppression around them

@@ -39,8 +39,12 @@ public sealed class InvokeBashEvalCommand : BashCmdlet
         if (RemainingArgs is { Length: > 0 })
             source = source + " " + string.Join(" ", RemainingArgs);
 
+        // Blank text runs no command: status 0 (`false; eval ''`).
         if (string.IsNullOrWhiteSpace(source))
+        {
+            FileSystemHelpers.SetLastExitCode(this, 0);
             return;
+        }
 
         // Nesting-depth guard: prevent runaway recursive eval.
         var depthObj = SessionState.PSVariable.GetValue("__BashEvalDepth");

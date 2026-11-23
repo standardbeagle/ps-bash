@@ -599,17 +599,16 @@ public class BashTranspilerTests
     public void Transpile_MultiVarAssignmentInAndChain_UsesSubexpressionNotGrouping()
     {
         var result = BashTranspiler.Transpile("A=1 B=2 && echo hi");
-        Assert.Equal("[void]$($env:A = \"1\"; $env:B = \"2\") && Invoke-BashEcho hi", result);
+        Assert.Equal("[void]$($env:A = \"1\"; $env:B = \"2\"; $global:LASTEXITCODE = 0) && Invoke-BashEcho hi", result);
     }
 
-    // Single-pair assignment is a single statement — valid inside `(...)`. Keep
-    // the cheaper grouping form (bit-identical to the prior emission) so the
-    // ExportWithAnd_WrapsInVoid contract is preserved.
+    // Single-pair assignment: the assignment and its status 0 are two statements, so it is a subexpression too
+    // (a grouping `(...)` cannot hold a statement list).
     [Fact]
-    public void Transpile_SingleVarAssignmentInAndChain_StaysInVoidGrouping()
+    public void Transpile_SingleVarAssignmentInAndChain_IsOneSubexpression()
     {
         var result = BashTranspiler.Transpile("A=1 && echo hi");
-        Assert.Equal("[void]($env:A = \"1\") && Invoke-BashEcho hi", result);
+        Assert.Equal("[void]$($env:A = \"1\"; $global:LASTEXITCODE = 0) && Invoke-BashEcho hi", result);
     }
 
     // Three-pair assignment: still one subexpression, all statements inside.
@@ -617,7 +616,7 @@ public class BashTranspilerTests
     public void Transpile_ThreeVarAssignmentInAndChain_UsesSubexpression()
     {
         var result = BashTranspiler.Transpile("A=1 B=2 C=3 && echo hi");
-        Assert.Equal("[void]$($env:A = \"1\"; $env:B = \"2\"; $env:C = \"3\") && Invoke-BashEcho hi", result);
+        Assert.Equal("[void]$($env:A = \"1\"; $env:B = \"2\"; $env:C = \"3\"; $global:LASTEXITCODE = 0) && Invoke-BashEcho hi", result);
     }
 
     // The full env-setup wrapper shape captured live from the Claude Code Bash
@@ -631,7 +630,7 @@ public class BashTranspilerTests
                   + "TEMP='C:\\Users\\me\\Temp' TMP='C:\\Users\\me\\Temp' && echo hi";
         var result = BashTranspiler.Transpile(input);
         // The TEMP/TMP assignment is a two-statement subexpression, not a grouping.
-        Assert.Contains("[void]$($env:TEMP = 'C:\\Users\\me\\Temp'; $env:TMP = 'C:\\Users\\me\\Temp')", result);
+        Assert.Contains("[void]$($env:TEMP = 'C:\\Users\\me\\Temp'; $env:TMP = 'C:\\Users\\me\\Temp'; $global:LASTEXITCODE = 0)", result);
         // The pre-fix unparseable shape must never reappear.
         Assert.DoesNotContain("[void]($env:TEMP", result);
     }
@@ -653,7 +652,7 @@ public class BashTranspilerTests
     public void ExportAndEchoVar_TransformsBoth()
     {
         var result = BashTranspiler.Transpile("export FOO=bar");
-        Assert.Equal("$env:FOO = \"bar\"; [PsBash.Cmdlets.BashVariableStore]::Export('FOO')", result);
+        Assert.Equal("$global:LASTEXITCODE = 0; $env:FOO = \"bar\"; [PsBash.Cmdlets.BashVariableStore]::Export('FOO')", result);
     }
 
     [Fact]
@@ -694,7 +693,7 @@ public class BashTranspilerTests
     public void ExportQuotedValue_TransformsCorrectly()
     {
         var result = BashTranspiler.Transpile("export NODE_ENV=\"production\"");
-        Assert.Equal("$env:NODE_ENV = \"production\"; [PsBash.Cmdlets.BashVariableStore]::Export('NODE_ENV')", result);
+        Assert.Equal("$global:LASTEXITCODE = 0; $env:NODE_ENV = \"production\"; [PsBash.Cmdlets.BashVariableStore]::Export('NODE_ENV')", result);
     }
 
     [Fact]
@@ -755,7 +754,7 @@ public class BashTranspilerTests
         // as a single and-or-list element after the [void] export assignment.
         var result = BashTranspiler.Transpile("export FOO=\"bar\" && echo $FOO");
         Assert.Equal(
-            "[void]$($env:FOO = \"bar\"; [PsBash.Cmdlets.BashVariableStore]::Export('FOO')) && $(& { $__bashsplat0 = " +
+            "[void]$($global:LASTEXITCODE = 0; $env:FOO = \"bar\"; [PsBash.Cmdlets.BashVariableStore]::Export('FOO')) && $(& { $__bashsplat0 = " +
             PsBuild.WordSplitArray("$env:FOO") + "; " +
             "Invoke-BashEcho @__bashsplat0 })",
             result);

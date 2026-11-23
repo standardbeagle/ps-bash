@@ -54,6 +54,15 @@ public static partial class PsEmitter
         return high;
     }
 
+    /// <summary>
+    /// A simple command that opens descriptors of its own around itself: numbered ones (<see cref="ScopedHighFdRedirects"/>)
+    /// or a <c>{name}</c> one. Not <c>exec</c>, whose descriptors stay open.
+    /// </summary>
+    private static bool OpensDescriptorsAroundItself(Command.Simple cmd)
+        => ScopedHighFdRedirects(cmd).Count > 0
+           || (!cmd.Redirects.IsDefaultOrEmpty && cmd.Words.Length > 0 && GetLiteralValue(cmd.Words[0]) != "exec"
+               && cmd.Redirects.Any(r => r.FdVar is not null));
+
     /// <summary>The statements after a standard-descriptor <c>exec</c>, as one brace group under its redirections.</summary>
     private static Command RestUnderExecRedirects(ImmutableArray<Command> rest, ImmutableArray<Redirect> redirects)
         => new Command.BraceGroup(rest.Length == 1 ? rest[0] : new Command.CommandList(rest), redirects);
@@ -290,12 +299,15 @@ public static partial class PsEmitter
     /// <summary>
     /// <c>&gt;&amp;N</c>, <c>2&gt;&amp;N</c> or <c>&lt;&amp;N</c> (N &gt;= 3) copying a table descriptor that no earlier redirect of
     /// <paramref name="all"/> opened (or one it closed): whether N is open is only known when the list reaches it.
+    /// <paramref name="anyDescriptor"/>: also a numbered descriptor's own copy (<c>3&gt;&amp;5</c>, <c>3&lt;&amp;5</c>, opened by
+    /// PsBuild.ScopedDescriptors), for the question "can this command's redirection fail?" (PsEmitter.HasOpenableRedirect).
     /// </summary>
-    private static bool IsUncheckedDescriptorCopy(IReadOnlyList<Redirect> all, Redirect r, out int fd)
+    private static bool IsUncheckedDescriptorCopy(IReadOnlyList<Redirect> all, Redirect r, out int fd, bool anyDescriptor = false)
     {
         fd = -1;
         if (r.FdVar is not null || r.Here is not null) return false;
-        if (!(r.Op == ">&" && r.Fd is 1 or 2) && !IsDescriptorInput(r, out _)) return false;
+        if (!(r.Op == ">&" && r.Fd is 1 or 2) && !IsDescriptorInput(r, out _)
+            && !(anyDescriptor && r.Fd >= 3 && r.Op is ">&" or "<&")) return false;
         if (!TryParseDescriptor(GetLiteralValue(r.Target), out fd) || fd < 3) return false;
         bool open = false;
         foreach (var earlier in all)

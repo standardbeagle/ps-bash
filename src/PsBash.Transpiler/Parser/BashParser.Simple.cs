@@ -149,7 +149,8 @@ public sealed partial class BashParser
                 Builtin: isLocal ? keyword : null,
                 Redirects: _declRedirects.Count == 0 ? default : [.. _declRedirects],
                 // `export -n NAME` takes the attribute away (-n is no nameref there); `local -x` / `typeset +x` set / clear it.
-                ExportAttr: isLocal ? _declExport : _declSawNameref ? -1 : 0);
+                ExportAttr: isLocal ? _declExport : _declSawNameref ? -1 : 0,
+                IsFunctionExport: !isLocal && _declSawFunction);
 
         // No assignment or name followed — rewind and parse as a normal command
         // so forms like `export -p` still reach the general path.
@@ -357,8 +358,11 @@ public sealed partial class BashParser
         }
 
         // `exec <<< w` / `exec <<EOF` with no command: the here-text becomes the SHELL's stdin, a redirection of exec as
-        // `exec < f` is, not a command's input (piped into an exec with nothing to run, it emitted `… | $x = 0`).
-        if (stdinHereText is not null && words.Count == 1 && words[0].Parts is [WordPart.Literal { Value: "exec" }])
+        // `exec < f` is, not a command's input (piped into an exec with nothing to run, it emitted `… | $x = 0`). So for
+        // `builtin exec <<< w` / `command exec <<EOF`, which are exec itself. REGRESSION: those still piped the text into
+        // the status assignment, and the whole script failed to parse.
+        if (stdinHereText is not null && words.Count >= 1 && words[^1].Parts is [WordPart.Literal { Value: "exec" }]
+            && words.Take(words.Count - 1).All(w => w.Parts is [WordPart.Literal { Value: "builtin" or "command" }]))
         {
             hereDocs.Clear();
             AddRedirect(redirects, stdinHereText);
@@ -548,6 +552,7 @@ public sealed partial class BashParser
     private bool _declSawLower;
     private bool _declSawUpper;
     private bool _declSawGlobal;
+    private bool _declSawFunction;
     /// <summary>Set by <see cref="ParseDeclarationPairs"/>: +1 after a flag with <c>x</c> (<c>-x</c>), -1 after <c>+x</c>, else 0.</summary>
     private int _declExport;
     /// <summary>The redirects <see cref="ParseDeclarationPairs"/> consumed (the builtin's own).</summary>
@@ -658,6 +663,7 @@ public sealed partial class BashParser
         _declSawLower = false;
         _declSawUpper = false;
         _declSawGlobal = false;
+        _declSawFunction = false;
         _declExport = 0;
         _declRedirects.Clear();
         var pairs = ImmutableArray.CreateBuilder<Assignment>();
@@ -676,6 +682,13 @@ public sealed partial class BashParser
             if (Peek().Kind == BashTokenKind.IoNumber || IsFileRedirectOp(Peek().Kind))
             {
                 AddRedirect(_declRedirects, ParseRedirect());
+                continue;
+            }
+            // `export y=1 {v}>f`: a named descriptor, as on any command. REGRESSION: `{v}` was a name to export (127).
+            if (IsNamedFdRedirect() && IsFileRedirectOp(_tokens[_pos + 1].Kind))
+            {
+                var fdVar = Advance().Value[1..^1];
+                AddRedirect(_declRedirects, ParseRedirect(fdVar));
                 continue;
             }
 
@@ -699,6 +712,7 @@ public sealed partial class BashParser
                 if (value[1] != '-' && value.Contains('i')) _declSawInteger = true;
                 if (value[1] != '-' && value.Contains('l')) _declSawLower = true;
                 if (value[1] != '-' && value.Contains('u')) _declSawUpper = true;
+                if (value[1] != '-' && value.Contains('f')) _declSawFunction = true;
                 if (value[1] != '-' && value.Contains('x')) _declExport = 1;
                 if (value[1] != '-' && value.Contains('g')) _declSawGlobal = true;
                 Advance();
@@ -1222,7 +1236,6 @@ public sealed partial class BashParser
         return redirects.ToImmutable();
     }
 
-    /// <summary>A <c>{name}</c> word right before a redirection operator: the descriptor bash allocates into <c>name</c>.</summary>
     /// <summary>
     /// A <c>{name}</c> word is a descriptor variable only when a redirection operator that takes a descriptor prefix
     /// follows it IMMEDIATELY, as a digit word becomes an IO number (<see cref="BashLexer"/> TryReclassifyIoNumber):

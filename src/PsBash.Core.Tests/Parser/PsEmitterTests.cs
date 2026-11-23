@@ -1116,10 +1116,11 @@ public class PsEmitterTests
 
     // bash: `cmd {fd}>file` opens a descriptor of its own (10 up), stores its number in fd and leaves it open after
     // the command; cmd's stdout is not redirected. It degraded to a plain `>file` (oils redirect "Parsing of
-    // x={myvar} and related cases": `echo + {myvar}>/dev/stdout` left myvar unchanged).
+    // x={myvar} and related cases": `echo + {myvar}>/dev/stdout` left myvar unchanged). The command runs only when the
+    // descriptor opened (bash: `cmd {fd}</nofile` never runs cmd).
     [Theory]
-    [InlineData("cmd {fd}>out.txt", ". { Invoke-BashExecFd -Variable 'fd' -Operator '>' -Target out.txt; cmd }")]
-    [InlineData("cmd a {v}<in.txt >o", ". { Invoke-BashExecFd -Variable 'v' -Operator '<' -Target in.txt; cmd a | Invoke-BashRedirect -Path o }")]
+    [InlineData("cmd {fd}>out.txt", ". { Invoke-BashExecFd -Variable 'fd' -Operator '>' -Target out.txt; if ($global:LASTEXITCODE -eq 0) { cmd; $global:__BashRedirectFailed = $false } else { $global:__BashRedirectFailed = $true } }")]
+    [InlineData("cmd a {v}<in.txt >o", ". { Invoke-BashExecFd -Variable 'v' -Operator '<' -Target in.txt; if ($global:LASTEXITCODE -eq 0) { cmd a | Invoke-BashRedirect -Path o } else { $global:__BashRedirectFailed = $true } }")]
     public void Transpile_NamedFdRedirect_OnASimpleCommand_OpensADescriptor(string bash, string expected)
         => Assert.Equal(expected, PsEmitter.Transpile(bash));
 
@@ -1692,7 +1693,7 @@ public class PsEmitterTests
 
         var result = PsEmitter.Emit(assignment);
 
-        Assert.Equal("$env:x = \"1\"", result);
+        Assert.Equal("$env:x = \"1\"; $global:LASTEXITCODE = 0", result);
     }
 
     [Fact]
@@ -1700,7 +1701,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("export FOO=bar");
 
-        Assert.Equal("$env:FOO = \"bar\"; [PsBash.Cmdlets.BashVariableStore]::Export('FOO')", result);
+        Assert.Equal("$global:LASTEXITCODE = 0; $env:FOO = \"bar\"; [PsBash.Cmdlets.BashVariableStore]::Export('FOO')", result);
     }
 
     [Fact]
@@ -1708,7 +1709,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("export FOO=\"hello world\"");
 
-        Assert.Equal("$env:FOO = \"hello world\"; [PsBash.Cmdlets.BashVariableStore]::Export('FOO')", result);
+        Assert.Equal("$global:LASTEXITCODE = 0; $env:FOO = \"hello world\"; [PsBash.Cmdlets.BashVariableStore]::Export('FOO')", result);
     }
 
     [Fact]
@@ -1716,7 +1717,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("FOO=bar");
 
-        Assert.Equal("$env:FOO = \"bar\"", result);
+        Assert.Equal("$env:FOO = \"bar\"; $global:LASTEXITCODE = 0", result);
     }
 
     [Fact]
@@ -1724,7 +1725,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("FOO=");
 
-        Assert.Equal("$env:FOO = \"\"", result);
+        Assert.Equal("$env:FOO = \"\"; $global:LASTEXITCODE = 0", result);
     }
 
     [Fact]
@@ -1756,7 +1757,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("export PATH=\"$PATH:/new\"");
 
-        Assert.Equal("$env:PATH = \"${env:PATH}:/new\"; [PsBash.Cmdlets.BashRuntime]::NormalizePathVariable(); [PsBash.Cmdlets.BashVariableStore]::Export('PATH')", result);
+        Assert.Equal("$global:LASTEXITCODE = 0; $env:PATH = \"${env:PATH}:/new\"; [PsBash.Cmdlets.BashRuntime]::NormalizePathVariable(); [PsBash.Cmdlets.BashVariableStore]::Export('PATH')", result);
     }
 
     [Fact]
@@ -1767,7 +1768,7 @@ public class PsEmitterTests
         // another "...", producing ""prefix":"$env:PATH"" — invalid PowerShell.
         var result = PsEmitter.Transpile("export PATH=\"/a/b\":\"$PATH\"");
 
-        Assert.Equal("$env:PATH = \"/a/b:$env:PATH\"; [PsBash.Cmdlets.BashRuntime]::NormalizePathVariable(); [PsBash.Cmdlets.BashVariableStore]::Export('PATH')", result);
+        Assert.Equal("$global:LASTEXITCODE = 0; $env:PATH = \"/a/b:$env:PATH\"; [PsBash.Cmdlets.BashRuntime]::NormalizePathVariable(); [PsBash.Cmdlets.BashVariableStore]::Export('PATH')", result);
     }
 
     [Fact]
@@ -1969,7 +1970,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cmd 3> file");
 
-        Assert.StartsWith("& { $__psbash_fdSave = Save-BashFd 3; Invoke-BashExecFd 3 '>' file; $__psbash_fdOk = $global:LASTEXITCODE -eq 0; try { if ($__psbash_fdOk) { cmd }", result);
+        Assert.StartsWith("& { $__psbash_fdSave = Save-BashFd 3; Invoke-BashExecFd 3 '>' file; $__psbash_fdOk = $global:LASTEXITCODE -eq 0; try { if ($__psbash_fdOk) { cmd; $global:__BashRedirectFailed = $false }", result);
     }
 
     [Fact]
@@ -4293,7 +4294,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("result=$((x + 1))");
         // The trailing clear: a failed $(( )) marks the expansion as failed; an assignment consumes the mark.
-        Assert.Equal(PsBuild.DiscardLineScope("$env:result = \"$(Invoke-BashArith 'x + 1')\"; " + PsBuild.ClearExpansionFailed), result);
+        Assert.Equal(PsBuild.DiscardLineScope(PsBuild.SetStatus(0) + "; $env:result = \"$(Invoke-BashArith 'x + 1')\"; " + PsBuild.ClearExpansionFailed), result);
     }
 
     /// <summary>
@@ -4582,9 +4583,9 @@ public class PsEmitterTests
     public void Transpile_ArrayAssignmentWithGlobElement_FlattensIntoOneArray()
     {
         // The comma form cannot splice an expansion that yields zero or many words.
-        Assert.Equal("$arr = @(\"a\"; @(ConvertTo-BashGlob '*.txt'); \"b\")", PsEmitter.Transpile("arr=(a *.txt b)"));
+        Assert.Equal("$arr = @(\"a\"; @(ConvertTo-BashGlob '*.txt'); \"b\"); if ($?) { $global:LASTEXITCODE = 0 }", PsEmitter.Transpile("arr=(a *.txt b)"));
         // No glob element: the historical comma form is unchanged.
-        Assert.Equal("$arr = @(\"a\",\"b\")", PsEmitter.Transpile("arr=(a b)"));
+        Assert.Equal("$arr = @(\"a\",\"b\"); if ($?) { $global:LASTEXITCODE = 0 }", PsEmitter.Transpile("arr=(a b)"));
     }
 
     [Fact]
@@ -5131,7 +5132,7 @@ public class PsEmitterTests
     public void Transpile_SourceWithProcessSub_RoutesToStringCapturePath()
     {
         var result = PsEmitter.Transpile("source <(echo 'PSBASH_T10_VAR=hello')");
-        Assert.Equal(PsBuildTestText.WithSignalPoll("Invoke-ProcessSubSource { Invoke-BashEcho 'PSBASH_T10_VAR=hello' }"), result);
+        Assert.Equal(PsBuildTestText.WithSignalPoll(ProcessSubSourceExempt("Invoke-BashEcho 'PSBASH_T10_VAR=hello'") + "; " + ErrexitCheckOnLine1()), result);
     }
 
     [Fact]
@@ -5139,7 +5140,7 @@ public class PsEmitterTests
     {
         // bash's `.` is a synonym for `source` and must classify identically.
         var result = PsEmitter.Transpile(". <(echo 'A=1')");
-        Assert.Equal(PsBuildTestText.WithSignalPoll("Invoke-ProcessSubSource { Invoke-BashEcho 'A=1' }"), result);
+        Assert.Equal(PsBuildTestText.WithSignalPoll(ProcessSubSourceExempt("Invoke-BashEcho 'A=1'") + "; " + ErrexitCheckOnLine1()), result);
     }
 
     [Fact]
@@ -5147,10 +5148,11 @@ public class PsEmitterTests
     {
         // The producer can be any pipeline; classifier must transpile it as a
         // nested command and wrap the whole thing in Invoke-ProcessSubSource.
+        // (`source` may turn pipefail on, so the producer carries its pipefail capture: only its shape is asserted.)
         var result = PsEmitter.Transpile("source <(cat config.env | grep -v '^#')");
-        Assert.Equal(
-            PsBuildTestText.WithSignalPoll("Invoke-ProcessSubSource { Invoke-BashCat config.env | Invoke-BashGrep '-v' '^#' }"),
-            result);
+        Assert.StartsWith("Invoke-ProcessSubSource { ", result);
+        Assert.Contains("Invoke-BashCat config.env", result);
+        Assert.Contains("Invoke-BashGrep '-v' '^#'", result);
     }
 
     [Fact]
@@ -5160,7 +5162,7 @@ public class PsEmitterTests
         // the string-capture path — it goes through Invoke-BashSource as a
         // normal file argument. This guards against the classifier overreaching.
         var result = PsEmitter.Transpile("source script.sh");
-        Assert.Equal(PsBuildTestText.WithSignalPoll(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock script.sh)"), result);
+        Assert.Equal(PsBuildTestText.WithSignalPoll(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock script.sh)" + "; " + ErrexitCheckOnLine1()), result);
     }
 
     // --- Array and associative array tests ---
@@ -5171,7 +5173,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("arr=(a b c)");
         // Elements route through EmitAssignmentValue now (bare literals → double-quoted),
         // so a "$x" element expands and $'a\'b' stays balanced (var-expansion fix).
-        Assert.Equal("$arr = @(\"a\",\"b\",\"c\")", result);
+        Assert.Equal("$arr = @(\"a\",\"b\",\"c\"); if ($?) { $global:LASTEXITCODE = 0 }", result);
     }
 
     [Fact]
@@ -5219,7 +5221,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("map[key]=val");
         // A key that is not a plain integer may be arithmetic on an indexed array (`a[1/0]=x` discards the line).
-        Assert.Equal(PsBuild.DiscardLineScope("if ($null -eq $map -and $null -ne $env:map) { $map = @($env:map) }; $map = Set-BashElement $map \"key\" \"val\" -Written 'map[key]'"), result);
+        Assert.Equal(PsBuild.DiscardLineScope("$global:LASTEXITCODE = 0; if ($null -eq $map -and $null -ne $env:map) { $map = @($env:map) }; $map = Set-BashElement $map \"key\" \"val\" -Written 'map[key]'"), result);
     }
 
     // Oracle: `b=(1); i=-5; b[$i]=x; echo no` prints "t.sh: line 1: b[$i]: bad array subscript" and drops the rest of the
@@ -5541,7 +5543,7 @@ public class PsEmitterTests
         // single and-or-list element.
         var result = PsEmitter.Transpile("export FOO=bar && echo $FOO");
         Assert.Equal(
-            "[void]$($env:FOO = \"bar\"; [PsBash.Cmdlets.BashVariableStore]::Export('FOO')) && $(& { $__bashsplat0 = " +
+            "[void]$($global:LASTEXITCODE = 0; $env:FOO = \"bar\"; [PsBash.Cmdlets.BashVariableStore]::Export('FOO')) && $(& { $__bashsplat0 = " +
             PsBuild.WordSplitArray("$env:FOO") + "; " +
             "Invoke-BashEcho @__bashsplat0 })",
             result);
@@ -5635,16 +5637,16 @@ public class PsEmitterTests
     public void Transpile_RedirectFdModel_UserFd_IsOpenedAroundTheCommand()
     {
         // fd 3 is outside the model: the descriptor is opened for the command and put back after it (it was PowerShell's
-        // warning stream, `cmd 3>f`).
-        Assert.StartsWith("& { $__psbash_fdSave = Save-BashFd 3; Invoke-BashExecFd 3 '>' f; $__psbash_fdOk = $global:LASTEXITCODE -eq 0; try { if ($__psbash_fdOk) { cmd } else { $global:LASTEXITCODE = 1;", PsEmitter.Transpile("cmd 3>f"));
+        // warning stream, `cmd 3>f`). The command runs only when it opened: bash never runs `cmd 3>/nodir/f`.
+        Assert.StartsWith("& { $__psbash_fdSave = Save-BashFd 3; Invoke-BashExecFd 3 '>' f; $__psbash_fdOk = $global:LASTEXITCODE -eq 0; try { if ($__psbash_fdOk) { cmd; $global:__BashRedirectFailed = $false } else { $global:LASTEXITCODE = 1;", PsEmitter.Transpile("cmd 3>f"));
     }
 
     // `echo hi 9>&1` / `9>f.txt` / `9>&-`: fd 7+ is no PowerShell stream. `9>f.txt` was a literal argument ("hi 9>f.txt"),
     // `9>&1` ended in PowerShell's background `&` (the command ran as a job). Opened around the command instead.
     [Theory]
-    [InlineData("echo hi 9>&1", "& { $__psbash_fdSave = Save-BashFd 9; Invoke-BashExecFd 9 '>&' 1; $__psbash_fdOk = $global:LASTEXITCODE -eq 0; try { if ($__psbash_fdOk) { Invoke-BashEcho hi } else { $global:LASTEXITCODE = 1;")]
-    [InlineData("echo hi 9>f.txt", "& { $__psbash_fdSave = Save-BashFd 9; Invoke-BashExecFd 9 '>' f.txt; $__psbash_fdOk = $global:LASTEXITCODE -eq 0; try { if ($__psbash_fdOk) { Invoke-BashEcho hi } else { $global:LASTEXITCODE = 1;")]
-    [InlineData("echo hi 9>&-", "& { $__psbash_fdSave = Save-BashFd 9; Invoke-BashExecFd 9 '>&' -; $__psbash_fdOk = $global:LASTEXITCODE -eq 0; try { if ($__psbash_fdOk) { Invoke-BashEcho hi } else { $global:LASTEXITCODE = 1;")]
+    [InlineData("echo hi 9>&1", "& { $__psbash_fdSave = Save-BashFd 9; Invoke-BashExecFd 9 '>&' 1; $__psbash_fdOk = $global:LASTEXITCODE -eq 0; try { if ($__psbash_fdOk) { Invoke-BashEcho hi; $global:__BashRedirectFailed = $false } else { $global:LASTEXITCODE = 1;")]
+    [InlineData("echo hi 9>f.txt", "& { $__psbash_fdSave = Save-BashFd 9; Invoke-BashExecFd 9 '>' f.txt; $__psbash_fdOk = $global:LASTEXITCODE -eq 0; try { if ($__psbash_fdOk) { Invoke-BashEcho hi; $global:__BashRedirectFailed = $false } else { $global:LASTEXITCODE = 1;")]
+    [InlineData("echo hi 9>&-", "& { $__psbash_fdSave = Save-BashFd 9; Invoke-BashExecFd 9 '>&' -; $__psbash_fdOk = $global:LASTEXITCODE -eq 0; try { if ($__psbash_fdOk) { Invoke-BashEcho hi; $global:__BashRedirectFailed = $false } else { $global:LASTEXITCODE = 1;")]
     [InlineData("read -u 7 l 7<in.txt", "& { $__psbash_fdSave = Save-BashFd 7; Invoke-BashExecFd 7 '<' in.txt; $__psbash_fdOk = $global:LASTEXITCODE -eq 0; try { if ($__psbash_fdOk) {")]
     // `cmd 3<&0`: fd 3 names the shell's stdin for the command (the table's dup of 0). It was dropped as a comment.
     [InlineData("cmd 3<&0", "& { $__psbash_fdSave = Save-BashFd 3; Invoke-BashExecFd 3 '<&' 0; $__psbash_fdOk = $global:LASTEXITCODE -eq 0; try { if ($__psbash_fdOk) {")]
@@ -5923,6 +5925,34 @@ public class PsEmitterTests
         }
     }
 
+    /// <summary>
+    /// REGRESSION (v0.15.2): <c>set -e; eval "echo x &gt;/nodir/f; echo still"</c> printed <c>still</c> - eval text is
+    /// transpiled at run time at nesting 0, so it got none of the caller's errexit checks. bash ends at the redirect.
+    /// </summary>
+    [Fact]
+    public void Transpile_InheritedErrexit_EvalTextGetsTheRedirectFailureCheck()
+    {
+        const string text = "echo x >/nodir/f; echo still";
+        Assert.DoesNotContain("__BashErrexit -and", PsEmitter.Transpile(text, PsBash.Core.Transpiler.TranspileContext.Eval));
+        PsEmitter.InheritedErrexit = true;
+        try
+        {
+            var result = PsEmitter.Transpile(text, PsBash.Core.Transpiler.TranspileContext.Eval)!;
+            Assert.Contains("__BashErrexit -and", result);
+            Assert.True(result.IndexOf("__BashErrexit -and", StringComparison.Ordinal) < result.IndexOf("still", StringComparison.Ordinal),
+                "the check must come between the failing echo and the next command: " + result);
+        }
+        finally { PsEmitter.InheritedErrexit = false; }
+    }
+
+    [Fact]
+    public void Transpile_InheritedErrTrap_EvalTextGetsTheErrTrapCheck()
+    {
+        PsEmitter.InheritedErrTrap = true;
+        try { Assert.Contains("__BashErrexit -and", PsEmitter.Transpile("false; echo x", PsBash.Core.Transpiler.TranspileContext.Eval)); }
+        finally { PsEmitter.InheritedErrTrap = false; }
+    }
+
     [Theory]
     [InlineData("set -C", "__BashNoclobber = $true")]
     [InlineData("set +C", "__BashNoclobber = $false")]
@@ -6070,7 +6100,8 @@ public class PsEmitterTests
         Assert.Contains("& $global:__BashTrapDEBUG", ps);
         Assert.Contains("& $global:__BashTrapERR", ps);
         Assert.DoesNotContain("__psbLine =", ps);
-        Assert.DoesNotContain("__BashTrapERR", PsBash.Core.Transpiler.BashTranspiler.TranspileTrapAction("false; echo x", "EXIT"));
+        // bash 5.2: a failure in an EXIT action runs the ERR trap (`trap 'echo E' ERR; trap false EXIT` prints E).
+        Assert.Contains("& $global:__BashTrapERR", PsBash.Core.Transpiler.BashTranspiler.TranspileTrapAction("false; echo x", "EXIT"));
     }
     [Fact]
     public void Transpile_RedirectedCompoundTrapLine_IsTheCommandBeforeIt()
@@ -6130,7 +6161,8 @@ public class PsEmitterTests
     public void Transpile_SetOErrexit_EmitsErrorActionStop()
     {
         var result = PsEmitter.Transpile("set -o errexit");
-        Assert.Equal("$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true; if (-not (Test-Path variable:global:__BashErrexitSuppress)) { $global:__BashErrexitSuppress = 0 }", result);
+        // `set -o NAME` can fail (`set -o bogus`, status 2), so it is checked like any builtin.
+        Assert.Equal("$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true; if (-not (Test-Path variable:global:__BashErrexitSuppress)) { $global:__BashErrexitSuppress = 0 }; " + ErrexitCheckOnLine1(), result);
     }
 
     // errexit: a failing command at statement position must end a `set -e` script. Only the
@@ -6184,12 +6216,12 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_SetE_ExportOfCommandSubIsNotChecked()
+    public void Transpile_SetE_ExportOfCommandSub_HasExportsStatusBeforeItsCheck()
     {
-        // bash: `export X=$(false)` has export's status (0); a bare `X=$(false)` fails.
-        var check = PsBuild.ErrexitCheck("exit $global:LASTEXITCODE");
-        Assert.DoesNotContain(check, PsEmitter.Transpile("set -e; export X=$(false)")!.Replace(
-            PsEmitter.Transpile("set -e")!, ""));
+        // bash: `export X=$(false)` has export's status (0); a bare `X=$(false)` fails. export itself can fail (a
+        // read-only name, a redirect), so it is checked, after its own status 0.
+        var check = ErrexitCheckOnLine1();
+        Assert.EndsWith("Export('X'); " + PsBuild.SetStatus(0) + "; " + check, PsEmitter.Transpile("set -e; export X=$(false)")!);
         Assert.Contains(check, PsEmitter.Transpile("set -e; X=$(false)")!);
     }
 
@@ -6279,34 +6311,47 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_SourceFileNamedLikeTheCmdlet_KeepsTheSwitchOnTheCmdlet()
     {
-        Assert.Equal(PsBuildTestText.WithSignalPoll(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock Invoke-BashSource.sh)"),
+        Assert.Equal(PsBuildTestText.WithSignalPoll(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock Invoke-BashSource.sh)" + "; " + ErrexitCheckOnLine1()),
             PsEmitter.Transpile("source Invoke-BashSource.sh"));
         var split = PsEmitter.Transpile("source $f Invoke-BashSource.sh");
         Assert.Contains("Invoke-BashSource -AsScriptBlock @__bashsplat0 Invoke-BashSource.sh", split);
     }
+
+    // `source FILE`: the file's `set -e` / ERR trap stays on in this shell, so the unit carries the statement checks.
+    private static string ErrexitCheckOnLine1()
+    {
+        int prior = PsBuild.TrapLine;
+        PsBuild.TrapLine = 1;
+        try { return PsBuild.ErrexitCheck("exit $global:LASTEXITCODE"); }
+        finally { PsBuild.TrapLine = prior; }
+    }
+
+    // A process substitution's body runs exempt from errexit.
+    private static string ProcessSubSourceExempt(string body) =>
+        "Invoke-ProcessSubSource { $global:__BashErrexitSuppress++; try { " + body + " } finally { $global:__BashErrexitSuppress-- } }";
 
     // source file.sh -> the CALLER dot-sources the prepared block, so the file's output streams
     [Fact]
     public void Transpile_SourceShFile_EmitsInvokeBashSource()
     {
         var result = PsEmitter.Transpile("source ./lib.sh");
-        Assert.Equal(PsBuildTestText.WithSignalPoll(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock ./lib.sh)"), result);
+        Assert.Equal(PsBuildTestText.WithSignalPoll(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock ./lib.sh)" + "; " + ErrexitCheckOnLine1()), result);
     }
 
     [Fact]
     public void Transpile_DotSourceShFile_EmitsInvokeBashSource()
     {
         var result = PsEmitter.Transpile(". ./lib.sh");
-        Assert.Equal(PsBuildTestText.WithSignalPoll(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock ./lib.sh)"), result);
+        Assert.Equal(PsBuildTestText.WithSignalPoll(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock ./lib.sh)" + "; " + ErrexitCheckOnLine1()), result);
     }
 
     [Fact]
     public void Transpile_SourceShFileWithArgs_EmitsInvokeBashSourceWithArgs()
     {
         var result = PsEmitter.Transpile("source ./setup.sh arg1 arg2");
-        Assert.Equal(PsBuildTestText.WithSignalPoll(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock ./setup.sh arg1 arg2)"), result);
+        Assert.Equal(PsBuildTestText.WithSignalPoll(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock ./setup.sh arg1 arg2)" + "; " + ErrexitCheckOnLine1()), result);
         // A dash argument is $1.. for the file — single-quoted, so it never binds a cmdlet parameter.
-        Assert.Equal(PsBuildTestText.WithSignalPoll(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock ./setup.sh '-x' '-AsScriptBlock')"), PsEmitter.Transpile("source ./setup.sh -x -AsScriptBlock"));
+        Assert.Equal(PsBuildTestText.WithSignalPoll(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock ./setup.sh '-x' '-AsScriptBlock')" + "; " + ErrexitCheckOnLine1()), PsEmitter.Transpile("source ./setup.sh -x -AsScriptBlock"));
     }
 
     // -e file exists test
@@ -7991,8 +8036,8 @@ public class PsEmitterTests
     [InlineData("echo hi > a,b", "Invoke-BashEcho hi | Invoke-BashRedirect -Path 'a,b'")]
     [InlineData("echo /tmp/a,b", "Invoke-BashEcho \"$($env:OS -eq 'Windows_NT' ? $env:TEMP : '/tmp')/a,b\"")]
     [InlineData("echo a\\,b", "Invoke-BashEcho a`,b")]
-    [InlineData("x=a,b", "$env:x = \"a,b\"")]
-    [InlineData("arr=(a,b c)", "$arr = @(\"a,b\",\"c\")")]
+    [InlineData("x=a,b", "$env:x = \"a,b\"; $global:LASTEXITCODE = 0")]
+    [InlineData("arr=(a,b c)", "$arr = @(\"a,b\",\"c\"); if ($?) { $global:LASTEXITCODE = 0 }")]
     [InlineData("for i in a,b c; do :; done", null)]
     public void Transpile_CommaInOtherContexts_StaysOneWord(string bash, string? expected)
     {

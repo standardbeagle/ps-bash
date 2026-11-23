@@ -172,8 +172,9 @@ public static class BashTranspiler
             // Set here, inside Guarded: the flag is per-thread and Guarded may move to a large-stack worker.
             PsEmitter.TrapActionSignal = signal is "ERR" or "DEBUG" ? signal
                 : signal is "" or "EXIT" or "RETURN" ? null : PsEmitter.RealSignalTrapAction;
+            PsEmitter.CheckedTrapAction = signal is "" or "EXIT" or "RETURN";
             try { return TranspileCore(action, TranspileContext.Eval); }
-            finally { PsEmitter.TrapActionSignal = null; }
+            finally { PsEmitter.TrapActionSignal = null; PsEmitter.CheckedTrapAction = false; }
         });
 
     /// <summary>
@@ -188,12 +189,18 @@ public static class BashTranspiler
         var fusion = PsEmitter.FusionEnabledOverride;
         var inheritedPipefail = PsEmitter.InheritedPipefail;
         var inheritedNounset = PsEmitter.InheritedNounset;
+        var inheritedErrexit = PsEmitter.InheritedErrexit;
+        var inheritedErrTrap = PsEmitter.InheritedErrTrap;
+        var inheritedErrtrace = PsEmitter.InheritedErrtrace;
         return NestingGuard.WithStackFallback(() =>
         {
             var prior = PsEmitter.FusionEnabledOverride;
             PsEmitter.FusionEnabledOverride = fusion;
             PsEmitter.InheritedPipefail = inheritedPipefail;
             PsEmitter.InheritedNounset = inheritedNounset;
+            PsEmitter.InheritedErrexit = inheritedErrexit;
+            PsEmitter.InheritedErrTrap = inheritedErrTrap;
+            PsEmitter.InheritedErrtrace = inheritedErrtrace;
             try { return work(); }
             finally { PsEmitter.FusionEnabledOverride = prior; }
         });

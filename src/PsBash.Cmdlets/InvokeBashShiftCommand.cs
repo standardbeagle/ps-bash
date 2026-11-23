@@ -14,8 +14,8 @@ namespace PsBash.Cmdlets;
 /// No flags besides <c>--help</c>. The first non-flag operand is the optional
 /// integer count; non-numeric / negative counts emit a bash-style error and
 /// the cmdlet returns with the array untouched. Shifting more than the
-/// current count emits a bash-style "cannot shift past end" error and the
-/// array is left untouched (matches the oracle byte-for-byte).
+/// current count fails (status 1, reported only under <c>shopt -s shift_verbose</c>) and the
+/// array is left untouched.
 ///
 /// No stdout output (variable side-effect only). No exit-code mutation on
 /// the happy path — the oracle did not set <c>$LASTEXITCODE</c>. The error
@@ -83,10 +83,14 @@ public sealed class InvokeBashShiftCommand : BashCmdlet
             }
         }
 
+        // Past the end: status 1 and the parameters untouched. bash says so only under `shopt -s shift_verbose`
+        // (`shift: 5: shift count out of range`); REGRESSION: a message bash never prints by default.
         if (n > pos.Length)
         {
-            FileSystemHelpers.WriteBashError(
-                this, "shift: cannot shift past end of positional parameters");
+            if (InvokeBashShoptCommand.ShoptOn("shift_verbose"))
+                FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + $"shift: {n}: shift count out of range");
+            else
+                FileSystemHelpers.SetLastExitCode(this, 1);
             return;
         }
 

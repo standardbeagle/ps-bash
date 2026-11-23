@@ -68,9 +68,10 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
         // An empty / blank expression is 0 in bash (`$(( ))`, `[[ "" -eq 0 ]]`).
         if (string.IsNullOrWhiteSpace(expr)) expr = "0";
 
-        // Set directly, not through SetLastExitCode: that would clear the mark an EARLIER word of the same
-        // command left (`echo $((1/0)) $((1+1))` is still abandoned).
-        FileSystemHelpers.SetLastExitCode(this, 0);
+        // The command forms (`(( e ))`, `let`, `[[ a -eq b ]]`) are commands: status 0 unless they fail. A WORD that
+        // expands leaves the status alone (bash: `false; echo "$((1+1)) $?"` prints `2 1`); only its failure sets 1.
+        // Set directly, not through SetLastExitCode: that would clear the mark an EARLIER word of the same command left.
+        if (!IsWordExpansion()) FileSystemHelpers.SetLastExitCode(this, 0);
         string expanded = expr;
         try
         {
@@ -104,10 +105,14 @@ public sealed class InvokeBashArithmeticCommand : BashCmdlet
     /// True for <c>$(( expr ))</c>, which the emitter writes as <c>$(Invoke-BashArith ...)</c> (under nounset:
     /// <c>$__psbash_av = Invoke-BashArith ...</c>). The command and condition forms (<c>(( expr ))</c>,
     /// <c>[[ a -eq b ]]</c>: <c>@(Invoke-BashArith ...)</c>, <c>[long](Invoke-BashArith ...)</c>) are not words:
-    /// only a failed WORD abandons the command it belongs to.
+    /// only a failed WORD abandons the command it belongs to. A <see cref="Label"/> names the COMMAND evaluating the
+    /// expression (<c>((</c>, <c>let</c>, <c>[[</c>), so a labelled call is never a word, whatever text surrounds it.
+    /// REGRESSION: under a nounset-capable script every arithmetic call is wrapped as <c>$__psbash_av = ...</c>, so
+    /// <c>(( 1/0 )) 2>/dev/null; echo x</c> was taken for a failed word and the echo was dropped.
     /// </summary>
     private bool IsWordExpansion()
     {
+        if (Label is not null) return false;
         var before = (MyInvocation.Line ?? "").AsSpan();
         int at = MyInvocation.OffsetInLine - 1;
         if (at < 0 || at > before.Length) return false;

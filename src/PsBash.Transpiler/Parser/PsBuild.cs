@@ -500,6 +500,10 @@ public static class PsBuild
     /// <summary>An assignment consumes the mark without abandoning anything: only its own status (1) records the failure.</summary>
     public const string ClearExpansionFailed = "$global:__BashExpansionFailed = $false";
 
+    /// <summary>A command whose words may fail to expand sets its own status 0 after them unless one did (the failure keeps
+    /// status 1): set AFTER the words, so a word that reads <c>$?</c> reads the status from before the command.</summary>
+    public const string StatusZeroUnlessExpansionFailed = "if (-not $global:__BashExpansionFailed) { $global:LASTEXITCODE = 0 }";
+
     /// <summary>
     /// Runs <paramref name="statements"/> only when no word expanded before it failed; otherwise consumes the mark and
     /// runs nothing, keeping the status (1) the failure set. A compound command (`case $((1/0)) in`) is abandoned whole.
@@ -1139,6 +1143,17 @@ public static class PsBuild
         "$(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue })";
 
     /// <summary>
+    /// The chain-operand bridge for an assignment-only command with a redirection (<c>x=1 &gt;/nodir/f || echo c</c>): fails
+    /// the chain when one of its redirections could not be opened (the opener raised <see cref="RedirectFailedVariable"/>,
+    /// which the operand cleared before it ran; the opener also set status 1), and consumes that flag.
+    /// <paramref name="orStatus"/>: a bare assignment whose value ran a command substitution, whose status is the
+    /// assignment's too (<c>r=$(false) &gt;f || echo fb</c>).
+    /// </summary>
+    public static string SignalFailIfOpenFailed(bool orStatus) =>
+        "$(if (" + RedirectFailedVariable + (orStatus ? " -or $global:LASTEXITCODE -ne 0" : "") + ") { "
+        + RedirectFailedVariable + " = $false; Write-Error '' -ErrorAction SilentlyContinue })";
+
+    /// <summary>
     /// A standalone <c>[ ... ]</c> / <c>[[ ... ]]</c> test as its OWN statement: bash
     /// is silent and sets only the exit code. Emit a form that sets
     /// <c>$global:LASTEXITCODE</c> and produces no stdout:
@@ -1171,20 +1186,41 @@ public static class PsBuild
         ErrTrapCheck(status) + "if (" + ErrexitArmed + " -and " + status + " -ne 0) { " + exitStatement + " }";
 
     /// <summary>
+    /// THE check of a command at statement position whose redirection can fail to open, under an ERR trap / errexit. Every
+    /// opener raises <see cref="RedirectFailedVariable"/> when it cannot open (Invoke-BashRedirect for an output file,
+    /// <see cref="InputRedirectGuard"/> for an input file, <see cref="FdOpensGated"/> for a descriptor of its own); a failed
+    /// open is status 1. <paramref name="statusCounts"/> false (a compound, whose status is the body's and whose own
+    /// statements were checked; <c>:</c>, <c>true</c>, a bare assignment): only the failed open runs
+    /// <paramref name="check"/>. True (a command whose own status errexit acts on): <paramref name="check"/> runs after it
+    /// either way, on status 1 when an open failed.
+    /// </summary>
+    public static string RedirectFailureChecked(string command, string check, bool statusCounts = false) =>
+        RedirectFailedVariable + " = $false; " + command
+        + "; if (" + RedirectFailedVariable + ") { " + RedirectFailedVariable + " = $false; $global:LASTEXITCODE = 1"
+        + (statusCounts ? " }; " + check : "; " + check + " }");
+
+    /// <summary>
+    /// A command's own descriptors (<c>3&gt;f</c>, <c>7&lt;f</c>, <c>{v}&gt;f</c>), opened left to right by
+    /// <paramref name="opens"/> (each an <c>Invoke-BashExecFd</c> call, status 1 when it fails), gating the command: an open
+    /// that fails skips the rest and the command (bash runs nothing) and raises <see cref="RedirectFailedVariable"/>, as a
+    /// failed stdout or stdin open does, for the check after the statement (<see cref="RedirectFailureChecked"/>).
+    /// <paramref name="clearsNested"/>: the command has no redirection of its own that reports, so a flag a nested
+    /// command left (a failed open in a condition) is not this command's failure once its opens succeeded.
+    /// REGRESSION: <c>set -e; { echo a; } 3&gt; /nodir/f; echo after</c> ran the body and went on.
+    /// </summary>
+    public static string FdOpensGated(IReadOnlyList<string> opens, string command, bool clearsNested)
+    {
+        string inner = clearsNested ? command + "; " + RedirectFailedVariable + " = $false" : command;
+        for (int i = opens.Count - 1; i >= 0; i--)
+            inner = opens[i] + "; if ($global:LASTEXITCODE -eq 0) { " + inner + " } else { " + RedirectFailedVariable + " = $true }";
+        return inner;
+    }
+
+    /// <summary>
     /// Run the <c>trap ... ERR</c> action when the statement just run failed outside an exempt context
     /// (a condition, a non-final <c>&amp;&amp;</c>/<c>||</c> operand, a negated pipeline). The action sees
     /// the failing status in <c>$?</c>/<c>$LASTEXITCODE</c>, which it leaves unchanged.
     /// </summary>
-    /// <summary>
-    /// A redirected compound command at statement position under an ERR trap / errexit: its status is the body's
-    /// (whose own statements were checked), so only a redirect that could not be opened (the body never ran) runs
-    /// <paramref name="check"/> — Invoke-BashRedirect (an output file) and <see cref="InputRedirectGuard"/> (an input
-    /// file) set <see cref="RedirectFailedVariable"/>.
-    /// </summary>
-    public static string RedirectFailureChecked(string compound, string check) =>
-        RedirectFailedVariable + " = $false; " + compound
-        + "; if (" + RedirectFailedVariable + ") { " + RedirectFailedVariable + " = $false; $global:LASTEXITCODE = 1; " + check + " }";
-
     public static string ErrTrapCheck(string status = "$global:LASTEXITCODE") =>
         "if (" + status + " -ne 0 -and -not " + ErrexitSuppressVar + (ErrTrapNeedsErrtrace ? " -and $global:__BashErrtrace" : "") + " -and -not $global:__BashInErr -and (Test-Path variable:global:__BashTrapERR) -and $global:__BashTrapERR) { "
         + "$__psbErr = " + status + "; " + (TrapLine > 0 && !InTrapAction ? "$env:__psbLine = " + TrapLine + "; " : "")
@@ -1237,6 +1273,35 @@ public static class PsBuild
         "if ([PsBash.Cmdlets.BashAssoc]::IsAssocValue((Get-Variable -Name " + SingleQuote(name) + " -ValueOnly -ErrorAction Ignore))) { "
         + assignment + "; " + SetStatus(0) + " } else { " + ShellDiagnosticLine(SingleQuote(written + BadArithSubscriptMessage))
         + "; " + SetStatus(1) + " }";
+    /// <summary>
+    /// <c>readonly NAME=VALUE</c>: <paramref name="declaration"/> (mark and assign) unless NAME is read-only already, which
+    /// bash refuses with <c>NAME: readonly variable</c> and status 1 (<see cref="ReadonlyGuardStatus"/>). Decided at run
+    /// time: a name made read-only on one branch only, or in another unit, is known only then.
+    /// </summary>
+    public static string ReadonlyValueGuard(string name, string declaration) =>
+        "if ([PsBash.Cmdlets.BashShellState]::FirstReadonly(" + SingleQuote(name) + ")) { "
+        + ShellDiagnosticLine(SingleQuote(name + ": readonly variable")) + "; $__psbash_rb = 1 } else { " + declaration + " }";
+
+    /// <summary>
+    /// <c>export -f NAME…</c>: each name must be a function now; one that is not is bash's <c>export: NAME: not a
+    /// function</c>, status 1 (the builtin's own failure, which errexit and the ERR trap see).
+    /// </summary>
+    public static string FunctionExportCheck(IEnumerable<string> names)
+    {
+        var sb = new System.Text.StringBuilder(ReadonlyGuardStart);
+        foreach (var name in names)
+            sb.Append("if (-not (Test-Path -LiteralPath ('function:' + ").Append(SingleQuote(name)).Append("))) { ")
+              .Append(ShellDiagnosticLine(SingleQuote("export: " + name + ": not a function"))).Append("; $__psbash_rb = 1 }; ");
+        return sb.Append(ReadonlyGuardStatus(false)).ToString();
+    }
+
+    /// <summary>Starts a <c>readonly</c> command with a <see cref="ReadonlyValueGuard"/>: no name refused yet.</summary>
+    public const string ReadonlyGuardStart = "$__psbash_rb = 0; ";
+
+    /// <summary>The status of a <c>readonly</c> command with a <see cref="ReadonlyValueGuard"/>: 1 when a name was refused.</summary>
+    public static string ReadonlyGuardStatus(bool refusedStatically) =>
+        refusedStatically ? SetStatus(1) : "$global:LASTEXITCODE = $__psbash_rb";
+
     /// <summary>
     /// A plain assignment to <paramref name="names"/> in a script that made names read-only at run time
     /// (<c>readonly $names</c>, <c>readonly</c> in a function): when one of them is read-only now, report
@@ -1355,6 +1420,31 @@ public static class PsBuild
     public static string BareLocal => LocalInFunction(SetStatus(0));
 
     /// <summary>
+    /// Emitted before a <c>return</c> in a function that may set a RETURN trap: the status before the return, which is the
+    /// trap's <c>$?</c> (bash: <c>trap 'echo $?' RETURN; false; return 6</c> prints 1, and the call's status is 6).
+    /// </summary>
+    public const string NotePreReturnStatus = "$__psbash_prs = $global:LASTEXITCODE; ";
+
+    /// <summary>
+    /// A function <paramref name="body"/> that may set a <c>trap … RETURN</c>: the action runs when the function returns
+    /// (then is spent, so a later call does not re-fire it), with <c>$?</c> the status before a <c>return</c>
+    /// (<see cref="NotePreReturnStatus"/>) or else the last command's, and the call's status is put back after it.
+    /// </summary>
+    public static string ReturnTrapScope(string body) =>
+        "$global:__BashTrapRETURN = $null; $__psbash_prs = $null; try { " + body + " } finally { "
+        + "$__psbash_rs = $global:LASTEXITCODE; $__psbash_rt = $global:__BashTrapRETURN; $global:__BashTrapRETURN = $null; "
+        + "try { if ($__psbash_rt) { if ($null -ne $__psbash_prs) { $global:LASTEXITCODE = $__psbash_prs }; & $__psbash_rt } } catch { }; "
+        + "$global:LASTEXITCODE = $__psbash_rs }";
+
+    /// <summary>
+    /// After a declaration builtin whose value ran a command substitution (<c>local x=$(exit 3)</c>,
+    /// <c>export e=$(false)</c>): its status is the builtin's 0, not the substitution's. <c>local</c> outside a function
+    /// keeps the 1 of its refusal (<see cref="LocalInFunction"/>).
+    /// </summary>
+    public static string DeclarationSucceeded(bool local) =>
+        local ? "if ([PsBash.Cmdlets.VarFrameStack]::Current.Depth -ne 0) { " + SetStatus(0) + " }" : SetStatus(0);
+
+    /// <summary>
     /// <paramref name="inFunction"/> when a function is running, else bash's <c>local: can only be used in a function</c>
     /// (status 1), which bash reports before it looks at any option or operand (<c>local -Q</c> at the top level).
     /// </summary>
@@ -1449,6 +1539,17 @@ public static class PsBuild
     public static string InheritErrexitCapture(string statements) =>
         "$__psbash_ie = [PsBash.Cmdlets.InvokeBashShoptCommand]::ShoptOn('inherit_errexit'); if (-not $__psbash_ie) { "
         + ErrexitSuppressVar + "++ }; try { " + statements + " } finally { if (-not $__psbash_ie) { " + ErrexitSuppressVar + "-- } }";
+
+    /// <summary>
+    /// The start of a command substitution's body that runs the ERR trap inside (errtrace, or its own ERR trap): bash
+    /// turns <c>-e</c> off there, unless <c>shopt -s inherit_errexit</c> is on when it runs (<paramref name="inheritable"/>:
+    /// the unit can turn that option on). REGRESSION: with <c>set -E</c> anywhere in the script the substitution always
+    /// dropped <c>-e</c>, so <c>shopt -s inherit_errexit; x=$(false; echo after)</c> captured <c>after</c>.
+    /// </summary>
+    public static string SubstitutionErrexitOff(bool inheritable) =>
+        inheritable
+            ? "if (-not [PsBash.Cmdlets.InvokeBashShoptCommand]::ShoptOn('inherit_errexit')) { $global:__BashErrexit = $false }; "
+            : "$global:__BashErrexit = $false; ";
 
     /// <summary>
     /// The FINAL operand of an <c>&amp;&amp;</c>/<c>||</c> list at statement position: it is NOT
@@ -1602,9 +1703,14 @@ public static class PsBuild
     /// <para>An open that fails (<c>3&gt;&amp;5</c> with 5 not open, <c>3&gt;/nodir/f</c>, <c>3&gt;$v</c> ambiguous) fails the
     /// command: status 1, the later opens are not made and the command never runs; its report goes through the open's
     /// FailTail (<see cref="RedirectFailure"/>: <c>echo y 2&gt;/dev/null 3&gt;&amp;5</c> is silent, <c>2&gt;e 3&gt;&amp;5</c>
-    /// writes it into e). The command ran anyway, status 0.</para>
+    /// writes it into e). The command ran anyway, status 0. The failure raises <see cref="RedirectFailedVariable"/> for the
+    /// one errexit / ERR check after the statement (<see cref="RedirectFailureChecked"/>): <c>set -e; cmd 3&gt;/nodir/f;
+    /// echo after</c> ends with status 1. <paramref name="clearsNested"/>: the command has no redirection of its own that
+    /// reports, so a flag a nested command left (a failed open in a condition) is not this command's failure once its
+    /// opens succeeded (as <see cref="FdOpensGated"/>).</para>
     /// </summary>
-    public static string ScopedDescriptors(IEnumerable<int> fds, IReadOnlyList<(string Open, string? FailTail)> opens, string command)
+    public static string ScopedDescriptors(IEnumerable<int> fds, IReadOnlyList<(string Open, string? FailTail)> opens, string command,
+        bool clearsNested)
     {
         var sb = new System.Text.StringBuilder("& { $__psbash_fdSave = Save-BashFd ").Append(string.Join(",", fds)).Append("; ");
         if (opens.Count == 0) sb.Append("$__psbash_fdOk = $true; ");
@@ -1618,7 +1724,8 @@ public static class PsBuild
                 : open + "; $__psbash_fdOk = $global:LASTEXITCODE -eq 0";
             sb.Append(i == 0 ? step : "if ($__psbash_fdOk) { " + step + " }").Append("; ");
         }
-        return sb.Append("try { if ($__psbash_fdOk) { ").Append(command).Append(" } else { $global:LASTEXITCODE = 1; ")
+        return sb.Append("try { if ($__psbash_fdOk) { ").Append(command)
+            .Append(clearsNested ? "; " + RedirectFailedVariable + " = $false" : "").Append(" } else { $global:LASTEXITCODE = 1; ")
             .Append(RedirectFailedVariable).Append(" = $true } } finally { $__psbash_fdRc = $global:LASTEXITCODE; ")
             .Append("Restore-BashFd $__psbash_fdSave; $global:LASTEXITCODE = $__psbash_fdRc } }").ToString();
     }
@@ -1888,7 +1995,9 @@ public static class PsBuild
         + "if ($__psbash_eval_depth -ge 5) { throw '" + label + ": nesting depth limit (5) exceeded; possible infinite recursion' }; "
         + "$global:__BashEvalDepth = $__psbash_eval_depth + 1; "
         + "try { " + loopModeSet + RunBashTextAtRunTime(localsArg, label) + " } finally { $global:__BashEvalDepth = $__psbash_eval_depth } "
-        + (returnCheck.Length > 0 ? returnCheck + " " : "") + "}";
+        + (returnCheck.Length > 0 ? returnCheck + " " : "") + "}"
+        // Blank text runs no command: status 0 (`false; e=''; eval "$e"`).
+        + " else { " + SetStatus(0) + " }";
 
     /// <summary>
     /// Transpile the bash text in <c>$__psbash_eval_src</c> as eval text and run it here (Invoke-Expression: the
@@ -1899,11 +2008,15 @@ public static class PsBuild
     /// </summary>
     /// <param name="localsArg"><c>, [string[]]@(…)</c>: the calling function's <c>local</c> names, or <c>, $null</c>.</param>
     /// <param name="label">The command named in a syntax-error diagnostic.</param>
+    /// <remarks>The text is transpiled under the shell's LIVE options (<c>RuntimeOptionHints.Apply</c>, as Invoke-BashEval
+    /// and Invoke-BashSource do): it runs under the caller's set -e, ERR trap, errtrace, pipefail and nounset though it
+    /// never names them. REGRESSION: <c>set -e; v='echo x &gt;/nodir/f; echo still'; eval "$v"</c> printed still.</remarks>
     private static string RunBashTextAtRunTime(string localsArg, string label) =>
-        "$__psbash_eval_pwsh = $null; try { $__psbash_eval_pwsh = [PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]::Transpile("
+        "$__psbash_eval_pwsh = $null; $__psbash_eval_hints = [PsBash.Cmdlets.RuntimeOptionHints]::Apply($ExecutionContext.SessionState); "
+        + "try { $__psbash_eval_pwsh = [PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]::Transpile("
         + "$__psbash_eval_src, [PsBash.Core.Transpiler.TranspileContext, PsBash.Transpiler]::Eval" + localsArg
         + ", ($null -ne (Get-Variable -Name __BashStdIn -Scope Global -ValueOnly -ErrorAction SilentlyContinue))) } "
-        + "catch { Write-Error -Message (" + DiagnosticPrefix + " + '" + label + ": ' + $(if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message })) -ErrorAction Continue; $global:LASTEXITCODE = 2 }; "
+        + "catch { Write-Error -Message (" + DiagnosticPrefix + " + '" + label + ": ' + $(if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message })) -ErrorAction Continue; $global:LASTEXITCODE = 2 } finally { $__psbash_eval_hints.Dispose() }; "
         + "if ($null -ne $__psbash_eval_pwsh) { " + EvalReturnVar + " = $false; " + EvalLinesScope("Invoke-Expression $__psbash_eval_pwsh") + " }";
 
     /// <summary>

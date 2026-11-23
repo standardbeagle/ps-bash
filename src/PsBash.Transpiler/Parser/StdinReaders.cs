@@ -119,7 +119,9 @@ public static class StdinReaders
             if (IsCommandLookup(args)) return false;
             return CommandTarget(args) is not { } target || MayReadStdin(target.Name, target.Args);
         }
-        if (CodeRunners.Contains(name)) return args.Count > 0;
+        // With nothing to run a code runner reads nothing (`eval`, `exec`, `time`) - except a shell, whose program then IS
+        // its stdin (`bash <<< 'echo b'`). REGRESSION: `{ bash <<< 'echo b'; }` dropped the here-string as unread.
+        if (CodeRunners.Contains(name)) return args.Count > 0 || name is "bash" or "sh";
         switch (Classify(name))
         {
             case Kind.Native:

@@ -332,6 +332,8 @@ public sealed class InvokeBashKillCommand : BashCmdlet
         // `kill -USR1 $$`: the shell signals itself. A trap runs here and the script carries on (an empty action ignores
         // the signal); with none, SIGCHLD/SIGURG/SIGWINCH are ignored and anything else ends the script with 128+N
         // (137 for -9, 143 for TERM). The same rules as a signal another shell sends (ShellSignalTraps).
+        // The trap runs after kill has finished, so its `$?` is kill's own status (bash: 0), not the one before kill.
+        FileSystemHelpers.SetLastExitCode(this, hadError ? 1 : 0);
         if (signalSelf && sigNum != 9 && ShellSignalTraps.RunTrap(this, sigNum))
             signalSelf = false;
         if (signalSelf && ShellSignalTraps.IgnoredHere(this, sigNum))
