@@ -94,6 +94,16 @@ internal static class BashFdTable
     }
 
     private static readonly object Gate = new();
+    // Writes the host dropped on this thread because the shell's fd 1 is closed (`exec >&-`). The divert runs on the
+    // pipeline thread while the writing command is in WriteObject, so a command compares the count around its writes.
+    [ThreadStatic] private static int t_closedStdoutWrites;
+
+    /// <summary>
+    /// How many writes reached a closed shell fd 1 on this thread (<c>exec &gt;&amp;-; echo x</c>). A builtin reads it
+    /// before and after it writes; a change means its write failed (<see cref="InvokeBashFdRouteCommand.FailClosedStdout"/>).
+    /// </summary>
+    public static int ClosedStdoutWrites => t_closedStdoutWrites;
+
     // Code with no runspace on its thread (a test calling in directly).
     private static readonly Table Fallback = new();
     private static readonly ConditionalWeakTable<Runspace, Table> ByRunspace = new();
@@ -562,7 +572,11 @@ internal static class BashFdTable
     {
         if (fd is not (1 or 2) || Volatile.Read(ref t.Low[fd]) is not { } h) return false;
         if (h.Kind == Kind.Terminal && h.Term == fd) return false;
-        if (h.Kind == Kind.Closed) return true;
+        if (h.Kind == Kind.Closed)
+        {
+            if (fd == 1 && text.Length > 0) t_closedStdoutWrites++;
+            return true;
+        }
         try
         {
             if (WriteHandle(h, text) != 0) return false;

@@ -79,6 +79,22 @@ public class BashFdTableTests : IClassFixture<SharedPwshFixture>, IDisposable
         Assert.Throws<InvalidOperationException>(() => BashFdTable.Write(7, "x\n"));
     }
 
+    // `( exec >&-; echo x )`: a write that reaches the shell's closed fd 1 is counted on the writing thread, so the
+    // builtin that wrote it fails (bash: `echo: write error: Bad file descriptor`, status 1). It was dropped silently.
+    [Fact]
+    public void Divert_AWriteToAClosedShellStdout_IsCountedForTheWriter()
+    {
+        Assert.True(BashFdTable.Close(1));
+        int before = BashFdTable.ClosedStdoutWrites;
+        Assert.True(PsBash.Core.Stdio.ShellStdio.TryDivert(1, ""));
+        Assert.Equal(before, BashFdTable.ClosedStdoutWrites);
+        Assert.True(PsBash.Core.Stdio.ShellStdio.TryDivert(1, "x\n"));
+        Assert.Equal(before + 1, BashFdTable.ClosedStdoutWrites);
+        Assert.True(PsBash.Core.Stdio.ShellStdio.TryDivert(2, "e\n") is false);
+        BashFdTable.CloseAll();
+        Assert.False(PsBash.Core.Stdio.ShellStdio.TryDivert(1, "x\n"));
+    }
+
     // One table per shell: a descriptor this (runspace-less) code opened is not open in a runspace's shell. The table was
     // process-wide, so an in-process job's or a parallel runspace's redirection stage took over the other's fd 1.
     [Fact]
