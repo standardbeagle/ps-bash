@@ -111,7 +111,10 @@ Non-goals
    (`PsBuild.DynamicExit`); `kill $$` still ends the shell. bash's "Terminated" report for a foreground child is not
    made (known gap). Guard `Cmdlets.Tests/JobSelfSignalGuardTests`; oracle `BackgroundJobSelfSignalDifferentialTests`.
 3. **stdin.** A non-interactive job's stdin is `/dev/null` (NUL) unless redirected; an interactive one
-   inherits the terminal (and gets SIGTTIN semantics only where the OS has them).
+   inherits the terminal (and gets SIGTTIN semantics only where the OS has them). A job started inside a compound
+   that has its own stdin (`seq 3 | { cat & wait; }`) reads that stdin at the same position as the shell and its
+   other programs (one pipe per cursor, `stdio-messaging.md` §4.7); a job's program never falls back to the
+   foreground's stdin.
 4. **Status.** `wait N` returns the job's exit status (128+signal on kill); unknown pid → 127;
    `wait` with no args → 0; `wait -n` → first finisher. `set -e` sees that status.
 5. **Lifetime.** A job is not waited for at command end (bash behaviour). Output produced after the
@@ -785,6 +788,11 @@ shell.** That is:
 - the other state builtins (`set`, `shopt`, `trap`, `exec`, `umask`, `read`, ...), `eval` and `source` text, a command
   named by an expansion, a function of the unit (a job runspace has no copy of the shell's functions), a function
   definition, `select`, a job in a job.
+
+`command NAME` and `builtin NAME` are judged by NAME (`command cat &` stays in-process, `command cd x &` does not):
+a job host does not read the compound's stdin (`stdio-messaging.md` §4.7), so `echo in | { command cat & wait; }`
+printed nothing. **Known gap:** a job that must go to a host (`seq 3 | { read a & wait; }`) still reads none of the
+compound's stdin.
 
 Writing a scalar or an array is not on the list. An in-process job's scalars are its own copy (§3, `ScalarOverlay`)
 and its arrays are globals of its own runspace, so an assignment, `FOO=1 prog`, a loop variable, `${x=1}`,

@@ -264,3 +264,50 @@ kills only that process on a stop. Routing every program through `Invoke-BashNat
 drain unbounded), `Cmdlets.Tests/ProcessTreeStopTests` (a parent with a grandchild holding the pipes, live-parent and
 orphan shapes, for the buffered path, the streaming path and `timeout`: the grandchild's pid is gone after a stop and
 alive after a normal exit), `Core.Tests/Runtime/JobProcessTests` (the primitive).
+
+### 4.7 A program's stdin: the cursor owns one pipe (implemented)
+
+**Rule.** The shell, its programs and its background jobs read ONE stdin at ONE position, as bash's readers share one
+open file description. A program's stdin is decided in one place, `NativeStdinBridge.ProgramStdin`, and a cursor's
+input reaches programs through one pipe the cursor owns, `Cmdlets/CursorPipe.cs`.
+
+**The tap.** A compound's stdin is a `StdinCursor` (records + pushback). When a program needs it, `CursorPipe.Hold`
+attaches a tap to the cursor (`StdinCursor.TryAttachTap`) and starts one pump that writes the cursor's records into an
+anonymous pipe; the program gets the pipe's read end. While the tap is attached, EVERY read of the cursor goes through
+it: the shell's `read`, `Count`, `PushFront` and a cmdlet's `TryDequeue` read the pipe the programs read (byte at a
+time, so a `read` takes one line and leaves the rest for the next reader, as bash's `read` on a pipe). Only the pipe
+reads the cursor past its tap (`TryTakeUpstream`/`PushFrontUpstream`).
+
+**Holders and teardown.** A second program, a job's program, `env`/`command`/`time`'s program: each holds the SAME pipe
+(holder count). A shell read while programs hold it counts as a reader. The last one out tears down: cancel the pump,
+drain what is left in the pipe, join the pump, put the drained bytes (as records) and any pushback back at the front of
+the cursor, detach the tap, then mark the pipe Closed. A holder or reader that arrives while it is Closing waits for
+Closed, then reads the cursor directly or opens a new pipe, so the input keeps its order across holders. A shell read
+with no holder left tears down first.
+
+**Who gets what** (`ProgramStdin`):
+
+| The command's stdin | The program's stdin |
+|---|---|
+| a cursor that can cancel a wait (a compound's stdin, a promoted queue, a job's inherited cursor) | the cursor's pipe |
+| a queue (legacy) | a pipe of its own fed from the queue, the rest put back at exit |
+| the shell's own stdin, foreground | the process stdin (inherited) |
+| none / not bridgeable, inside a background job | end of input (an empty stdin), never the foreground's |
+
+`NativeStdinBridge.Enter` (a program PowerShell starts itself, `& prog`) also swaps the process stdin to the pipe for
+the call, only in the foreground and one at a time (`SetStdHandle` / `dup2(fd, 0)`). A job never swaps it.
+
+**Why.** Each program had its own pump. The foreground program of `while read x; do /usr/bin/true & /usr/bin/echo $x;
+done` joined a pipe the background one held, the rest of the input sat in it when both exited, and `read` found the
+cursor empty (`a end`). A background program that reads nothing (`sleep 1 &`) starved the shell's reads the same way
+(`a=`). A program that started during a put-back opened a second pipe and read the records behind the put-back first
+(`a=2 b=1`). `RunMerged` (`env X=1 cat`, `command`, `time`) inherited the process stdin and read nothing.
+
+**Known limits.** While a program holds the pipe, the shell's reads are byte at a time (bash's are too on a pipe), and an
+in-process record read through it becomes a text line. The pump can wait behind an upstream reader blocked on a silent
+source; that delays a reader, it does not deadlock. The queue path keeps a pipe per program.
+
+**Guards.** `Core.Tests/StdinOwnershipGuardTests` (`InheritStdin` is set only by the bridge and the primitives; only
+`CursorPipe` reads past the tap; only the bridge swaps the process stdin), `Cmdlets.Tests/CursorPipeTests` (a shell read
+through the pipe, pushback order, holders coming and going on 8 threads keep the order, two programs share one pipe),
+`Shell.Tests/JobStdinEndToEndTests` (each race repeated 20 times in one script), `Differential.Tests/JobStdinDifferentialTests`.

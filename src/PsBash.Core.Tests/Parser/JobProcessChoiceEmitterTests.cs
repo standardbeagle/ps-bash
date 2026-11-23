@@ -42,6 +42,13 @@ public class JobProcessChoiceEmitterTests
     [InlineData("(x=1; echo $x) &")]
     [InlineData("x=$(date) &")]
     [InlineData("if (( i<(n-1) )); then echo a; fi &")]
+    // `command`/`builtin` are judged by what they run. REGRESSION: `echo in | { command cat & wait; }` printed nothing:
+    // the job went to a host process, which does not read the compound's stdin.
+    [InlineData("command cat &")]
+    [InlineData("command -p /usr/bin/cat -n &")]
+    [InlineData("command -- command cat &")]
+    [InlineData("builtin echo x &")]
+    [InlineData("command &")]
     public void Transpile_JobThatOnlyRunsProgramsOrWritesVariables_RunsInProcess(string bash)
         => Assert.False(Isolated(bash), bash);
 
@@ -77,6 +84,11 @@ public class JobProcessChoiceEmitterTests
     [InlineData("eval 'x=1' &")]
     [InlineData("source ./lib.sh &")]
     [InlineData("$cmd arg &")]
+    [InlineData("command cd x &")]
+    [InlineData("builtin cd x &")]
+    [InlineData("command -p cd x &")]
+    [InlineData("command $cmd &")]
+    [InlineData("command eval 'x=1' &")]
     // The job runspace does not have the shell's functions.
     [InlineData("f() { :; }; f &")]
     [InlineData("f() { :; }; for i in 1 2; do f $i; done &")]

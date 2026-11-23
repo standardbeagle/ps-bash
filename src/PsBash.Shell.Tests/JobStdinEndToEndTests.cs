@@ -18,6 +18,17 @@ public class JobStdinEndToEndTests
     // A program that runs a few seconds without reading stdin, and one that copies its stdin, on each platform.
     private static readonly string Sleeper = OperatingSystem.IsWindows() ? "ping.exe -n 4 127.0.0.1 >/dev/null" : "/bin/sleep 3";
     private static readonly string Reader = OperatingSystem.IsWindows() ? "sort.exe" : "/bin/cat";
+    // A program that exits at once without reading stdin, and one that runs about a second without reading it.
+    private static readonly string Quick = OperatingSystem.IsWindows() ? "hostname.exe >/dev/null" : "/bin/true";
+    private static readonly string Short = OperatingSystem.IsWindows() ? "ping.exe -n 2 127.0.0.1 >/dev/null" : "/bin/sleep 1";
+
+    // These are races (a program's pipe set up and put back beside the shell's reads): each script runs its case this
+    // many times in one shell, and every run must be right.
+    private const int Runs = 20;
+
+    private static string Repeat(string body) => $"for run in $(seq {Runs}); do {body}; done";
+
+    private static string Expected(string once) => string.Join("\n", Enumerable.Repeat(once, Runs));
 
     private static async Task<string> RunAsync(string script, string? stdin)
     {
@@ -44,4 +55,32 @@ public class JobStdinEndToEndTests
     [SkippableFact]
     public async Task CompoundStdin_ReachesAJobsProgram()
         => Assert.Equal("hi", await RunAsync($"printf 'hi\\n' | {{ {Reader} & wait; }}", null));
+
+    // REGRESSION: the foreground program joined the pipe a background program held, the pipe outlived it with the rest
+    // of the input inside, and `read` found the stdin done: `a end` in 9 runs of 10 (bash: a b c end).
+    [SkippableFact]
+    public async Task ReadLoop_ProgramsInTheBackgroundAndForeground_ReadsEveryLine()
+        => Assert.Equal(Expected("a b c end"), await RunAsync(
+            Repeat($"printf 'a\\nb\\nc\\n' | {{ while read x; do {Quick} & {Quick}; printf '%s ' \"$x\"; done; wait; echo end; }}"), null));
+
+    // REGRESSION: a program that started while the last one's pipe was being put back opened a second pipe and took the
+    // records behind it: `a=2 b=1` in 8 runs of 15 (bash: a=1 b=2).
+    [SkippableFact]
+    public async Task Records_AfterProgramsComeAndGo_KeepTheirOrder()
+        => Assert.Equal(Expected("a=1 b=2"), await RunAsync(
+            Repeat($"seq 50000 | {{ {Quick} & {Quick}; {Quick}; wait; read a; read b; echo \"a=$a b=$b\"; }}"), null));
+
+    // REGRESSION (also before the pipe was shared): a background program that reads nothing took the input the shell
+    // reads next: `a b` for three lines, `a=` (bash: a b c; a=1).
+    [SkippableFact]
+    public async Task ShellReads_BesideABackgroundProgramThatReadsNothing_GetTheInput()
+        => Assert.Equal("a b c\na=1 b=2", await RunAsync(
+            $"printf 'a\\nb\\nc\\n' | while read x; do {Short} & printf '%s' \"$x\"; [ $x = c ] && echo || printf ' '; done; wait; "
+            + $"seq 5 | {{ {Short} & read a; read b; echo \"a=$a b=$b\"; wait; }}", null));
+
+    // REGRESSION: a program `env` or `command` runs read the process stdin, not the compound's (bash: in1, in2, in3).
+    [SkippableFact]
+    public async Task EnvsAndCommandsProgram_ReadsTheCompoundsStdin()
+        => Assert.Equal("in1\nin2\nin3", await RunAsync(
+            $"echo in1 | {{ env X=1 {Reader}; }}; echo in2 | {{ env X=1 {Reader} & wait; }}; echo in3 | {{ command {Reader} & wait; }}", null));
 }

@@ -7,8 +7,8 @@ using PsBash.Core;
 namespace PsBash.Cmdlets;
 
 /// <summary>
-/// Runs ONE native program with the shell's shared stdin (<c>$global:__BashStdIn</c>: the launcher's forwarded
-/// stdin, or a compound command's) as its REAL process stdin, the way bash hands a child fd 0.
+/// Gives ONE native program the shell's shared stdin (<c>$global:__BashStdIn</c>: the launcher's forwarded stdin, or a
+/// compound command's) as its REAL stdin, the way bash hands a child fd 0.
 /// <para>
 /// <b>Why not <c>feed | prog</c>.</b> PowerShell starts a native program as soon as it is invoked, but a
 /// pipeline ends only when its UPSTREAM does, and the upstream (the feed) cannot know the program exited. Under
@@ -16,19 +16,19 @@ namespace PsBash.Cmdlets;
 /// command therefore hung, even <c>git --version</c>, which never reads stdin at all.
 /// </para>
 /// <para>
-/// <b>How.</b> <see cref="Enter"/> creates an anonymous OS pipe, makes its read end the PROCESS stdin
-/// (Windows: <c>SetStdHandle</c>; Unix: <c>dup2</c> onto fd 0) — PowerShell starts a native program that has no
-/// pipeline input with the process stdin, so the program inherits the pipe — and starts a pump thread that
-/// moves records from the shared stdin into the pipe (their exact bytes, <see cref="RawBytes"/>), closing the
-/// write end at end of input so the program sees EOF. <see cref="Exit"/> (after the program exited) restores the
-/// process stdin, cancels the pump (its wait on a silent stdin is cancellable, <see cref="IStdinRecordSource"/>),
-/// reads back every byte the program left in the pipe and puts it back at the FRONT of the shared stdin, so the
-/// next command sees exactly what bash would: the stream minus what the program consumed.
+/// <b>How.</b> A <see cref="StdinCursor"/>'s input goes through the cursor's ONE pipe (<see cref="CursorPipe"/>), which
+/// the program holds while it runs: the shell and every program reading that stdin (a background job's too) read the
+/// same bytes from one position, and what nobody read goes back in front of the cursor when the last of them is done
+/// (docs/specs/stdio-messaging.md §4.7). <see cref="Enter"/> makes the pipe's read end the PROCESS stdin (Windows:
+/// <c>SetStdHandle</c>; Unix: <c>dup2</c> onto fd 0): PowerShell starts a native program that has no pipeline input with
+/// the process stdin. <see cref="ForChild"/> hands the read end to a program ps-bash starts itself. A plain
+/// <c>Queue&lt;object&gt;</c> (an eager compound stdin, never shared with a job) gets a pipe of its own per program, with
+/// the same put-back.
 /// </para>
 /// <para>
-/// The process stdin is process-global; the host runs one command at a time (its execution lease), and nesting is
-/// refused (<see cref="Enter"/> returns null while a bridge is active), so only one program owns it. The write
-/// end is never inheritable, or the program would never see EOF.
+/// The process stdin is process-global: only the foreground swaps it (the host runs one command at a time, its
+/// execution lease), nesting is refused (<see cref="Enter"/> returns null while a bridge is active), and code with its
+/// own scalars (a background job, <c>env</c>'s command) never swaps it.
 /// </para>
 /// </summary>
 public sealed class NativeStdinBridge
@@ -36,46 +36,42 @@ public sealed class NativeStdinBridge
     private const int PipeBufferSize = 64 * 1024;
     private static readonly object Gate = new();
     private static NativeStdinBridge? _active;
-    // The one pipe of each stdin a background job shares with the shell (StdinCursor.SharedWithAJob), under Gate.
-    private static readonly Dictionary<StdinCursor, NativeStdinBridge> SharedPipes = new(ReferenceEqualityComparer.Instance);
 
-    private readonly object _stdin;
-    private readonly AnonymousPipeServerStream _writer;
     private readonly StdinSwap _swap;
-    private readonly CancellationTokenSource _cancel = new();
-    private readonly Thread _pump;
-    // A foreground program's swap onto a shared pipe (SharedPipes) holds that pipe instead of owning one.
-    private readonly NativeStdinBridge? _pipe;
-    private int _refs = 1;
+    // A cursor's input: this program's hold on the cursor's pipe.
+    private readonly CursorPipe? _pipe;
+    // A plain queue's input: a pipe of this program's own, its pump and the queue it puts back into.
+    private readonly Queue<object>? _queue;
+    private readonly AnonymousPipeServerStream? _writer;
+    private readonly CancellationTokenSource? _cancel;
+    private readonly Thread? _pump;
     private bool _exited;
 
-    private NativeStdinBridge(object stdin, AnonymousPipeServerStream writer, StdinSwap swap)
+    private NativeStdinBridge(CursorPipe pipe, StdinSwap swap)
     {
-        _stdin = stdin;
+        _pipe = pipe;
+        _swap = swap;
+    }
+
+    private NativeStdinBridge(Queue<object> queue, AnonymousPipeServerStream writer, StdinSwap swap)
+    {
+        _queue = queue;
         _writer = writer;
         _swap = swap;
+        _cancel = new CancellationTokenSource();
         _pump = new Thread(Pump) { IsBackground = true, Name = "ps-bash native stdin pump" };
     }
 
-    private NativeStdinBridge(NativeStdinBridge pipe, StdinSwap swap)
-    {
-        _stdin = pipe._stdin;
-        _writer = pipe._writer;
-        _swap = swap;
-        _pump = pipe._pump;
-        _pipe = pipe;
-    }
-
     /// <summary>
-    /// Install the bridge for <paramref name="stdin"/> (a <see cref="StdinCursor"/> or <c>Queue&lt;object&gt;</c>).
-    /// Null — and the program runs with the stdin it would have had anyway — when another bridge is active, the
-    /// stdin is unsupported, or the OS refuses the pipe.
+    /// Make <paramref name="stdin"/> (a <see cref="StdinCursor"/> or <c>Queue&lt;object&gt;</c>) the PROCESS stdin for the
+    /// foreground program about to run. Null — and the program runs with the stdin it would have had anyway — when another
+    /// bridge is active, the stdin is unsupported, or the OS refuses the pipe.
     /// <para>
     /// Only the foreground swaps the PROCESS stdin. Code with its own scalars (<see cref="ScalarOverlay.Current"/>: an
     /// in-process background job, <c>env</c>'s command) runs beside the foreground: a swap from there gave the
     /// foreground's next program the job's stdin (<c>/usr/bin/sleep 3 &amp; sleep 1; cat</c> read the job's empty pipe,
-    /// not the launcher's input), and refused the foreground its own bridge while it lasted. Such a program gets its
-    /// stdin through a pipe of its own (<see cref="ForChild"/>, which <c>Invoke-BashNative</c> uses).
+    /// not the launcher's input), and refused the foreground its own bridge while it lasted. Such a program gets the
+    /// pipe as its own fd 0 (<see cref="ForChild"/>, which <c>Invoke-BashNative</c> uses).
     /// </para>
     /// </summary>
     public static NativeStdinBridge? Enter(object? stdin)
@@ -84,88 +80,71 @@ public sealed class NativeStdinBridge
         lock (Gate)
         {
             if (_active is not null) return null;
-            NativeStdinBridge? bridge;
-            if (stdin is StdinCursor { SharedWithAJob: true } shared)
-            {
-                // The process stdin becomes the pipe the job's programs read too.
-                if (SharedPipe(shared) is not { } pipe) return null;
-                try { bridge = new NativeStdinBridge(pipe, StdinSwap.Install(pipe.ChildStdin)); }
-                catch (Exception)
-                {
-                    pipe.Release();
-                    return null;
-                }
-            }
-            else
-            {
-                bridge = Open(stdin!, HandleInheritability.Inheritable, StdinSwap.Install);
-                if (bridge is null) return null;
-                bridge._pump.Start();
-            }
+            var bridge = stdin is StdinCursor cursor
+                ? OnCursorPipe(cursor, StdinSwap.Install)
+                : OwnPipe((Queue<object>)stdin!, HandleInheritability.Inheritable, StdinSwap.Install);
             _active = bridge;
             return bridge;
         }
     }
 
     /// <summary>
-    /// A bridge for ONE child that gets <see cref="ChildStdin"/> as its fd 0 (the process stdin is not touched): the
-    /// stdin of a program started by ps-bash itself outside the foreground. <see cref="Exit"/> after the child exited
-    /// puts back what it did not read, as for <see cref="Enter"/>. Null when the stdin is unsupported or the OS refuses
-    /// the pipe.
-    /// <para>
-    /// A stdin a background job shares with the shell (<see cref="StdinCursor.SharedWithAJob"/>) has ONE pipe, which
-    /// every program reading it gets (a job's, through this; the foreground's, through <see cref="Enter"/>), the way
-    /// bash's readers share one file description: a pump per program would move the input into the pipe of one that
-    /// may never read it (<c>printf 'hi\n' | { sleep 3 &amp; sleep 1; cat; }</c> prints <c>hi</c>), and keeping the
-    /// process stdin instead gave <c>echo hi | { cat &amp; wait; }</c> nothing. The unread rest goes back when the
-    /// last program is done.
-    /// </para>
+    /// The stdin of ONE program ps-bash starts itself: <see cref="ChildStdin"/> becomes its fd 0 and the process stdin is
+    /// not touched. <see cref="Exit"/> after the child exited. Null when the stdin is unsupported, the OS refuses the
+    /// pipe, or it is a queue the foreground's <see cref="Enter"/> already made the process stdin.
     /// </summary>
     public static NativeStdinBridge? ForChild(object? stdin)
     {
         if (!Bridgeable(stdin)) return null;
-        if (stdin is StdinCursor { SharedWithAJob: true } shared)
-            lock (Gate) return SharedPipe(shared);
-        var bridge = Open(stdin!, ChildReadEnd, static _ => new NoSwap());
-        bridge?._pump.Start();
-        return bridge;
+        if (stdin is StdinCursor cursor) return OnCursorPipe(cursor, static _ => new NoSwap());
+        var queue = (Queue<object>)stdin!;
+        lock (Gate)
+            if (_active is { } active && ReferenceEquals(active._queue, queue)) return null;
+        return OwnPipe(queue, OperatingSystem.IsWindows() ? HandleInheritability.Inheritable : HandleInheritability.None,
+            static _ => new NoSwap());
     }
 
-    // The read end goes to a child by an explicit handle (ChildStdio): inheritable only where the spawn needs it so
-    // (Windows' handle list); POSIX dup2s it onto fd 0.
-    private static HandleInheritability ChildReadEnd
-        => OperatingSystem.IsWindows() ? HandleInheritability.Inheritable : HandleInheritability.None;
-
-    // Under Gate: the shared pipe of the cursor, one more holder; null when the OS refuses the pipe.
-    private static NativeStdinBridge? SharedPipe(StdinCursor cursor)
+    /// <summary>
+    /// THE stdin of a program ps-bash starts itself with no input piped to it (<c>Invoke-BashNative</c>; <c>env</c>,
+    /// <c>command</c>, <c>time</c>, <c>find -exec</c> through <c>RunMerged</c>): the shell's stdin (<see cref="ForChild"/>);
+    /// without one that can be bridged, in a background job end of input (bash: <c>/dev/null</c>; the process stdin is
+    /// the foreground's), else the process stdin (a terminal, or the foreground's own bridge of a queue).
+    /// <see cref="Exit"/> the bridge after the child exited. Guard: Core.Tests <c>StdinOwnershipGuardTests</c>.
+    /// </summary>
+    internal static ChildStdioMode ProgramStdin(PSCmdlet cmdlet, bool mergeStderr, out NativeStdinBridge? bridge)
     {
-        if (SharedPipes.TryGetValue(cursor, out var pipe) && !pipe._exited)
-        {
-            pipe._refs++;
-            return pipe;
-        }
-        pipe = Open(cursor, ChildReadEnd, static _ => new NoSwap());
-        if (pipe is null) return null;
-        SharedPipes[cursor] = pipe;
-        pipe._pump.Start();
-        return pipe;
+        bridge = ForChild(SharedStdin.Get(cmdlet.SessionState));
+        bool inherit = bridge is null && !BashShellState.InBackgroundJob(cmdlet.SessionState);
+        return new ChildStdioMode(MergeStderr: mergeStderr, InheritStdin: inherit, Stdin: bridge?.ChildStdin);
     }
 
     /// <summary>The read end a <see cref="ForChild"/> bridge's child gets as its stdin.</summary>
-    public SafePipeHandle ChildStdin => _writer.ClientSafePipeHandle;
+    public SafePipeHandle ChildStdin => _pipe?.ReadEnd ?? _writer!.ClientSafePipeHandle;
 
-    // An enumerator-backed cursor blocks in MoveNext whatever the token says, so Exit could never stop a pump waiting on it.
-    private static bool Bridgeable(object? stdin)
-        => stdin is (StdinCursor or Queue<object>) && stdin is not StdinCursor { CanCancelWait: false };
+    // An enumerator-backed cursor blocks in MoveNext whatever the token says, so no pump on it could ever be stopped.
+    private static bool Bridgeable(object? stdin) => stdin is Queue<object> or StdinCursor { CanCancelWait: true };
 
-    private static NativeStdinBridge? Open(object stdin, HandleInheritability readEnd, Func<SafePipeHandle, StdinSwap> swap)
+    private static NativeStdinBridge? OnCursorPipe(StdinCursor cursor, Func<SafePipeHandle, StdinSwap> swap)
+    {
+        if (CursorPipe.Hold(cursor) is not { } pipe) return null;
+        try { return new NativeStdinBridge(pipe, swap(pipe.ReadEnd)); }
+        catch (Exception)
+        {
+            pipe.Release();
+            return null;
+        }
+    }
+
+    private static NativeStdinBridge? OwnPipe(Queue<object> queue, HandleInheritability readEnd, Func<SafePipeHandle, StdinSwap> swap)
     {
         AnonymousPipeServerStream? writer = null;
         try
         {
             // The server end is the WRITE end and is never inheritable.
             writer = new AnonymousPipeServerStream(PipeDirection.Out, readEnd, PipeBufferSize);
-            return new NativeStdinBridge(stdin, writer, swap(writer.ClientSafePipeHandle));
+            var bridge = new NativeStdinBridge(queue, writer, swap(writer.ClientSafePipeHandle));
+            bridge._pump!.Start();
+            return bridge;
         }
         catch (Exception)
         {
@@ -175,37 +154,31 @@ public sealed class NativeStdinBridge
     }
 
     /// <summary>
-    /// Undo <see cref="Enter"/> once the program has exited: restore the process stdin, stop the pump and put
-    /// every unread byte back at the front of the shared stdin. Each holder exits once (a shared pipe ends with its
-    /// last holder); a further call is a no-op.
+    /// Undo <see cref="Enter"/> / <see cref="ForChild"/> once the program has exited: restore the process stdin and
+    /// release the pipe (what nobody read goes back in front of the shared stdin). Idempotent.
     /// </summary>
-    public void Exit() => Release();
-
-    private void Release()
+    public void Exit()
     {
         lock (Gate)
         {
-            if (_exited || --_refs > 0) return;
+            if (_exited) return;
             _exited = true;
             if (ReferenceEquals(_active, this)) _active = null;
-            if (_stdin is StdinCursor cursor && SharedPipes.TryGetValue(cursor, out var shared) && ReferenceEquals(shared, this))
-                SharedPipes.Remove(cursor);
         }
 
         _swap.Restore();
         if (_pipe is not null)
         {
-            _cancel.Dispose();
             _pipe.Release();
             return;
         }
-        _cancel.Cancel();
 
+        _cancel!.Cancel();
         // Drain the pipe until EOF while the pump winds down: the pump may be blocked writing into a full pipe
         // (the program stopped reading), and only reading unblocks it. EOF arrives when the pump closes the
         // write end (its finally) — every other holder of the pipe only has the read end.
         var unread = new MemoryStream();
-        using (var reader = new AnonymousPipeClientStream(PipeDirection.In, _writer.ClientSafePipeHandle))
+        using (var reader = new AnonymousPipeClientStream(PipeDirection.In, _writer!.ClientSafePipeHandle))
         {
             var buffer = new byte[16 * 1024];
             int n;
@@ -219,32 +192,32 @@ public sealed class NativeStdinBridge
                 // Broken pipe: nothing more to read.
             }
         }
-        _pump.Join();
+        _pump!.Join();
         _writer.Dispose();
         _cancel.Dispose();
 
-        if (unread.Length > 0) PutBack(RawBytes.GetString(unread.GetBuffer().AsSpan(0, (int)unread.Length)));
+        if (unread.Length == 0) return;
+        var records = Records(RawBytes.GetString(unread.GetBuffer().AsSpan(0, (int)unread.Length)));
+        var rest = _queue!.ToArray();
+        _queue.Clear();
+        foreach (var r in records) _queue.Enqueue(r);
+        foreach (var r in rest) _queue.Enqueue(r);
     }
 
     private void Pump()
     {
-        var ct = _cancel.Token;
+        var ct = _cancel!.Token;
         try
         {
-            while (TryNext(ct, out var record))
+            while (!ct.IsCancellationRequested && _queue!.TryDequeue(out var record))
             {
                 var bytes = RecordBytes(record);
                 if (bytes.Length > 0)
                 {
-                    _writer.Write(bytes, 0, bytes.Length);
+                    _writer!.Write(bytes, 0, bytes.Length);
                     _writer.Flush();
                 }
-                if (ct.IsCancellationRequested) break;
             }
-        }
-        catch (OperationCanceledException)
-        {
-            // Exit: the program is gone and the stdin was silent.
         }
         catch (IOException)
         {
@@ -256,30 +229,15 @@ public sealed class NativeStdinBridge
         finally
         {
             // End of input (or Exit): close the write end so a reader sees EOF and Exit's drain completes.
-            try { _writer.Dispose(); } catch { /* already closed */ }
-        }
-    }
-
-    private bool TryNext(CancellationToken ct, out object? record)
-    {
-        record = null;
-        switch (_stdin)
-        {
-            case StdinCursor cursor:
-                return cursor.TryDequeue(ct, out record);
-            case Queue<object> queue:
-                ct.ThrowIfCancellationRequested();
-                return queue.TryDequeue(out record);
-            default:
-                return false;
+            try { _writer!.Dispose(); } catch { /* already closed */ }
         }
     }
 
     /// <summary>A record's exact bytes (<see cref="BashRuntime.RecordBytes"/>) as the child's stdin bytes.</summary>
     internal static byte[] RecordBytes(object? record) => RawBytes.GetBytes(BashRuntime.RecordBytes(record));
 
-    /// <summary>The unread text as records again (lines; an unterminated last piece stays unterminated), in front.</summary>
-    private void PutBack(string text)
+    /// <summary>Stdin text as records again: lines; an unterminated last piece stays unterminated.</summary>
+    internal static List<object> Records(string text)
     {
         var records = new List<object>();
         int start = 0;
@@ -290,19 +248,7 @@ public sealed class NativeStdinBridge
             start = i + 1;
         }
         if (start < text.Length) records.Add(BashRuntime.TextRecord(text.Substring(start), unterminated: true));
-
-        switch (_stdin)
-        {
-            case StdinCursor cursor:
-                cursor.PushFront(records);
-                break;
-            case Queue<object> queue:
-                var rest = queue.ToArray();
-                queue.Clear();
-                foreach (var r in records) queue.Enqueue(r);
-                foreach (var r in rest) queue.Enqueue(r);
-                break;
-        }
+        return records;
     }
 
     /// <summary>The process-stdin swap: the pipe's read end becomes stdin until <see cref="Restore"/>.</summary>

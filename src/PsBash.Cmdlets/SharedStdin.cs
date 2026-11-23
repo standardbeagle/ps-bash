@@ -196,10 +196,9 @@ public static class BackgroundJobStdin
         switch (SharedStdin.Get(state))
         {
             case StdinCursor cursor when !cursor.IsShellStdin:
-                cursor.SharedWithAJob = true;
                 return cursor;
             case Queue<object> queue:
-                var promoted = new StdinCursor { SharedWithAJob = true };
+                var promoted = new StdinCursor();
                 while (queue.Count > 0) promoted.Enqueue(queue.Dequeue());
                 state.PSVariable.Set(SharedStdin.VariableName, promoted);
                 return promoted;

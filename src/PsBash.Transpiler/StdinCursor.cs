@@ -39,18 +39,23 @@ public sealed class StdinCursor
     /// </summary>
     public bool IsShellStdin { get; init; }
 
+    // While a program reads this input, it is in a pipe (IStdinTap, `CursorPipe`) and every take reads that pipe.
+    private IStdinTap? _tap;
+
     /// <summary>
-    /// A background job was started with this cursor while the shell reads it too (<c>BackgroundJobStdin.Inherit</c>).
-    /// Every program that reads it then reads ONE pipe (<c>NativeStdinBridge.ForChild</c>), as bash's readers share one
-    /// file description: a pump per program would take records ahead of the shell's next reader even when the program
-    /// reads none (<c>printf 'hi\n' | { /usr/bin/sleep 2 &amp; sleep 1; cat; }</c> prints <c>hi</c> in bash).
+    /// The pipe this input is in while a program reads it, or null. Its owner (<c>CursorPipe</c>) moves the records
+    /// into it with <see cref="TryTakeUpstream"/> and, when the last reader is done, puts what nobody read back with
+    /// <see cref="PushFrontUpstream"/> before it detaches. Meanwhile every take (<see cref="TryDequeue(out object?)"/>,
+    /// <see cref="Count"/>, <see cref="PushFront"/>) goes through it: ONE reading position for the shell and its
+    /// programs, as bash's readers share one file description (docs/specs/stdio-messaging.md §4.7).
     /// </summary>
-    public bool SharedWithAJob
-    {
-        get => Volatile.Read(ref _sharedWithAJob);
-        set => Volatile.Write(ref _sharedWithAJob, value);
-    }
-    private bool _sharedWithAJob;
+    public IStdinTap? Tap => Volatile.Read(ref _tap);
+
+    /// <summary>Make <paramref name="tap"/> this input's pipe; false when one is already attached.</summary>
+    public bool TryAttachTap(IStdinTap tap) => Interlocked.CompareExchange(ref _tap, tap, null) is null;
+
+    /// <summary>Detach <paramref name="tap"/> (after its unread rest is back in front); a no-op for another tap.</summary>
+    public void DetachTap(IStdinTap tap) => Interlocked.CompareExchange(ref _tap, null, tap);
 
     /// <summary>An empty cursor, filled by <see cref="Enqueue"/> (the eager compound-scope form).</summary>
     public StdinCursor()
@@ -92,6 +97,18 @@ public sealed class StdinCursor
     /// </summary>
     public bool TryDequeue(CancellationToken ct, out object? record)
     {
+        // A tap that has ended has already put its rest back and detached: look again.
+        while (Tap is { } tap)
+            if (tap.TryTake(out record) is { } took) return took;
+        return TryTakeUpstream(ct, out record);
+    }
+
+    /// <summary>
+    /// <see cref="TryDequeue(CancellationToken, out object?)"/> past the tap: the records themselves. Only the tap's
+    /// owner takes this way (the pump that fills its pipe); every other reader reads the pipe.
+    /// </summary>
+    public bool TryTakeUpstream(CancellationToken ct, out object? record)
+    {
         // Check-and-take is ONE step under the lock, and an empty buffer means end of input only once the source is
         // done: another reader (a background job shares the cursor) can take the record this thread just pulled, and
         // then this one pulls the next instead of reporting a false end of input. `Count` then `Dequeue` raced exactly
@@ -128,6 +145,8 @@ public sealed class StdinCursor
     {
         get
         {
+            while (Tap is { } tap)
+                if (tap.HasNext() is { } has) return has ? 1 : 0;
             FillOne();
             lock (_gate) return _buffer.Count;
         }
@@ -140,16 +159,7 @@ public sealed class StdinCursor
 
     /// <summary>Take the next record. Throws <see cref="InvalidOperationException"/> at end of input (as <see cref="Queue{T}"/> does).</summary>
     public object Dequeue()
-    {
-        FillOne();
-        lock (_gate)
-        {
-            if (_buffer.First is null) throw new InvalidOperationException("The stdin cursor is empty.");
-            var item = _buffer.First.Value;
-            _buffer.RemoveFirst();
-            return item;
-        }
-    }
+        => TryDequeue(out var item) ? item ?? "" : throw new InvalidOperationException("The stdin cursor is empty.");
 
     /// <summary>Append a record after everything buffered (eager fill; a lazy source still follows).</summary>
     public void Enqueue(object item)
@@ -159,6 +169,15 @@ public sealed class StdinCursor
 
     /// <summary>Put records back at the FRONT (the unread rest of a record <c>read</c> took one line from), in order.</summary>
     public void PushFront(IEnumerable<object> items)
+    {
+        var list = items as IList<object> ?? items.ToList();
+        while (Tap is { } tap)
+            if (tap.TryPushFront(list)) return;
+        PushFrontUpstream(list);
+    }
+
+    /// <summary><see cref="PushFront"/> past the tap: the tap's owner putting the unread rest of its pipe back.</summary>
+    public void PushFrontUpstream(IEnumerable<object> items)
     {
         var list = items as IList<object> ?? items.ToList();
         lock (_gate)
@@ -211,6 +230,22 @@ public sealed class StdinCursor
             _source.Dispose();
         }
     }
+}
+
+/// <summary>
+/// The pipe a <see cref="StdinCursor"/>'s input is in while a program reads it (<see cref="StdinCursor.Tap"/>). The
+/// shell's own reads go through it, so they read the same bytes, in the same order, as its programs.
+/// </summary>
+public interface IStdinTap
+{
+    /// <summary>Take the next line from the pipe (false: end of input); null when the tap has ended (take from the cursor).</summary>
+    bool? TryTake(out object? record);
+
+    /// <summary>Whether another record exists (waits for one); null when the tap has ended.</summary>
+    bool? HasNext();
+
+    /// <summary>Put <paramref name="items"/> back in front of the pipe's input; false when the tap has ended.</summary>
+    bool TryPushFront(IList<object> items);
 }
 
 /// <summary>

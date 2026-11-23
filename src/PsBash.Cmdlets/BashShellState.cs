@@ -513,6 +513,10 @@ public static class BashShellState
     /// <summary>Set to <c>$true</c> in a background job's pooled runspace by Invoke-BashBackground.</summary>
     public const string BackgroundRunspaceMark = "__psbashBgRunspace";
 
+    /// <summary>True in a background job's runspace (<see cref="BackgroundRunspaceMark"/>).</summary>
+    internal static bool InBackgroundJob(SessionState session)
+        => LanguagePrimitives.IsTrue(session.PSVariable.GetValue("global:" + BackgroundRunspaceMark));
+
     // The $global: shell state lives in the runspace, so it is always the body's own to put back. So is the
     // location; the process cwd is put back with it, after the variables (it rewrites $PWD).
     private static object? RestoreRunspaceGlobals(SessionState session, Snapshot saved)

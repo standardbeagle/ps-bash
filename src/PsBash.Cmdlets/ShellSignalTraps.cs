@@ -114,8 +114,7 @@ internal static class ShellSignalTraps
 
     private static object? Unwrap(object? v) => v is PSObject pso ? pso.BaseObject : v;
 
-    private static bool InBackgroundJob(PSCmdlet cmdlet)
-        => LanguagePrimitives.IsTrue(cmdlet.SessionState.PSVariable.GetValue("global:" + BashShellState.BackgroundRunspaceMark));
+    private static bool InBackgroundJob(PSCmdlet cmdlet) => BashShellState.InBackgroundJob(cmdlet.SessionState);
 }
 
 /// <summary>

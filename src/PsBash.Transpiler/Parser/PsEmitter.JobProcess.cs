@@ -59,6 +59,15 @@ public static partial class PsEmitter
         if (RedirectsNeedOwnProcess(s.Redirects)) return true;
         if (s.Words.IsDefaultOrEmpty) return false; // assignments only
         if (GetLiteralValue(s.Words[0]) is not { } name) return true; // `$cmd args`: could be cd
+        // `command prog`, `builtin x`: judged by the command they run. `command cat &` in a job host read nothing of the
+        // compound's stdin (`echo in | { command cat & wait; }`; stdio-messaging.md 4.7), where `cat &` reads it.
+        for (int i = 1; name is "command" or "builtin"; i++)
+        {
+            if (i == s.Words.Length) return false; // `command` alone does nothing
+            if (GetLiteralValue(s.Words[i]) is not { } next) return true;
+            if (next.Length > 1 && next[0] == '-') continue; // its options (-p, -v, --)
+            name = next;
+        }
         if (name != "let" && _stateBuiltins.Contains(name)) return true;
         if (_unitFunctions?.Contains(name) ?? false) return true;
         return s.Words.Any(WordNeedsOwnProcess);

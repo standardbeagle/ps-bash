@@ -93,11 +93,13 @@ internal static class InnerCommand
             invokeTarget = ScriptBlock.Create(launch.StandInScript(PsBash.Core.ProgramFile.Shown(name, file.Path)));
 
         // `command prog 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4). In a
-        // background job always through RunMerged: `& $c` would give it the process environment, not the job's scalars.
-        // Likewise when its environment or argv has a value PowerShell's launcher would turn into U+FFFD (NativeRunner):
-        // `& $c` on an ApplicationInfo passes no lookup hook.
+        // background job always through RunMerged: `& $c` would give it the process environment, not the job's scalars,
+        // and the process stdin, not the job's (NativeStdinBridge.ProgramStdin; `echo in | { command cat & wait; }`
+        // printed nothing). Likewise when its environment or argv has a value PowerShell's launcher would turn into
+        // U+FFFD (NativeRunner): `& $c` on an ApplicationInfo passes no lookup hook.
         if (invokeTarget is ApplicationInfo app && !InvokeBashNativeCommand.IsBatchFile(app.Path)
             && (StderrMerge.JoinsStdout(cmdlet) || PsBash.Core.ScalarOverlay.Current is not null
+                || BashShellState.InBackgroundJob(cmdlet.SessionState)
                 || PsBash.Core.ProcessScalars.ChildNeedsExactBytes(argv.Skip(1))))
         {
             try

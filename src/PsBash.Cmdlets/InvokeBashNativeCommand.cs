@@ -130,18 +130,12 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
         var psi = ProgramStartInfo(this, path, args);
         try
         {
-            // Piped input is fed to it; otherwise it reads the process stdin, as a program PowerShell starts does.
-            // Not merged, its stderr goes through this cmdlet's error stream (StreamingChildProcess).
+            // Piped input is fed to it; otherwise it reads the shell's stdin (NativeStdinBridge.ProgramStdin: the
+            // cursor's one pipe, never the process stdin outside the foreground). Not merged, its stderr goes through
+            // this cmdlet's error stream (StreamingChildProcess).
             bool piped = MyInvocation.ExpectingInput;
-            // Outside the foreground (a background job, env's command) the process stdin is the foreground's: such a
-            // program reads its own compound stdin (a job's top level: end of input, as bash's /dev/null) through a
-            // pipe of its own, never by a swap of the process stdin (NativeStdinBridge.Enter refuses it there); a stdin
-            // the shell reads too has one pipe for all its programs (NativeStdinBridge.ForChild).
-            if (!piped && PsBash.Core.ScalarOverlay.Current is not null
-                && NativeStdinBridge.ForChild(SharedStdin.Get(SessionState)) is { } own)
-                _ownStdin = own;
             _child = BashRuntime.StartChildProcessStreaming(psi, keepStdinOpen: piped,
-                new ChildStdioMode(MergeStderr: merge, InheritStdin: !piped, Stdin: _ownStdin?.ChildStdin));
+                piped ? new ChildStdioMode(MergeStderr: merge) : NativeStdinBridge.ProgramStdin(this, merge, out _ownStdin));
         }
         catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex))
         {
@@ -196,8 +190,9 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
     /// Run program <paramref name="path"/> with its output streamed through <paramref name="cmdlet"/>, and return its exit
     /// status: ONE pipe for its stdout and stderr when <see cref="StderrMerge.JoinsStdout"/> (<see cref="ChildStdio"/>),
     /// else its stderr through the cmdlet's error stream, where the redirect downstream picks it up. Its stdin is <paramref name="input"/>'s
-    /// records when given, else the process stdin when <paramref name="inheritStdin"/>, else empty (xargs:
-    /// <c>/dev/null</c>). <paramref name="workDir"/> defaults to the session's location. A program that cannot be started
+    /// records when given, else the shell's stdin when <paramref name="inheritStdin"/>
+    /// (<see cref="NativeStdinBridge.ProgramStdin"/>: <c>echo in | { env X=1 cat; }</c> reads <c>in</c>), else empty
+    /// (xargs: <c>/dev/null</c>). <paramref name="workDir"/> defaults to the session's location. A program that cannot be started
     /// throws, as running it through PowerShell would.
     /// </summary>
     internal static int RunMerged(PSCmdlet cmdlet, string path, IEnumerable<string> args, bool inheritStdin,
@@ -205,19 +200,31 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
     {
         var psi = ProgramStartInfo(cmdlet, path, args);
         if (workDir is not null) psi.WorkingDirectory = workDir;
-        using var child = BashRuntime.StartChildProcessStreaming(psi, keepStdinOpen: input is not null,
-            new ChildStdioMode(MergeStderr: StderrMerge.JoinsStdout(cmdlet), InheritStdin: input is null && inheritStdin));
-        if (input is not null)
+        bool merge = StderrMerge.JoinsStdout(cmdlet);
+        NativeStdinBridge? shellStdin = null;
+        try
         {
-            foreach (var record in input)
+            using var child = BashRuntime.StartChildProcessStreaming(psi, keepStdinOpen: input is not null,
+                input is null && inheritStdin
+                    ? NativeStdinBridge.ProgramStdin(cmdlet, merge, out shellStdin)
+                    : new ChildStdioMode(MergeStderr: merge));
+            if (input is not null)
             {
-                if (record is null) continue;
-                var pso = PSObject.AsPSObject(record);
-                var bytes = pso.BaseObject is byte[] raw ? raw : NativeStdinBridge.RecordBytes(pso);
-                if (!child.WriteStdin(cmdlet, bytes)) break; // it stopped reading: the rest is dropped
+                foreach (var record in input)
+                {
+                    if (record is null) continue;
+                    var pso = PSObject.AsPSObject(record);
+                    var bytes = pso.BaseObject is byte[] raw ? raw : NativeStdinBridge.RecordBytes(pso);
+                    if (!child.WriteStdin(cmdlet, bytes)) break; // it stopped reading: the rest is dropped
+                }
             }
+            return child.Complete(cmdlet);
         }
-        return child.Complete(cmdlet);
+        finally
+        {
+            // The program is gone: what it left of the shell's stdin goes back.
+            shellStdin?.Exit();
+        }
     }
 
     private static ProcessStartInfo ProgramStartInfo(PSCmdlet cmdlet, string path, IEnumerable<string> args)

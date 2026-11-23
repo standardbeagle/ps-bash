@@ -106,36 +106,4 @@ public class ProgramLookupTests : IClassFixture<SharedPwshFixture>
         Assert.Equal("bc", BashRuntime.GetBashText(rest));
         Assert.False(cursor.TryDequeue(out _));
     }
-
-    // A stdin a job shares with the shell has ONE pipe for every program that reads it, as bash's readers share one file
-    // description: what the first program left is the next one's, and the rest goes back after the last.
-    // REGRESSION: `echo hi | { /usr/bin/cat & wait; }` printed nothing (the job's program kept the process stdin).
-    [SkippableFact]
-    public void ForChild_AStdinSharedWithAJob_IsOnePipeForAllItsPrograms()
-    {
-        Skip.If(OperatingSystem.IsWindows(), "/usr/bin/head -c1 reads one byte; the bridge itself is the same on Windows");
-        var cursor = new StdinCursor { SharedWithAJob = true };
-        cursor.Enqueue(BashRuntime.TextRecord("abc", unterminated: true));
-        var first = NativeStdinBridge.ForChild(cursor);
-        var second = NativeStdinBridge.ForChild(cursor);
-        Assert.NotNull(first);
-        Assert.Same(first, second);
-
-        Assert.Equal("a", HeadOneByte(first!));
-        first!.Exit();
-        Assert.False(cursor.TryDequeue(out _));    // the second holder still reads the pipe
-        Assert.Equal("b", HeadOneByte(second!));
-        second!.Exit();
-        Assert.True(cursor.TryDequeue(out var rest));
-        Assert.Equal("c", BashRuntime.GetBashText(rest));
-    }
-
-    private static string HeadOneByte(NativeStdinBridge bridge)
-    {
-        var psi = new ProcessStartInfo("/usr/bin/head") { ArgumentList = { "-c1" } };
-        using var child = ChildStdio.Start(psi, new ChildStdioMode(Stdin: bridge.ChildStdin));
-        string output = child.StandardOutput.ReadToEnd();
-        Assert.True(child.WaitForExit(30_000), "head never exited");
-        return output;
-    }
 }
