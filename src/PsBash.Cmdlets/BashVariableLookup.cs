@@ -42,18 +42,31 @@ public static class BashVariableLookup
         if ((callerLocal || journal is not null && !PowerShellOwnedVariables.Contains(name))
             && state.PSVariable.Get(name) is { } nearest && Writable(nearest))
         {
-            journal?.Note(nearest, made: null);
+            journal?.Note(nearest, made: null, state);
             return nearest;
         }
         string global = "global:" + name;
         if (state.PSVariable.Get(global) is { } existing)
         {
-            journal?.Note(existing, made: null);
+            // A name PowerShell owns and keeps read-only (`Error`): a subshell's array of that name is its own variable,
+            // gone with its scope. REGRESSION: `( Error=(e); Error+=(f) )` failed "Cannot overwrite variable Error"; then
+            // the second write made it afresh (`f`, not `e f`): one the subshell already made is reused.
+            if (journal is not null && !Writable(existing) && PowerShellOwnedVariables.Contains(name))
+            {
+                if (state.PSVariable.Get(name) is { } made && Writable(made) && !ReferenceEquals(made, existing)) return made;
+                try
+                {
+                    state.PSVariable.Set(name, null);
+                    if (state.PSVariable.Get(name) is { } own && Writable(own)) return own;
+                }
+                catch (SessionStateException) { /* AllScope (`Host`): the write fails as it always did */ }
+            }
+            journal?.Note(existing, made: null, state);
             return existing;
         }
         state.PSVariable.Set(global, null);
         PSVariable created = state.PSVariable.Get(global)!;
-        journal?.Note(created, made: name);
+        journal?.Note(created, made: name, state);
         return created;
     }
 
@@ -98,41 +111,113 @@ public static class BashVariableLookup
     /// REGRESSION: every call's <c>local -a p; read -ra p</c> was noted (each call's local is a new variable) and each
     /// note scanned all earlier ones, so <c>seq N | while read n; do parse "$n"; done</c> was quadratic in N.</para>
     /// </summary>
-    internal sealed class ArrayWriteJournal(VarFrameStack frames, int depth)
+    internal sealed class ArrayWriteJournal
     {
-        private readonly List<(PSVariable Variable, object? Before, string? Made)> _writes = [];
+        private readonly VarFrameStack _frames;
+        private readonly int _depth;
+        private readonly long _openedAt;
 
-        // The entries of each name (PowerShell variable names ignore case): almost always one.
+        // When each journal opened and each entry was noted: one clock for every journal, so a journal can tell which of a
+        // concurrent sibling's entries came after it opened.
+        private static long s_clock;
+
+        private readonly List<Entry> _writes = [];
+
+        // The entries of each name (PowerShell variable names ignore case), and of each variable noted: O(1) per write.
         private readonly Dictionary<string, List<int>> _byName = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<PSVariable> _seen = new(ReferenceEqualityComparer.Instance);
+
+        private readonly record struct Entry(PSVariable Variable, object? Before, string? Made, long NotedAt);
+
+        internal ArrayWriteJournal(VarFrameStack frames, int depth)
+        {
+            _frames = frames;
+            _depth = depth;
+            _openedAt = Interlocked.Increment(ref s_clock);
+            frames.OpenJournals.Add(this);
+        }
 
         /// <summary>The variables noted so far (each is put back once).</summary>
         internal int Count => _writes.Count;
 
         /// <summary>
         /// A write to <paramref name="variable"/> follows; <paramref name="made"/> is its name when this write made it
-        /// global. Only the first write to a variable counts. A function's local is a new <see cref="PSVariable"/> per
-        /// lookup, so one is known by its name and the value it holds (every array write stores a new array). The value
-        /// kept is a copy when the write may change it in place (an associative or sparse array: <c>m[k]=v</c>,
-        /// <c>sp+=(x)</c>), else the subshell's write would be kept too.
+        /// global. Only the first write to a variable counts (a later note of it that is not recognized is harmless:
+        /// the entries are put back newest first). The value kept is a copy when the write may change it in place (an
+        /// associative or sparse array: <c>m[k]=v</c>, <c>sp+=(x)</c>), else the subshell's write would be kept too.
         /// </summary>
-        public void Note(PSVariable variable, string? made)
+        public void Note(PSVariable variable, string? made, SessionState? state = null)
         {
+            if (made is null && IsLocalOfACallInside(variable, state)) return;
+            if (_seen.Contains(variable)) return;
             string name = variable.Name;
-            // A local array of a function the subshell called: it ends with that call, inside the subshell.
-            if (made is null && frames.InnermostLocalArrayDepth(name) > depth) return;
             object? now = variable.Value;
             if (_byName.TryGetValue(name, out var entries))
             {
-                foreach (int i in entries)
-                {
-                    PSVariable seen = _writes[i].Variable;
-                    if (ReferenceEquals(seen, variable) || now is not null && ReferenceEquals(seen.Value, now)) return;
-                }
+                // A function's local may be a new PSVariable per lookup: it is known by the array it holds (every write
+                // stores a new one). Only the newest entries are looked at, so a name noted many times stays O(1).
+                for (int k = entries.Count - 1, stop = Math.Max(0, entries.Count - 4); k >= stop; k--)
+                    if (now is not null && ReferenceEquals(_writes[entries[k]].Variable.Value, now)) return;
             }
             else _byName[name] = entries = new List<int>(1);
             entries.Add(_writes.Count);
-            object? raw = now is PSObject wrapped ? wrapped.BaseObject : now;
-            _writes.Add((variable, raw is IDictionary ? BashShellState.CloneMutable(raw) : now, made));
+            _seen.Add(variable);
+            object? before;
+            if (made is null && SiblingBefore(variable, now) is { } sibling)
+            {
+                before = Kept(sibling.Before);
+                made = sibling.Made;
+            }
+            else before = Kept(now);
+            _writes.Add(new Entry(variable, before, made, Interlocked.Increment(ref s_clock)));
+        }
+
+        private static object? Kept(object? value)
+        {
+            object? raw = value is PSObject wrapped ? wrapped.BaseObject : value;
+            return raw is IDictionary ? BashShellState.CloneMutable(raw) : value;
+        }
+
+        /// <summary>
+        /// The variable is a local array of a function called inside the subshell: it ends with that call, so it is not
+        /// noted (REGRESSION: every call's <c>local -a p</c> was, and <c>seq N | while read n; do parse; done</c> went
+        /// quadratic). Decided by the variable written, not its name alone: a function inside that names it local
+        /// (its prologue lists every <c>local</c>, run or not) and no function outside does, and the variable is not the
+        /// shell's global. REGRESSION: <c>g() { if false; then local -a a; fi; h; }</c> with <c>h() { a+=(3); }</c>, run as
+        /// <c>( g )</c>, kept the 3 in the shell's <c>a</c>. Noting a variable that dies anyway is harmless; missing one
+        /// outside is not, so a doubt notes it.
+        /// </summary>
+        private bool IsLocalOfACallInside(PSVariable variable, SessionState? state)
+        {
+            _frames.LocalArrayDepths(variable.Name, out int innermost, out int outermost);
+            if (innermost <= _depth || outermost <= _depth) return false;
+            if (state is null) return true;
+            PSVariable? global = null;
+            try { global = state.PSVariable.Get("global:" + variable.Name); }
+            catch (Exception e) when (e is ArgumentException or InvalidOperationException or SessionStateException) { }
+            return global is null || !(ReferenceEquals(global, variable) || global.Value is not null && ReferenceEquals(global.Value, variable.Value));
+        }
+
+        /// <summary>
+        /// A pipe stage's sibling stages run interleaved with it, each a subshell with its own journal: the entry of
+        /// another open journal for this variable noted after this one opened, the earliest, holds the value the variable
+        /// had when this subshell started. REGRESSION: <c>a=(0); { a+=(u); echo 1; } | while read x; do a+=(d); done</c>
+        /// left <c>0 u</c>: the loop's journal kept the upstream's write as its "before" and put it back last.
+        /// </summary>
+        private Entry? SiblingBefore(PSVariable variable, object? now)
+        {
+            Entry? earliest = null;
+            foreach (var other in _frames.OpenJournals)
+            {
+                if (ReferenceEquals(other, this) || !other._byName.TryGetValue(variable.Name, out var entries)) continue;
+                foreach (int i in entries)
+                {
+                    Entry e = other._writes[i];
+                    if (e.NotedAt < _openedAt || earliest is { } best && best.NotedAt <= e.NotedAt) continue;
+                    if (ReferenceEquals(e.Variable, variable) || now is not null && ReferenceEquals(e.Variable.Value, now)) earliest = e;
+                }
+            }
+            return earliest;
         }
 
         /// <summary>
@@ -141,9 +226,10 @@ public static class BashVariableLookup
         /// </summary>
         public void Undo(SessionState? state)
         {
+            _frames.OpenJournals.Remove(this);
             for (int i = _writes.Count - 1; i >= 0; i--)
             {
-                var (variable, before, made) = _writes[i];
+                var (variable, before, made, _) = _writes[i];
                 try
                 {
                     if (made is not null) state?.PSVariable.Remove("global:" + made);
@@ -156,24 +242,61 @@ public static class BashVariableLookup
             }
             _writes.Clear();
             _byName.Clear();
+            _seen.Clear();
         }
+
+        /// <summary>
+        /// The variable lives outside this subshell (the shell's global, a calling function's local, or one the
+        /// subshell already wrote): an <c>unset</c> in the subshell empties it, journaled, rather than removing it.
+        /// </summary>
+        internal bool HoldsOutside(PSVariable variable, SessionState state)
+            => _seen.Contains(variable) || !IsLocalOfACallInside(variable, state);
     }
 
     /// <summary>
-    /// <c>unset NAME</c>, after the builtin removed the variable from its caller's scope: when the array NAME held is
-    /// still the one seen (it lives further out: the shell's global, a calling function's local the caller's scope does
-    /// not own, an array a subshell wrote in place), that variable is emptied, so NAME reads as unset as bash's does. In
-    /// a subshell its journal puts the array back when the subshell ends. REGRESSION: <c>( mapfile -t m &lt;&lt;&lt; x;
-    /// unset m; echo ${#m[@]} )</c> printed 1, since the subshell's array is written in place (the journal) and the
-    /// builtin removed only its caller's scope.
+    /// <c>unset NAME</c>, after the builtin's own removal from its caller's scope: when NAME still shows the array it
+    /// showed (a function's local, which PowerShell cannot remove from a compiled scope, or the shell's global), bash's
+    /// unset of that variable, which depends on whose it is:
+    /// <list type="bullet">
+    /// <item>In a subshell, one that lives outside it (the shell's, written in place: <see cref="ArrayWriteJournal"/>) is
+    /// emptied, journaled, so the subshell's end puts it back. REGRESSION: <c>( mapfile -t m &lt;&lt;&lt; x; unset m;
+    /// echo ${#m[@]} )</c> printed 1.</item>
+    /// <item>The shell's global is removed (<c>declare -p</c> then finds nothing).</item>
+    /// <item>A local of the function running the unset stays its local, unset: emptied
+    /// (<c>f() { local -a q=(l); unset q; echo ${#q[@]}; }</c> prints 0, whatever the global holds).</item>
+    /// <item>A calling function's local goes, so the shell's array of the name shows again there
+    /// (<c>a=(G); g() { unset a; }; f() { local -a a=(1); g; echo ${a[@]}; }</c> prints G): it takes the global's
+    /// value. REGRESSION: it was emptied, so the empty local hid the global (<c>[]</c>).</item>
+    /// </list>
     /// </summary>
     public static void UnsetSurvivingArray(SessionState state, string name, object? before)
     {
         if (before is null || ArrayVariable(state, name) is not { } survivor || !Writable(survivor)) return;
         object? held = survivor.Value is PSObject wrapped ? wrapped.BaseObject : survivor.Value;
         if (!ReferenceEquals(held, before)) return;
-        Journal(state)?.Note(survivor, made: null);
-        survivor.Value = null;
+        ArrayWriteJournal? journal = Journal(state);
+        if (journal is not null && journal.HoldsOutside(survivor, state))
+        {
+            journal.Note(survivor, made: null, state);
+            survivor.Value = null;
+            return;
+        }
+        string store = BashNameCase.ToStore(name);
+        PSVariable? global = null;
+        try { global = state.PSVariable.Get("global:" + store); }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or SessionStateException) { }
+        try
+        {
+            if (global is not null && (ReferenceEquals(global, survivor) || ReferenceEquals(global.Value, survivor.Value)))
+                state.PSVariable.Remove("global:" + store);
+            else
+            {
+                var frames = VarFrameStack.Current;
+                frames.LocalArrayDepths(store, out int innermost, out _);
+                survivor.Value = innermost == frames.Depth ? null : global?.Value;
+            }
+        }
+        catch (Exception e) when (e is SessionStateException or InvalidOperationException or ArgumentException) { }
     }
 
     /// <summary>
@@ -384,14 +507,14 @@ public static class BashVariableLookup
         string global = "global:" + name;
         if (existing is not null && !PowerShellOwnedVariables.Contains(name) && Writable(existing))
         {
-            journal?.Note(existing, made: null);
+            journal?.Note(existing, made: null, state);
             existing.Value = holder;
             return ReferenceEquals(existing, state.PSVariable.Get(global));
         }
         PSVariable? before = journal is null ? null : state.PSVariable.Get(global);
-        if (before is not null) journal!.Note(before, made: null);
+        if (before is not null) journal!.Note(before, made: null, state);
         state.PSVariable.Set(global, holder);
-        if (journal is not null && before is null && state.PSVariable.Get(global) is { } created) journal.Note(created, made: name);
+        if (journal is not null && before is null && state.PSVariable.Get(global) is { } created) journal.Note(created, made: name, state);
         return true;
     }
 
@@ -419,7 +542,7 @@ public static class BashVariableLookup
         name = BashNameCase.ToStore(name);
         if (ArrayVariable(state, name) is { } owner)
         {
-            Journal(state)?.Note(owner, made: null);
+            Journal(state)?.Note(owner, made: null, state);
             owner.Value = holder;
         }
         else state.PSVariable.Set(name, holder);

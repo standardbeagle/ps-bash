@@ -60,6 +60,18 @@ public class BashAssocTests
         Assert.False(t.ContainsKey("new"));
     }
 
+    // The copy keeps each key's insertion sequence (no replay): later keys land where they would in the original.
+    [Fact] public void Clone_LaterKeysTakeTheSamePlacesAsInTheOriginal()
+    {
+        var keys = Enumerable.Range(0, 3000).Select(i => "k" + i).ToArray();
+        var t = Of(keys);
+        t.Remove("k7");
+        var c = (BashAssoc)t.Clone();
+        foreach (var k in new[] { "k7", "zz", "k1" }) { t[k] = "n"; c[k] = "n"; }
+        Assert.Equal(t.OrderedKeys(), c.OrderedKeys());
+        Assert.Equal(t.ReplayOrder(), c.ReplayOrder());
+    }
+
     [Fact] public void FromPairs_ReplayOfReplayOrder_RebuildsTheSameOrder()
     {
         var t = Of("é", "ü", "ñ", "z", "Z", "0", "1", "10", "_x");

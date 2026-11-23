@@ -104,13 +104,17 @@ public sealed class BashAssoc : Hashtable, IEnumerable
     /// <summary>Keys in bash's enumeration order.</summary>
     public List<string> OrderedKeys()
     {
-        var keys = new List<string>(_seq.Count);
-        foreach (var k in _seq.Keys) keys.Add(k);
-        keys.Sort((a, b) =>
+        // Each key's bucket is hashed once, not per comparison.
+        var order = new (int Bucket, long Seq, string Key)[_seq.Count];
+        int i = 0;
+        foreach (var kv in _seq) order[i++] = (BucketOf(kv.Key), kv.Value, kv.Key);
+        Array.Sort(order, static (a, b) =>
         {
-            int c = BucketOf(a).CompareTo(BucketOf(b));
-            return c != 0 ? c : _seq[b].CompareTo(_seq[a]);   // newest first within a bucket
+            int c = a.Bucket.CompareTo(b.Bucket);
+            return c != 0 ? c : b.Seq.CompareTo(a.Seq);   // newest first within a bucket
         });
+        var keys = new List<string>(order.Length);
+        foreach (var o in order) keys.Add(o.Key);
         return keys;
     }
 
@@ -177,12 +181,24 @@ public sealed class BashAssoc : Hashtable, IEnumerable
 
     IEnumerator IEnumerable.GetEnumerator() => new Enumerator(this);
 
+    /// <summary>
+    /// A shallow copy that enumerates the same: each key keeps its insertion sequence, so no sort is needed. O(n).
+    /// REGRESSION: a replay in enumeration order sorted the keys (hashing each key per comparison), and a subshell's
+    /// first write to a 5000-key table (journaled as a copy) cost ~16 ms: <c>x=$(w)</c> in a loop went ~25x slower.
+    /// </summary>
     public override object Clone()
     {
         var copy = new BashAssoc();
-        foreach (var kv in ReplayOrder()) copy[kv.Key] = kv.Value;
+        foreach (var kv in _seq) copy.Put(kv.Key, base[kv.Key], kv.Value);
+        copy._next = _next;
         copy.IsDeclaredUnset = IsDeclaredUnset;
         return copy;
+    }
+
+    private void Put(string key, object? value, long seq)
+    {
+        base[key] = value;
+        _seq[key] = seq;
     }
 
     private sealed class Enumerator : IDictionaryEnumerator

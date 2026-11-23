@@ -3073,10 +3073,12 @@ public static partial class PsEmitter
     private static string ArrayWriteTarget(string name) =>
         ResolveNameref(name) is var resolved && resolved != name ? ArrayWriteTarget(resolved) :
         // eval'd / sourced text runs in the calling function's scope: an array it assigns is the running function's local when
-        // one holds the name, else the shell's own. Which one is known only when the text runs: the text's own `local -a a`
-        // (EmitRunTimeArrayLocals) makes `a` a local array only inside a function, so a later `a+=(3)` / `m[k]=v` / `S[5]=6`
-        // in the same text is the run-time slot (VarFrameStack.ArraySlot: the nearest local array, else the global).
-        // REGRESSION: it was `$global:a`, so `f(){ eval "$1"; }; f 'local -a a=(1 2); a+=(3)'` appended to a global.
+        // one holds the name (declared statically, or at run time: the text's own `local -a a` via EmitRunTimeArrayLocals,
+        // `local -a "$1"; eval "$1+=(x)"`), or a caller's, else the shell's own. Which one is known only when the text runs,
+        // so a later `a+=(3)` / `m[k]=v` / `S[5]=6` in the same text is the run-time slot (VarFrameStack.ArraySlot: the
+        // nearest local array, else the global), and a subshell's journal puts the global back when it ends. REGRESSION: it
+        // was `$global:a`, so `f(){ eval "$1"; }; f 'local -a a=(1 2); a+=(3)'` appended to a global and
+        // `f() { local -a "$1"; eval "$1+=(x)"; }; a=(1); ( f a )` left a=(1 x).
         _context == TranspileContext.Eval && _functionDepth == 0 && _subshellDepth == 0
             ? (_evalLocalArrays || EvalLocalNames?.Contains(name) == true ? "$" + name
                 : _globalArrayWrites ? "$global:" + name : PsBuild.ArraySlot(name)) :
