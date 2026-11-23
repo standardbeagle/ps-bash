@@ -275,6 +275,11 @@ public class PsBuildTests
         => Assert.Equal("[PsBash.Cmdlets.BashVariableStore]::Copy('IFS', '__psbash_ea_IFS')",
             PsBuild.ParkShellVariable("__psbash_ea_IFS", "IFS"));
 
+    [Fact]
+    public void UnparkShellVariable_CopiesTheParkedValueBack()
+        => Assert.Equal("[PsBash.Cmdlets.BashVariableStore]::Copy('__psbash_ea_IFS', 'IFS')",
+            PsBuild.UnparkShellVariable("IFS", "__psbash_ea_IFS"));
+
     // `echo "c=$(echo zz*)"; echo $?` under failglob: the error ends the substitution only, and the line mark it set is
     // put back (the parent's `echo $?` was dropped).
     [Fact]

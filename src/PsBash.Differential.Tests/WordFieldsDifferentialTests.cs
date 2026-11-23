@@ -83,6 +83,16 @@ public class WordFieldsDifferentialTests
     [InlineData(P + "qzv1=1 qzv2=2; p \"${!qzv@}\"; p x\"${!qzv@}\"y; set -- \"${!qzv@}\"; echo $#")]
     public Task ReviewedWordShapes_MatchBash(string script) => AssertOracle.EqualAsync(script);
 
+    // A substitution in `VAR=v cmd` is a subshell of the shell from BEFORE the binding (bash expands the words first): it
+    // splits on the IFS it sets itself (`$(IFS=,; … $x)` read the parked IFS), an inner binding parks its own value and
+    // leaves the outer's alone, and `<( )` and `$(( $( ) ))` do the same.
+    [SkippableTheory]
+    [InlineData(P + "x='a,b c'; IFS=: printf '1<%s>\\n' $(IFS=,; printf '[%s]' $x); IFS=: printf '2<%s>\\n' \"$(IFS=,; printf '[%s]' $x)\"; IFS=: printf '3<%s>\\n' $(printf '[%s]' $x)")]
+    [InlineData(P + "x='a,b c'; z='p:q r'; IFS=: printf '4<%s>\\n' $(IFS=, printf '[%s]' $x) $z; IFS=: cat <(IFS=,; printf '6[%s]' $x; echo); echo \"11 $(( $(IFS=: ; echo 1) + 1 ))\"")]
+    [InlineData(P + "y=old; y=new printf '7<%s>\\n' \"$(echo $y)\" \"$y\"; y=old; y=new printf '8<%s>\\n' \"$(y=in; echo $y)\" \"$y\"; v=1 printf '12<%s>\\n' $(v=2; echo $v) $(echo $v)")]
+    [InlineData(P + "z='p:q r'; unset IFS; IFS=: printf '9<%s>\\n' $(echo \"[${IFS-unset}]\") $z; IFS=; IFS=: printf '10<%s>\\n' $(echo \"[${IFS-unset}]\") $z; unset IFS; echo \"[${IFS-unset}]\"")]
+    public Task SubstitutionInATempBinding_SeesTheShellFromBefore(string script) => AssertOracle.EqualAsync(script);
+
     // failglob in a subshell or `$( )` ends that subshell only (status 1); its message goes to the subshell's stderr, so a
     // redirect on the subshell silences it. The substitution was ending the command around it.
     [SkippableTheory]

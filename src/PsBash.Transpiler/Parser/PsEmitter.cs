@@ -10163,10 +10163,34 @@ public static partial class PsEmitter
     }
 
     private static string EmitCommandSub(WordPart.CommandSub cs)
+        => $"$({SubstitutionBody((Command)cs.Body)} | ConvertTo-BashCapture)";
+
+    /// <summary>
+    /// THE body of a substitution (<c>$( )</c>, <c>&lt;( )</c>, a <c>$( )</c> inside <c>$(( ))</c>): the captured body at
+    /// the head of its pipeline (<see cref="PipelineHead"/>, the subshell scope when it needs one).
+    /// <para>A substitution is a subshell of the shell as it was BEFORE the enclosing command's own <c>VAR=v</c> bindings:
+    /// bash expands a command's words, substitutions included, before it binds them. Inside an env-prefix command
+    /// (<see cref="WithEnvShadow"/>) the body therefore starts by putting each parked value back into its variable, is
+    /// emitted with no shadow of its own, and runs in the subshell scope, which undoes that when it ends. So the body's
+    /// reads, its own assignments and the programs it runs all see one variable: <c>IFS=: printf '&lt;%s&gt;' $(IFS=,;
+    /// printf '[%s]' $x)</c> with x='a,b c' splits the inner <c>$x</c> on the comma the body set (it split on the parked
+    /// IFS, and an inner binding reused and then cleared the outer's parked name). Guard: <c>WordFieldsGuardTests</c>.</para>
+    /// </summary>
+    /// <param name="body">The substitution's command.</param>
+    /// <param name="dqNested">The substitution is emitted INTO a double-quoted string (<see cref="_dqNestDepth"/>).</param>
+    private static string SubstitutionBody(Command body, bool dqNested = false)
     {
-        var body = (Command)cs.Body;
-        string inner = EmitCaptured(body, scoped: true);
-        return $"$({PipelineHead(body, inner)} | ConvertTo-BashCapture)";
+        var shadow = _envPrefixShadow;
+        _envPrefixShadow = null;
+        if (dqNested) _dqNestDepth++;
+        string inner;
+        try { inner = EmitCaptured(body, scoped: true); }
+        finally { _envPrefixShadow = shadow; if (dqNested) _dqNestDepth--; }
+        if (shadow is null || shadow.Count == 0) return PipelineHead(body, inner);
+        var unpark = new StringBuilder();
+        foreach (var name in shadow.Order(StringComparer.Ordinal))
+            unpark.Append(PsBuild.UnparkShellVariable(name, EnvShadowPrefix + name)).Append("; ");
+        return PsBuild.ShellStateScope(WithSubshellExitTrap(unpark + inner));
     }
 
     /// <summary>
@@ -10185,34 +10209,23 @@ public static partial class PsEmitter
         // This `$( … )` is emitted INTO a double-quoted string, so everything inside
         // it sits one string level deeper (see _dqNestDepth). `nested: false` is the
         // same value used as a bare argument expression (no enclosing string).
-        if (nested) _dqNestDepth++;
-        string inner;
-        try { inner = EmitCaptured(body, scoped: true); }
-        finally { if (nested) _dqNestDepth--; }
+        string head = SubstitutionBody(body, dqNested: nested);
         // The newline join uses [char]10, NOT a "`n" literal — the SAME reason
         // EmitArithCommandSubValue does. This fragment can land inside an
         // arbitrarily nested "$( … )", where the OUTER string scanner consumes
         // the backtick escape and the inner string ends early ("The string is
         // missing the terminator"). Hit git-completion.bash, where a command sub
         // nested two double-quote levels deep broke the whole file's parse.
-        return $"{CommandSubStringPrefix}{PipelineHead(body, inner)} | ConvertTo-BashCapture -Join)))";
+        return $"{CommandSubStringPrefix}{head} | ConvertTo-BashCapture -Join)))";
     }
 
     // `<( ... )` is a subshell as `$( ... )` is: the same scope (PipelineHead), so `cat <(f)` with f calling exit, or
     // turning -e on and failing, ends only the substitution. Without it the run-time exit ended the whole script.
     private static string EmitProcessSub(WordPart.ProcessSub ps)
-    {
-        var body = (Command)ps.Body;
-        string inner = EmitCaptured(body, scoped: true);
-        return $"(Invoke-ProcessSub {{ {PipelineHead(body, inner)} }})";
-    }
+        => $"(Invoke-ProcessSub {{ {SubstitutionBody((Command)ps.Body)} }})";
 
     private static string EmitProcessSubPipeline(WordPart.ProcessSub ps)
-    {
-        var body = (Command)ps.Body;
-        string inner = EmitCaptured(body, scoped: true);
-        return $"(Invoke-ProcessSubPipeline {{ {PipelineHead(body, inner)} }})";
-    }
+        => $"(Invoke-ProcessSubPipeline {{ {SubstitutionBody((Command)ps.Body)} }})";
 
     private static string EmitArithSub(WordPart.ArithSub arith)
         => $"$({EmitArithmeticInvocation(arith.Expr)})";
@@ -10406,8 +10419,7 @@ public static partial class PsEmitter
         // An empty substitution (`$(( $() + 1 ))`) expands to nothing, which bash then
         // evaluates as the empty operand of a unary `+` — i.e. zero.
         if (body is null) return "'0'";
-        string inner = EmitCaptured(body, scoped: true);
-        return $"$((@({PipelineHead(body, inner)} | ConvertTo-BashCapture) -join [string][char]10).Trim())";
+        return $"$((@({SubstitutionBody(body)} | ConvertTo-BashCapture) -join [string][char]10).Trim())";
     }
 
     /// <summary>

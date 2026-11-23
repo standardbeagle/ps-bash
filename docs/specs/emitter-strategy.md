@@ -1110,7 +1110,11 @@ nobody had listed kept one field: with x='a b', `$x$x`, `~/$x`, `$x*`, `"$@"$x`,
   `PsBuild.ExpandsWords` / `MayFailGlob` recognise the emitted text.
 - `IFS=: cmd $x` expands its words BEFORE the binding applies, so they read the IFS parked from before it
   (`PsBuild.ParkShellVariable` = `BashVariableStore.Copy`, one store call: unset stays unset, empty stays
-  empty) under `__psbash_ea_IFS`, the name passed to `Words` / `SplitNumber`.
+  empty) under `__psbash_ea_IFS`, the name passed to `Words` / `SplitNumber`. A substitution in that command
+  (`$( )`, `<( )`) is a subshell of the shell from before the binding: `PsEmitter.SubstitutionBody` (the only
+  emitter of a substitution body, guard `WordFieldsGuardTests`) starts it by copying each parked value back
+  (`PsBuild.UnparkShellVariable`), emits it with no shadow, and scopes it, so `$(IFS=,; … $x)` splits on its
+  own comma and an inner `IFS=, cmd` parks its own value.
 - The kinds (`PsBash.Cmdlets.BashWordFields`): 1 quoted text, 2 pattern text (unquoted literals and glob
   parts, never split), 3 a split value, 4 an unquoted list (values joined with IFS[0], then split), 5 a
   quoted list, 6 a field break (between the words of a dynamic brace expansion; the next word's leading IFS

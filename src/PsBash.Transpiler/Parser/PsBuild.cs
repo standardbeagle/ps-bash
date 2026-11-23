@@ -1478,6 +1478,12 @@ public static class PsBuild
     public static string ParkShellVariable(string parkName, string name) =>
         "[PsBash.Cmdlets.BashVariableStore]::Copy(" + SingleQuote(name) + ", " + SingleQuote(parkName) + ")";
 
+    /// <summary>The reverse of <see cref="ParkShellVariable"/>: <paramref name="name"/> becomes the value parked under
+    /// <paramref name="parkName"/> (unset when it was unset). A substitution inside <c>VAR=v cmd</c> starts with the
+    /// values from before the binding (<c>PsEmitter.SubstitutionBody</c>).</summary>
+    public static string UnparkShellVariable(string name, string parkName) =>
+        "[PsBash.Cmdlets.BashVariableStore]::Copy(" + SingleQuote(parkName) + ", " + SingleQuote(name) + ")";
+
     /// <summary>One segment of <see cref="WordFieldsArray"/>: its kind, then its value (a PowerShell expression; anything but
     /// a quoted literal is parenthesised so it stays one element of the comma list).</summary>
     public static string WordSegment(int kind, string valueExpr)

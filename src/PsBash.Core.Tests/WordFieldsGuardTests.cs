@@ -107,6 +107,32 @@ public class WordFieldsGuardTests
     }
 
     /// <summary>
+    /// A substitution body (<c>$( )</c>, <c>&lt;( )</c>, <c>$( )</c> in <c>$(( ))</c>) is emitted only by
+    /// <c>PsEmitter.SubstitutionBody</c>, which starts it with no env-prefix shadow: inside <c>IFS=: cmd $(…)</c> a body
+    /// emitted on its own split its words on the PARKED IFS, so <c>$(IFS=,; printf '[%s]' $x)</c> ignored the comma it set.
+    /// One call of each of its pieces outside it means a substitution bypassed it.
+    /// </summary>
+    [Theory]
+    [InlineData("PipelineHead(", "private static string PipelineHead(")]
+    [InlineData("EmitCaptured(body, scoped: true)", null)]
+    public void OnlySubstitutionBodyEmitsASubstitutionBody(string call, string? definition)
+    {
+        var uses = new List<string>();
+        foreach (var file in Directory.EnumerateFiles(ParserDir(), "*.cs"))
+        {
+            var lines = File.ReadAllLines(file);
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string t = lines[i].TrimStart();
+                if (!t.Contains(call, StringComparison.Ordinal) || t.StartsWith("//", StringComparison.Ordinal)) continue;
+                if (definition is not null && t.StartsWith(definition, StringComparison.Ordinal)) continue;
+                uses.Add($"{Path.GetFileName(file)}:{i + 1}: {t}");
+            }
+        }
+        Assert.True(uses.Count == 1, "Emit a substitution body through PsEmitter.SubstitutionBody only:\n" + string.Join('\n', uses));
+    }
+
+    /// <summary>
     /// Every <c>Is…Word(</c> predicate of the transpiler, pinned. A new word-shape predicate is how the bug class came back
     /// (a review found <c>IsPlainDefaultWord</c> taking a nested <c>${w:-'a b'}</c> as plain text and splitting the
     /// quoted space): one that decides fields belongs in PsEmitter.Fields.cs beside <c>IsUnquotedSplitWord</c>, and any
