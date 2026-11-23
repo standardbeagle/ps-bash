@@ -6,8 +6,9 @@ namespace PsBash.Cmdlets.Tests;
 /// The streaming push-engine (<see cref="SedEngine"/>) against the verbatim whole-input engine it replaced
 /// (<see cref="LegacySedEngine"/>): identical output records for random scripts over random inputs, covering every
 /// address form (<c>$</c>, line, range, regex range, N,/re/, 0,/re/, step, negation) and every command, including
-/// the engine's quirks (N not advancing the line number, ranged c) and the D restart (its pass's inserts and printed
-/// lines are written, its appends wait for the cycle's end — GNU; the legacy copy is edited to match).
+/// the ranged c and the D restart (its pass's inserts and printed lines are written, its appends wait for the cycle's
+/// end), N advancing the line number and a regex range end looked for from the line after the start — GNU on all
+/// three; the legacy copy is edited to match.
 /// </summary>
 public class SedEngineEquivalenceTests
 {

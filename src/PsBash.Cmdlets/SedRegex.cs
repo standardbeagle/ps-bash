@@ -7,24 +7,61 @@ namespace PsBash.Cmdlets;
 /// is parsed, so a bad one is a script error in GNU's words (<c>Unmatched ( or \(</c>, status 1) before any input is
 /// read. REGRESSION: address regexes were compiled lazily by <c>Regex.IsMatch</c> on the first input line, and the
 /// parse failure surfaced inside the file loop as <c>sed: can't read f: Invalid pattern ...</c>, printed twice.
+/// The text goes through sed's character escapes (<see cref="SedEscape.NormalizeRegex"/>) and then the one GNU
+/// translator (<see cref="GnuRegex"/>, sed's flavor: the pattern space is one buffer, <c>M</c> makes it line-wise).
 /// </summary>
 internal static class SedRegex
 {
     /// <summary>
+    /// The empty regex (<c>//</c>, <c>s//x/</c>): GNU reuses the last regex used when the command RUNS, so the engine
+    /// substitutes it (<see cref="SedEngine"/>). It matches nothing on its own.
+    /// </summary>
+    public static readonly Regex Last = new("(?!)", RegexOptions.CultureInvariant);
+
+    public const string EmptyModifiersMessage = "cannot specify modifiers on empty regexp";
+
+    public const string NoPreviousMessage = "no previous regular expression";
+
+    /// <summary>
+    /// True when <paramref name="message"/> (from <see cref="TryCompile"/>) is GNU's panic, not a script error at a
+    /// character: <c>sed: character class syntax is [[:space:]], not [:space:]</c>, status 4, no position.
+    /// </summary>
+    public static bool IsPanic(string message) => message == GnuRegex.ColonClassMessage;
+
+    /// <summary>
     /// Translate <paramref name="sedPattern"/> (BRE, or ERE when <paramref name="extended"/>) and compile it. False with
-    /// GNU's message for the failure in <paramref name="error"/>.
+    /// GNU's message for the failure in <paramref name="error"/>. An empty pattern is <see cref="Last"/>.
     /// </summary>
     public static bool TryCompile(string sedPattern, bool extended, RegexOptions options, out Regex regex, out string error)
     {
+        regex = null!;
+        error = string.Empty;
+        if (sedPattern.Length == 0)
+        {
+            if ((options & (RegexOptions.IgnoreCase | RegexOptions.Multiline)) != 0)
+            {
+                error = EmptyModifiersMessage;
+                return false;
+            }
+            regex = Last;
+            return true;
+        }
+        bool lineWise = (options & RegexOptions.Multiline) != 0;
+        var syntax = extended ? GnuRegexSyntax.SedExtended : GnuRegexSyntax.SedBasic;
+        if (!GnuRegex.TryTranslate(SedEscape.NormalizeRegex(sedPattern), syntax, out string net, out string? bad, newlineSensitive: lineWise))
+        {
+            error = bad ?? "Invalid regular expression";
+            return false;
+        }
         try
         {
-            regex = new Regex(BashRuntime.SedRegexToNet(sedPattern, extended), options);
-            error = string.Empty;
+            // The translation spells every anchor itself (`\A`, `(?m:^)`), so .NET's Multiline changes nothing; it stays
+            // in the options as the record of the M flag (--debug lists it).
+            regex = new Regex(net, options | RegexOptions.CultureInvariant);
             return true;
         }
         catch (ArgumentException ex)
         {
-            regex = null!;
             error = GnuMessage(ex);
             return false;
         }

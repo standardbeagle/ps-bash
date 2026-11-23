@@ -159,6 +159,7 @@ public sealed class InvokeBashSedCommand : BashCmdlet
             else if (end == SedEnd.Owed) _owedNewline.Add(name);
         };
         rt.RunCommand = RunShell;
+        rt.Error = EmitError;
     }
 
     private readonly HashSet<string> _owedNewline = new();
@@ -371,26 +372,31 @@ public sealed class InvokeBashSedCommand : BashCmdlet
 
         var operands = plan.Operands;
         bool suppressDefault = plan.Quiet;
-        var expressions = new List<string>();
+        // Each script keeps where it came from (`-e` number, `-f` file and line), for GNU's error positions.
+        var scripts = new List<SedScript>();
+        bool anyScript = false;   // a script was read (an emptied `#n` one counts: it is no longer "first")
+        int exprNo = 0;
 
         foreach (var (isFile, value) in plan.Sources)
         {
             if (!isFile)
             {
+                exprNo++;
                 string chunk = value;
-                if (expressions.Count == 0 && TryStripHashN(ref chunk))
+                if (!anyScript && TryStripHashN(ref chunk))
                     suppressDefault = true;   // `#n` on the first line of the first script acts like -n
+                anyScript = true;
                 // GNU joins -e chunks with a newline, so `-e 'a\' -e text` is one multi-line command.
-                if (chunk.Length == 0 && expressions.Count == 0) continue;
-                if (expressions.Count > 0 && expressions[^1].EndsWith('\\'))
-                    expressions[^1] = expressions[^1] + "\n" + chunk;
-                else
-                    expressions.Add(chunk);
+                if (scripts.Count > 0 && scripts[^1].File == null && scripts[^1].Text.EndsWith('\\'))
+                    scripts[^1] = scripts[^1] with { Text = scripts[^1].Text + "\n" + chunk };
+                else if (chunk.Length > 0 || scripts.Count > 0)
+                    scripts.Add(new SedScript(chunk, ExprNo: exprNo));
                 continue;
             }
 
             // -f script file: ONE sed script; newlines separate commands and a trailing backslash
-            // continues onto the next line (the multi-line `a\`/`i\`/`c\` text form).
+            // continues onto the next line (the multi-line `a\`/`i\`/`c\` text form). The text is kept whole (its
+            // newlines count GNU's `line N`).
             string? resolved = ResolveExistingPath(value);
             string? raw = null;
             if (resolved != null)
@@ -404,28 +410,31 @@ public sealed class InvokeBashSedCommand : BashCmdlet
                 FileSystemHelpers.SetLastExitCode(this, 4);   // GNU: panic, exit 4
                 return;
             }
-            raw = raw.TrimEnd('\n');
-            if (expressions.Count == 0 && TryStripHashN(ref raw))
+            int fileFirstLine = 1;
+            if (!anyScript && TryStripHashN(ref raw))
+            {
                 suppressDefault = true;
-            if (raw.Length == 0 && expressions.Count == 0) continue;
-            expressions.Add(raw);
+                fileFirstLine = 2;
+            }
+            anyScript = true;
+            scripts.Add(new SedScript(raw, File: value, FirstLine: fileFirstLine));
         }
 
         // First operand is the script when no -e / -f was given.
         if (plan.Sources.Count == 0 && operands.Count > 0)
         {
-            expressions.Add(operands[0]);
+            scripts.Add(new SedScript(operands[0]));
             operands.RemoveAt(0);
         }
 
-        if (expressions.Count == 0)
+        if (scripts.Count == 0 && !anyScript)
         {
             EmitError("Usage: sed [OPTION]... {script-only-if-no-other-script} [input-file]...");
             FileSystemHelpers.SetLastExitCode(this, 1);
             return;
         }
 
-        if (!BuildProgram(expressions, plan.Extended, out var commands, out string? buildError, out int buildCode))
+        if (!BuildProgram(scripts, plan.Extended, out var commands, out string? buildError, out int buildCode))
         {
             EmitError(buildError!);
             FileSystemHelpers.SetLastExitCode(this, buildCode);
@@ -967,7 +976,7 @@ public sealed class InvokeBashSedCommand : BashCmdlet
     internal sealed class SedAddress
     {
         public AddressType Type;
-        public string? Pattern;        // Regex
+        public string? Pattern;        // Regex (each pattern is the sed regex as typed; --debug lists it)
         public int Line;               // Line
         public int Start;              // RangeNum / Step / RangeNumToRegex
         public int End;                // RangeNum
@@ -1004,6 +1013,8 @@ public sealed class InvokeBashSedCommand : BashCmdlet
         public bool IgnoreCase, Multiline, Eval; // s flags I/i, M/m, e
         public bool Bytes;             // s: the regex names a lone byte (\xce), so it matches the pattern space's bytes
         public int EndPos;             // where this command ended in its expression (diagnostics)
+        public SedScript? Script;      // the -e expression / -f file it came from (diagnostics)
+        public string? EmptyRegexError; // it holds the empty regex: GNU's message when no regex was used before it ran
     }
 
     /// <summary>
@@ -1044,37 +1055,38 @@ public sealed class InvokeBashSedCommand : BashCmdlet
     }
 
     /// <summary>
-    /// Convert a GNU-sed replacement string into a .NET regex replacement
-    /// string. Handles backrefs (\1-\9 → $1-$9), whole-match & → $0, the
-    /// C-escapes \n \t \r, the literalizers \&amp; and \\, a dropped backslash
-    /// before any other char, and escapes a literal $ to $$ so .NET does not
-    /// read it as a group reference.
+    /// Convert a GNU-sed replacement string into a .NET regex replacement string: <c>\1</c>-<c>\9</c> (and <c>\0</c>)
+    /// are groups, <c>&amp;</c> the whole match, <c>\n</c> a newline, a character escape (<see cref="SedEscape"/>:
+    /// <c>\t</c>, <c>\x26</c>, ...) the character itself (<c>\x26</c> is a literal <c>&amp;</c>), and a backslash before
+    /// any other character is dropped. Every literal <c>$</c> becomes <c>$$</c> so .NET does not read it as a group.
     /// </summary>
-    private static string BuildReplacement(string sed)
+    internal static string BuildReplacement(string sed)
     {
         var sb = new StringBuilder(sed.Length);
+        void Literal(char ch)
+        {
+            if (ch == '$') sb.Append("$$"); else sb.Append(ch);
+        }
         for (int i = 0; i < sed.Length; i++)
         {
             char c = sed[i];
             if (c == '\\' && i + 1 < sed.Length)
             {
-                char n = sed[i + 1];
-                switch (n)
+                if (SedEscape.TryDecode(sed, i + 1, out char v, out int next))
                 {
-                    case 'n': sb.Append('\n'); break;
-                    case 't': sb.Append('\t'); break;
-                    case 'r': sb.Append('\r'); break;
-                    case '\\': sb.Append('\\'); break;
-                    case '&': sb.Append('&'); break;          // literal &, not whole-match
-                    case >= '0' and <= '9': sb.Append('$').Append(n); break; // backref
-                    default: sb.Append(n); break;              // \x → x
+                    Literal(SedEscape.DataChar(v));
+                    i = next - 1;
+                    continue;
                 }
+                char n = sed[i + 1];
+                if (n == 'n') sb.Append('\n');
+                else if (n is >= '0' and <= '9') sb.Append("${").Append(n).Append('}');   // `\10` is group 1, then 0
+                else Literal(n);                                                            // `\&` `\\` `\q`: the character
                 i++;
                 continue;
             }
-            if (c == '&') { sb.Append("$0"); continue; }       // whole match
-            if (c == '$') { sb.Append("$$"); continue; }       // literal $ for .NET
-            sb.Append(c);
+            if (c == '&') { sb.Append("$0"); continue; }
+            Literal(c);
         }
         return sb.ToString();
     }
@@ -1321,8 +1333,10 @@ public sealed class InvokeBashSedCommand : BashCmdlet
             return pos;
         }
 
-        if (p >= s.Length || s[p] != ',') return p;
-        int q = SkipBlanks(s, p + 1);
+        // Blanks may sit between the first address and its comma (`2 ,3p`), as in the parser.
+        int comma = SkipBlanks(s, p);
+        if (comma >= s.Length || s[comma] != ',') return p;
+        int q = SkipBlanks(s, comma + 1);
         if (SedDelimited.StartsRegexAddress(s, q))
         {
             var second = SedDelimited.ScanRegexAddress(s, q);
@@ -1379,27 +1393,38 @@ public sealed class InvokeBashSedCommand : BashCmdlet
         IEnumerable<string> expressions, bool extendedRegex, out List<SedCommand> commands)
         => BuildProgram(expressions, extendedRegex, out commands, out _, out _);
 
+    /// <summary><see cref="BuildProgram(IReadOnlyList{SedScript}, bool, out List{SedCommand}, out string?, out int)"/>
+    /// for <c>-e</c> expressions only, numbered from 1.</summary>
+    internal static bool BuildProgram(
+        IEnumerable<string> expressions, bool extendedRegex, out List<SedCommand> commands,
+        out string? error, out int exitCode)
+    {
+        var scripts = new List<SedScript>();
+        foreach (var e in expressions) scripts.Add(new SedScript(e, ExprNo: scripts.Count + 1));
+        return BuildProgram(scripts, extendedRegex, out commands, out error, out exitCode);
+    }
+
     /// <summary>
     /// Split, parse and LINK a script: <c>{</c> learns its <c>}</c>, <c>b t T</c> their <c>:label</c> (or the end of
     /// the script). A script error comes back as GNU's message and exit status (1 for syntax, 4 for a missing
-    /// label); no-op commands (<c>v</c>) are dropped.
+    /// label), placed in the script it is in (<see cref="SedScript"/>); no-op commands (<c>v</c>) are dropped. A
+    /// command holding the empty regex learns the run-time message GNU gives when no regex was used before it.
     /// </summary>
     internal static bool BuildProgram(
-        IEnumerable<string> expressions, bool extendedRegex, out List<SedCommand> commands,
+        IReadOnlyList<SedScript> scripts, bool extendedRegex, out List<SedCommand> commands,
         out string? error, out int exitCode)
     {
         commands = new List<SedCommand>();
         error = null;
         exitCode = 0;
-        int exprNo = 0;
-        foreach (var expr in expressions)
+        foreach (var script in scripts)
         {
-            exprNo++;
+            string expr = script.Text;
             var split = SplitSedCommands(expr, out var ends);
             for (int pi = 0; pi < split.Count; pi++)
             {
                 // A part is expr[start..end) (SplitSedCommands' Add), so its offset is its end less its length.
-                var site = new SedSite(exprNo, expr, ends[pi] - split[pi].Length);
+                var site = new SedSite(script, ends[pi] - split[pi].Length);
                 var c = ParseExpressionCore(split[pi], extendedRegex, site, out string? err, out int code);
                 if (c == null)
                 {
@@ -1408,10 +1433,26 @@ public sealed class InvokeBashSedCommand : BashCmdlet
                     return false;
                 }
                 c.EndPos = ends[pi];
+                c.Script = script;
                 if (c.Type != 'v') commands.Add(c);
             }
         }
-        return LinkProgram(commands, out error, out exitCode);
+        if (!LinkProgram(commands, out error, out exitCode)) return false;
+        if (scripts.Count > 0)
+        {
+            // GNU reports a run-time "no previous regular expression" at the end of the last script it read.
+            string noPrevious = scripts[^1].AtEnd(SedRegex.NoPreviousMessage);
+            foreach (var c in commands)
+                if (HasEmptyRegex(c)) c.EmptyRegexError = noPrevious;
+        }
+        return true;
+    }
+
+    private static bool HasEmptyRegex(SedCommand c)
+    {
+        var a = c.Address;
+        return c.Regex == SedRegex.Last
+            || (a != null && (a.Rx == SedRegex.Last || a.StartRx == SedRegex.Last || a.EndRx == SedRegex.Last));
     }
 
     private static bool LinkProgram(List<SedCommand> commands, out string? error, out int exitCode)
@@ -1428,7 +1469,7 @@ public sealed class InvokeBashSedCommand : BashCmdlet
             {
                 if (open.Count == 0)
                 {
-                    error = $"sed: -e expression #1, char {c.EndPos}: unexpected `}}'";
+                    error = c.Script!.At(c.EndPos, "unexpected `}'");
                     exitCode = 1;
                     return false;
                 }
@@ -1438,7 +1479,10 @@ public sealed class InvokeBashSedCommand : BashCmdlet
         }
         if (open.Count > 0)
         {
-            error = "sed: -e expression #1, char 0: unmatched `{'";
+            // GNU: an -e script names the expression at char 0, a file the line of the `{`.
+            var brace = commands[open.Peek()];
+            var s = brace.Script!;
+            error = s.File == null ? $"sed: -e expression #{s.ExprNo}, char 0: unmatched `{{'" : s.At(brace.EndPos, "unmatched `{'");
             exitCode = 1;
             return false;
         }
@@ -1458,16 +1502,40 @@ public sealed class InvokeBashSedCommand : BashCmdlet
     }
 
     /// <summary>
-    /// Where one split command sits in its script: GNU's <c>sed: -e expression #N, char M: ...</c> prefix counts
-    /// <c>-e</c> scripts from 1 and characters from the start of that script, so an error in the second command of
-    /// <c>/a/d;/b\(/d</c> is at char 10, not 5. <paramref name="Base"/> is the command's offset in
-    /// <paramref name="Expression"/>.
+    /// One script as sed read it: an <c>-e</c> expression (<paramref name="ExprNo"/> counts only the <c>-e</c>
+    /// options, from 1) or a <c>-f</c> <paramref name="File"/> whose <paramref name="Text"/> starts at line
+    /// <paramref name="FirstLine"/> (2 once a leading <c>#n</c> line was taken off). GNU places an error in an
+    /// expression as <c>sed: -e expression #N, char M:</c> and in a file as <c>sed: file F line L:</c>, L being 1 plus
+    /// the newlines read before the error.
     /// </summary>
-    internal readonly record struct SedSite(int ExprNo, string Expression, int Base)
+    internal sealed record SedScript(string Text, string? File = null, int ExprNo = 1, int FirstLine = 1)
     {
-        public static SedSite Whole(string expression) => new(1, expression, 0);
+        /// <summary>GNU's message for an error at <paramref name="offset"/> in <see cref="Text"/>.</summary>
+        public string At(int offset, string message)
+        {
+            if (File == null) return $"sed: -e expression #{ExprNo}, char {offset}: {message}";
+            int line = FirstLine;
+            int end = Math.Min(offset, Text.Length);
+            for (int i = 0; i < end; i++) if (Text[i] == '\n') line++;
+            return $"sed: file {File} line {line}: {message}";
+        }
 
-        public string At(int local, string message) => $"sed: -e expression #{ExprNo}, char {Base + local}: {message}";
+        /// <summary>GNU's message for an error found after the whole script was read (<c>char 0</c> / its last line).</summary>
+        public string AtEnd(string message) => File == null ? $"sed: -e expression #{ExprNo}, char 0: {message}" : At(Text.Length, message);
+    }
+
+    /// <summary>
+    /// Where one split command sits in its script: GNU's prefix counts characters (or lines) from the start of that
+    /// script, so an error in the second command of <c>/a/d;/b\(/d</c> is at char 10, not 5.
+    /// <paramref name="Base"/> is the command's offset in the script's text.
+    /// </summary>
+    internal readonly record struct SedSite(SedScript Script, int Base)
+    {
+        public static SedSite Whole(string expression) => new(new SedScript(expression), 0);
+
+        public string Expression => Script.Text;
+
+        public string At(int local, string message) => Script.At(Base + local, message);
 
         /// <summary>
         /// GNU reads the <c>;</c> or newline that ends an <c>s</c> / <c>y</c> command before it compiles the regex, so
@@ -1506,17 +1574,30 @@ public sealed class InvokeBashSedCommand : BashCmdlet
         errCode = code;
         return result;
 
-        // A regex address at `at` (`/re/` or `\cREc`, its I/M flags), compiled. Null on success; else GNU's message.
-        string? RegexAddress(int at, out int end, out Regex rx)
+        // A regex error at `at`: GNU's message there, status 1, or its panic (status 4, no position).
+        SedCommand? FailRegex(int at, string message) =>
+            SedRegex.IsPanic(message) ? Fail("sed: " + message, 4) : Fail(site.At(at, message), 1);
+
+        // A regex address at `at` (`/re/` or `\cREc`, its I/M flags), compiled; `source` is the regex as typed.
+        // Null on success; else GNU's message (to report at `end`).
+        string? RegexAddress(int at, out int end, out Regex rx, out string source)
         {
             var a = SedDelimited.ScanRegexAddress(expression, at);
             end = a.End;
             rx = null!;
-            if (!a.Closed) return site.At(a.End, "unterminated address regex");
+            source = a.Pattern;
+            if (!a.Closed) return "unterminated address regex";
             var opts = RegexOptions.None;
             if (a.IgnoreCase) opts |= RegexOptions.IgnoreCase;
             if (a.Multiline) opts |= RegexOptions.Multiline;
-            return SedRegex.TryCompile(a.Pattern, extendedRegex, opts, out rx, out string msg) ? null : site.At(a.End, msg);
+            return SedRegex.TryCompile(a.Pattern, extendedRegex, opts, out rx, out string msg) ? null : msg;
+        }
+
+        // GNU allows blanks between a first address and its comma (`2 ,3p`, `/b/ ,/c/p`): the comma's index, or -1.
+        int CommaAfter(int p)
+        {
+            int q = SkipBlanks(expression, p);
+            return q < expression.Length && expression[q] == ',' ? q : -1;
         }
 
         SedCommand? Parse()
@@ -1527,22 +1608,22 @@ public sealed class InvokeBashSedCommand : BashCmdlet
         // Address prefix.
         if (SedDelimited.StartsRegexAddress(expression, pos))
         {
-            if (RegexAddress(pos, out pos, out var rx1) is { } bad1) return Fail(bad1, 1);
-            addr = new SedAddress { Type = AddressType.Regex, Pattern = rx1.ToString(), Rx = rx1 };
+            if (RegexAddress(pos, out pos, out var rx1, out string src1) is { } bad1) return FailRegex(pos, bad1);
+            addr = new SedAddress { Type = AddressType.Regex, Pattern = src1, Rx = rx1 };
 
             // Range: /start/,/end/ (either regex may use a custom delimiter: \,start,,\|end|)
-            if (pos < expression.Length && expression[pos] == ',')
+            if (CommaAfter(pos) is var comma && comma >= 0)
             {
-                pos = SkipBlanks(expression, pos + 1);
+                pos = SkipBlanks(expression, comma + 1);
                 if (SedDelimited.StartsRegexAddress(expression, pos))
                 {
-                    if (RegexAddress(pos, out pos, out var rx2) is { } bad2) return Fail(bad2, 1);
+                    if (RegexAddress(pos, out pos, out var rx2, out string src2) is { } bad2) return FailRegex(pos, bad2);
                     addr = new SedAddress
                     {
                         Type = AddressType.RangeRegex,
                         StartPattern = addr.Pattern,
                         StartRx = rx1,
-                        EndPattern = rx2.ToString(),
+                        EndPattern = src2,
                         EndRx = rx2,
                     };
                 }
@@ -1602,9 +1683,9 @@ public sealed class InvokeBashSedCommand : BashCmdlet
                     Step = step,
                 };
             }
-            else if (pos < expression.Length && expression[pos] == ',')
+            else if (CommaAfter(pos) is var numComma && numComma >= 0)
             {
-                pos = SkipBlanks(expression, pos + 1);
+                pos = SkipBlanks(expression, numComma + 1);
                 if (pos < expression.Length && expression[pos] == '$')
                 {
                     addr = new SedAddress
@@ -1619,12 +1700,12 @@ public sealed class InvokeBashSedCommand : BashCmdlet
                 {
                     // N,/re/ — numeric start, regex end. With N==0 the end regex
                     // may match the very first line (GNU's 0,/re/ idiom).
-                    if (RegexAddress(pos, out pos, out var rxEnd) is { } badEnd) return Fail(badEnd, 1);
+                    if (RegexAddress(pos, out pos, out var rxEnd, out string srcEnd) is { } badEnd) return FailRegex(pos, badEnd);
                     addr = new SedAddress
                     {
                         Type = AddressType.RangeNumToRegex,
                         Start = startNum,
-                        EndPattern = rxEnd.ToString(),
+                        EndPattern = srcEnd,
                         EndRx = rxEnd,
                     };
                 }
@@ -1657,7 +1738,7 @@ public sealed class InvokeBashSedCommand : BashCmdlet
         // Optional negation between the address and the command: `addr!cmd`
         // (e.g. `2!d`, `/re/!s///`). GNU also tolerates spaces and a repeated `!`.
         bool negate = false;
-        while (pos < expression.Length && (expression[pos] == '!' || expression[pos] == ' '))
+        while (pos < expression.Length && expression[pos] is '!' or ' ' or '\t')
         {
             if (expression[pos] == '!') { negate = true; }
             pos++;
@@ -1687,24 +1768,40 @@ public sealed class InvokeBashSedCommand : BashCmdlet
                 string flags = remaining.Substring(replField.End);   // flags, incl. `w FILE`
                 string srcRegex = searchPattern, srcReplacement = replacement;
 
-                // Parse the substitution flags. GNU allows g, i/I, p, and a
-                // numeric occurrence N (and the combination Ng = "Nth and
-                // onward"). Accumulate digit runs so `s/x/y/10` parses as 10,
-                // not three separate flags. TryParse guards the int.Parse
-                // overflow trap on an absurd count (`s/x/y/9999999999`).
-                // Blanks are skipped, `#` starts a comment, anything else is GNU's "unknown option to `s'".
+                // Parse the substitution flags: g, p, e, i/I, m/M, a number N (with g: "Nth and onward"), `w FILE`.
+                // A digit run is ONE number (`s/x/y/10`); TryParse guards an absurd count (`s/x/y/9999999999`).
+                // Blanks are skipped, `#` starts a comment, anything else is GNU's "unknown option to `s'". GNU
+                // refuses a second g, p or number and a zero number (i, m, e may repeat).
                 bool global = false;
                 int nth = 0;
+                bool sawNumber = false;
                 bool printOnSub = false, evalFlag = false, multiline = false, ignoreCase = false;
                 string? wFile = null;
                 int flagsEnd = remaining.Length;   // where the command's text ends (a `#` comment is not part of it)
-                var numBuf = new StringBuilder();
                 for (int fi = 0; fi < flags.Length; fi++)
                 {
                     char f = flags[fi];
-                    if (char.IsDigit(f)) { numBuf.Append(f); }
-                    else if (f == 'g') { global = true; }
-                    else if (f == 'p') { printOnSub = true; }
+                    int at = pos + replField.End + fi + 1;   // GNU's char: just past this flag
+                    if (char.IsAsciiDigit(f))
+                    {
+                        if (sawNumber) return Fail(site.At(at, "multiple number options to `s' command"), 1);
+                        sawNumber = true;
+                        int numStart = fi;
+                        while (fi + 1 < flags.Length && char.IsAsciiDigit(flags[fi + 1])) fi++;
+                        if (!int.TryParse(flags.AsSpan(numStart, fi - numStart + 1), out nth)) nth = int.MaxValue;
+                        else if (nth == 0)
+                            return Fail(site.At(pos + replField.End + fi + 1, "number option to `s' command may not be zero"), 1);
+                    }
+                    else if (f == 'g')
+                    {
+                        if (global) return Fail(site.At(at, "multiple `g' options to `s' command"), 1);
+                        global = true;
+                    }
+                    else if (f == 'p')
+                    {
+                        if (printOnSub) return Fail(site.At(at, "multiple `p' options to `s' command"), 1);
+                        printOnSub = true;
+                    }
                     else if (f == 'e') { evalFlag = true; }
                     else if (f == 'm' || f == 'M') { multiline = true; }
                     else if (f == 'i' || f == 'I') { ignoreCase = true; }
@@ -1713,33 +1810,20 @@ public sealed class InvokeBashSedCommand : BashCmdlet
                     else if (f == 'w')
                     {
                         wFile = flags.Substring(fi + 1).TrimStart();
-                        if (wFile.Length == 0) return Fail("sed: -e expression #1, char 0: missing filename in r/R/w/W commands", 1);
+                        if (wFile.Length == 0)
+                            return Fail(site.At(site.AfterCommand(pos + remaining.Length), "missing filename in r/R/w/W commands"), 1);
                         break;
                     }
                     else
                     {
-                        return Fail(site.At(pos + replField.End + fi + 1, "unknown option to `s'"), 1);
+                        return Fail(site.At(at, "unknown option to `s'"), 1);
                     }
                 }
-                if (numBuf.Length > 0 && !int.TryParse(numBuf.ToString(), out nth)) { nth = 0; }
                 // GNU compiles the regex once the command (and the `;` / newline after it) has been read.
                 int compileAt = flagsEnd == remaining.Length ? site.AfterCommand(pos + flagsEnd) : pos + flagsEnd;
 
-                // An empty regex (`s//repl/`) means "reuse the last regex" in sed;
-                // with none to reuse it is an error. ps-bash does not track a previous
-                // regex, so an empty pattern would compile to .NET's match-empty-
-                // everywhere regex and inject the replacement at every position. Reject
-                // it like GNU (exit 1) instead of silently mangling the input.
-                if (searchPattern.Length == 0)
-                {
-                    return Fail(
-                        "sed: -e expression #1, char 0: no previous regular expression", 1);
-                }
-
-                // Translate a GNU-sed replacement into a .NET replacement string:
-                // backrefs \1-\9 → $1-$9, whole-match & → $0, C-escapes \n \t \r
-                // → real control chars, \& and \\ → literal & and \, and a literal
-                // $ → $$ (else .NET would read it as a group reference).
+                // An empty regex (`s//repl/`) reuses the last regex used when it runs (SedRegex.Last; the engine
+                // resolves it, or ends the run with GNU's "no previous regular expression").
                 int maxRef = SedRegex.MaxReplacementReference(replacement);
                 replacement = BuildReplacement(replacement);
                 bool byteMatch = TryRewriteByteEscapes(ref searchPattern);
@@ -1755,8 +1839,8 @@ public sealed class InvokeBashSedCommand : BashCmdlet
                 // The address and `s` regexes compile through one helper: GNU dialect (POSIX classes, BRE escapes)
                 // to .NET, and a parse failure in GNU's words at GNU's character position.
                 if (!SedRegex.TryCompile(searchPattern, extendedRegex, regexOpts, out var regex, out string regexError))
-                    return Fail(site.At(compileAt, regexError), 1);
-                if (maxRef > regex.GetGroupNumbers().Length - 1)
+                    return FailRegex(compileAt, regexError);
+                if (regex != SedRegex.Last && maxRef > regex.GetGroupNumbers().Length - 1)
                     return Fail(site.At(compileAt, $"invalid reference \\{maxRef} on `s' command's RHS"), 1);
 
                 return new SedCommand
@@ -1838,7 +1922,7 @@ public sealed class InvokeBashSedCommand : BashCmdlet
             {
                 string label = remaining.Substring(1).Trim();
                 if (addr != null) return Fail(site.At(pos + 1, ": doesn't want any addresses"), 1);
-                if (label.Length == 0) return Fail("sed: -e expression #1, char 1: \":\" lacks a label", 1);
+                if (label.Length == 0) return Fail(site.At(pos + 1, "\":\" lacks a label"), 1);
                 return new SedCommand { Type = ':', Label = label };
             }
             case 'b':
@@ -1857,7 +1941,8 @@ public sealed class InvokeBashSedCommand : BashCmdlet
             case 'W':
             {
                 string file = remaining.Substring(1).TrimStart();
-                if (file.Length == 0) return Fail(site.At(pos + 1, "missing filename in r/R/w/W commands"), 1);
+                if (file.Length == 0)
+                    return Fail(site.At(site.AfterCommand(pos + remaining.Length), "missing filename in r/R/w/W commands"), 1);
                 return new SedCommand { Type = cmdChar, Address = addr, Negate = negate, FileName = file };
             }
             case 'e':
@@ -1881,7 +1966,7 @@ public sealed class InvokeBashSedCommand : BashCmdlet
                     int stop = remaining.Length < 2 ? remaining.Length : srcField.Closed ? dstField.End : srcField.End;
                     return Fail(site.At(pos + stop, "unterminated `y' command"), 1);
                 }
-                string source = TransliterationText(srcField.Text), dest = TransliterationText(dstField.Text);
+                string source = SedEscape.TransliterationText(srcField.Text), dest = SedEscape.TransliterationText(dstField.Text);
                 if (source.Length != dest.Length)
                     return Fail(site.At(pos + dstField.End, "strings for `y' command are different lengths"), 1);
                 int junk = SkipBlanks(remaining, dstField.End);
@@ -1901,28 +1986,6 @@ public sealed class InvokeBashSedCommand : BashCmdlet
                 return Fail(site.At(pos + 1, $"unknown command: `{cmdChar}'"), 1);
         }
         }
-    }
-
-    /// <summary>
-    /// A <c>y</c> string as GNU reads it after the field scan: <c>\\</c> is a backslash, <c>\n</c> a newline, and a
-    /// backslash before any other character is dropped (<c>y/\q/Z/</c> maps <c>q</c>).
-    /// </summary>
-    private static string TransliterationText(string field)
-    {
-        if (field.IndexOf('\\') < 0) return field;
-        var sb = new StringBuilder(field.Length);
-        for (int i = 0; i < field.Length; i++)
-        {
-            char c = field[i];
-            if (c == '\\' && i + 1 < field.Length)
-            {
-                char n = field[++i];
-                sb.Append(n == 'n' ? '\n' : n);
-                continue;
-            }
-            sb.Append(c);
-        }
-        return sb.ToString();
     }
 
     private void EmitError(string message)

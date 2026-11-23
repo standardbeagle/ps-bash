@@ -24,8 +24,9 @@ internal static class LegacySedEngine
 
         switch (addr.Type)
         {
+            // EDITED: the compiled regexes (the patterns are the sed text as typed now, not .NET patterns).
             case AddressType.Regex:
-                return Regex.IsMatch(line, addr.Pattern!);
+                return addr.Rx!.IsMatch(line);
             case AddressType.Line:
                 return lineNum == addr.Line;
             case AddressType.Last:
@@ -52,7 +53,7 @@ internal static class LegacySedEngine
                 for (int ri = begin; ri <= lineNum && ri <= allLines.Length; ri++)
                 {
                     if ((ri > begin || canEndOnStart)
-                        && Regex.IsMatch(allLines[ri - 1], addr.EndPattern!))
+                        && addr.EndRx!.IsMatch(allLines[ri - 1]))
                     {
                         // Range closed at line ri — only lines begin..ri are in range.
                         return lineNum <= ri;
@@ -62,26 +63,23 @@ internal static class LegacySedEngine
             }
             case AddressType.RangeRegex:
             {
+                // EDITED to match GNU (and SedEngine): a regex end is looked for from the line after the start.
                 bool inRange = false;
                 bool rangeActive = false;
                 for (int ri = 0; ri < allLines.Length; ri++)
                 {
-                    if (!rangeActive
-                        && Regex.IsMatch(allLines[ri], addr.StartPattern!))
+                    bool opened = false;
+                    if (!rangeActive && addr.StartRx!.IsMatch(allLines[ri]))
                     {
                         rangeActive = true;
+                        opened = true;
                     }
                     if (rangeActive && ri + 1 == lineNum)
                     {
                         inRange = true;
                     }
-                    if (rangeActive && ri + 1 != lineNum
-                        && (addr.EndPattern is null ? ri + 1 >= addr.End : Regex.IsMatch(allLines[ri], addr.EndPattern)))
-                    {
-                        rangeActive = false;
-                    }
-                    if (rangeActive && ri + 1 == lineNum
-                        && (addr.EndPattern is null ? ri + 1 >= addr.End : Regex.IsMatch(allLines[ri], addr.EndPattern)))
+                    if (rangeActive
+                        && (addr.EndRx is null ? ri + 1 >= addr.End : !opened && addr.EndRx.IsMatch(allLines[ri])))
                     {
                         rangeActive = false;
                     }
@@ -229,6 +227,7 @@ internal static class LegacySedEngine
                             if (li < totalLines)
                             {
                                 patternSpace += "\n" + inputLines[li];
+                                lineNum = li + 1;   // EDITED to match GNU (and SedEngine): the line number follows N
                             }
                             else
                             {

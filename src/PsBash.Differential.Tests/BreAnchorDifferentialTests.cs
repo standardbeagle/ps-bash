@@ -19,6 +19,11 @@ public class BreAnchorDifferentialTests
     public async Task Differential_GrepCaretInsideTheBre_IsLiteral()
         => await AssertOracle.EqualAsync("printf 'a^b\\nab\\n' | grep 'a^b'; echo \"rc $?\"");
 
+    // A `$` before more pattern is text in a BRE (grep took it as an anchor and matched nothing).
+    [SkippableFact]
+    public async Task Grep_Bre_MidPatternDollar_IsLiteral()
+        => await AssertOracle.EqualAsync("printf 'a$b\\nab\\n' | grep 'a$b'; echo \"rc $?\"; printf 'x$\\n' | grep -c 'x$\\|q'");
+
     [SkippableFact]
     public async Task Differential_BreAnchorsAtTheEndsAndAroundGroups_StillAnchor()
         => await AssertOracle.EqualAsync("printf 'ab\\nb\\nxab\\n' | grep '^ab$'; printf 'b\\nab\\n' | sed -n '/\\(^b$\\)/p'; printf 'ab\\nb\\n' | grep -c 'x\\|^b'");

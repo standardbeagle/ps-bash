@@ -126,4 +126,73 @@ public class SedDifferentialTests
     public Task Sed_UnterminatedAndBadCommands_GnuMessages()
         => Eq(InFile + @"sed -n '/abc' f; echo ""s=$?""; sed -n '\,abc' f; echo ""s=$?""; sed 's/a/b' f; echo ""s=$?""; "
             + @"sed 'y/ab/x/' f; echo ""s=$?""; sed 's/a/b/gx' f; echo ""s=$?""; sed 's/a/\1/' f; echo ""s=$?""");
+
+    // ---- the engine: N's line number, the multi-line pattern space, the empty regex ----------------------
+
+    private const string Abcd = @"printf 'a\nb\nc\nd\n' | ";
+
+    // After N the line number is the pulled line's: `1~2N;1p` printed "a\nb" (line 1 was still the cycle's).
+    [SkippableFact]
+    public Task Sed_LineNumberAfterN_IsThePulledLine()
+        => Eq(Abcd + @"sed -n '1~2N;1p'; echo ""s=$?""; " + Abcd + @"sed 'N;='; " + Abcd + @"sed -n 'N;4p'");
+
+    // Without M the pattern space is one buffer: `.` and `[^x]` match its newline, `$` is only its end.
+    [SkippableFact]
+    public Task Sed_MultiLineBuffer_DotAndDollar()
+        => Eq(@"printf 'a\nb\n' | sed -n 'N;/a.b/p'; printf 'a\nb\n' | sed -n 'N;/a$/p'; printf 'a\nb\n' | sed -n 'N;/a$/Mp'; "
+            + @"printf 'a\nb\n' | sed 'N;s/[^x]/_/g'; printf 'a\nb\n' | sed 'N;s/./_/Mg'; printf 'a\nb\n' | sed 'N;s/$/</Mg'");
+
+    // `//` is the last regex used, at run time (with its I flag and its groups).
+    [SkippableFact]
+    public Task Sed_EmptyRegex_IsTheLastRegexUsed()
+        => Eq(@"printf 'ab\n' | sed -n '/b/s//X/p;s/a/Y/;s//Z/p'; printf 'ab\n' | sed -n 's/\(a\)/\1/;s//[\1]/p'; "
+            + @"printf 'a\nb\n' | sed -n '/a/,//p'; printf 'Ab\n' | sed -n '/a/Is//X/p'; printf 'a\nb\na\nc\n' | sed -n '/a/,/a/p'");
+
+    // With no regex used before it, `//` stops sed at run time: what was written stays, status 1.
+    [SkippableFact]
+    public Task Sed_EmptyRegex_NoPrevious_IsARunTimeError()
+        => Eq(@"printf 'a\n' | sed '//p'; echo ""s=$?""; printf '' | sed '//p'; echo ""s=$?""; "
+            + @"printf 'a\nb\n' | sed '2s//x/'; echo ""s=$?""; sed '/o/Ip;//Ip' /dev/null; echo ""s=$?""; "
+            + @"sed 's/o/0/;s//1/I' /dev/null; echo ""s=$?""");
+
+    // ---- script errors: -f files name the line, each -e its own number ---------------------------------
+
+    [SkippableFact]
+    public Task Sed_ScriptFile_ErrorNamesTheFileLine()
+        => Eq(@"cd ""$(mktemp -d)"" || exit; printf ':\n' > f1; sed -f f1 /dev/null; echo ""s=$?""; "
+            + @"printf 'p\ns/a/b/w\n' > f2; sed -f f2 /dev/null; echo ""s=$?""; "
+            + @"printf 'p\n{\np\n' > f3; sed -f f3 /dev/null; echo ""s=$?""; "
+            + @"printf '#n\nk\n' > f4; sed -f f4 /dev/null; echo ""s=$?""; "
+            + @"printf 'p\nk' > f5; sed -f f5 /dev/null; echo ""s=$?""; "
+            + @"printf 'p\n\n' > f6; printf 'x\n' | sed -f f6 -e '//p'; echo ""s=$?""; "
+            + @"printf 'x\n' | sed -e '//p' -f f6; echo ""s=$?""");
+
+    [SkippableFact]
+    public Task Sed_MissingFilenameLabelAndBraces_GnuChar()
+        => Eq(@"sed r /dev/null; echo ""s=$?""; sed 'p;r' /dev/null; echo ""s=$?""; sed 's/a/b/w' /dev/null; echo ""s=$?""; "
+            + @"sed ':' /dev/null; echo ""s=$?""; sed 'p;:' /dev/null; echo ""s=$?""; sed -e p -e r /dev/null; echo ""s=$?""; "
+            + @"sed -e p -e '{p' /dev/null; echo ""s=$?""; sed -e '{p' -e p /dev/null; echo ""s=$?""; "
+            + @"sed -e p -e '}' /dev/null; echo ""s=$?""; sed -e p -e 'p;}' /dev/null; echo ""s=$?""");
+
+    [SkippableFact]
+    public Task Sed_SubstFlags_RepeatedOrZero_AreErrors()
+        => Eq(@"sed 's/a/b/gg' /dev/null; echo ""s=$?""; sed 's/a/b/pp' /dev/null; echo ""s=$?""; "
+            + @"sed 's/a/b/2g3' /dev/null; echo ""s=$?""; sed 's/a/b/0' /dev/null; echo ""s=$?""; "
+            + @"echo aaaa | sed 's/a/b/g3'; echo aaaa | sed 's/a/b/12'");
+
+    [SkippableFact]
+    public Task Sed_Address_BlanksBeforeTheComma()
+        => Eq(Abcd + "sed -n '2 ,3p'; " + Abcd + "sed -n '2\t,3p'; " + Abcd + "sed -n '/b/ ,3p'; " + Abcd + "sed -n '2,3\tp'");
+
+    // ---- character escapes: \t \xHH \dNNN \oNNN \cX in a regex, a replacement and y ------------------------
+
+    [SkippableFact]
+    public Task Sed_Transliterate_CharacterEscapes()
+        => Eq(@"echo abc | sed 'y/b/\t/' | od -c; echo abc | sed 'y/abc/\x41\x42\x43/'; echo abc | sed 'y/abc/\x41\x4/'; echo ""s=$?""; "
+            + @"echo 'aqb' | sed 'y/\q/Z/'");
+
+    [SkippableFact]
+    public Task Sed_Replacement_CharacterEscapesAreLiteral()
+        => Eq(@"echo abc | sed 's/b/[\n]/'; echo abc | sed 's/b/[\q]/'; echo abc | sed 's/b/\x26/'; "
+            + @"echo abc | sed 's/b/\d065\o102/'; echo 'a b' | sed 's/\t*b/X/'; printf 'a\tb\n' | sed 's/\t/<TAB>/'");
 }

@@ -134,41 +134,7 @@ public class BashRuntimeTests
     public void TranslatePosixClasses_RewritesKnownClassesOnly(string input, string expected)
         => Assert.Equal(expected, BashRuntime.TranslatePosixClasses(input));
 
-    // ---- TranslateBre (grep / sed / expr default dialect) ----
-    //
-    // BRE is the inverse of .NET: `\| \( \) \{ \} \+ \?` are operators, bare ones literals.
-    // grep kept the escaped forms as literals, so `grep 'a\|b'` silently matched nothing.
-
-    [Theory]
-    [InlineData(@"foo\|bar", "foo|bar")]
-    [InlineData(@"\(fo\)\1", @"(fo)\1")]
-    [InlineData(@"o\{2,3\}", "o{2,3}")]
-    [InlineData(@"a\+b\?", "a+b?")]
-    [InlineData("a|b(c){2}+?", @"a\|b\(c\)\{2\}\+\?")]   // bare metachars → literal
-    [InlineData(@"a\\|b", @"a\\\|b")]                    // escaped backslash, then a literal |
-    [InlineData(@"x\.y\w", @"x\.y\w")]                   // other escapes pass through
-    [InlineData("plain", "plain")]
-    [InlineData("", "")]
-    // POSIX: ^ $ * are positional in BRE (GNU sed/grep agree): anchors only at the ends, literals inside.
-    [InlineData("a$(b", @"a\$\(b")]
-    [InlineData("a$b$", @"a\$b$")]
-    [InlineData("^a^b", @"^a\^b")]
-    [InlineData(@"\(^a$\)\|^b", @"(^a$)|^b")]
-    [InlineData("*a", @"\*a")]
-    [InlineData("^*a", @"^\*a")]
-    [InlineData("a*", "a*")]
-    [InlineData("[^$]x[a^]", "[^$]x[a^]")]                // bracket expressions are copied as they are
-    public void TranslateBre_InvertsEscapedMetachars(string input, string expected)
-        => Assert.Equal(expected, BashRuntime.TranslateBre(input));
-
-    [Fact]
-    public void TranslateBre_AfterPunctClass_KeepsUnicodeCategoryBraces()
-    {
-        // [[:punct:]] → [\p{P}\p{S}]; escaping those braces made .NET throw "Malformed \p{X}".
-        var rx = BashRuntime.TranslateBre(BashRuntime.TranslatePosixClasses("x[[:punct:]]"));
-        Assert.Equal(@"x[\p{P}\p{S}]", rx);
-        Assert.Matches(new System.Text.RegularExpressions.Regex(rx), "x!");
-    }
+    // The BRE translator these rows used to pin (TranslateBre) is GnuRegex now: GnuRegexTests.
 
     [Fact]
     public void SplitPipelineSegments_NestedPipe_IndexesTheOuterStage()

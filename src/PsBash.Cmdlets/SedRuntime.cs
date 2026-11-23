@@ -32,8 +32,11 @@ internal sealed class SedRuntime
     /// <summary>The <c>-l N</c> / default 70 wrap width of the <c>l</c> command (0 = never wrap).</summary>
     public int LineLength = 70;
 
-    /// <summary>Exit status requested by <c>q</c>/<c>Q</c>.</summary>
+    /// <summary>Exit status requested by <c>q</c>/<c>Q</c> (1 after a run-time error).</summary>
     public int ExitCode;
+
+    /// <summary>A run-time error, GNU's whole stderr line (the empty regex with no regex used before it).</summary>
+    public Action<string>? Error;
 
     /// <summary><c>r FILE</c>: the whole file, or null when it cannot be read (silently ignored by GNU).</summary>
     public Func<string, string?>? ReadFile;

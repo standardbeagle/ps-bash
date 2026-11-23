@@ -321,10 +321,12 @@ internal sealed class GrepStage : ILineStreamStage, ILineStreamDiagnostics
         if (patterns.Count != 1) return null; // multiple patterns not certified — decline
 
         // Shared ladder with the cmdlet (lineRegexp=false — -x is declined above).
+        var warnings = new List<string>();
         if (!InvokeBashGrepCommand.TryBuildRegexes(
                 patterns, plan.Fixed, plan.Extended, plan.Word, lineRegexp: false, plan.IgnoreCase,
-                out var regexes, out _))
+                out var regexes, out _, warnings: warnings))
             return null; // invalid regex → decline; the cmdlet emits the error
+        if (warnings.Count > 0) return null; // GNU's `* at start of expression` warning is the cmdlet's to print
 
         return new GrepStage(regexes, plan.Invert, plan.LineNumbers, plan.Count);
     }

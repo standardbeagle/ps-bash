@@ -265,16 +265,17 @@ internal sealed class ExprEvaluator
     }
 
     /// <summary>
-    /// <c>STRING : REGEX</c>: a POSIX BRE anchored at the start. With a <c>\(…\)</c> group the result is group 1 (empty
-    /// when there is no match), else the number of characters matched (0 when none).
+    /// <c>STRING : REGEX</c>: a POSIX BRE (the shared GNU translator, expr's flavor) anchored at the start. With a
+    /// <c>\(…\)</c> group the result is group 1 (empty when there is no match), else the number of characters matched
+    /// (0 when none). A bad regex is GNU's message (<c>expr: Unmatched ( or \(</c>), status 2.
     /// </summary>
     private static Value Match(string str, string pattern)
     {
-        var netPattern = BashRuntime.TranslateBre(BashRuntime.TranslatePosixClasses(pattern));
-        if (!netPattern.StartsWith('^')) netPattern = "^" + netPattern;
+        if (!GnuRegex.TryTranslate(pattern, GnuRegexSyntax.ExprBasic, out string net, out string? error))
+            throw new ExprException("expr: " + error, 2);
         Regex rx;
-        try { rx = new Regex(netPattern, RegexOptions.CultureInvariant); }
-        catch (ArgumentException) { throw new ExprException("expr: invalid regular expression", 2); }
+        try { rx = new Regex(@"\A(?:" + net + ")", RegexOptions.CultureInvariant); }
+        catch (ArgumentException ex) { throw new ExprException("expr: " + SedRegex.GnuMessage(ex), 2); }
         var m = rx.Match(str);
         if (rx.GetGroupNumbers().Length > 1) return Value.Str(m.Success && m.Groups[1].Success ? m.Groups[1].Value : "");
         return Value.Num(m.Success ? CharCount(m.Value) : 0);

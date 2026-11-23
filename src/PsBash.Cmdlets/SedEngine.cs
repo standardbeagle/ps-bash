@@ -33,9 +33,9 @@ internal readonly record struct SedOut(string Text, SedEnd End);
 /// The sed cycle engine as a PUSH state machine: <see cref="Feed"/> hands it one input record at a time and it
 /// emits output records as soon as a cycle completes, so retained memory is the pattern space plus a one-record
 /// lookahead — never the stream. It is a line-for-line port of the whole-input <c>ProcessLines</c> it replaces
-/// (same command semantics, same quirks: <c>N</c> does not advance the line number, a <c>c</c> over a range prints once
-/// at the range's last line; a <c>D</c> restart writes the aborted pass's inserts and printed lines and keeps its
-/// appends for the cycle's end, as GNU), proven equal over
+/// (same command semantics; a <c>c</c> over a range prints once at the range's last line; as GNU, <c>N</c> advances the
+/// line number, a regex range end is looked for from the line after its start, and a <c>D</c> restart writes the
+/// aborted pass's inserts and printed lines and keeps its appends for the cycle's end), proven equal over
 /// random scripts and inputs by <c>SedEngineEquivalenceTests</c>.
 ///
 /// <para>Whole-input lookups became state. <c>$</c> needs "is there another record": the engine answers from its
@@ -70,8 +70,7 @@ internal sealed class SedEngine
     private sealed class RangeState
     {
         public bool Active;             // RangeRegex: inside the range after the last raw line
-        public bool CycleInRange;       // RangeRegex: in range AT the current cycle's start line
-        public bool ActiveAfterStart;   // RangeRegex: Active as of the end of the cycle's start line
+        public bool LineInRange;        // RangeRegex: the current line (the last one read, as GNU numbers it) is in range
         public int ClosedAt;            // RangeNumToRegex: first line that closed the range (0 = still open)
     }
     private readonly RangeState?[] _range;
@@ -81,9 +80,10 @@ internal sealed class SedEngine
     private Stage _stage = Stage.Start;
     private string _ps = "";
     private bool _psTerm = true;  // GNU line.chomped: the pattern space prints with its newline (see SedEnd)
-    private int _lineNum;
-    private string? _rawNext;     // raw record lineNum+1 when an N already consumed it
+    private int _lineNum;         // GNU's line number: the last record read (a cycle start, n or N)
     private bool _quit;
+    private Regex? _lastRx;       // the last regex used: what the empty regex (`//`, `s//x/`) stands for
+    private bool _panic;          // the empty regex ran with no regex used before it: the run ends (status 1)
     private int _ci;
     private List<SedOut> _printed = new(), _append = new(), _insert = new();
     private bool _deleted, _restart, _paused;
@@ -127,12 +127,18 @@ internal sealed class SedEngine
         return false;
     }
 
-    /// <summary>True when the script needs a <see cref="SedRuntime"/>: a new command, or a <c>q</c>/<c>Q</c> exit status.</summary>
+    /// <summary>
+    /// True when the script needs a <see cref="SedRuntime"/>: a new command, a <c>q</c>/<c>Q</c> exit status, or an
+    /// empty regex (it can end the run with an error and status 1 when no regex was used before it).
+    /// </summary>
     internal static bool UsesRuntimeFeatures(List<SedCommand> commands)
     {
         if (UsesNewCommands(commands)) return true;
         foreach (var c in commands)
+        {
             if (c.Type is 'q' or 'Q' && c.ExitCode != 0) return true;
+            if (c.EmptyRegexError != null) return true;
+        }
         return false;
     }
 
@@ -176,10 +182,9 @@ internal sealed class SedEngine
                 (_ps, _psTerm) = _in.Dequeue();
                 _pulled++;
                 _lineNum = _pulled;
-                _rawNext = null;
                 _quit = false;
                 _tflag = false;
-                ObserveRaw(_ps, cycleStart: true);
+                ObserveRaw(_ps);
                 if (Dbg)
                 {
                     _rt!.Debug!($"INPUT:   '{(_rt.FileName == "-" ? "STDIN" : _rt.FileName)}' line {_pulled}");
@@ -317,6 +322,7 @@ internal sealed class SedEngine
     {
         while (_ci < _cmds.Count)
         {
+            if (_panic) break;
             var cmd = _cmds[_ci];
             if (_deleted) break;
             if (_quit && cmd.Type != 'q' && cmd.Type != 'Q') { Next(); continue; }
@@ -350,7 +356,7 @@ internal sealed class SedEngine
                     if (Dbg) _psBeforeSubst = _ps;
                     // A byte regex (`s/\xce//`) matches the pattern space one char per byte, then it is text again.
                     string subject = cmd.Bytes ? PsBash.Core.RawBytes.ToByteChars(_ps) : _ps;
-                    _ps = cmd.Regex!.Replace(subject, m =>
+                    _ps = Use(cmd.Regex!, cmd).Replace(subject, m =>
                     {
                         count++;
                         first ??= m;
@@ -407,12 +413,11 @@ internal sealed class SedEngine
                     {
                         var (next, nextTerm) = _in.Dequeue();
                         _pulled++;
-                        if (_pulled == _lineNum + 1) _rawNext = next;
-                        ObserveRaw(next, cycleStart: false);
+                        // GNU's line number follows the input: after N it is the pulled line (`1~2N;1p` prints nothing).
+                        _lineNum = _pulled;
+                        ObserveRaw(next);
                         _ps += "\n" + next;
                         _psTerm = nextTerm;
-                        // GNU's line counter follows the input; the historical engine kept the cycle's start line.
-                        if (_chrono) { _lineNum = _pulled; _rawNext = null; }
                         if (Dbg) DbgPattern();
                     }
                     else if (_eof)
@@ -437,9 +442,8 @@ internal sealed class SedEngine
                         (_ps, _psTerm) = _in.Dequeue();
                         _pulled++;
                         _lineNum = _pulled;
-                        _rawNext = null;
                         _tflag = false;
-                        ObserveRaw(_ps, cycleStart: true);
+                        ObserveRaw(_ps);
                         if (Dbg) DbgPattern();
                     }
                     else if (_eof)
@@ -607,8 +611,40 @@ internal sealed class SedEngine
             if (_restart) return true;
             Next();
         }
+        if (_panic)
+        {
+            // GNU's panic: output already written stays, the pattern space is not printed, nothing more is read.
+            _deleted = true;
+            _quit = true;
+            Quit = true;
+            _noBanner = true;
+        }
         return true;
     }
+
+    /// <summary>
+    /// The regex a command matches with: its own, or for the empty regex (<see cref="SedRegex.Last"/>) the last regex
+    /// used before it, as GNU resolves it when the command runs (<c>/foo/s//X/</c>; its <c>I</c> flag comes along).
+    /// With none used yet the run ends with GNU's error and status 1, and the never-matching sentinel is returned.
+    /// </summary>
+    private Regex Use(Regex rx, SedCommand cmd)
+    {
+        if (rx != SedRegex.Last) { _lastRx = rx; return rx; }
+        if (_lastRx != null) return _lastRx;
+        if (!_panic)
+        {
+            _panic = true;
+            if (_rt != null)
+            {
+                _rt.ExitCode = 1;
+                _rt.Error?.Invoke(cmd.EmptyRegexError ?? "sed: " + SedRegex.NoPreviousMessage);
+            }
+        }
+        return SedRegex.Last;
+    }
+
+    /// <summary><see cref="Use"/> for a look ahead (a ranged <c>c</c> asking about the next line): resolves, records nothing.</summary>
+    private Regex Peek(Regex rx) => rx == SedRegex.Last ? _lastRx ?? SedRegex.Last : rx;
 
     private static string TrimNewline(string s) => s.EndsWith('\n') ? s.Substring(0, s.Length - 1) : s;
 
@@ -631,31 +667,33 @@ internal sealed class SedEngine
 
     // ---- addresses --------------------------------------------------------------------------------------
 
-    /// <summary>Advance every range state over one raw input record (cycle start or N pull), in input order.</summary>
-    private void ObserveRaw(string raw, bool cycleStart)
+    /// <summary>
+    /// Advance every range state over one raw input record (cycle start, n or N pull), in input order. A regex end is
+    /// looked for from the line AFTER the start (GNU: <c>/a/,/a/</c> does not close on the line that opened it); a
+    /// line-number end closes on the start line when it is not past it.
+    /// </summary>
+    private void ObserveRaw(string raw)
     {
         for (int i = 0; i < _range.Length; i++)
         {
             var st = _range[i];
             if (st is null) continue;
-            var addr = _cmds[i].Address!;
+            var cmd = _cmds[i];
+            var addr = cmd.Address!;
             if (addr.Type == AddressType.RangeRegex)
             {
-                if (!st.Active && addr.StartRx!.IsMatch(raw)) st.Active = true;
-                bool inRange = st.Active;
-                if (st.Active && (addr.EndRx is null ? _pulled >= addr.End : addr.EndRx.IsMatch(raw))) st.Active = false;
-                if (cycleStart)
-                {
-                    st.CycleInRange = inRange;
-                    st.ActiveAfterStart = st.Active;
-                }
+                bool opened = false;
+                if (!st.Active && Use(addr.StartRx!, cmd).IsMatch(raw)) { st.Active = true; opened = true; }
+                st.LineInRange = st.Active;
+                if (st.Active && (addr.EndRx is null ? _pulled >= addr.End : !opened && Use(addr.EndRx, cmd).IsMatch(raw)))
+                    st.Active = false;
             }
             else // RangeNumToRegex (N,/re/ and the 0,/re/ idiom)
             {
                 int begin = Math.Max(addr.Start, 1);
                 bool canEndOnStart = addr.Start == 0;
                 if (st.ClosedAt == 0 && _pulled >= begin && (_pulled > begin || canEndOnStart)
-                    && addr.EndRx!.IsMatch(raw))
+                    && Use(addr.EndRx!, cmd).IsMatch(raw))
                 {
                     st.ClosedAt = _pulled;
                 }
@@ -672,14 +710,12 @@ internal sealed class SedEngine
         switch (addr.Type)
         {
             case AddressType.Regex:
-                return addr.Rx!.IsMatch(line);
+                return Use(addr.Rx!, cmd).IsMatch(line);
             case AddressType.Line:
                 return lineNum == addr.Line;
             case AddressType.Last:
-                // "this is the last record": nothing was pulled past it and the input has ended. GNU asks
-                // whether the INPUT is exhausted (after an N that is the pulled line); the historical engine
-                // also required the cycle's start line to be the last one, kept for the original command set.
-                if (!_chrono && lineNum != _pulled) return false;
+                // "this is the last record": nothing was pulled past it and the input has ended (GNU asks whether
+                // the INPUT is exhausted; after an N that is the pulled line).
                 if (_in.Count > 0) return false;
                 if (!_eof) { _paused = true; return false; }
                 return true;
@@ -696,7 +732,7 @@ internal sealed class SedEngine
                 return closed == 0 || lineNum <= closed;
             }
             case AddressType.RangeRegex:
-                return _range[ci]!.CycleInRange;
+                return _range[ci]!.LineInRange;
         }
         return false;
     }
@@ -712,7 +748,7 @@ internal sealed class SedEngine
         if (addr.Type is not (AddressType.RangeNum or AddressType.RangeRegex or AddressType.RangeNumToRegex))
             return false;
 
-        string? next = _rawNext ?? (_in.Count > 0 ? _in.Peek().Text : null);
+        string? next = _in.Count > 0 ? _in.Peek().Text : null;
         if (next is null)
         {
             if (!_eof) _paused = true;
@@ -727,7 +763,7 @@ internal sealed class SedEngine
                 nextMatched = nextNum >= addr.Start && nextNum <= addr.End;
                 break;
             case AddressType.RangeRegex:
-                nextMatched = _range[ci]!.ActiveAfterStart || addr.StartRx!.IsMatch(next);
+                nextMatched = _range[ci]!.Active || Peek(addr.StartRx!).IsMatch(next);
                 break;
             default: // RangeNumToRegex
             {

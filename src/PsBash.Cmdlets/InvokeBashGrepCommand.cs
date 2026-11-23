@@ -595,15 +595,15 @@ public sealed class InvokeBashGrepCommand : BashCmdlet
         }
 
         // Build regex list (OR logic across multiple patterns) via the shared ladder.
+        var regexWarnings = new List<string>();
         if (!TryBuildRegexes(patterns, plan.Fixed, plan.Extended, plan.Word, plan.LineRegexp,
-                plan.IgnoreCase, out var regexes, out var invalidRegex, plan.Perl, plan.NullData))
+                plan.IgnoreCase, out var regexes, out var invalidRegex, plan.Perl, plan.NullData, regexWarnings))
         {
-            FileSystemHelpers.WriteBashError(this, plan.Perl
-                ? $"grep: {invalidRegex}"
-                : $"grep: invalid regular expression: {invalidRegex}");
+            FileSystemHelpers.WriteBashError(this, $"grep: {invalidRegex}");
             FileSystemHelpers.SetLastExitCode(this, 2);
             return;
         }
+        foreach (var w in regexWarnings) FileSystemHelpers.WriteBashError(this, $"grep: warning: {w}");
 
         var style = GrepStyle.Create(plan.Color, BashVariableStore.GetExported,
             msg => FileSystemHelpers.WriteStderr(this, msg));
@@ -899,18 +899,19 @@ public sealed class InvokeBashGrepCommand : BashCmdlet
     /// <summary>
     /// The grep regex-assembly ladder, shared by the cmdlet and the fused-pipeline
     /// streaming stage so the two can never drift: per pattern, fixed → escape,
-    /// basic (BRE) → <see cref="BashRuntime.TranslateBre"/>, extended → verbatim, perl → <see cref="GrepPcre"/>; then the
-    /// optional word (<c>\b…\b</c>) and whole-line (<c>^(?:…)$</c>) wraps;
+    /// basic (BRE) / extended (ERE) → the shared GNU translator (<see cref="GnuRegex"/>, grep's flavor), perl →
+    /// <see cref="GrepPcre"/>; then the optional word (<c>\b(?:…)\b</c>) and whole-line (<c>^(?:…)$</c>) wraps;
     /// <c>-i</c> → <see cref="RegexOptions.IgnoreCase"/>; <c>-z</c> → <see cref="RegexOptions.Singleline"/> for
     /// BRE/ERE (a record spans lines and <c>.</c> matches the newline; PCRE keeps its own dot). Returns false with
-    /// <paramref name="invalidMessage"/> set (no error emission) on the first
-    /// pattern that fails to compile — the caller decides how to report it.
+    /// <paramref name="invalidMessage"/> set (GNU's text, no error emission) on the first pattern that fails to
+    /// compile — the caller decides how to report it. A warning GNU prints and goes on with (<c>* at start of
+    /// expression</c>) is added to <paramref name="warnings"/>.
     /// </summary>
     internal static bool TryBuildRegexes(
         IReadOnlyList<string> patterns, bool fixedString, bool extendedRegex,
         bool wholeWord, bool lineRegexp, bool ignoreCase,
         out List<Regex> regexes, out string? invalidMessage,
-        bool perl = false, bool nullData = false)
+        bool perl = false, bool nullData = false, List<string>? warnings = null)
     {
         regexes = new List<Regex>();
         invalidMessage = null;
@@ -931,17 +932,19 @@ public sealed class InvokeBashGrepCommand : BashCmdlet
             }
             else
             {
-                // POSIX classes first, before BRE escaping: the rewrite introduces regex
-                // metacharacters (\s, \w, \p{P}) that must NOT then be escaped as literals.
-                // -F is a literal search, so it keeps `[[:digit:]]` verbatim.
-                rp = fixedString ? Regex.Escape(pat)
-                   : !extendedRegex ? BashRuntime.TranslateBre(BashRuntime.TranslatePosixClasses(pat))
-                   : BashRuntime.TranslatePosixClasses(pat);
-                if (wholeWord) rp = "\\b" + rp + "\\b";
+                // -F is a literal search (it keeps `[[:digit:]]` verbatim); BRE/ERE go through the one GNU translator.
+                if (fixedString) rp = Regex.Escape(pat);
+                else if (!GnuRegex.TryTranslate(pat, extendedRegex ? GnuRegexSyntax.GrepExtended : GnuRegexSyntax.GrepBasic,
+                             out rp, out var gnuError, warnings: warnings))
+                {
+                    invalidMessage = gnuError;
+                    return false;
+                }
+                if (wholeWord) rp = @"\b(?:" + rp + @")\b";
                 if (lineRegexp) rp = "^(?:" + rp + ")$";
             }
             try { regexes.Add(new Regex(rp, opts)); }
-            catch (ArgumentException ex) { invalidMessage = ex.Message; return false; }
+            catch (ArgumentException ex) { invalidMessage = perl ? ex.Message : SedRegex.GnuMessage(ex); return false; }
         }
         return true;
     }

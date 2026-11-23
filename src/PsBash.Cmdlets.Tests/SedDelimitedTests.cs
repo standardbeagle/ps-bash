@@ -242,6 +242,27 @@ public class SedDelimitedTests
     [InlineData("y/ab/x/", "sed: -e expression #1, char 7: strings for `y' command are different lengths")]
     [InlineData("y/[/]/]/", "sed: -e expression #1, char 7: extra characters after command")]
     [InlineData("/a/Xd", "sed: -e expression #1, char 4: unknown command: `X'")]
+    // s flags: each at most once, a number not zero.
+    [InlineData("s/a/b/gg", "sed: -e expression #1, char 8: multiple `g' options to `s' command")]
+    [InlineData("s/a/b/pp", "sed: -e expression #1, char 8: multiple `p' options to `s' command")]
+    [InlineData("s/a/b/2g3", "sed: -e expression #1, char 9: multiple number options to `s' command")]
+    [InlineData("s/a/b/0", "sed: -e expression #1, char 7: number option to `s' command may not be zero")]
+    // a missing file name or label: past the command (and the newline that ends it).
+    [InlineData("r", "sed: -e expression #1, char 1: missing filename in r/R/w/W commands")]
+    [InlineData("p;r", "sed: -e expression #1, char 3: missing filename in r/R/w/W commands")]
+    [InlineData("s/a/b/w", "sed: -e expression #1, char 7: missing filename in r/R/w/W commands")]
+    [InlineData(":", "sed: -e expression #1, char 1: \":\" lacks a label")]
+    [InlineData("p;:", "sed: -e expression #1, char 3: \":\" lacks a label")]
+    // the empty regex takes no flags of its own.
+    [InlineData("/o/Ip;//Ip", "sed: -e expression #1, char 9: cannot specify modifiers on empty regexp")]
+    [InlineData("s/o/0/;s//1/I", "sed: -e expression #1, char 13: cannot specify modifiers on empty regexp")]
+    // braces
+    [InlineData("s/a/b/;}", "sed: -e expression #1, char 8: unexpected `}'")]
+    [InlineData("{p", "sed: -e expression #1, char 0: unmatched `{'")]
+    // regcomp's own messages
+    [InlineData(@"s/a\{1/x/", @"sed: -e expression #1, char 9: Unmatched \{")]
+    [InlineData("s/[[:foo:]]/x/", "sed: -e expression #1, char 14: Invalid character class name")]
+    [InlineData("/a**/p", "sed: -e expression #1, char 5: Invalid preceding regular expression")]
     public void BuildProgram_ScriptError_IsGnusMessageAtGnusChar(string script, string message)
     {
         Assert.False(InvokeBashSedCommand.BuildProgram(new[] { script }, false, out _, out var err, out int code));
@@ -261,5 +282,95 @@ public class SedDelimitedTests
     {
         Assert.False(InvokeBashSedCommand.BuildProgram(new[] { "/a(/d" }, true, out _, out var err, out _));
         Assert.Equal(@"sed: -e expression #1, char 4: Unmatched ( or \(", err);
+    }
+
+    // ---- where an error is: the -e expression it is in, or the line of the -f file -------------------
+
+    private static string ScriptError(params InvokeBashSedCommand.SedScript[] scripts)
+    {
+        Assert.False(InvokeBashSedCommand.BuildProgram(scripts, false, out _, out var err, out int code));
+        Assert.Equal(1, code);
+        return err!;
+    }
+
+    [Fact]
+    public void BuildProgram_ErrorInAFile_IsItsLine()
+    {
+        Assert.Equal("sed: file f2 line 3: missing filename in r/R/w/W commands",
+            ScriptError(new InvokeBashSedCommand.SedScript("p\ns/a/b/w\n", File: "f2")));
+        Assert.Equal("sed: file f5 line 2: unknown command: `k'", ScriptError(new InvokeBashSedCommand.SedScript("p\nk", File: "f5")));
+        Assert.Equal("sed: file f3 line 2: unmatched `{'", ScriptError(new InvokeBashSedCommand.SedScript("p\n{\np\n", File: "f3")));
+        // a leading `#n` line was taken off: the script's first line is line 2
+        Assert.Equal("sed: file f4 line 2: unknown command: `k'", ScriptError(new InvokeBashSedCommand.SedScript("k\n", File: "f4", FirstLine: 2)));
+    }
+
+    [Fact]
+    public void BuildProgram_BraceErrors_NameTheirOwnExpression()
+    {
+        Assert.Equal("sed: -e expression #2, char 1: unexpected `}'", ScriptError(new("p", ExprNo: 1), new("}", ExprNo: 2)));
+        Assert.Equal("sed: -e expression #2, char 3: unexpected `}'", ScriptError(new("p", ExprNo: 1), new("p;}", ExprNo: 2)));
+        Assert.Equal("sed: -e expression #1, char 0: unmatched `{'", ScriptError(new("{p", ExprNo: 1), new("p", ExprNo: 2)));
+    }
+
+    [Fact]
+    public void BuildProgram_EmptyRegex_LearnsGnusNoPreviousMessage_FromTheLastScript()
+    {
+        Assert.True(InvokeBashSedCommand.BuildProgram(
+            new InvokeBashSedCommand.SedScript[] { new("p\n\n", File: "f6"), new("//p", ExprNo: 1) },
+            false, out var cmds, out _, out _));
+        Assert.Equal("sed: -e expression #1, char 0: no previous regular expression", cmds[^1].EmptyRegexError);
+
+        Assert.True(InvokeBashSedCommand.BuildProgram(
+            new InvokeBashSedCommand.SedScript[] { new("//p", ExprNo: 1), new("p\n\n", File: "f6") },
+            false, out cmds, out _, out _));
+        Assert.Equal("sed: file f6 line 3: no previous regular expression", cmds[0].EmptyRegexError);
+    }
+
+    // ---- the engine: line numbers after N, the multi-line buffer, the last regex ---------------------
+
+    [Fact]
+    public void Engine_LineNumberAfterN_IsThePulledLine()
+    {
+        Assert.Empty(Sed("1~2N;1p", true, "a", "b", "c", "d"));
+        Assert.Equal(new[] { "c\nd" }, Sed("N;4p", true, "a", "b", "c", "d"));
+    }
+
+    [Fact]
+    public void Engine_MultiLineBuffer_DotMatchesNewline_DollarIsItsEnd()
+    {
+        Assert.Equal(new[] { "a\nb" }, Sed("N;/a.b/p", true, "a", "b"));
+        Assert.Empty(Sed("N;/a$/p", true, "a", "b"));
+        Assert.Equal(new[] { "a\nb" }, Sed("N;/a$/Mp", true, "a", "b"));
+        Assert.Equal(new[] { "aXb" }, Sed(@"N;s/a.b/aXb/", false, "a", "b"));
+    }
+
+    [Fact]
+    public void Engine_EmptyRegex_IsTheLastRegexUsed()
+    {
+        Assert.Equal(new[] { "X" }, Sed("/foo/s//X/", false, "foo"));
+        Assert.Equal(new[] { "f[<o>]o" }, Sed(@"s/\(o\)/[\1]/;s//<\1>/", false, "foo"));
+        Assert.Equal(new[] { "a", "b" }, Sed("/a/,//p", true, "a", "b"));
+        Assert.Equal(new[] { "Xb" }, Sed("/a/Is//X/p", true, "Ab"));
+    }
+
+    [Fact]
+    public void Engine_RegexRangeEnd_IsLookedForFromTheNextLine()
+    {
+        Assert.Equal(new[] { "a", "b", "a" }, Sed("/a/,/a/p", true, "a", "b", "a", "c"));
+        Assert.Equal(new[] { "a" }, Sed("/a/,1p", true, "a", "b"));
+    }
+
+    [Theory]
+    [InlineData("2 ,3p")]
+    [InlineData("2\t,3p")]
+    [InlineData("/b/ ,3p")]
+    public void Address_BlanksBeforeTheComma(string script)
+        => Assert.Equal(new[] { "b", "c" }, Sed(script, true, "a", "b", "c", "d"));
+
+    [Fact]
+    public void Transliterate_CharacterEscapes()
+    {
+        Assert.Equal(new[] { "a\tc" }, Sed(@"y/b/\t/", false, "abc"));
+        Assert.Equal(new[] { "ABC" }, Sed(@"y/abc/\x41\x42\x43/", false, "abc"));
     }
 }
