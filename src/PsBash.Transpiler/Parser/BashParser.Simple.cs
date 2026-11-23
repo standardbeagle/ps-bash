@@ -1107,6 +1107,12 @@ public sealed partial class BashParser
         // `1>&2` / `2>&1`. Kept as `<&` it was emitted raw, and PowerShell took the trailing `&` for its background op.
         if (op == "<&" && fd is 1 or 2 && fdVar is null)
             op = ">&";
+        // `2>&01`, `<&00`: the descriptor is the NUMBER (bash reads it with strtol), so `2>&01` is the `2>&1` merge and
+        // `<&00` a dup of stdin onto itself. Kept as typed, every later "is it 1 / 0 / this fd" test missed it.
+        if (op is ">&" or "<&" && targetParts is [WordPart.Literal { Value: { Length: > 1 } digits }]
+            && digits[0] == '0' && digits.All(char.IsAsciiDigit) && int.TryParse(digits, out int dupFd))
+            target = new CompoundWord(ImmutableArray.Create<WordPart>(
+                new WordPart.Literal(dupFd.ToString(System.Globalization.CultureInfo.InvariantCulture))));
 
         return new Redirect(op, fd, target, fdVar, Force: opToken.Value == ">|", ReadWrite: opToken.Value == "<>");
     }

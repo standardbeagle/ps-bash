@@ -807,6 +807,93 @@ public class ShellLanguageGapDifferentialTests
         g() { echo q | return 3; }; g; echo "21:$?"
         echo "22:$(fn() { cat; }; fn < f | tr '\n' ' ')"
         ( exec cat < missing; echo after ) 2>/dev/null; echo "23:$?"
+        echo "24:$(set -u; n=1; head -n $((n+1)) < f | tr '\n' ' ')"
+        echo "25:$(set -u; n=1; printf 'a\nb\nc\n' | head -n $((n+1)) | tr '\n' ' ')"
+        echo "26:$(set -euo pipefail; n=1; printf 'a\nb\nc\n' | head -n $((n+1)) | tr '\n' ' ')"
+        echo "27:$(grep -Fxf <(echo f2; echo zz) < f)"
+        echo "28:$(set -u; x=-; cat "$x" < f | tr '\n' ' ')"
+        echo "29:$(X=1 read -r v < f; echo "$v")"
+        echo "30:$(mapfile -t a < f; echo "${a[*]}")"
+        echo "31:$(eval 'read -r v; echo "$v"' < f)"
+        echo "32:$(set -u; n=1; eval 'head -n $((n+1))' < f | tr '\n' ' ')"
+        echo "33:$( { read -r v; X=1 read -r w; echo "$v/$w"; } < f)"
+        echo "34:$(set -o pipefail; printf 'a\nb\n' | { X=1 read -r v; echo "$v"; })"
+        } 2>&1
+        """);
+
+    /// <summary>
+    /// A command fed its own <c>&lt;</c> file, or an <c>exec</c> pipe stage, reads its input as it asks and so ends on an
+    /// endless producer. REGRESSION (3eb541b6): the statement list fed a file collected every record before it started,
+    /// so <c>exec head -c 5 &lt; /dev/zero</c> and <c>tail -f log | exec grep x</c> never ended. The <c>timeout</c> is the
+    /// wall-clock bound: a hang shows as an empty count and rc 124.
+    /// </summary>
+    [SkippableFact]
+    public Task FedCommand_StreamsAnEndlessInput() => SameAsScript(
+        """
+        timeout 20 bash -c 'exec head -c 5 < /dev/zero' | wc -c
+        timeout 20 bash -c 'X=1 exec head -c 5 < /dev/zero' | wc -c
+        timeout 20 bash -c 'eval "head -c 5" < /dev/zero' | wc -c
+        timeout 20 bash -c 'cat /dev/zero 2>/dev/null | exec head -c 5' | wc -c
+        timeout 20 bash -c 'cat /dev/zero 2>/dev/null | command exec head -c 5' | wc -c
+        timeout 20 bash -c '( exec head -c 5 < /dev/zero; echo after ) | wc -c'
+        echo "rc=$?"
+        """);
+
+    /// <summary>
+    /// A dup redirect (<c>&lt;&amp;N</c>, <c>&gt;&amp;N</c>, <c>&lt;&amp;$fd</c>, <c>2&gt;&amp;01</c>, the self-dup
+    /// <c>&lt;&amp;0</c>) is a redirect beside an env prefix, in a group, a subshell, a loop, eval and a function.
+    /// REGRESSION: <c>echo q | { X=1 cat &lt;&amp;0; }</c> handed PowerShell a bare <c>&amp;</c>, which started a
+    /// background job; a group or subshell given <c>&lt;&amp;3</c> did not read descriptor 3.
+    /// </summary>
+    [SkippableFact]
+    public Task DupRedirects_AreRedirectsInEveryContext() => SameAsScript(
+        """
+        {
+        printf 'f1\nf2\n' > f
+        echo "1:$(echo q | { X=1 cat <&0; })"
+        echo "2:$(echo q | cat <&0 2>/dev/null)"
+        exec 3<f; echo "3:$(while read -r l; do printf '%s ' "$l"; done <&3)"; exec 3<&-
+        exec 3<f; echo "4:$({ cat; } <&3 | tr '\n' ' ')"; exec 3<&-
+        exec 3<f; echo "5:$( ( cat ) <&3 | tr '\n' ' ')"; exec 3<&-
+        exec 3<f; : <&3; echo "6:$?"; exec 3<&-
+        echo "7:$( { echo a >&2; } 2>&01 )"
+        fd=3; exec 3<f; echo "8:$({ cat; } <&$fd | tr '\n' ' ')"; exec 3<&-
+        exec 3<f; echo "9:$(echo q | cat <&$fd | tr '\n' ' ')"; exec 3<&-
+        exec 3<f; echo "10:$(eval cat <&3 | tr '\n' ' ')"; exec 3<&-
+        exec 3<f; { read -r a; } <&3; read -r b <&3; echo "11:$a/$b"; exec 3<&-
+        echo "12:$(echo hi 1>&1 2>&2 <&00)"
+        echo "13:$(echo q | { X=1 cat <&0 >&1; } | tr a-z A-Z)"
+        echo "14:$(g() { X=1 cat <&0; }; echo q | g)"
+        exec 3<f; echo "15:$( { eval cat <&3; } < /dev/null | tr '\n' ' ')"; exec 3<&-
+        exec 3<f; echo "16:$( { eval cat <&$fd; } < /dev/null | tr '\n' ' ')"; exec 3<&-
+        } 2>&1
+        """);
+
+    /// <summary>
+    /// <c>command exec</c> / <c>builtin exec</c> / <c>command eval</c> / <c>command source</c> / <c>command .</c> are the
+    /// builtin and read a pipe or a <c>&lt;</c> file as it does. REGRESSION: <c>echo q | command exec cat</c> printed
+    /// nothing (Invoke-BashCommand ran exec unfed); <c>command eval cat &lt; f</c> lost the first line and
+    /// <c>command . ./s &lt; f</c> read nothing (the file was piped into a bare <c>. $(...)</c>).
+    /// </summary>
+    [SkippableFact]
+    public Task CommandExec_RunsTheBuiltin() => SameAsScript(
+        """
+        {
+        printf 'f1\nf2\n' > f
+        printf 'read -r v; echo "s=$v"\n' > s
+        echo "1:$(echo q | command exec cat)"
+        echo "2:$(command exec cat < f | tr '\n' ' ')"
+        echo "3:$(echo q | builtin exec cat)"
+        echo "4:$(command eval cat < f | tr '\n' ' ')"
+        echo "5:$(echo q | command source ./s)"
+        echo "6:$(command . ./s < f)"
+        echo "7:$(echo q | command eval 'read -r v; echo "e=$v"')"
+        echo "8:$( ( command exec cat; echo notreached ) < f | tr '\n' ' ')"
+        command -v exec; echo "9:$?"
+        echo "10:$(builtin source ./s <<< hs)"
+        echo "11:$(command eval cat <<< hd)"
+        echo "12:$(builtin eval cat < f | tr '\n' ' ')"
+        echo "13:$(command -- . ./s < f)"
         } 2>&1
         """);
 

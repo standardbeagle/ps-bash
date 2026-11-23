@@ -1245,7 +1245,8 @@ public class PsEmitterTests
     public void Transpile_GreatAndUserFdFromStderr_DegradesToComment()
     {
         var result = PsEmitter.Transpile("cmd 2>&3");
-        Assert.Equal("cmd <# ps-bash: fd merge 2>&3 has no PowerShell equivalent #>", result);
+        // Every dup with no PowerShell form is one comment (PsEmitter.EmitDupRedirect), never text PowerShell parses.
+        Assert.Equal("cmd <# ps-bash: fd 2>&3 has no PowerShell equivalent #>", result);
     }
 
     [Fact]
@@ -5606,7 +5607,7 @@ public class PsEmitterTests
     // `cmd 3<&0`: the descriptor table has no stdin to name; ignored rather than a "Bad file descriptor" on every run.
     [Fact]
     public void Transpile_HighDescriptorDupOfStdin_IsIgnored()
-        => Assert.Equal("cmd <# ps-bash: fd 3 <& redirect ignored #>", PsEmitter.Transpile("cmd 3<&0"));
+        => Assert.Equal("cmd <# ps-bash: fd 3<&0 has no PowerShell equivalent #>", PsEmitter.Transpile("cmd 3<&0"));
 
     // `cmd >&2` pipes into Write-BashHostStderr, which writes each record to PowerShell's
     // ERROR STREAM (not $Host.UI.WriteErrorLine, which no redirection can see), so an

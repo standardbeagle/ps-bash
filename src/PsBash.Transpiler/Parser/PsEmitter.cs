@@ -374,16 +374,23 @@ public static partial class PsEmitter
     /// command reads. Every "does this simple command read the inherited stdin" site asks this.
     /// </summary>
     private static bool HasOwnStdin(ImmutableArray<Redirect> redirects) =>
-        HasInputRedirect(redirects)
-        || !redirects.IsDefaultOrEmpty && redirects.Any(r => r.Fd == 0 && r.Op == "<&" && r.FdVar is null
-            && GetLiteralValue(r.Target) is { } t && IsAllDigits(t) && int.TryParse(t, out int n) && n >= 3);
+        HasInputRedirect(redirects) || !redirects.IsDefaultOrEmpty && redirects.Any(IsDescriptorInput);
 
     /// <summary>
-    /// A compound command that is given its own stdin (<c>&lt; file</c>, <c>&lt;&lt;&lt;</c>) emits its
+    /// <c>&lt;&amp;N</c> (N &gt;= 3, a descriptor <c>exec</c> opened) or <c>&lt;&amp;$fd</c> (known when it expands): the
+    /// command's stdin is that descriptor (<c>Read-BashFd</c>, <see cref="PsBuild.DescriptorStdinScope"/>). <c>&lt;&amp;0</c>
+    /// changes nothing, and <c>&lt;&amp;-</c> / <c>&lt;&amp;1</c> have no equivalent (<see cref="EmitDupRedirect"/>).
+    /// </summary>
+    private static bool IsDescriptorInput(Redirect r) =>
+        r.Fd == 0 && r.Op == "<&" && r.FdVar is null
+        && (GetLiteralValue(r.Target) is { } t ? IsAllDigits(t) && int.TryParse(t, out int n) && n >= 3 : IsPlainVarRefWord(r.Target));
+
+    /// <summary>
+    /// A compound command that is given its own stdin (<c>&lt; file</c>, <c>&lt;&lt;&lt;</c>, <c>&lt;&amp;N</c>) emits its
     /// body INSIDE a stdin scope; one without redirects inherits the surrounding scope unchanged.
     /// </summary>
     private static string EmitCompoundBody(ImmutableArray<Redirect> redirects, Func<string> emitBody) =>
-        HasInputRedirect(redirects) ? WithStdinScope(true, emitBody) : emitBody();
+        HasOwnStdin(redirects) ? WithStdinScope(true, emitBody) : emitBody();
 
     /// <summary>
     /// Active transpile context for the current call. Set by
@@ -3446,7 +3453,7 @@ public static partial class PsEmitter
         {
             if (redirect.Fd >= 3)
                 highFds.Add(redirect);
-            else if (redirect.Fd == 0 && redirect.Op is "<" or "<<" or "<<<")
+            else if (redirect.Fd == 0 && redirect.Op is "<" or "<<" or "<<<" || IsDescriptorInput(redirect))
                 inputRedirect = redirect;
             else
                 tailRedirects.Add(redirect);
@@ -3460,6 +3467,12 @@ public static partial class PsEmitter
         if (inputRedirect is { Here: { } subshellHere })
         {
             result = $"{EmitHereDocLiteral(subshellHere)} | Emit-BashLine | & {{ {PsBuild.StdinScope(result)} }}";
+        }
+        else if (inputRedirect is not null && IsDescriptorInput(inputRedirect))
+        {
+            // `( ... ) <&3`: the descriptor is the body's stdin. Left in the tail it was a raw `0<&3`, which PowerShell ended
+            // at its background operator.
+            result = "& { " + PsBuild.DescriptorStdinScope(EmitArgWord(inputRedirect.Target), result, "__psbash_stdin_prev") + " }";
         }
         else if (inputRedirect is not null)
         {
@@ -3528,8 +3541,7 @@ public static partial class PsEmitter
             || HasOwnStdin(simple.Redirects)
             || simple.Words.IsDefaultOrEmpty
             || StdinOperands(simple) is not ({ } name, var args)
-            || PsBuild.IsStatementList(text)
-            || text.StartsWith("$(", StringComparison.Ordinal)
+            || !PsBuild.IsPipeElement(text)
             || text.StartsWith("& {", StringComparison.Ordinal))
             return text;
 
@@ -6308,7 +6320,7 @@ public static partial class PsEmitter
         // eval / source / . run text in this shell whose commands read the here-document: a stdin scope around them
         // (`. ./f <<< "$in"` with `read l` in f; `. /dev/stdin <<< "$code"` runs it). REGRESSION: source was piped
         // into a bare `. $(...)`, so the file's commands read nothing and /dev/stdin was empty.
-        if (cmd.EnvPairs.IsEmpty && GetLiteralValue(cmd.Words[0]) is "eval" or "source" or ".")
+        if (cmd.EnvPairs.IsEmpty && RunsShellText(cmd))
         {
             string hereText = EmitHereDocLiteral(cmd.HereDocs[^1]);
             result = RedirectGroup(WithStdinScope(true, () => EmitSimple(innerCmd)), body => $"{hereText} | Emit-BashLine | {DotStdinBlock(body)}");
@@ -6317,7 +6329,7 @@ public static partial class PsEmitter
         // The command is the pipe stage after the body (`body | Emit-BashLine | cmd`): any script block its emission wraps it in
         // (a splat hoist, an env prefix, the run-time exec branch of `$SH >out <<EOF`) must hand the block's input on, or the
         // command reads nothing (`f=-; cat $f <<EOF`, `$SH >stdout <<EOF` printed nothing).
-        string cmdText = WithPipeStageFeed(true, () => EmitSimple(innerCmd));
+        string cmdText = WithStdinScope(false, () => WithPipeStageFeed(true, () => EmitSimple(innerCmd)));
         // A real program must read the heredoc's bytes, not PowerShell's per-record `\r\n` rendering of them;
         // every other consumer keeps receiving the records as before.
         result = $"{EmitHereDocLiteral(cmd.HereDocs[^1])} | Emit-BashLine | {NativeStdinFeedOrNull(innerCmd)}{cmdText}";
@@ -6456,7 +6468,9 @@ public static partial class PsEmitter
         // handled is not its failure), unless an output file of its own reports on it after the command (Invoke-BashRedirect).
         bool clearsNested = !OpensOutputFile(remaining);
         bool noCommand = innerCmd.Words.IsDefaultOrEmpty && innerCmd.EnvPairs.IsDefaultOrEmpty;
-        var inner = noCommand ? "" : WithPipeStageFeed(true, () => EmitSimple(innerCmd));
+        // It reads that pipe, never a stdin scope around it (`builtin eval cat < f` in a script that reads stdin fed its
+        // cat from the scope: the file was lost).
+        var inner = noCommand ? "" : WithStdinScope(false, () => WithPipeStageFeed(true, () => EmitSimple(innerCmd)));
         if (inner.Length == 0)
         {
             // Only a lone `$(< file)` reads the file out; any other bare redirect just opens it. Its other redirects
@@ -6483,12 +6497,15 @@ public static partial class PsEmitter
         // So is any other command whose emission is no pipe element (IsUnpipeableStage: exec's `cmd; return`, `true`'s
         // `$( )`): wrapped in `& { }` as the stage after the file, its statements never saw the file. REGRESSION:
         // `( exec cat < <(echo q3) )` printed nothing, and `( exec cat < f; echo after )` printed only "after".
-        if (innerCmd.EnvPairs.IsDefaultOrEmpty && GetLiteralValue(innerCmd.Words[0]) is "source" or "." or "eval" or "return" or "exit"
+        if (innerCmd.EnvPairs.IsDefaultOrEmpty && (RunsShellText(innerCmd) || GetLiteralValue(innerCmd.Words[0]) is "return" or "exit")
             || IsUnpipeableStage(inner))
         {
             // Its readers take the file from the scope (EmitSimpleFed), not from a pipe into the statement list.
-            var fed = WithStdinScope(true, () => WithPipeStageFeed(false, () => EmitSimple(innerCmd)));
-            string Feed(string body) => $"Invoke-BashCat {target} -RawStdinBytes | {DotStdinBlock(body)}";
+            // The file is a cursor its readers pull one record at a time (PsBuild.FileStdinScope), never a pipe into the
+            // block: a block after a pipe starts only once the file was read to its end (`exec head -c 5 < /dev/zero` hung).
+            // REGRESSION: emitted with EmitSimple, `set -u; head -n $((n+1)) < f` re-emitted head unfed (it printed nothing).
+            var fed = WithStdinScope(true, () => WithPipeStageFeed(false, () => EmitSimpleFed(innerCmd)));
+            string Feed(string body) => PsBuild.FileStdinScope(target, body, "__psbash_fin_prev" + _unitNameSalt + (++_evalStdinSeq));
             result = guarded ? InputRedirectGuarded(target, fed, Feed, failTail, clearsNested) : RedirectGroup(fed, Feed);
             return true;
         }
@@ -7148,13 +7165,50 @@ public static partial class PsEmitter
         if (outFd is null && inFd is null)
             return false;
 
-        string body = EmitSimple(new Command.Simple(cmd.Words, cmd.EnvPairs, rest.ToImmutable()));
+        var restCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, rest.ToImmutable());
+        string body = inFd is null ? EmitSimple(restCmd) : PipedAfterDescriptor(restCmd);
+        // A command whose emission is no pipe element (`: <&3`, exec's `cmd; return`, eval text) reads the descriptor through
+        // a stdin scope: after `Read-BashFd 3 |` it was an expression after a pipe, or statements that saw nothing.
+        bool scoped = inFd is not null && IsUnpipeableStage(body);
+        if (scoped)
+            body = DescriptorFed(restCmd, inFd!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
         if (outFd is { } o)
             body = (PsBuild.IsStatementList(body) ? "& { " + body + " }" : body) + $" | Write-BashFd {o}";
-        if (inFd is { } i)
+        if (inFd is { } i && !scoped)
             body = $"Read-BashFd {i} | " + body;
         result = body;
         return true;
+    }
+
+    /// <summary>
+    /// <paramref name="rest"/> (the command without its <c>&lt;&amp;</c>) run with descriptor <paramref name="fdWord"/> as its
+    /// stdin scope (<see cref="PsBuild.DescriptorStdinScope"/>), its readers fed from it (<see cref="EmitSimpleFed"/>).
+    /// </summary>
+    private static string DescriptorFed(Command.Simple rest, string fdWord) =>
+        RedirectGroup(WithStdinScope(true, () => WithPipeStageFeed(false, () => EmitSimpleFed(rest))),
+            b => ". { " + PsBuild.DescriptorStdinScope(fdWord, b, "__psbash_fdin_prev" + _unitNameSalt + (++_evalStdinSeq)) + " }");
+
+    /// <summary>
+    /// <paramref name="rest"/> as the stage after <c>Read-BashFd N |</c>: it reads that pipe, never the stdin scope around it.
+    /// REGRESSION: in a scope (a script that reads the launcher's stdin, a group given <c>&lt; f</c>) <c>eval cat &lt;&amp;3</c>
+    /// inlined to a cat fed from the scope, which dropped the descriptor's lines (and waited on a terminal's stdin).
+    /// </summary>
+    private static string PipedAfterDescriptor(Command.Simple rest) =>
+        WithStdinScope(false, () => WithPipeStageFeed(true, () => EmitSimple(rest)));
+
+    /// <summary>
+    /// <c>eval</c> / <c>source</c> / <c>.</c>, run directly or through <c>builtin</c> / <c>command</c> (an optional
+    /// <c>--</c> between): text this shell runs, whose readers take the command's stdin from a scope. REGRESSION:
+    /// <c>command . ./s &lt; f</c> piped the file into a bare <c>. $(...)</c>, so the sourced <c>read</c> got nothing.
+    /// </summary>
+    private static bool RunsShellText(Command.Simple cmd)
+    {
+        if (cmd.Words.IsDefaultOrEmpty) return false;
+        var name = GetLiteralValue(cmd.Words[0]);
+        if (name is "eval" or "source" or ".") return true;
+        if (name is not ("builtin" or "command") || cmd.Words.Length < 2) return false;
+        int at = GetLiteralValue(cmd.Words[1]) == "--" ? 2 : 1;
+        return at < cmd.Words.Length && GetLiteralValue(cmd.Words[at]) is "eval" or "source" or ".";
     }
 
     /// <summary>
@@ -7193,10 +7247,13 @@ public static partial class PsEmitter
             string sink = PsBuild.IsStatementList(plain) ? "& { " + plain + " }" : plain;
             return value + "if ($__psbFd -match '^[0-9]+$') { " + sink + " | Write-BashFd ([int]$__psbFd) } else { " + file + " }";
         }
+        // A command that is no pipe element reads the descriptor through a stdin scope (`eval cat <&$fd`, `: <&$fd`).
+        if (IsUnpipeableStage(plain))
+            return value + DescriptorFed(cmd with { Redirects = cmd.Redirects.Remove(dyn) }, "$__psbFd");
         var dash = new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal("-")));
         string closed = EmitSimple(cmd with { Redirects = cmd.Redirects.Replace(dyn, dyn with { Target = dash }) });
         return value + "if ($__psbFd -eq '0') { " + plain + " } elseif ($__psbFd -match '^[0-9]+$') { Read-BashFd ([int]$__psbFd) | "
-            + plain + " } else { " + closed + " }";
+            + PipedAfterDescriptor(cmd with { Redirects = cmd.Redirects.Remove(dyn) }) + " } else { " + closed + " }";
     }
 
     /// <summary>A word that is only variable references (<c>$fd</c>, <c>"${fd}"</c>): no operator, nothing to run.</summary>
@@ -7213,31 +7270,8 @@ public static partial class PsEmitter
     /// </summary>
     private static bool TryEmitExec(Command.Simple cmd, out string result)
     {
-        // `exec -- cmd` : the `--` ends option parsing, it is not the command.
-        if (cmd.Words.Length > 1 && GetLiteralValue(cmd.Words[1]) == "--")
-            cmd = new Command.Simple(cmd.Words.RemoveAt(1), cmd.EnvPairs, cmd.Redirects);
-        // `exec -a NAME cmd`: NAME is the command's argv[0]; `-c` (empty environment) and `-l` (login) are dropped.
-        // Only a nested shell shows argv[0] (`exec -a NAME sh -c 'echo $0'`): it becomes the -c script's $0.
-        CompoundWord? argv0 = null;
-        while (cmd.Words.Length > 1 && GetLiteralValue(cmd.Words[1]) is "-a" or "-c" or "-l" or "-cl" or "-lc" or "--")
+        if (ExecCommandOf(cmd) is { } inner)
         {
-            string opt = GetLiteralValue(cmd.Words[1])!;
-            if (opt == "--") { cmd = new Command.Simple(cmd.Words.RemoveAt(1), cmd.EnvPairs, cmd.Redirects); break; }
-            if (opt == "-a")
-            {
-                if (cmd.Words.Length < 3) break;
-                argv0 = cmd.Words[2];
-                cmd = new Command.Simple(cmd.Words.RemoveRange(1, 2), cmd.EnvPairs, cmd.Redirects);
-                continue;
-            }
-            cmd = new Command.Simple(cmd.Words.RemoveAt(1), cmd.EnvPairs, cmd.Redirects);
-        }
-        if (argv0 is not null && cmd.Words.Length == 4 && GetLiteralValue(cmd.Words[1]) is "sh" or "bash"
-            && GetLiteralValue(cmd.Words[2]) == "-c")
-            cmd = new Command.Simple(cmd.Words.Add(argv0), cmd.EnvPairs, cmd.Redirects);
-        if (cmd.Words.Length > 1)
-        {
-            var inner = new Command.Simple(cmd.Words.RemoveAt(0), cmd.EnvPairs, cmd.Redirects);
             // The command reads the stdin exec had, the enclosing stdin scope's included (EmitSimpleFed). REGRESSION:
             // `echo q | exec cat` and `{ exec cat; } < f` printed nothing. Not when exec's own here-document or `<` file
             // is already piped in (the caller strips it and sets _pipeStageFeedsInput): the scope's feed displaced it.
@@ -7262,6 +7296,49 @@ public static partial class PsEmitter
         }
         result = string.Join("; ", steps);
         return true;
+    }
+
+    /// <summary>
+    /// The command <c>exec</c> runs (<c>exec -a NAME cmd</c>, <c>exec -- cmd</c>: <c>cmd</c>), or null when it runs none
+    /// (<c>exec 3&lt;f</c>). <c>-a NAME</c> is the command's argv[0], which only a nested shell shows (it becomes the -c
+    /// script's $0); <c>-c</c> (empty environment) and <c>-l</c> (login) are dropped.
+    /// </summary>
+    private static Command.Simple? ExecCommandOf(Command.Simple cmd)
+    {
+        if (cmd.Words.Length > 1 && GetLiteralValue(cmd.Words[1]) == "--")
+            cmd = cmd with { Words = cmd.Words.RemoveAt(1) };
+        CompoundWord? argv0 = null;
+        while (cmd.Words.Length > 1 && GetLiteralValue(cmd.Words[1]) is "-a" or "-c" or "-l" or "-cl" or "-lc" or "--")
+        {
+            string opt = GetLiteralValue(cmd.Words[1])!;
+            if (opt == "--") { cmd = cmd with { Words = cmd.Words.RemoveAt(1) }; break; }
+            if (opt == "-a")
+            {
+                if (cmd.Words.Length < 3) break;
+                argv0 = cmd.Words[2];
+                cmd = cmd with { Words = cmd.Words.RemoveRange(1, 2) };
+                continue;
+            }
+            cmd = cmd with { Words = cmd.Words.RemoveAt(1) };
+        }
+        if (argv0 is not null && cmd.Words.Length == 4 && GetLiteralValue(cmd.Words[1]) is "sh" or "bash"
+            && GetLiteralValue(cmd.Words[2]) == "-c")
+            cmd = cmd with { Words = cmd.Words.Add(argv0) };
+        return cmd.Words.Length > 1 ? cmd with { Words = cmd.Words.RemoveAt(0) } : null;
+    }
+
+    /// <summary>
+    /// The command an <c>exec</c> pipe stage runs (<c>exec cmd</c>, <c>builtin exec cmd</c>, <c>command exec -- cmd</c>), or
+    /// null for any other stage. A function named exec is called instead (the bare word only: the wrappers skip it).
+    /// </summary>
+    private static Command.Simple? PipeStageExecCommand(Command.Simple s)
+    {
+        int at = 0;
+        while (at < s.Words.Length && GetLiteralValue(s.Words[at]) is "builtin" or "command") at++;
+        if (at > 0 && at < s.Words.Length && GetLiteralValue(s.Words[at]) == "--") at++;
+        if (at >= s.Words.Length || GetLiteralValue(s.Words[at]) != "exec") return null;
+        if (at == 0 && (_definedFunctions?.Contains("exec") == true || _unitFunctions?.Contains("exec") == true)) return null;
+        return ExecCommandOf(s with { Words = s.Words.RemoveRange(0, at) });
     }
 
     // POSIX special builtins (exec and exit aside: a prefix before them is never seen again).
@@ -8514,40 +8591,11 @@ public static partial class PsEmitter
             // Not a PowerShell stream: `9>f.txt` / `9>$null` were literal ARGUMENTS ("hi 9>f.txt"), and `9>&1` ended in
             // PowerShell's background `&`. (A simple command opens it around itself: ScopedHighFdRedirects.)
             _ when r.Fd > 6 => $"<# ps-bash: fd {r.Fd} {r.Op} redirect ignored #>",
-            ">&" or "<&" when r.Fd > 2 && target == "0" => $"<# ps-bash: fd {r.Fd} {r.Op} redirect ignored #>",
             ">" => r.Fd == 1 ? $">{target}" : $"{r.Fd}>{target}",
             ">>" => r.Fd == 1 ? $">>{target}" : $"{r.Fd}>>{target}",
-            // `n>&-` (close output fd) — PowerShell has no fd-close; the practical
-            // equivalent for an output fd is to discard (redirect to $null).
-            // Without this, target "-" emitted invalid `1>&-`. The `target == "-"`
-            // guard keeps the normal merge form (`2>&1`, target "1") intact.
-            ">&" when target == "-" => r.Fd == 1 ? ">$null" : $"{r.Fd}>$null",
-            // `cmd >&file` (non-numeric, non-close target) is a bash synonym for
-            // `&>file`: redirect BOTH stdout and stderr to the FILE. The `{fd}>&{target}`
-            // form is invalid PowerShell for a file (the `>&` operator only accepts a
-            // stream number), so emit the `&>` form. A numeric target (`>&2`, `>&1`) is a
-            // genuine fd-merge and keeps the `{fd}>&{n}` form below.
-            // Only the UNPREFIXED `>&file` (fd defaults to 1) is the both-streams
-            // synonym for `&>file`. A prefixed `2>&file` is not that form, so it is
-            // left to the fallback rather than wrongly redirecting stdout.
-            ">&" when r.Fd == 1 && !IsAllDigits(target) => $">{target} 2>&1",
-            // PowerShell's fd-merge operator accepts ONLY `n>&1` with n != 1.
-            // Every other numeric merge is a parse error — `1>&3` / `2>&3`
-            // ("Missing file specification after redirection operator") and
-            // `1>&2` / `2>&2` ("reserved for future use") — which poisons the
-            // parse of the whole emitted file. bash's user fds (3, 4, …) have no
-            // PowerShell equivalent at all: they are opened by `exec 3>&1`, which
-            // we cannot model. Degrade to a visible inline no-op — the stream
-            // keeps its default destination — the same way `<&-` already does.
-            // (`>&2`, the common stderr idiom, never reaches here: EmitSimple
-            // routes it through the Write-BashHostStderr pipe.)
-            // Hit dotnet-install.sh and the Visual Studio prereq scripts.
-            ">&" when IsAllDigits(target) && (target != "1" || r.Fd == 1) =>
-                $"<# ps-bash: fd merge {r.Fd}>&{target} has no PowerShell equivalent #>",
-            ">&" => $"{r.Fd}>&{target}",
-            // `n<&-` (close stdin) — no PowerShell equivalent; degrade to a
-            // documented inline no-op comment rather than the invalid `0<&-`.
-            "<&" when target == "-" => "<# ps-bash: stdin fd-close (<&-) has no PowerShell equivalent #>",
+            // Every descriptor duplication / close is built by EmitDupRedirect: none is left raw, where PowerShell took the
+            // `&` of `0<&3` for its background operator and ran the command as a job.
+            ">&" or "<&" => EmitDupRedirect(r),
             // `&>file` / `&>>file` — redirect (or append) BOTH stdout and stderr.
             // PowerShell: `>file 2>&1` / `>>file 2>&1` (stdout to the file, then
             // stderr to wherever stdout now points).
@@ -8559,6 +8607,39 @@ public static partial class PsEmitter
             _ => $"{r.Fd}{r.Op}{target}",
         };
     }
+
+    /// <summary>
+    /// THE emission of a descriptor duplication or close (<c>N&gt;&amp;M</c>, <c>N&lt;&amp;M</c>, <c>N&gt;&amp;-</c>,
+    /// <c>&gt;&amp;word</c>) in a redirect tail. PowerShell has one: <c>2&gt;&amp;1</c>. A dup onto itself (<c>&lt;&amp;0</c>,
+    /// <c>2&gt;&amp;2</c>) changes nothing (empty); <c>&gt;&amp;-</c> / <c>2&gt;&amp;-</c> discard; <c>&gt;&amp;file</c> is
+    /// <c>&amp;&gt;file</c>. Anything else (a user descriptor, <c>1&gt;&amp;2</c> outside the modelled tail, closing stdin,
+    /// a word known only at run time) is a visible no-op comment that never holds the target's text. A descriptor a
+    /// command READS (<c>&lt;&amp;3</c>, <c>&lt;&amp;$fd</c>, <see cref="IsDescriptorInput"/>) or writes (<c>&gt;&amp;3</c>)
+    /// is taken before the tail (TryEmitFdRedirect, the compound scopes). REGRESSION: <c>echo q | { X=1 cat &lt;&amp;0; }</c>
+    /// emitted <c>Invoke-BashCat 0&lt;&amp;0</c>, which PowerShell ran as a background job ("The pwsh executable cannot be
+    /// found ... Start-Job"). Guard: Host.Tests DupRedirectParseabilityTests.
+    /// </summary>
+    private static string EmitDupRedirect(Redirect r)
+    {
+        var word = r.FdVar is null ? TryGetStaticArgValue(r.Target) : null;
+        if (word == "-")
+            return r.Op == ">&" && r.Fd is 1 or 2 ? (r.Fd == 1 ? ">$null" : "2>$null")
+                : $"<# ps-bash: closing fd {r.Fd} ({r.Op}-) has no PowerShell equivalent #>";
+        if (word is not null && IsAllDigits(word) && int.TryParse(word, out int n))
+        {
+            if (n == r.Fd) return "";
+            if (r.Op == ">&" && r.Fd == 2 && n == 1) return "2>&1";
+            return $"<# ps-bash: fd {r.Fd}{r.Op}{n} has no PowerShell equivalent #>";
+        }
+        if (r.Op == ">&" && r.Fd == 1)
+            return EmitRedirect(r with { Op = "&>" });
+        return $"<# ps-bash: fd {r.Fd}{r.Op}word has no PowerShell equivalent #>";
+    }
+
+    /// <summary>A dup of a descriptor onto itself (<c>&lt;&amp;0</c>, <c>1&gt;&amp;1</c>, <c>2&gt;&amp;02</c>): no change.</summary>
+    private static bool IsSelfDup(Redirect r) =>
+        r.Op is ">&" or "<&" && r.FdVar is null && GetLiteralValue(r.Target) is { } t && IsAllDigits(t)
+        && int.TryParse(t, out int n) && n == r.Fd;
 
     // True only for a non-empty run of ASCII digits — used to tell a numeric fd-merge
     // target (`>&2`) from a file target (`>&out.txt`).
@@ -10314,6 +10395,15 @@ public static partial class PsEmitter
             // ... and so does `$(echo $BASH_SUBSHELL)`, whose depth the scope raises.
             && !inner.Contains(PsBuild.SubshellDepthRead, StringComparison.Ordinal)
             ? inner : PsBuild.ShellStateScope(WithSubshellExitTrap(inner));
+    }
+
+    /// <summary><c>command [--] exec cmd ...</c> / <c>eval</c> / <c>source</c> / <c>.</c>, with no option: a builtin that runs
+    /// shell text or a command in this shell, which <c>command</c> runs as <c>builtin</c> would.</summary>
+    private static bool CommandRunsShellText(ImmutableArray<CompoundWord> args)
+    {
+        int at = !args.IsEmpty && GetLiteralValue(args[0]) == "--" ? 1 : 0;
+        return at < args.Length && GetLiteralValue(args[at]) is { } name
+            && (name is "eval" or "source" or "." || name == "exec" && at + 1 < args.Length);
     }
 
     /// <summary>The command a `builtin`/`command` wrapper runs (`builtin command read v` -> `read`), or null when a
@@ -13363,10 +13453,15 @@ public static partial class PsEmitter
     /// True when <paramref name="emitted"/> is no pipe element: a statement list (<c>Invoke-BashCat; return</c>, an env
     /// prefix's save/restore) or a <c>$( ... )</c> EXPRESSION (<c>return</c> outside a function, <c>true</c>), which PowerShell
     /// allows only as a pipeline's first element (<c>echo x | return 3</c> failed the parse of the whole script).
+    /// A dot-sourced block with statements (<c>. { a; b }</c>) counts too: its statements never see the block's input.
+    /// Only a <c>; </c> at depth 0 makes a statement list (<see cref="PsBuild.IsPipeElement"/>): one nested in an argument
+    /// (<c>Invoke-BashHead -n $($__psbash_av = ...; ...)</c>, a <c>&lt;( )</c> body) does not. REGRESSION: taken for one,
+    /// the reader was re-emitted unfed (<c>set -u; head -n $((n+1)) &lt; f</c> printed nothing), and as a pipefail stage it
+    /// was wrapped in <c>&amp; { }</c>, whose statements never saw the stage's records.
     /// </summary>
     private static bool IsUnpipeableStage(string emitted) =>
-        !emitted.StartsWith("& {", StringComparison.Ordinal)
-        && (emitted.StartsWith("$(", StringComparison.Ordinal) || PsBuild.HasUnquotedStatementSeparator(emitted));
+        !PsBuild.IsPipeElement(emitted)
+        || emitted.StartsWith(". {", StringComparison.Ordinal) && PsBuild.HasUnquotedStatementSeparator(emitted);
 
     [ThreadStatic] private static int _timeDepth;
 
@@ -13510,6 +13605,14 @@ public static partial class PsEmitter
             if (mergeStage) _stderrMergeDepth++;
 
             var cmd = pipeline.Commands[i];
+            // `tail -f log | exec grep x`, `cat /dev/zero | exec head -c 5`: a stage is a subshell, so exec's command is the
+            // whole stage. It runs as the stage itself, which streams; as a state-builtin stage (the subshell scope below)
+            // its records were collected before it started, and an endless producer never let it start. A lastpipe stage
+            // runs in the shell itself, where exec ends the shell.
+            if (pipeline.Commands.Length > 1 && cmd is Command.Simple execStage
+                && !(_scriptLastpipe && i > 0 && i == pipeline.Commands.Length - 1)
+                && PipeStageExecCommand(execStage) is { } execCommand)
+                cmd = execCommand;
             // `... | echo "[$(cat)]"`: echo ignores the pipe, but the command substitution inherits it as stdin.
             // Run the stage as `{ echo ...; }`, whose stdin scope hands the pipe to the substitution.
             if (i > 0 && cmd is Command.Simple { EnvPairs.IsEmpty: true, Words.Length: >= 1 } substStage
@@ -13921,7 +14024,7 @@ public static partial class PsEmitter
             return $"& {{ {Scoped(Body())} }}";
 
         // `producer | while read l; do ...; done` (no input redirect of its own, which would replace the pipe).
-        if (cmd is Command.While { IsUntil: false } readStage && !HasInputRedirect(readStage.Redirects)
+        if (cmd is Command.While { IsUntil: false } readStage && !HasOwnStdin(readStage.Redirects)
             && IsWhileRead(readStage.Cond, out var readVars, out var readIfs))
         {
             // A body that reads nothing: the loop handles each record as it arrives (a process block), not the collected
@@ -14019,7 +14122,8 @@ public static partial class PsEmitter
     /// </summary>
     private static void AppendRedirectTail(StringBuilder sb, IEnumerable<Redirect> redirects)
     {
-        var list = redirects as IReadOnlyList<Redirect> ?? redirects.ToList();
+        // A dup onto itself (`<&0`, `2>&2`) changes nothing: dropped first, the rest of the list can still be modelled.
+        var list = redirects.Where(r => !IsSelfDup(r)).ToList();
         if (TryAppendModelledRedirectTail(sb, list))
             return;
         AppendLegacyRedirectTail(sb, list);
@@ -14232,6 +14336,7 @@ public static partial class PsEmitter
             }
 
             var emitted = EmitRedirect(redirect);
+            if (emitted.Length == 0) continue;
             bool mergesStderr = emitted.Contains("2>&1", StringComparison.Ordinal);
             if (mergesStderr && stderrMerged)
             {
@@ -14302,7 +14407,7 @@ public static partial class PsEmitter
             // one wins (bash).
             if (redirect.Fd >= 3)
                 highFds.Add(redirect);
-            else if (redirect.Fd == 0 && redirect.Op is "<" or "<<" or "<<<")
+            else if (redirect.Fd == 0 && redirect.Op is "<" or "<<" or "<<<" || IsDescriptorInput(redirect))
                 inputRedirect = redirect;
             else
                 tailRedirects.Add(redirect);
@@ -14314,7 +14419,11 @@ public static partial class PsEmitter
         // Dot-sourced: the body runs in the caller's scope, so an array element it assigns (`{ a[1]=x; } 2>/dev/null`,
         // a PowerShell variable, unlike scalars in $env:) outlives the group.
         var sb = new StringBuilder(". { ");
-        sb.Append(inputRedirect is not null && stdinScope ? PsBuild.StdinScope(body) : body);
+        // `{ ...; } <&3`, `done <&$fd`: the descriptor is the scope's stdin, read as the body asks.
+        sb.Append(inputRedirect is null || !stdinScope ? body
+            : IsDescriptorInput(inputRedirect)
+                ? PsBuild.DescriptorStdinScope(EmitArgWord(inputRedirect.Target), body, "__psbash_fdin_prev" + _unitNameSalt + (++_evalStdinSeq))
+                : PsBuild.StdinScope(body));
         sb.Append(" }");
         int tailStart = sb.Length;
         AppendRedirectTail(sb, tailRedirects);
@@ -14326,7 +14435,7 @@ public static partial class PsEmitter
         {
             result = $"{EmitHereDocLiteral(here)} | Emit-BashLine | {result}";
         }
-        else if (inputRedirect is not null)
+        else if (inputRedirect is not null && !IsDescriptorInput(inputRedirect))
         {
             var inTarget = EmitInputRedirectTarget(inputRedirect.Target);
             // /dev/null maps to $null; `Get-Content $null` errors. Its stdin is EMPTY (EOF), which
@@ -15025,6 +15134,11 @@ public static partial class PsEmitter
                 result = EmitPassthrough("Invoke-BashRealpath", args);
                 return true;
             case "command":
+                // `command exec cat`, `command eval "$c"`, `command . ./f`: the builtin runs in this shell, as under `builtin`
+                // (a function of that name is skipped either way). Passed to Invoke-BashCommand it ran as a command of its
+                // own: exec's command was never fed the stdin (`echo q | command exec cat` printed nothing).
+                if (CommandRunsShellText(args))
+                    return TryEmitMappedCommand(cmd with { Words = cmd.Words.SetItem(0, new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal("builtin")))) }, out result);
                 result = EmitPassthrough("Invoke-BashCommand", args);
                 return true;
             case "declare":
