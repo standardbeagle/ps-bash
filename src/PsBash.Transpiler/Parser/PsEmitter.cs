@@ -101,6 +101,9 @@ public static partial class PsEmitter
     // The script can turn nounset on: simple `$x` / `${x}` reads then check the flag at runtime.
     [ThreadStatic]
     private static bool _nounsetMode;
+    // The operand word of the `${u:-w}`-style expansion BuildEreWord is emitting: its arm is =~ word text (TryEmitEreOperand).
+    [ThreadStatic]
+    private static ImmutableArray<WordPart>? _ereOperandWord;
 
     /// <summary>
     /// Set by <c>source</c> / <c>eval</c> from the caller's LIVE option state: the sourced text may never mention
@@ -1827,7 +1830,7 @@ public static partial class PsEmitter
         _armedBase = null; _armedBaseUsed = false; _armedBaseDepth = 0;
         _leavingReturns = 0; _groupReturnMark = 0; _operandsAreText = false;
         _liveJobs = null; _callSites = null; _definedFunctions = null; _readerMode = default;
-        _inRunTimeExecBranch = false; _namesLoopControl = false;
+        _inRunTimeExecBranch = false; _namesLoopControl = false; _ereOperandWord = null;
         _stdinOpaque = false; _stdinProbeDepth = 0; _stdinSealed = null;
         _subshellBody = null; _fdPrelude = null; _redirectCommandName = null;
         PsBuild.InTrapAction = false; PsBuild.TrapLine = 0; PsBuild.ErrTrapNeedsErrtrace = false;
@@ -4595,6 +4598,14 @@ public static partial class PsEmitter
                     else AddText(ts.NamedText, quoted: true);
                     if (ts.SlashConsumed) AddText("/", quoted: false);
                     break;
+                case WordPart.BracedVarSub { ArgWord: { } arg } bvs when ChoosesOperandWord(bvs.Suffix):
+                    // `u=; [[ 'a{1}' =~ ^${u:-a\{1\}}$ ]]`: the operand word the expansion takes is part of the =~ word, so
+                    // its quoted characters match literally; the variable's value is regex text. The arm is chosen at run time.
+                    var outerOperand = _ereOperandWord;
+                    _ereOperandWord = arg;
+                    try { AddExpr(PsBuild.EreExpansion(EmitBracedVar(bvs))); }
+                    finally { _ereOperandWord = outerOperand; }
+                    break;
                 default: // an unquoted expansion: its VALUE is regex text
                     AddExpr(PsBuild.EreUnquoted("[string](" + EmitWord(new CompoundWord(ImmutableArray.Create(part))) + ")"));
                     break;
@@ -4602,6 +4613,32 @@ public static partial class PsEmitter
         }
         FlushText();
         return PsBuild.EreWord(pieces);
+    }
+
+    /// <summary>
+    /// <c>${u:-w}</c> <c>${u-w}</c> <c>${u:+w}</c> <c>${u+w}</c> (also through <c>${!ref:-w}</c>): the expansion's value
+    /// can be its operand word as written. <c>${u:=w}</c> is the variable's new value and <c>${u:?w}</c> the variable's.
+    /// </summary>
+    private static bool ChoosesOperandWord(string? suffix)
+    {
+        if (suffix is null) return false;
+        if (suffix.StartsWith("!indirect", StringComparison.Ordinal)) suffix = suffix["!indirect".Length..];
+        if (suffix.StartsWith(':')) suffix = suffix[1..];
+        return suffix.Length > 0 && suffix[0] is '-' or '+';
+    }
+
+    /// <summary>
+    /// The operand arm of the expansion BuildEreWord is emitting (<see cref="_ereOperandWord"/>, matched by identity):
+    /// its word built as =~ word text, so a quoted character in it matches literally (<c>${u:-a\{1\}}</c>) and an
+    /// unquoted expansion in it is regex text (<c>${u:-$re}</c>). Any other operand word is an ordinary word.
+    /// </summary>
+    private static bool TryEmitEreOperand(ImmutableArray<WordPart> argWord, out string expr)
+    {
+        expr = "";
+        if (_ereOperandWord is not { } ere || ere != argWord) return false;
+        _ereOperandWord = null; // the operand's own expansions (`${u:-$(f)}`) are ordinary words
+        expr = PsBuild.EreOperand(BuildEreWord(new CompoundWord(argWord)));
+        return true;
     }
     private static string QuoteIfBareLiteral(string emitted)
     {
@@ -11658,6 +11695,7 @@ public static partial class PsEmitter
         string ArgValRaw(string rawSlice) =>
             !argWord.HasValue
                 ? (nested ? PsBuild.SingleQuote(rawSlice) : $"\"{rawSlice}\"")
+            : TryEmitEreOperand(argWord.Value, out var ereOperand) ? ereOperand
             : TryEmitJoinedValue(argWord.Value, out var joinedArg) ? joinedArg
             : nested ? EmitBracedArgWordValue(argWord.Value)
             : FlattenPartsToDoubleQuotedString(argWord.Value);

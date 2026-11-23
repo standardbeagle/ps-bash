@@ -39,6 +39,18 @@ public static class BashPatternMatch
     /// <summary>An UNQUOTED part of the <c>=~</c> word (a literal or an unquoted expansion): regex text.</summary>
     public static string EreRaw(object? value) => PsBash.Core.Parser.BashEre.MarkUnquoted(Text(value));
 
+    /// <summary>
+    /// An unquoted <c>${u:-w}</c> / <c>${u-w}</c> / <c>${u:+w}</c> / <c>${u+w}</c> in the <c>=~</c> word, whose value
+    /// <paramref name="value"/> is either the variable's (regex text, as <see cref="EreRaw"/>) or the operand word the
+    /// expansion chose, already marked part by part (<see cref="EreOperandText"/>: its quoted characters match
+    /// literally, <c>${u:-a\{1\}}</c>). Which one is known only at run time. A variable's value is converted as
+    /// PowerShell's <c>[string]</c> cast does (an array joins with spaces), as for any other unquoted expansion.
+    /// </summary>
+    public static string EreExpansion(object? value) =>
+        (value is PSObject pso ? pso.BaseObject : value) is EreOperandText chosen
+            ? chosen.Text
+            : EreRaw(LanguagePrimitives.ConvertTo<string>(value));
+
     /// <summary>Does <paramref name="input"/> match the bash <paramref name="pattern"/> (canonical text, built by the
     /// transpiler: quoted parts escaped, an unquoted expansion's value active)? <c>case</c>, <c>[[ == != ]]</c> and
     /// <c>compgen -X</c>; ignore-case under <c>nocasematch</c>.</summary>
@@ -185,4 +197,15 @@ public static class BashPatternMatch
 
     // A BashObject carries its text in BashText; anything else stringifies (null = "").
     private static string Text(object? value) => BashRuntime.GetBashText(value);
+}
+
+/// <summary>
+/// The operand word of a parameter expansion in the <c>=~</c> word, as the expansion chose it: <see cref="Text"/> is
+/// already in the marked form <c>BashEre.WordToRegex</c> reads (quoted characters CTLESC-escaped), so
+/// <see cref="BashPatternMatch.EreExpansion"/> uses it as is instead of treating it as a variable's value.
+/// </summary>
+public sealed class EreOperandText(string text)
+{
+    /// <summary>The marked regex text.</summary>
+    public string Text { get; } = text;
 }

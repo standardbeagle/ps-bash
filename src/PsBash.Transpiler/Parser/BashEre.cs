@@ -54,9 +54,21 @@ public static class BashEre
     // The host is long-lived and a run-time regex can differ every iteration: bound the cache.
     private const int MaxCached = 512;
 
-    /// <summary>Match <paramref name="subject"/> against the regcomp text <paramref name="regex"/>.</summary>
-    public static BashEreResult Match(string regex, bool icase, string subject) =>
-        Compile(regex, icase).Run(subject);
+    /// <summary>
+    /// Match <paramref name="subject"/> against the regcomp text <paramref name="regex"/>. The engine boundary: any
+    /// failure inside (a bound, or a bug) is status 2, never an exception into the script (OutOfMemory excepted).
+    /// </summary>
+    public static BashEreResult Match(string regex, bool icase, string subject)
+    {
+        try
+        {
+            return Compile(regex, icase).Run(subject);
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            return new BashEreResult(2, BashEreResult.NoGroups, "REG_ESPACE");
+        }
+    }
 
     /// <summary>The compiled regex (or its regcomp error), cached.</summary>
     internal static BashEreProgram Compile(string regex, bool icase)

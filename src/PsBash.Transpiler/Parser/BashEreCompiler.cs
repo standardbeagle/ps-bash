@@ -132,6 +132,8 @@ internal sealed class BashEreCompiler
         catch (EreSyntaxException e) { return BashEreProgram.Failed(e.Code); }
         catch (ParseException) { return BashEreProgram.Failed("REG_ESPACE"); } // nesting past NestingGuard
         catch (InsufficientExecutionStackException) { return BashEreProgram.Failed("REG_ESPACE"); }
+        // Any other failure is this compiler's bug, but a regex must never take the host down: status 2.
+        catch (Exception e) when (e is not OutOfMemoryException) { return BashEreProgram.Failed("REG_ESPACE"); }
     }
 
     // ---- tokens -------------------------------------------------------------------------------------------
@@ -554,13 +556,16 @@ internal sealed class BashEreCompiler
                 {
                     case ElemKind.SbChar:
                     case ElemKind.MbChar:
-                        set.AddChar(startElem.Ch);
+                        // An invalid byte is a single-byte character whose bit glibc masks out in UTF-8 (bitset_mask
+                        // with sb_char): it is never a member (and Matcher.Accepts refuses it to every set).
+                        if (!IsRawByte(startElem.Ch)) set.AddChar(startElem.Ch);
                         break;
                     case ElemKind.EquivClass:
                     case ElemKind.CollSym:
-                        // C.UTF-8 has no collation rules: only a one-byte name is valid, and it is that character.
+                        // C.UTF-8 has no collation rules: only a one-byte name is valid, and it is that character
+                        // (an invalid byte is valid but masked out, as above).
                         if (startElem.NameBytes != 1) throw new EreSyntaxException("REG_ECOLLATE");
-                        set.AddChar(startElem.Name![0]);
+                        if (!IsRawByte(startElem.Name![0])) set.AddChar(startElem.Name![0]);
                         break;
                     case ElemKind.CharClass:
                         string name = startElem.Name!;
@@ -579,11 +584,13 @@ internal sealed class BashEreCompiler
     }
 
     // lookup_collation_sequence_value with nrules == 0: a single-byte character (or a one-byte collating symbol) is
-    // its own value; a multibyte endpoint is REG_ECOLLATE; a class is REG_ERANGE.
+    // its own value (collseqmb), an invalid byte included: its byte value, so [a-\xff] is a..U+00FF and
+    // [[.\xff.]-z] is REG_ERANGE; a multibyte endpoint is REG_ECOLLATE; a class is REG_ERANGE.
     private static int RangeEndpoint(Elem e) => e.Kind switch
     {
         ElemKind.SbChar => e.Ch,
-        ElemKind.CollSym when e.NameBytes == 1 => e.Name![0],
+        ElemKind.MbChar when IsRawByte(e.Ch) => e.Ch - 0xDC00,
+        ElemKind.CollSym when e.NameBytes == 1 => IsRawByte(e.Name![0]) ? e.Name![0] - 0xDC00 : e.Name![0],
         ElemKind.EquivClass or ElemKind.CharClass => throw new EreSyntaxException("REG_ERANGE"),
         _ => throw new EreSyntaxException("REG_ECOLLATE"),
     };
@@ -621,7 +628,10 @@ internal sealed class BashEreCompiler
             _pos++;
             if (_pos >= _raw.Length) throw new EreSyntaxException("REG_EBRACK");
             if (ch == delim && _fold[_pos] == ']') break;
-            name.Append(char.ConvertFromUtf32(ch));
+            // A lone surrogate (an invalid byte's marker, or one from a broken string) is one UTF-16 unit, which
+            // ConvertFromUtf32 would refuse.
+            if (ch < 0x10000) name.Append((char)ch);
+            else name.Append(char.ConvertFromUtf32(ch));
             bytes += len;
         }
         _pos++;
@@ -633,7 +643,12 @@ internal sealed class BashEreCompiler
         };
     }
 
-    private static int Utf8Length(int cp) => cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+    // An invalid byte's marker stands for that one byte.
+    private static int Utf8Length(int cp) =>
+        cp < 0x80 || IsRawByte(cp) ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+
+    // RawBytes' marker of an invalid UTF-8 byte (CodePoints keeps a lone surrogate as one code point).
+    private static bool IsRawByte(int cp) => cp >= RawBytes.FirstMarker && cp <= RawBytes.LastMarker;
 
     // ---- analyze: the NFA ---------------------------------------------------------------------------------
 

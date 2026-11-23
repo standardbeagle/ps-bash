@@ -101,6 +101,36 @@ public class RegexEreDifferentialTests
         [[ '|' =~ $'|' ]]; t Q1 $?
         """);
 
+    // The operand word `${u:-w}` / `${u+w}` takes keeps its own quoting in the =~ word (an escaped or quoted character
+    // matches literally, an unquoted one is regex text); the variable's value is regex text. Which one it is depends on
+    // `u` at run time. `${u:=w}` is the variable's new value, regex text.
+    [SkippableFact]
+    public Task Differential_RegexEre_DefaultOperandKeepsItsQuoting() => AssertOracle.EqualAsync(T + """
+        u=; [[ 'a{1,2}}' =~ ^${u:-a\{1,2\}}\}$ ]]; t U01 $?
+        u=; [[ 'aa}' =~ ^${u:-a\{1,2\}}\}$ ]]; t U02 $?
+        u='a{2}'; [[ 'aa}' =~ ^${u:-x}\}$ ]]; t U03 $?
+        u='a{2}'; [[ 'a{2}}' =~ ^${u:-x}\}$ ]]; t U04 $?
+        u=; [[ a.b =~ ^${u:-a'.'b}$ ]]; t U05 $?
+        u=; [[ axb =~ ^${u:-a'.'b}$ ]]; t U06 $?
+        u=; [[ axb =~ ^${u:-a.b}$ ]]; t U07 $?
+        u=; [[ axb =~ ^${u:-"a.b"}$ ]]; t U08 $?
+        u=; v='x.y'; [[ xzy =~ ^${u:-$v}$ ]]; t U10 $?
+        u=; v='x.y'; [[ xzy =~ ^${u:-"$v"}$ ]]; t U11 $?
+        u=1; [[ 'x.' =~ ^${u:+x\.}$ ]]; t U12 $?
+        u=1; [[ 'xy' =~ ^${u:+x\.}$ ]]; t U13 $?
+        u=; [[ '' =~ ^${u:+x\.}$ ]]; t U14 $?
+        u=; [[ 'a\b' =~ ^${u:-a\\b}$ ]]; t U15 $?
+        u=; [[ 'a*' =~ ^${u:-a\*}$ ]]; t U16 $?
+        u=; [[ 'aaa' =~ ^${u:-a\*}$ ]]; t U17 $?
+        u=; [[ 'axb' =~ "^${u:-a.b}$" ]]; t U20 $?
+        u=; [[ 'a.b' =~ ^${u-a\.b}$ ]]; t U21 $?
+        unset u; [[ 'axb' =~ ^${u=a\.b}$ ]]; t U24 $?; echo "u=$u"
+        u=; w=; [[ 'a.' =~ ^${u:-${w:-a\.}}$ ]]; t U25 $?
+        u=; w=; [[ 'ax' =~ ^${u:-${w:-a\.}}$ ]]; t U26 $?
+        u=; [[ 'a[b' =~ ^${u:-a\[b}$ ]]; t U29 $?
+        unset u; [[ 'a(b)' =~ ^${u-a\((b)\)}$ ]]; t U31 $?
+        """);
+
     [SkippableFact]
     public Task Differential_RegexEre_PerlSyntaxIsNotEre() => AssertOracle.EqualAsync(T + """
         [[ é =~ ^[[:alpha:]]$ ]]; t e12 $?
@@ -227,5 +257,97 @@ public class RegexEreDifferentialTests
         [[ ${s}b =~ (a|aa)*c ]]; echo "P2 $?"
         [[ $s =~ (a*)*b ]]; echo "P3 $?"
         [[ $s =~ ((a*)*)*$ ]]; echo "P4 $? ${#BASH_REMATCH[1]}"
+        """);
+
+    // A back-reference compares the text its group took: the old search took a reference as any length and trusted
+    // a walk that can exit early, so (a*)*(x)\2 matched xy.
+    [SkippableFact]
+    public Task Differential_RegexEre_BackReferencesAreExact() => AssertOracle.EqualAsync(T + """
+        re='(a*)*(x)\2'; [[ xy =~ $re ]]; echo "R01 $? ${#BASH_REMATCH[@]}"
+        line='key=value; other=thing; key=value; x'; re='(key=[a-z]+).*\1'; [[ $line =~ $re ]]; echo "R09 $? ${BASH_REMATCH[1]}"
+        re='([a-z]+) \1'; [[ 'the the cat sat sat' =~ $re ]]; t R10 $?
+        re='(a|ab)(c|bcd)(d*)\2'; [[ abcdbcd =~ $re ]]; t R11 $?
+        re='(a*)+\1b'; [[ aab =~ $re ]]; t R12 $?
+        re='((a)|b)*\2'; [[ abba =~ $re ]]; t R13 $?
+        re='(a)|\1x'; [[ x =~ $re ]]; t R14 $?
+        re='(a)?\1'; [[ b =~ $re ]]; t R15 $?
+        re='()\1*'; [[ b =~ $re ]]; t R16 $?
+        re='(.)(.)\2\1'; [[ xabbay =~ $re ]]; t R17 $?
+        re='(a+)(b+)\1\2'; [[ aabbaabbx =~ $re ]]; t R18 $?
+        re='^(.*)\1$'; [[ abcabc =~ $re ]]; t R19 $?
+        re='(.*)\1'; [[ xyzxyzq =~ $re ]]; t R20 $?
+        re='([a-c]*)\1'; [[ abcabcabc =~ $re ]]; t R21 $?
+        re='(x)?(y)?\2'; [[ yy =~ $re ]]; t R22 $?
+        re='(a)\1{2}'; [[ aaaa =~ $re ]]; t R23 $?
+        re='(a)(\1)*'; [[ aaaa =~ $re ]]; t R24 $?
+        re='(ab|a)(bc|c)?\1'; [[ abcab =~ $re ]]; t R25 $?
+        """);
+
+    // The back-reference search is bounded by its distinct states, not starts x ends x subject: these finish (the
+    // old search was cubic, and allocated a subject-sized array per start).
+    [SkippableFact]
+    public Task Differential_RegexEre_BackReferenceBombsFinish() => AssertOracle.EqualAsync("""
+        s=$(printf 'ab%.0s' {1..500}); re='(.)\1'; [[ $s =~ $re ]]; echo "R02 $?"; [[ ${s}xx =~ $re ]]; echo "R03 $? ${BASH_REMATCH[0]}"
+        s=$(head -c 1000000 /dev/zero | tr '\0' a); re='(x)\1'; [[ $s =~ $re ]]; echo "R04 $?"
+        re='(a)\1'; [[ $s =~ $re ]]; echo "R05 $? ${BASH_REMATCH[0]}"
+        s=$(head -c 4000 /dev/zero | tr '\0' a); re='(a*)\1$'; [[ $s =~ $re ]]; echo "R06 $? ${#BASH_REMATCH[0]} ${#BASH_REMATCH[1]}"
+        re='^(a+)\1$'; [[ ${s}a =~ $re ]]; echo "R07 $?"
+        re='(a*)*b\1'; [[ $s =~ $re ]]; echo "R08 $?"
+        long=$(printf 'word%d ' {1..200}); re='(word[0-9]+) .* \1 '; [[ "$long word7 " =~ $re ]]; echo "R26 $? ${BASH_REMATCH[1]}"
+        re='(.)\1'; [[ $long =~ $re ]]; echo "R27 $? ${BASH_REMATCH[0]}"
+        """);
+
+    // Hyphens as members and endpoints, collating symbols as endpoints, multibyte endpoints (REG_ECOLLATE in
+    // C.UTF-8), and an invalid byte: only ever itself in the subject, its byte value as an endpoint. The invalid-byte
+    // cases are written inline: through a variable ps-bash still turns $'\xff' into U+FFFD (a store bug, not =~).
+    [SkippableFact]
+    public Task Differential_RegexEre_BracketRangesWithHyphensAndMultibyte() => AssertOracle.EqualAsync(T + """
+        export LC_ALL=C.UTF-8
+        [[ x =~ x ]]
+        [[ - =~ [a---z] ]]; echo "B01 $?"
+        [[ b =~ [a---z] ]]; echo "B02 $?"
+        [[ β =~ [α-ω] ]]; echo "B03 $?"
+        v B05 ',' '[!--]'
+        v B06 . '[--/]'
+        v B07 + '[%--]'
+        v B08 - '[--@]'
+        v B09 a '[a-a]'
+        v B10 b '[[.-.]-z]'
+        v B11 b '[a-[.z.]]'
+        v B12 - '[--]'
+        v B13 - '[^-a]'
+        v B14 d '[a-c-e]'
+        v B15 - '[a-c-]'
+        v B16 b '[---]'
+        v B17 - '[---]'
+        v B18 a '[[.a.]-[.c.]]'
+        v B19 é '[[.é.]]'
+        [[ x =~ [[.$'\xff'.]] ]]; echo "B20 $?"
+        [[ $'\xff' =~ [[.$'\xff'.]] ]]; echo "B21 $?"
+        [[ $'\xff' =~ $'\xff' ]]; echo "B22 $?"
+        [[ x =~ [[=$'\xff'=]] ]]; echo "B23 $?"
+        [[ x =~ [[:$'\xff':]] ]]; echo "B24 $?"
+        v B25 b '[a-]b]'
+        v B27 ']' '[]-a]'
+        v B28 '^' '[]-^]'
+        v B29 'b' '[α-a]'
+        v B30 'b' '[a-α]'
+        v B31 'β' '[[.α.]-ω]'
+        v B32 'β' '[α-[.ω.]]'
+        [[ $'\xff' =~ [$'\xff'] ]]; echo "B33 $?"
+        [[ $'\xff' =~ [a-$'\xff'] ]]; echo "B34 $?"
+        [[ b =~ [[.$'\xff'.]-z] ]]; echo "B35 $?"
+        [[ é =~ [a-$'\xff'] ]]; echo "B36 $?"
+        [[ b =~ [a-$'\xff'] ]]; echo "B37 $?"
+        [[ $'\x80' =~ [$'\x80'-$'\xff'] ]]; echo "B38 $?"
+        [[ é =~ [$'\x80'-$'\xff'] ]]; echo "B39 $?"
+        [[ b =~ [$'\xff'-z] ]]; echo "B40 $?"
+        [[ ÿ =~ [a-$'\xff'] ]]; echo "B41 $?"
+        [[ b =~ [a-[.$'\xff'.]] ]]; echo "B44 $?"
+        [[ é =~ [^$'\xff'] ]]; echo "B45 $?"
+        [[ $'\xff' =~ [^$'\xff'] ]]; echo "B46 $?"
+        [[ $'\xff' =~ [^a] ]]; echo "B47 $?"
+        [[ $'\xff' =~ . ]]; echo "B48 $?"
+        [[ $'\xfe' =~ [$'\xff'-$'\xfe'] ]]; echo "B49 $?"
         """);
 }
