@@ -112,6 +112,20 @@ public class RunTimeArrayAttributeDifferentialTests
         + "h(){ read -a hr <<< \"3 4\"; }; h; echo \"hr:${hr[*]}\"\n"
         + "k(){ local -a ka=(0); kb; echo \"k:${ka[*]}\"; }; kb(){ read -a ka <<< \"5 6\"; }; k; echo \"[${ka[*]-unset}]\"\n");
 
+    // `declare -g a=(...)` sets the shell's global even while a running function (this one or a caller) holds a local
+    // array of the name, which keeps its value and stays the one the function reads; a later `a+=(x)` and `readonly`
+    // write that local. REGRESSION: `f(){ local -a g=(l); declare -ga g=(x); }; f; echo ${g[*]}` printed nothing.
+    [SkippableFact]
+    public Task GlobalArrayDeclarations_WriteTheGlobal_OverAFunctionsLocal() => Same(
+        "gd(){ local -a gy=(loc); declare -ga gy=(glob); echo \"in:${gy[*]}\"; gy+=(x); declare -ga gy+=(more); echo \"in2:${gy[*]}\"; }; gd; echo \"gy:${gy[*]}\"\n"
+        + "ge(){ local -A gm=([k]=loc); declare -gA gm=([k]=glob); echo \"in:${gm[k]}\"; }; ge; echo \"gm:${gm[k]}\"\n"
+        + "outer(){ local -a go=(outer); inner; echo \"outer:${go[*]}\"; }; inner(){ declare -ga go=(glob); }; outer; echo \"go:${go[*]}\"\n"
+        + "gh(){ declare -ga gn=(1 2); echo \"in:${gn[*]}\"; }; gh; echo \"gn:${gn[*]}\"\n"
+        + "gs(){ local -a gw=(loc); ( declare -ga gw=(sub); echo \"sub:${gw[*]}\" ); echo \"in:${gw[*]}\"; }; gw=(top); gs; echo \"gw:${gw[*]}\"\n"
+        + "gr(){ local -a gq=(loc); readonly -a gq=(ro) 2>&1; echo \"in:${gq[*]}\"; }; gr; echo \"gq:${gq[*]-unset}\"\n"
+        + "gt(){ local -a gv=(loc); eval 'declare -ga gv=(e1); gv+=(e2)'; echo \"in:${gv[*]}\"; }; gt; echo \"gv:${gv[*]}\"\n"
+        + "printf 'declare -ga GS=(file)\\nGS+=(more)\\n' > gs.sh; gu(){ local -a GS=(loc); source ./gs.sh; echo \"in:${GS[*]}\"; }; gu; echo \"GS:${GS[*]}\"\n");
+
     [SkippableFact]
     public Task StaticEvalText_InAFunction_IsTheFunctionsOwnCode() => Same(
         "e1(){ eval 'declare -a ea=(7 8)'; eval 'declare -i ei=2*3'; ei+=1; ea+=(9); echo \"e1: ${ea[*]} $ei\"; }\n"

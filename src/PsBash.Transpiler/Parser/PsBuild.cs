@@ -586,14 +586,23 @@ public static class PsBuild
         => "[PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, " + SingleQuote(name) + ").Value";
 
     /// <summary>
+    /// The write target of <c>declare -g a=(…)</c>: the shell's global array, also while a running function holds a local
+    /// array of the name (<c>VarFrameStack.GlobalArraySlot</c>; a subshell's journal still puts it back). An
+    /// <see cref="IsArraySlot"/> target. REGRESSION: <c>f() { local -a g=(l); declare -ga g=(x); }; f</c> wrote the local.
+    /// </summary>
+    public static string GlobalArraySlot(string name)
+        => "[PsBash.Cmdlets.VarFrameStack]::GlobalArraySlot($ExecutionContext.SessionState, " + SingleQuote(name) + ").Value";
+
+    /// <summary>
     /// A write target as a COMMAND argument (<c>Set-BashElement T ...</c>): an <see cref="ArraySlot"/> is wrapped in
     /// parentheses, since argument mode reads <c>[Type]::M()</c> as text; a variable stays as it is.
     /// </summary>
     public static string TargetArg(string target) => IsArraySlot(target) ? "(" + target + ")" : target;
 
-    /// <summary>True for a write target <see cref="ArraySlot"/> made, or the one <see cref="BindArraySlot"/> bound.</summary>
+    /// <summary>True for a write target <see cref="ArraySlot"/> or <see cref="GlobalArraySlot"/> made, or the one <see cref="BindArraySlot"/> bound.</summary>
     public static bool IsArraySlot(string target)
-        => target.StartsWith("[PsBash.Cmdlets.VarFrameStack]::ArraySlot(", StringComparison.Ordinal) || target == BoundArraySlot;
+        => target.StartsWith("[PsBash.Cmdlets.VarFrameStack]::ArraySlot(", StringComparison.Ordinal)
+           || target.StartsWith("[PsBash.Cmdlets.VarFrameStack]::GlobalArraySlot(", StringComparison.Ordinal) || target == BoundArraySlot;
 
     /// <summary>The write target after <see cref="BindArraySlot"/>: the bound slot's value.</summary>
     public const string BoundArraySlot = "$__psbSlot.Value";
@@ -2145,7 +2154,7 @@ public static class PsBuild
     /// </summary>
     public static string InputRedirectGuardInline(string target, string ok, string? onFail = null, string? failTail = null) =>
         "$__psbash_ir = [string](Write-Output " + target + "); Invoke-BashTest -e $__psbash_ir; if ($global:LASTEXITCODE -eq 0) { " + ok
-        + "; " + RedirectFailedVariable + " = $false"
+        + "; " + LowerRedirectFailure
         + " } else { " + InputRedirectFailure(failTail, onFail) + " }";
     /// <summary>
     /// A compound command's <c>&lt; file</c> that cannot be opened fails the command: bash reports
@@ -2158,12 +2167,18 @@ public static class PsBuild
     /// </summary>
     public static string InputRedirectGuard(string target, string ok, string? failTail = null, bool clearsNested = true) =>
         "& { $__psbash_ir = [string](Write-Output " + target + "); Invoke-BashTest -e $__psbash_ir; if ($global:LASTEXITCODE -eq 0) { " + ok
-        + (clearsNested ? "; " + RedirectFailedVariable + " = $false" : "")
+        + (clearsNested ? "; " + LowerRedirectFailure : "")
         + " } else { " + InputRedirectFailure(failTail, RedirectFailedVariable + " = $true") + " } }";
 
     /// <summary>The global a redirect that could not be opened raises (Invoke-BashRedirect's
     /// <c>RedirectFailedVariable</c>, <see cref="InputRedirectGuard"/>), read by <see cref="RedirectFailureChecked"/>.</summary>
     public const string RedirectFailedVariable = "$global:__BashRedirectFailed";
+
+    /// <summary>
+    /// The statement that lowers <see cref="RedirectFailedVariable"/> once a command ran whose own redirect did not fail:
+    /// a failure inside its words that was already handled (<c>: "$(cat &lt; missing || true)" &lt; f</c>) is not its own.
+    /// </summary>
+    public const string LowerRedirectFailure = RedirectFailedVariable + " = $false";
 
     /// <summary>
     /// The failure branch of every input-redirect guard (<see cref="InputRedirectGuard"/>, <see cref="InputRedirectGuardInline"/>,
@@ -2236,7 +2251,7 @@ public static class PsBuild
     /// REGRESSION: under set -e that ended the shell.</para>
     public static string SimpleInputRedirectGuard(string target, string ok, string? failTail = null, bool clearsNested = true) =>
         ". { $__psbash_ir = [string](Write-Output " + target + "); Invoke-BashTest -e $__psbash_ir; if ($global:LASTEXITCODE -eq 0) { " + ok
-        + (clearsNested ? "; " + RedirectFailedVariable + " = $false" : "")
+        + (clearsNested ? "; " + LowerRedirectFailure : "")
         + " } else { " + InputRedirectFailure(failTail, RedirectFailedVariable + " = $true") + " } }";
 
     /// <summary>

@@ -534,6 +534,16 @@ public sealed class VarFrameStack
         => BashVariableLookup.ArrayWriteSlot(session, name,
             Current.IsLocalArray(name) && !PsBash.Core.PowerShellOwnedVariables.Contains(name));
 
+    /// <summary>
+    /// The variable <c>declare -g a=(…)</c> writes (PsBuild.GlobalArraySlot): the shell's global, also while an active
+    /// function holds <paramref name="name"/> as a local array (that local keeps its value and stays the one the function
+    /// reads); otherwise the one <see cref="ArraySlot"/> finds. REGRESSION: <c>f() { local -a g=(l); declare -ga g=(x);
+    /// }; f; echo ${g[*]}</c> printed nothing (the local took x).
+    /// </summary>
+    public static PSVariable GlobalArraySlot(SessionState session, string name)
+        => BashVariableLookup.ArrayWriteSlot(session, name, callerLocal: false,
+            globalOnly: Current.IsLocalArray(name) && !PsBash.Core.PowerShellOwnedVariables.Contains(name));
+
     /// <summary>A local held as a PowerShell variable (<c>local -A m</c>) is declared: see <see cref="TakeAttributes"/>.</summary>
     public static void LocalAttributes(string name) => Current.TakeAttributes(name);
 

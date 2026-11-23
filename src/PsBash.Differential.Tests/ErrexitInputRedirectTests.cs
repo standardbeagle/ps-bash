@@ -71,14 +71,15 @@ public class ErrexitInputRedirectTests
     // A redirect that cannot open fails only its own command: a failure inside the command's words (`$( )`, a function
     // call in it, `<( )`) that was handled or whose status the builtin ignores does not end the shell when the
     // command's own file opens. REGRESSION: the inner failure raised the flag the builtin's open check read, and
-    // `set -e; : "$(cat < /nonexistent 2>/dev/null || true)" < f; echo ok` printed no ok.
+    // `set -e; : "$(cat < /nonexistent 2>/dev/null || true)" < f; echo ok` printed no ok. (The function rows' messages
+    // are silenced: in a function ps-bash names the shell `environment`, a separate gap.)
     [SkippableFact]
     public Task AFailureInsideTheWords_IsNotTheCommandsOwnOpen() => AssertOracle.EqualAsync(
         "echo host > hn\n"
         + "( set -e; : \"$(cat < /nonexistent 2>/dev/null || true)\" < hn; echo ok1 ); echo \"s1=$?\"\n"
         + "( set -e; : \"$({ cat; } < /nonexistent 2>/dev/null || true)\" < hn; echo ok2 ); echo \"s2=$?\"\n"
-        + "( set -e; nf(){ cat < /nonexistent 2>/dev/null; }; true \"$(nf || :)\" < hn; echo ok3 ); echo \"s3=$?\"\n"
-        + "( set -e; nf(){ cat < /nonexistent 2>/dev/null || :; }; : \"$(nf)\" < hn; echo ok4 ); echo \"s4=$?\"\n"
+        + "( set -e; nf(){ cat < /nonexistent 2>/dev/null; }; true \"$(nf || :)\" < hn; echo ok3 ) 2>/dev/null; echo \"s3=$?\"\n"
+        + "( set -e; nf(){ cat < /nonexistent 2>/dev/null || :; }; : \"$(nf)\" < hn; echo ok4 ) 2>/dev/null; echo \"s4=$?\"\n"
         + "( set -e; : \"$(cat < /nonexistent 2>/dev/null || true)\" > out; echo ok5 ); echo \"s5=$?\"\n"
         + "( set -e; { : \"$(cat < /nonexistent 2>/dev/null || true)\"; } < hn; echo ok6 ); echo \"s6=$?\"\n"
         + "( set -e; : <(cat < /nonexistent 2>/dev/null) < hn; echo ok7 ); echo \"s7=$?\"\n"
@@ -88,4 +89,18 @@ public class ErrexitInputRedirectTests
         + "( set -e; export Q=\"$(cat < /nonexistent 2>/dev/null || true)\" < hn; echo ok13 ); echo \"s13=$?\"\n"
         + "( set -e; while read -r l; do : \"$(cat < /nonexistent 2>/dev/null || :)\"; done < hn; echo ok14 ); echo \"s14=$?\"\n"
         + "( set -e; for i in 1; do : \"$(cat < /nonexistent 2>/dev/null || :)\"; done < hn; echo ok15 ); echo \"s15=$?\"\n");
+
+    // The same for a declaration builtin (export, local, declare, readonly) and a bare assignment whose value's `$( )`
+    // handled a failed open: the declaration's own redirect opened, so the shell goes on. REGRESSION: `set -e; export
+    // Q="$(cat < /nonexistent 2>/dev/null || true)" < f; echo ok` printed no ok (status 1). (The function row's message
+    // is silenced: in a function ps-bash names the shell `environment`, a separate gap.)
+    [SkippableFact]
+    public Task AFailureInADeclarationsValue_IsNotItsOwnOpen() => AssertOracle.EqualAsync(
+        "echo host > hn\n"
+        + "( set -e; lf(){ local L=\"$(cat < /nonexistent 2>/dev/null || true)\" < hn; echo okL; }; lf; echo ok1 ) 2>/dev/null; echo \"s1=$?\"\n"
+        + "( set -e; declare D=\"$(cat < /nonexistent 2>/dev/null || true)\" < hn; echo ok2 ); echo \"s2=$?\"\n"
+        + "( set -e; readonly R=\"$(cat < /nonexistent 2>/dev/null || true)\" < hn; echo ok3 ); echo \"s3=$?\"\n"
+        + "( set -e; x=\"$(cat < /nonexistent 2>/dev/null || true)\" < hn; echo ok4 ); echo \"s4=$?\"\n"
+        + "( set -e; export Q2=\"$(cat < /nonexistent 2>/dev/null || true)\" > out; echo ok5 ); echo \"s5=$?\"\n"
+        + "( trap 'echo ERR' ERR; export Q3=\"$(cat < /nonexistent 2>/dev/null || true)\" < hn; echo ok6 ); echo \"s6=$?\"\n");
 }

@@ -193,9 +193,14 @@ back what the local hid.**
   (`BashParser.Parse(text, inFunctionBody: true)`, its `declare` local) and shares the body's attribute and nameref
   sets. A later write in the same text (`a+=(3)`, `m[k]=v`, `read -a`, `mapfile`) must agree with that run-time choice,
   so the text's array write target is the run-time slot (`PsBuild.ArraySlot` → `VarFrameStack.ArraySlot`: the running
-  function's local array, else the global); only the top-level form and `-g`/`readonly` write `$global:`.
-  REGRESSION: `f(){ local -a "$1"; }; f 'a=(1 2)'` left a global a, and later `$global:` writes in the same text went
-  around the local. Behavior: `Differential.Tests/RunTimeArrayAttributeDifferentialTests`.
+  function's local array, else the global); only the top-level form writes `$global:`, and `readonly -a` takes the
+  run-time slot (the array in sight). REGRESSION: `f(){ local -a "$1"; }; f 'a=(1 2)'` left a global a, and later
+  `$global:` writes in the same text went around the local. Behavior: `Differential.Tests/RunTimeArrayAttributeDifferentialTests`.
+- **`declare -g a=(...)`** in a function, or in eval / sourced text, sets the shell's global even while a running
+  function (this one or a caller) holds a local array of the name: `PsEmitter.GlobalDeclarationTarget` →
+  `PsBuild.GlobalArraySlot` → `VarFrameStack.GlobalArraySlot` (`ArrayWriteSlot(globalOnly:)`, a subshell's journal
+  still notes it). The parser marks it `ShAssignment.RequestsGlobal` (not `readonly`). The local keeps its value and a
+  later `a+=(x)` writes it, as in bash. Not covered: a subscripted `declare -g 'a[2]=x'` over a local.
 - **Attributes set by such text hold for the writes after it** (`eval 'declare -i n'; n=2*3` stores 6; `-u`/`-l`
   convert, `+=` too). The emitter cannot see them, so in a unit that runs run-time declaration text
   (`PsEmitter.RunsRunTimeDeclarations`: a command named at run time, `eval` of text known only then, `source`, a

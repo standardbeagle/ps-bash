@@ -3121,8 +3121,8 @@ public static partial class PsEmitter
     /// <summary>A run-time array declaration is being split into its two forms (<see cref="EmitRunTimeArrayLocals"/>).</summary>
     [ThreadStatic] private static bool _runTimeLocalSplit;
 
-    /// <summary>While a declaration in eval text at its top that is the shell's global is emitted: its top-level form, or
-    /// `declare -g` / `readonly` (a function's local array of the name must not take it). Its array writes are `$global:`.</summary>
+    /// <summary>While the top-level form of a run-time array declaration in eval text is emitted (<see cref="EmitRunTimeArrayLocals"/>):
+    /// no function runs it then, so its array writes are `$global:`. (`declare -g` is <see cref="GlobalDeclarationTarget"/>.)</summary>
     [ThreadStatic] private static bool _globalArrayWrites;
 
     /// <summary>Eval text at its own top (no function, no subshell of its own): a function may be running it.</summary>
@@ -4909,6 +4909,10 @@ public static partial class PsEmitter
         if (bare && !cmd.Redirects.IsDefaultOrEmpty && !ContainsCommandSub(cmd) && cmd.Redirects.All(r => r.Op is ">" or ">>"))
             text = text + "; " + PsBuild.SetStatus(0) + "; " + EmitNoOpRedirectTouches(new Command.Simple([], [], cmd.Redirects));
         else if (!cmd.Redirects.IsDefaultOrEmpty && !ContainsCommandSub(cmd)) text = ApplyCompoundRedirects(text, cmd.Redirects);
+        // `export Q="$(cat < missing || true)" < f`: with a value's `$( )` the builtin's redirects are not applied (above),
+        // so no open of its own failed, and a failure the `$( )` handled is not the declaration's (RedirectFailureChecked
+        // reads the flag after it). REGRESSION: under set -e that ended the shell.
+        else if (!cmd.Redirects.IsDefaultOrEmpty) text += "; " + PsBuild.LowerRedirectFailure;
         if (!_runtimeReadonly || cmd.IsLocal || cmd.IsExport || cmd.IsDeclare) return text;
         var unknown = cmd.Pairs.Select(p => ResolveNameref(p.Name)).Select(n => n.Contains('[') ? n[..n.IndexOf('[')] : n)
             .Where(n => _readonlyVars?.Contains(n) != true).Distinct(StringComparer.Ordinal).ToList();
@@ -5012,13 +5016,6 @@ public static partial class PsEmitter
         }
         if (!_runTimeLocalSplit && RunTimeArrayLocals(cmd) is { } arrayLocals)
             return EmitRunTimeArrayLocals(cmd, arrayLocals);
-        // `eval 'declare -ga g=(1)'` / `readonly -a r=(2)` in a function: the global, never the function's local array of the name.
-        if (cmd.IsGlobal && EvalTextAtTop && !_globalArrayWrites)
-        {
-            _globalArrayWrites = true;
-            try { return EmitShAssignment(cmd); }
-            finally { _globalArrayWrites = false; }
-        }
         if (!NeedsArrayKindGuard(cmd)) return EmitShAssignmentCore(cmd);
         _inArrayKindGuard = true;
         try
@@ -5070,6 +5067,17 @@ public static partial class PsEmitter
         && _intVars?.Contains(target) != true && _caseVars?.ContainsKey(target) != true && _arrayVars?.Contains(target) != true
         && target is not ("PATH" or "HOME" or "IFS") && PsBuild.TryMapSpecialVar(target, braced: false, false) is null
         && EnvShadowName(pair.Name) is null && EnvShadowName(target) is null;
+
+    /// <summary>
+    /// The whole-array target of `declare -g a=(...)` in a function, or in eval / sourced text a function may run: the
+    /// shell's global even when a running function holds a local array of the name (PsBuild.GlobalArraySlot). Null
+    /// otherwise: `readonly` and a later write keep the array in sight, as in bash (`f() { local -a g=(l); declare -ga
+    /// g=(x); g+=(y); }` leaves the local `l y` and the global `x`). REGRESSION: `declare -ga` wrote the local, statically
+    /// and from run-time text.
+    /// </summary>
+    private static string? GlobalDeclarationTarget(Command.ShAssignment cmd, string name) =>
+        cmd.RequestsGlobal && (_functionDepth > 0 || EvalTextAtTop) && ResolveNameref(name) is var target && IsValidVarName(target)
+            ? PsBuild.GlobalArraySlot(target) : null;
 
     private static string EmitShAssignmentCore(Command.ShAssignment cmd)
     {
@@ -5349,7 +5357,7 @@ public static partial class PsEmitter
                     pair = pair with { ArrayValue = plainElements };
                 // A mixed `b=([n]=x [0]=z)` has a numeric key too: it takes this path (all-numeric ones the sparse literal below).
                 bool keyedNumericOk = knownAssoc || pair.Op == AssignOp.Equal && HasNonNumericSubscript(pair.ArrayValue);
-                string arrTarget = BindArrayTarget(sb, ArrayWriteTarget(pair.Name));
+                string arrTarget = BindArrayTarget(sb, GlobalDeclarationTarget(cmd, pair.Name) ?? ArrayWriteTarget(pair.Name));
                 if (pair.Op is AssignOp.Equal or AssignOp.PlusEqual && TryEmitAssocLiteral(pair.ArrayValue, out var assoc, out var assocAsIndexed, keyedNumericOk))
                 {
                     // `a+=([k]=v)` merges into the existing table (a changed value keeps its place, a new key joins).

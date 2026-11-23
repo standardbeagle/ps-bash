@@ -129,16 +129,26 @@ public class VarFrameEmitTests
     public void Transpile_EvalTextArrayWrite_IsTheRunTimeSlot(string bash, string name)
         => Assert.Contains(PsBuild.ArraySlot(name)[..^".Value".Length], Eval(bash));
 
-    // Oracle: `f(){ local -a g; eval 'declare -ga g=(1 2)'; }; f; echo ${g[*]}` prints 1 2: -g (and readonly) is the
-    // global, never the function's local array of the name.
+    // Oracle: `f(){ local -a g=(l); eval 'declare -ga g=(1 2)'; echo ${g[*]}; }; f; echo ${g[*]}` prints l, then 1 2: -g
+    // is the global even over the function's local array of the name (VarFrameStack.GlobalArraySlot), and so without
+    // eval. `readonly -a g=(1 2)` there sets the local (prints 1 2, then nothing): the array in sight, the run-time slot.
+    // REGRESSION: -g wrote the local.
     [Theory]
     [InlineData("declare -ga g=(1 2)")]
-    [InlineData("readonly -a g=(1 2)")]
-    public void Transpile_EvalTextGlobalArrayDeclaration_WritesTheGlobal(string bash)
+    [InlineData("declare -gA g=([k]=v)")]
+    [InlineData("declare -ga g+=(3)")]
+    public void Transpile_GlobalArrayDeclaration_WritesTheGlobalSlot(string bash)
     {
-        var ps = Eval(bash);
-        Assert.Contains("$global:g", ps);
-        Assert.DoesNotContain("ArraySlot(", ps);
+        string slot = PsBuild.GlobalArraySlot("g")[..^".Value".Length];
+        Assert.Contains(slot, Eval(bash));
+        Assert.Contains(slot, T("f() { local -a g=(l); " + bash + "; }"));
+    }
+
+    [Fact]
+    public void Transpile_ReadonlyArrayDeclaration_WritesTheArrayInSight()
+    {
+        Assert.Contains(PsBuild.ArraySlot("g")[..^".Value".Length], Eval("readonly -a g=(1 2)"));
+        Assert.DoesNotContain("GlobalArraySlot(", T("f() { local -a g=(l); readonly -a g=(1 2); }"));
     }
 
     // Oracle: `v=n; declare -i "$v"; source ./w.sh` with `n=2+3` in w.sh prints 5, and `declare -i n; source ./w.sh` too:

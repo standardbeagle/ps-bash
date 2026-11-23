@@ -82,7 +82,10 @@ public abstract record Command : BashNode
         string? Builtin = null,
         // `declare -g a=(…)` / `readonly a=(…)`: a declaration that is global even when a function runs it (eval text,
         // which cannot know whether one does, keeps any other `declare`'s array local to the running function).
-        bool IsGlobal = false) : Command;
+        bool IsGlobal = false,
+        // `declare -g a=(…)` (not `readonly`): the whole array is the shell's global even when a running function holds
+        // a local array of the name (bash; `readonly` and a subscripted pair write the one in sight).
+        bool RequestsGlobal = false) : Command;
 
     /// <summary>
     /// An if/elif/else statement.

@@ -269,7 +269,9 @@ errexit decision for a failed open. The exit/return is never inside the guard's 
 block in a function or subshell. A nested failure the body handled (`{ { cat; } < missing || :; } < in`), or one in a
 simple command's words (`: "$(cat < missing || true)" < f`, also a read loop's body), is cleared by the outer command's
 own guard once the command ran (`SimpleInputRedirectGuard`/`InputRedirectGuardInline` lower the flag), or by
-Invoke-BashRedirect when the command has an output file of its own: the flag says only whether that command's open failed. REGRESSION: the input guard lost its errexit exit and nothing
+Invoke-BashRedirect when the command has an output file of its own: the flag says only whether that command's open failed.
+A declaration whose value has a `$( )` does not apply its redirects, so `PsEmitter.EmitShAssignmentStatement` lowers
+the flag after it (`PsBuild.LowerRedirectFailure`; `export Q="$(cat < missing || true)" < f`). REGRESSION: the input guard lost its errexit exit and nothing
 checked after the compound, so `set -e; { { cat; } < missing; } 2>/dev/null; echo no` printed no. Guard:
 `RedirectGroupGuardTests.Transpile_RedirectedCompoundUnderErrexit_IsFollowedByTheOpenFailureCheck`; behavior
 `Differential.Tests/ErrexitInputRedirectTests`.

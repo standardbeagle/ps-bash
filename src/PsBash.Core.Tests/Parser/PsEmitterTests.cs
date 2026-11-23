@@ -6003,6 +6003,17 @@ public class PsEmitterTests
         Assert.Equal(guardLowers, ps.Contains("; $global:__BashRedirectFailed = $false } else { ", StringComparison.Ordinal));
     }
 
+    // Oracle: `set -e; export Q="$(cat < /nonexistent 2>/dev/null || true)" < f; echo ok` prints ok, and so for local.
+    // With a value's `$( )` the declaration's redirects are not applied, so the flag the check reads after it is lowered
+    // once it ran. REGRESSION: the handled inner failure ended the shell. (A top-level `declare` / `readonly` / `x=` with
+    // a redirect is a simple command: its input guard lowers the flag, above.)
+    [Theory]
+    [InlineData("set -e\nexport Q=\"$(nf || true)\" < f")]
+    [InlineData("set -e\ng() { local L=\"$(nf || true)\" < f; }")]
+    [InlineData("set -e\nexport Q=\"$(nf || true)\" > out")]
+    public void Transpile_DeclarationWithACommandSubAndARedirect_LowersTheFlagBeforeTheCheck(string script)
+        => Assert.Contains(PsBuild.LowerRedirectFailure + "; if (" + PsBuild.RedirectFailedVariable + ")", PsEmitter.Transpile(script)!);
+
     [Theory]
     [InlineData("true | (false)", 3)]
     [InlineData("(false) | (false) | (false; false)", 3)]

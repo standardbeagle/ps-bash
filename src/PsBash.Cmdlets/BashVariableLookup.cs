@@ -33,13 +33,14 @@ public static class BashVariableLookup
     /// else the shell's global, made (unset) when missing. In a subshell it is always the nearest one (the subshell's
     /// own, a caller's local or the shell's: the one the subshell's code reads), and the subshell's
     /// <see cref="ArrayWriteJournal"/> notes it, so the write ends with the subshell. REGRESSION: <c>( f() { arr=(x y); };
-    /// f )</c> wrote a variable local to f, so the subshell never saw x y.
+    /// f )</c> wrote a variable local to f, so the subshell never saw x y. With <paramref name="globalOnly"/>
+    /// (<c>declare -g</c> over a function's local array) it is the shell's global even then, the journal noting it.
     /// </summary>
-    public static PSVariable ArrayWriteSlot(SessionState state, string name, bool callerLocal)
+    public static PSVariable ArrayWriteSlot(SessionState state, string name, bool callerLocal, bool globalOnly = false)
     {
         name = BashNameCase.ToStore(name);
         ArrayWriteJournal? journal = Journal(state);
-        if ((callerLocal || journal is not null && !PowerShellOwnedVariables.Contains(name))
+        if (!globalOnly && (callerLocal || journal is not null && !PowerShellOwnedVariables.Contains(name))
             && state.PSVariable.Get(name) is { } nearest && Writable(nearest))
         {
             journal?.Note(nearest, made: null, state);
