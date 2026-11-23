@@ -1407,12 +1407,40 @@ public static class PsBuild
         "@(ConvertTo-BashWords " + varRef + ")";
 
     /// <summary>
-    /// <c>-"${a[@]}"</c> / <c>"p$@q"</c>: the elements of a quoted all-elements expansion, each whole (never split or globbed),
-    /// <paramref name="prefix"/> glued to the first and <paramref name="suffix"/> to the last; no elements is the one field
-    /// prefix+suffix. The arguments are PowerShell expressions.
+    /// The fields of one word given as segments (<c>PsBash.Cmdlets.BashWordFields</c>): <paramref name="segments"/> is a
+    /// comma list of <see cref="WordSegment"/> / <see cref="WordSegmentGroup"/> items. The one general form of word
+    /// expansion (spec emitter-strategy.md "Word expansion: one primitive").
     /// </summary>
-    public static string QuotedAffixArray(string prefix, string suffix, string elements) =>
-        "@([PsBash.Cmdlets.BashQuotedWords]::Affix(" + prefix + ", " + suffix + ", " + elements + "))";
+    public static string WordFieldsArray(string segments) =>
+        "@(ConvertTo-BashWords -Parts @(" + segments + "))";
+
+    /// <summary>One segment of <see cref="WordFieldsArray"/>: its kind, then its value (a PowerShell expression; anything but
+    /// a quoted literal is parenthesised so it stays one element of the comma list).</summary>
+    public static string WordSegment(int kind, string valueExpr)
+    {
+        string k = kind.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        bool bare = valueExpr.Length > 1 && valueExpr[0] == '\'' && valueExpr[^1] == '\'' && valueExpr.IndexOf('\'', 1) == valueExpr.Length - 1
+            || valueExpr == "$null";
+        return k + ", " + (bare ? valueExpr : "(" + valueExpr + ")");
+    }
+
+    /// <summary>
+    /// A group of segments chosen at run time (<c>${v:-word}</c>: the value or the word): <paramref name="probeExpr"/> is
+    /// <c>x</c> exactly when <paramref name="thenSegments"/> apply, otherwise <paramref name="elseSegments"/> (either may be
+    /// empty). The group is one element, an array, in the place of a kind.
+    /// </summary>
+    public static string WordSegmentGroup(string probeExpr, string thenSegments, string elseSegments) =>
+        "$(if ([string](" + probeExpr + ") -ceq 'x') { ,@(" + thenSegments + ") } else { ,@(" + elseSegments + ") })";
+
+    /// <summary>An unquoted list expansion alone (<c>$@</c>, <c>${a[@]}</c>, <c>${@:2}</c>): the values joined with IFS[0] and
+    /// split again; with an empty IFS each value is its own field.</summary>
+    public static string ListFieldsArray(string valuesExpr) =>
+        "@(ConvertTo-BashWords -Prefix '' -Suffix '' -Fields " + valuesExpr + ")";
+
+    /// <summary>An unquoted arithmetic result alone (<c>$((n))</c>): split on IFS (it holds no glob character), without the
+    /// cmdlet: <c>IFS=1</c> makes <c>$((11+0))</c> two empty fields.</summary>
+    public static string NumberFieldsArray(string valueExpr) =>
+        "@([PsBash.Cmdlets.BashWordFields]::SplitNumber(" + valueExpr + "))";
 
     /// <summary>
     /// The array an unquoted GLOB word (<c>*.txt</c>, <c>src/*</c>, <c>$d/[ab]*</c>) pathname-expands into:

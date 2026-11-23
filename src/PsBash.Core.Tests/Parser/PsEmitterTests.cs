@@ -292,7 +292,7 @@ public class PsEmitterTests
     public void Transpile_ForListExpansionWithText_IsSplitByConvertToBashWords(string src, string leaked)
     {
         var ps = PsEmitter.Transpile(src)!;
-        Assert.Contains("ConvertTo-BashWords -Prefix ", ps);
+        Assert.Contains("ConvertTo-BashWords -Parts @(", ps);
         Assert.DoesNotContain(leaked, ps);
     }
 
@@ -508,7 +508,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile(": ${x:=5}")!;
         Assert.DoesNotContain("Invoke-Expression", result);
-        Assert.Contains("$global:BashLastArg = [string](", result); // the lone word is also `$_` for the next command
+        Assert.Contains("$global:BashLastArg = if ($__psbash_nv.Count) { [string]$__psbash_nv[-1] }", result); // the last field is also `$_` for the next command
         Assert.Contains("$global:LASTEXITCODE = 0", result);
         Assert.DoesNotMatch(@"(^|;)\s*:\s", result);
     }
@@ -606,7 +606,7 @@ public class PsEmitterTests
         // evaluator, not a verbatim PowerShell $( ) subexpression (which
         // mistranslated **, integer /, bitwise, 1/0 comparisons, etc.).
         var result = PsEmitter.Transpile("echo $((2**10))");
-        Assert.Equal(PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith '2**10')"), result);
+        Assert.Equal(PsBuild.DiscardLineScope(ArithEcho("$(Invoke-BashArith '2**10')")), result);
     }
 
     [Fact]
@@ -626,7 +626,7 @@ public class PsEmitterTests
         // uses — so bash-correct integer operators apply.
         var result = PsEmitter.Transpile("echo $(($1 + 1))");
         Assert.Equal(
-            PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith ('' + $(\"$(if ($null -ne $global:BashPositional) { $global:BashPositional[0] } else { $args[0] })\" -replace '^$','0') + ' + 1'))"),
+            PsBuild.DiscardLineScope(ArithEcho("$(Invoke-BashArith ('' + $(\"$(if ($null -ne $global:BashPositional) { $global:BashPositional[0] } else { $args[0] })\" -replace '^$','0') + ' + 1'))")),
             result);
     }
 
@@ -639,7 +639,7 @@ public class PsEmitterTests
         // the positional value substituted in.
         var result = PsEmitter.Transpile("echo $(($1 ** 2))");
         Assert.Equal(
-            PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith ('' + $(\"$(if ($null -ne $global:BashPositional) { $global:BashPositional[0] } else { $args[0] })\" -replace '^$','0') + ' ** 2'))"),
+            PsBuild.DiscardLineScope(ArithEcho("$(Invoke-BashArith ('' + $(\"$(if ($null -ne $global:BashPositional) { $global:BashPositional[0] } else { $args[0] })\" -replace '^$','0') + ' ** 2'))")),
             result);
         // The nonexistent-PowerShell-operator `**` must not appear as raw output.
         Assert.DoesNotContain("$($1 ** 2)", result);
@@ -655,10 +655,10 @@ public class PsEmitterTests
         // command must be spliced in as a value fragment ahead of Invoke-BashArith
         // rather than left in the string the evaluator parses.
         var result = PsEmitter.Transpile("echo $(( $(echo 5) + 60 ))");
-        Assert.Equal(PsBuild.DiscardLineScope(
-            "Invoke-BashEcho $(Invoke-BashArith ('' + "
+        Assert.Equal(PsBuild.DiscardLineScope(ArithEcho(
+            "$(Invoke-BashArith ('' + "
             + "$((@(Invoke-BashEcho 5 | ConvertTo-BashCapture) -join [string][char]10).Trim())"
-            + " + ' + 60 '))"), // left-trimmed only (bash: `2 + 1/0 : division by 0 (error token is "0 ")`)
+            + " + ' + 60 '))")), // left-trimmed only (bash: `2 + 1/0 : division by 0 (error token is "0 ")`)
             result);
         // The evaluator must never receive the un-expanded substitution text.
         Assert.DoesNotContain("Invoke-BashArith '$(", result);
@@ -680,7 +680,7 @@ public class PsEmitterTests
         // evaluator's existing paren grouping already handles. It must NOT be
         // mistaken for a command sub and shelled out.
         var result = PsEmitter.Transpile("echo $(( $((2+3)) * 4 ))");
-        Assert.Equal(PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith '$((2+3)) * 4 ')"), result);
+        Assert.Equal(PsBuild.DiscardLineScope(ArithEcho("$(Invoke-BashArith '$((2+3)) * 4 ')")), result);
     }
 
     [Fact]
@@ -700,7 +700,7 @@ public class PsEmitterTests
         // $# (parameter count) is likewise substituted with its runtime value.
         var result = PsEmitter.Transpile("echo $(($# * 2))");
         Assert.Equal(
-            PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith ('' + $(\"$(if ($null -ne $global:BashPositional) { $global:BashPositional.Count } else { $args.Count })\" -replace '^$','0') + ' * 2'))"),
+            PsBuild.DiscardLineScope(ArithEcho("$(Invoke-BashArith ('' + $(\"$(if ($null -ne $global:BashPositional) { $global:BashPositional.Count } else { $args.Count })\" -replace '^$','0') + ' * 2'))")),
             result);
     }
 
@@ -714,7 +714,7 @@ public class PsEmitterTests
         // guard turns an empty ($null / out-of-range) substitution into "0".
         var result = PsEmitter.Transpile("echo $(($1 * 2))");
         Assert.Equal(
-            PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith ('' + $(\"$(if ($null -ne $global:BashPositional) { $global:BashPositional[0] } else { $args[0] })\" -replace '^$','0') + ' * 2'))"),
+            PsBuild.DiscardLineScope(ArithEcho("$(Invoke-BashArith ('' + $(\"$(if ($null -ne $global:BashPositional) { $global:BashPositional[0] } else { $args[0] })\" -replace '^$','0') + ' * 2'))")),
             result);
         // The empty-default guard is present so an unset positional never yields a
         // leading-operator (malformed) arithmetic string.
@@ -2064,6 +2064,11 @@ public class PsEmitterTests
     private static string SplitEcho(string expr)
         => $"& {{ $__bashsplat0 = @(ConvertTo-BashWords ({expr})); Invoke-BashEcho @__bashsplat0 }}";
 
+    /// <summary>`echo $((…))`: an arithmetic result is split on IFS like any unquoted expansion (IFS=1: `$((11+0))` is two
+    /// empty fields), through the cheap number path.</summary>
+    private static string ArithEcho(string arith)
+        => "& { $__bashsplat0 = " + PsBuild.NumberFieldsArray(arith) + "; Invoke-BashEcho @__bashsplat0 }";
+
     [Fact]
     public void Transpile_BracedVarWithDefault_EmitsEmptyOrUnsetTest()
     {
@@ -2149,7 +2154,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo ${VAR:=default}");
 
-        Assert.Equal("Invoke-BashEcho ($env:VAR ? $env:VAR : ($env:VAR = \"default\"))", result);
+        Assert.Equal(SplitEcho("($env:VAR ? $env:VAR : ($env:VAR = \"default\"))"), result);
     }
 
     [Fact]
@@ -2165,7 +2170,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo ${VAR:?error msg}");
 
-        Assert.Equal("Invoke-BashEcho ($env:VAR ? $env:VAR : $($__psbash_pe = [PsBash.Cmdlets.BashParamErrorException]::Reported('VAR: ', \"error msg\"); Write-Error -Message ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + $__psbash_pe.Message) -ErrorAction Continue; throw $__psbash_pe))", result);
+        Assert.Equal(SplitEcho("($env:VAR ? $env:VAR : $($__psbash_pe = [PsBash.Cmdlets.BashParamErrorException]::Reported('VAR: ', \"error msg\"); Write-Error -Message ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + $__psbash_pe.Message) -ErrorAction Continue; throw $__psbash_pe))"), result);
     }
 
     [Fact]
@@ -2182,7 +2187,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo ${VAR=default}");
 
-        Assert.Equal("Invoke-BashEcho ($env:VAR ?? ($env:VAR = \"default\"))", result);
+        Assert.Equal(SplitEcho("($env:VAR ?? ($env:VAR = \"default\"))"), result);
     }
 
     [Fact]
@@ -2198,7 +2203,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo ${VAR?must be set}");
 
-        Assert.Equal("Invoke-BashEcho ($env:VAR ?? $($__psbash_pe = [PsBash.Cmdlets.BashParamErrorException]::Reported('VAR: ', \"must be set\"); Write-Error -Message ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + $__psbash_pe.Message) -ErrorAction Continue; throw $__psbash_pe))", result);
+        Assert.Equal(SplitEcho("($env:VAR ?? $($__psbash_pe = [PsBash.Cmdlets.BashParamErrorException]::Reported('VAR: ', \"must be set\"); Write-Error -Message ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + $__psbash_pe.Message) -ErrorAction Continue; throw $__psbash_pe))"), result);
     }
 
     [Fact]
@@ -2217,7 +2222,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo ${VAR@U}");
 
-        Assert.Equal("Invoke-BashEcho $env:VAR.ToUpper()", result);
+        Assert.Equal(SplitEcho("$env:VAR.ToUpper()"), result);
     }
 
     [Fact]
@@ -2225,7 +2230,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo ${VAR@L}");
 
-        Assert.Equal("Invoke-BashEcho $env:VAR.ToLower()", result);
+        Assert.Equal(SplitEcho("$env:VAR.ToLower()"), result);
     }
 
     [Fact]
@@ -2288,7 +2293,7 @@ public class PsEmitterTests
         // ${arr[0]:-x} -> the operator must apply to the indexed value, not be dropped.
         var result = PsEmitter.Transpile("echo ${arr[0]:-x}");
         // A scalar arr (no PowerShell variable) is element 0, so the element read is null-guarded.
-        Assert.Equal("Invoke-BashEcho ($(if ($null -eq $arr) { $env:arr } else { $arr[0] }) ? $(if ($null -eq $arr) { $env:arr } else { $arr[0] }) : \"x\")", result);
+        Assert.Equal(SplitEcho("($(if ($null -eq $arr) { $env:arr } else { $arr[0] }) ? $(if ($null -eq $arr) { $env:arr } else { $arr[0] }) : \"x\")"), result);
     }
 
     [Fact]
@@ -2350,7 +2355,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo ${m[key]:+yes}");
         // The element read is guarded: an unset `m` is unset, not "Cannot index into a null array".
-        Assert.Equal(PsBuild.DiscardLineScope("Invoke-BashEcho ($(if ($null -eq $m) { $null } else { $m[$(if ($m -is [System.Collections.IDictionary]) { 'key' } else { [long]$(Invoke-BashArith 'key' -Subscript) })] }) ? \"yes\" : \"\")"), result);
+        Assert.Equal(PsBuild.DiscardLineScope(SplitEcho("($(if ($null -eq $m) { $null } else { $m[$(if ($m -is [System.Collections.IDictionary]) { 'key' } else { [long]$(Invoke-BashArith 'key' -Subscript) })] }) ? \"yes\" : \"\")")), result);
     }
 
     [Fact]
@@ -2469,7 +2474,7 @@ public class PsEmitterTests
         // `| ForEach-Object { Get-BashText $_ }` so the captured value is the
         // bash-text payload, never a typed BashObject's default ToString(). Glued to `x`, the
         // unquoted substitution is word-split with the text glued to its first and last field.
-        Assert.Equal("& { $__bashsplat0 = @(ConvertTo-BashWords -Prefix \"x\" -Suffix '' -Fields @($(Invoke-BashWhoami | ConvertTo-BashCapture))); Invoke-BashEcho @__bashsplat0 }", result);
+        Assert.Equal("& { $__bashsplat0 = @(ConvertTo-BashWords -Parts @(2, 'x', 3, ($((@(Invoke-BashWhoami | ConvertTo-BashCapture -Join)))))); Invoke-BashEcho @__bashsplat0 }", result);
     }
 
     [Fact]
@@ -2477,7 +2482,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo x$(ls | grep foo)");
 
-        Assert.Contains("-Fields @($(Invoke-BashLs | Invoke-BashGrep foo | ConvertTo-BashCapture))", result);
+        Assert.Contains("3, ($((@(Invoke-BashLs | Invoke-BashGrep foo | ConvertTo-BashCapture -Join))))", result);
     }
 
     [Fact]
@@ -2485,7 +2490,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo x`date`");
 
-        Assert.Contains("-Fields @($(Invoke-BashDate | ConvertTo-BashCapture))", result);
+        Assert.Contains("3, ($((@(Invoke-BashDate | ConvertTo-BashCapture -Join))))", result);
     }
 
     [Fact]
@@ -2504,7 +2509,8 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo x$(echo y$(whoami))");
 
-        Assert.Equal("& { $__bashsplat0 = @(ConvertTo-BashWords -Prefix \"x\" -Suffix '' -Fields @($(& { $__bashsplat0 = @(ConvertTo-BashWords -Prefix \"y\" -Suffix '' -Fields @($(Invoke-BashWhoami | ConvertTo-BashCapture))); Invoke-BashEcho @__bashsplat0 } | ConvertTo-BashCapture))); Invoke-BashEcho @__bashsplat0 }", result);
+        Assert.StartsWith("& { $__bashsplat0 = @(ConvertTo-BashWords -Parts @(2, 'x', 3, ($((@(", result);
+        Assert.Contains("& { $__bashsplat0 = @(ConvertTo-BashWords -Parts @(2, 'y', 3, ($((@(Invoke-BashWhoami | ConvertTo-BashCapture -Join)))))); Invoke-BashEcho @__bashsplat0 }", result);
     }
 
     /// <summary>
@@ -2565,8 +2571,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("cat /tmp/$(echo hi).txt");
 
         // The temp directory is the split word's prefix; the substitution's fields keep the suffix.
-        Assert.Contains("-Prefix ($($env:OS -eq 'Windows_NT' ? $env:TEMP : '/tmp') + '/')", result);
-        Assert.Contains("-Suffix \".txt\" -Fields @($(Invoke-BashEcho hi | ConvertTo-BashCapture))", result);
+        Assert.Contains("-Parts @(1, (" + PsBuild.TempDirExpr + "), 2, '/', 3, ($((@(Invoke-BashEcho hi | ConvertTo-BashCapture -Join)))), 2, '.txt')", result);
     }
 
     [Fact]
@@ -4172,21 +4177,21 @@ public class PsEmitterTests
     public void Transpile_ArithSub_BasicAddition()
     {
         var result = PsEmitter.Transpile("echo $((x + 1))");
-        Assert.Equal(PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith 'x + 1')"), result);
+        Assert.Equal(PsBuild.DiscardLineScope(ArithEcho("$(Invoke-BashArith 'x + 1')")), result);
     }
 
     [Fact]
     public void Transpile_ArithSub_LiteralAddition()
     {
         var result = PsEmitter.Transpile("echo $((2 + 3))");
-        Assert.Equal(PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith '2 + 3')"), result);
+        Assert.Equal(PsBuild.DiscardLineScope(ArithEcho("$(Invoke-BashArith '2 + 3')")), result);
     }
 
     [Fact]
     public void Transpile_ArithSub_Multiplication()
     {
         var result = PsEmitter.Transpile("echo $((x * y))");
-        Assert.Equal(PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith 'x * y')"), result);
+        Assert.Equal(PsBuild.DiscardLineScope(ArithEcho("$(Invoke-BashArith 'x * y')")), result);
     }
 
     [Fact]
@@ -4300,14 +4305,14 @@ public class PsEmitterTests
         // The old emission was a literal PowerShell `$(2 ** 3)`, which is a PARSE
         // ERROR (** is not a PowerShell operator). Now evaluated correctly = 8.
         var result = PsEmitter.Transpile("echo $((2 ** 3))");
-        Assert.Equal(PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith '2 ** 3')"), result);
+        Assert.Equal(PsBuild.DiscardLineScope(ArithEcho("$(Invoke-BashArith '2 ** 3')")), result);
     }
 
     [Fact]
     public void Transpile_ArithSub_Modulo()
     {
         var result = PsEmitter.Transpile("echo $((10 % 3))");
-        Assert.Equal(PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith '10 % 3')"), result);
+        Assert.Equal(PsBuild.DiscardLineScope(ArithEcho("$(Invoke-BashArith '10 % 3')")), result);
     }
 
     [Fact]
@@ -4359,7 +4364,7 @@ public class PsEmitterTests
 
     [Fact]
     public void Transpile_BracedNamedArithmeticParameter_RemainsEvaluatorResolvedSource()
-        => Assert.Equal(PsBuild.DiscardLineScope("Invoke-BashEcho $(Invoke-BashArith '${x} + 1')"),
+        => Assert.Equal(PsBuild.DiscardLineScope(ArithEcho("$(Invoke-BashArith '${x} + 1')")),
             PsEmitter.Transpile("echo $((${x} + 1))"));
 
     // A glob word is expanded by the SHELL (ConvertTo-BashGlob), so echo receives file names.
@@ -4519,7 +4524,7 @@ public class PsEmitterTests
         var unquoted = PsEmitter.Transpile("echo $d/*");
         var quoted = PsEmitter.Transpile("echo \"$d\"/*");
 
-        Assert.Contains("ConvertTo-BashGlob ('' + ($env:d) + '/*')", unquoted);
+        Assert.Contains("ConvertTo-BashWords -Parts @(3, ($env:d), 2, '/*')", unquoted); // split first, each field globbed
         Assert.Contains("ConvertTo-BashGlob ('' + ([PsBash.Cmdlets.BashGlobText]::Escape(\"$env:d\")) + '/*')", quoted);
     }
 
@@ -5162,7 +5167,9 @@ public class PsEmitterTests
     public void Transpile_ArrayIteration_EmitsForEachOverArray()
     {
         var result = PsEmitter.Transpile("for item in ${arr[@]}; do echo $item; done");
-        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($__psbash_lv0 in $(if ($arr -is [System.Collections.IDictionary]) { $arr.Values } else { $arr })) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; [PsBash.Cmdlets.BashVariableStore]::Set('item', [string]($__psbash_lv0)); Invoke-BashEcho $env:item }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }", result);
+        // Unquoted, each element is split and globbed again (arr=('a b' c) iterates a, b, c).
+        Assert.Contains(":__psbash_l0 foreach ($__psbash_lv0 in @(ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @($(if ($arr -is [System.Collections.IDictionary]) { $arr.Values } else { $(if ($null -ne $arr) { $arr } else { $env:arr }) })))) {", result);
+        Assert.Contains("[PsBash.Cmdlets.BashVariableStore]::Set('item', [string]($__psbash_lv0)); Invoke-BashEcho $env:item }", result);
     }
 
     [Fact]
@@ -7588,7 +7595,7 @@ public class PsEmitterTests
     [InlineData("echo ${V=d}", "($env:V ?? ($env:V = \"d\"))")]
     public void Transpile_ParamExpansionColonForm_TestsEmptyNotJustUnset(
         string bash, string expected)
-        => Assert.Equal(expected.StartsWith("split:") ? SplitEcho(expected[6..]) : $"Invoke-BashEcho {expected}", PsEmitter.Transpile(bash));
+        => Assert.Equal(SplitEcho(expected.StartsWith("split:") ? expected[6..] : expected), PsEmitter.Transpile(bash));
 
     [Theory]
     // PowerShell's &&/|| chain wants a COMMAND on the right; a statement keyword
@@ -7781,8 +7788,8 @@ public class PsEmitterTests
         // `[$x]` made PowerShell read `$x` as ITS OWN (undefined) variable and
         // `x="a b"; echo [$x]` printed `[]` — total, silent data loss.
         // Unquoted, the value is split too: the text is glued to the first and last field.
-        Assert.Contains("ConvertTo-BashWords -Prefix \"[\" -Suffix \"]\" -Fields @($env:x)", PsEmitter.Transpile("echo [$x]"));
-        Assert.Contains("ConvertTo-BashWords -Prefix \"x[\" -Suffix \"]z\" -Fields @($env:y)", PsEmitter.Transpile("echo x[$y]z"));
+        Assert.Contains("ConvertTo-BashWords -Parts @(2, '[', 3, ($env:x), 2, ']')", PsEmitter.Transpile("echo [$x]"));
+        Assert.Contains("ConvertTo-BashWords -Parts @(2, 'x[', 3, ($env:y), 2, ']z')", PsEmitter.Transpile("echo x[$y]z"));
     }
 
     [Fact]
@@ -7931,7 +7938,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("cmd $x,y a,\"b\"");
         Assert.DoesNotContain(" $env:x,y", result);
         // `$x,y` unquoted splits $x; the comma stays inside the quoted suffix.
-        Assert.Contains("-Suffix \",y\" -Fields @($env:x)", result);
+        Assert.Contains("-Parts @(3, ($env:x), 2, ',y')", result);
         Assert.Contains("\"a,b\"", result);
     }
 
@@ -8085,9 +8092,9 @@ public class PsEmitterTests
         // "An empty pipe element is not allowed" (Go's make.bash).
         var result = PsEmitter.Transpile("echo x$(LC_TIME=C date)");
 
-        Assert.Contains("@($(& { $__psbash_ss = ", result);
+        Assert.Contains("$((@(& { $__psbash_ss = ", result);
         Assert.Contains("try { $__saved_LC_TIME", result);
-        Assert.Contains("} | ConvertTo-BashCapture)", result);
+        Assert.Contains("} | ConvertTo-BashCapture -Join)", result);
     }
 
     [Fact]
@@ -8098,7 +8105,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("echo x$(cd /tmp)");
 
         // Wrapped in the subshell scope (cd changes shell state), whose body is the cd list.
-        Assert.Contains("@($(& { $__psbash_ss = ", result);
+        Assert.Contains("$((@(& { $__psbash_ss = ", result);
         Assert.Contains("try { $__psbash_cd_target", result);
     }
 
@@ -8120,7 +8127,7 @@ public class PsEmitterTests
 
         // The only block is the split word's own; the substitution body is not wrapped as a statement list.
         Assert.DoesNotContain("$__psbash_ss", result);
-        Assert.Contains("@($(Invoke-BashEcho \"a;b\" | ConvertTo-BashCapture))", result);
+        Assert.Contains("$((@(Invoke-BashEcho \"a;b\" | ConvertTo-BashCapture -Join)))", result);
     }
 
     [Fact]

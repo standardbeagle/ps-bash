@@ -111,7 +111,7 @@ public class ChildEnvironmentGuardTests
     /// </summary>
     private static readonly HashSet<string> ShellViewReaders = new(StringComparer.Ordinal)
     {
-        "BashVariableStore.cs", "BashVariableLookup.cs",
+        "BashVariableStore.cs", "BashVariableLookup.cs", "BashWordFields.cs",
         "BashGlob.cs", "BashLocale.cs", "BashPromptText.cs", "BashRuntime.cs", "BashShellState.cs",
         "BashStateSnapshot.cs", "BashSubscriptExpansion.cs", "BashTimeKeyword.cs", "ConvertToBashWordsCommand.cs",
         "DeclarePrinter.cs", "InvokeBashArithmeticCommand.cs", "InvokeBashCompgenCommand.cs", "InvokeBashDirsCommand.cs",

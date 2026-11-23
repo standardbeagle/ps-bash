@@ -671,7 +671,12 @@ public class BashTranspilerReviewRegressionTests
 
     [Fact]
     public void Transpile_ComparisonInArithmetic_IsNotTreatedAsAssignment()
-        => Assert.DoesNotContain("$__bashsplat1 =", BashTranspiler.Transpile("echo $((n==2)) $n"));
+    {
+        string ps = BashTranspiler.Transpile("echo $((n==2)) $n");
+        Assert.Contains("[PsBash.Cmdlets.BashWordFields]::SplitNumber($(Invoke-BashArith 'n==2'))", ps);
+        Assert.DoesNotContain("$env:n =", ps);
+        Assert.DoesNotContain("BashVariableStore]::Set('n'", ps);
+    }
 
     // Oracle: `for i in 1 2 3; do :; done; i=0; until [ $i -ge 3 ]; do i=$((i+1)); done; echo $i` prints 3. A
     // PowerShell loop variable lingered with its last value and arithmetic read it before the shell variable (it

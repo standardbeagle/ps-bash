@@ -5,52 +5,50 @@ namespace PsBash.Core.Tests.Parser;
 
 /// <summary>An unquoted variable glued to text (<c>a$x</c>, <c>$x.c</c>, <c>"q"$x</c>, <c>f=$x</c>) is field-split like a bare
 /// <c>$x</c>, the text joined to the first and last field: with x='a b', <c>printf '[%s]' a$x</c> prints <c>[aa][b]</c>. Only
-/// for-lists split it; command arguments passed <c>"aa b"</c> as one.</summary>
+/// for-lists split it; command arguments passed <c>"aa b"</c> as one. Every such word is one <c>ConvertTo-BashWords -Parts</c>
+/// call: kind 1 quoted text, 2 pattern text, 3 a split value, 5 a quoted list (PsBash.Cmdlets.BashWordFields).</summary>
 public class AffixWordSplitTests
 {
     private static string T(string bash) => PsEmitter.Transpile(bash)!;
 
     [Theory]
-    [InlineData("printf '[%s]' a$x", "-Prefix \"a\" -Suffix '' -Fields @($env:x)")]
-    [InlineData("f $x.c", "-Prefix '' -Suffix \".c\" -Fields @($env:x)")]
-    [InlineData("printf '[%s]' \"q\"$x", "-Prefix \"q\" -Suffix '' -Fields @($env:x)")]
-    [InlineData("echo $y'x'", "-Prefix '' -Suffix \"x\" -Fields @($env:y)")]
-    [InlineData("p=printf; $p '[%s]' f=$x", "-Prefix \"f=\" -Suffix '' -Fields @($env:x)")]
-    public void Transpile_UnquotedVarGluedToText_SplitsTheValue(string bash, string fields)
-        => Assert.Contains("ConvertTo-BashWords " + fields, T(bash));
+    [InlineData("printf '[%s]' a$x", "-Parts @(2, 'a', 3, ($env:x))")]
+    [InlineData("f $x.c", "-Parts @(3, ($env:x), 2, '.c')")]
+    [InlineData("printf '[%s]' \"q\"$x", ", 3, ($env:x))")]
+    [InlineData("echo $y'x'", "-Parts @(3, ($env:y), 1, ")]
+    [InlineData("p=printf; $p '[%s]' f=$x", "-Parts @(2, 'f=', 3, ($env:x))")]
+    public void Transpile_UnquotedVarGluedToText_SplitsTheValue(string bash, string parts)
+        => Assert.Contains(parts, T(bash));
 
-    // `""$A` / `$A""`: a quoted affix anchors a field of its own (bash's quoted null), so the runtime is told which side is quoted.
+    // `""$A` / `$A""`: a quoted affix anchors a field of its own (bash's quoted null): it is a quoted (kind 1) segment.
     [Theory]
-    [InlineData("for i in \"\"$A; do :; done", " -PrefixQuoted)")]
-    [InlineData("for i in $A\"\"; do :; done", " -SuffixQuoted)")]
-    [InlineData("for i in \"\"x\"\"$A\"\"; do :; done", " -PrefixQuoted -SuffixQuoted)")]
-    public void Transpile_QuotedAffix_MarksTheQuotedSide(string bash, string marks)
-        => Assert.Contains("-Fields @($env:A)" + marks, T(bash));
+    [InlineData("for i in \"\"$A; do :; done", "-Parts @(1, ")]
+    [InlineData("for i in $A\"\"; do :; done", "-Parts @(3, ($env:A), 1, ")]
+    public void Transpile_QuotedAffix_IsAQuotedSegment(string bash, string parts)
+        => Assert.Contains(parts, T(bash));
 
-    [Fact]
-    public void Transpile_UnquotedAffix_HasNoQuotedMark()
-        => Assert.DoesNotContain("Quoted", T("printf '[%s]' a$x"));
     [Fact]
     public void Transpile_TmpPathGluedToVar_MapsTheTempDirectory()
-    {
-        var ps = T("cat /tmp/a$x");
-        Assert.Contains("-Prefix (" + PsBuild.TempDirExpr + " + '/' + \"a\")", ps);
-        Assert.Contains("-Fields @($env:x)", ps);
-    }
+        => Assert.Contains("-Parts @(1, (" + PsBuild.TempDirExpr + "), 2, '/a', 3, ($env:x))", T("cat /tmp/a$x"));
 
+    // bash splits every unquoted expansion of a word, beside a glob or another expansion too (x='a b': `$x*` is a and
+    // b*, `a$x$x` is aa, ba, b). Both kept one field before.
     [Theory]
-    [InlineData("ls *$x")]
-    [InlineData("echo \"$x\"b")]
-    [InlineData("echo a$x$y")]
-    public void Transpile_GlobOrQuotedOrTwoExpansions_KeepsItsForm(string bash)
-        => Assert.DoesNotContain("-Prefix", T(bash));
+    [InlineData("ls *$x", "-Parts @(2, '*', 3, ($env:x))")]
+    [InlineData("echo a$x$y", "-Parts @(2, 'a', 3, ($env:x), 3, ($env:y))")]
+    public void Transpile_GlobOrTwoExpansions_SplitsEveryExpansion(string bash, string parts)
+        => Assert.Contains(parts, T(bash));
+
+    [Fact]
+    public void Transpile_QuotedVarWithText_IsOneWord()
+        => Assert.DoesNotContain("ConvertTo-BashWords", T("echo \"$x\"b"));
 
     // `${b}uiltin declare g=$x` (b=b): a command name glued to text is split and looked up at run time.
     [Theory]
     [InlineData("${b}uiltin declare g=$x")]
     [InlineData("${z}ommand readonly d=$x")]
     public void Transpile_AffixCommandName_ResolvesAtRunTime(string bash)
-        => Assert.Contains("Resolve-BashCommand -Words @(ConvertTo-BashWords -Prefix", T(bash));
+        => Assert.Contains("Resolve-BashCommand -Words @(ConvertTo-BashWords -Parts", T(bash));
 
     [Fact]
     public void Transpile_PathCommandWordWithVar_KeepsItsPathForm()
@@ -64,25 +62,29 @@ public class AffixWordSplitTests
     public void Transpile_QuotedDeclareName_DeclaresWithoutPrinting(string bash)
         => Assert.DoesNotContain("Invoke-BashDeclare", T(bash));
 
-    // `-"${a[@]}"`, `"p$@q"`: the text goes on the first and last element, each element whole.
+    // `-"${a[@]}"`, `"p$@q"`: the text goes on the first and last element, each element whole (a quoted list, kind 5).
     [Theory]
-    [InlineData("printf '<%s>' -\"${a[@]}\"", "Affix(\"-\", ''")]
-    [InlineData("printf '<%s>' \"p${a[@]}q\"", "Affix(\"p\", \"q\"")]
-    [InlineData("printf '<%s>' k\"$@\"", "Affix(\"k\", ''")]
-    [InlineData("for w in -\"${a[@]}\"; do :; done", "Affix(\"-\", ''")]
-    public void Transpile_QuotedArrayWithText_DistributesOverTheElements(string bash, string affix)
-        => Assert.Contains("[PsBash.Cmdlets.BashQuotedWords]::" + affix, T(bash));
-
-    [Theory]
-    [InlineData("printf '<%s>' \"${a[@]}\"")]
-    [InlineData("printf '<%s>' \"${a[@]}${b[@]}\"")]
-    [InlineData("printf '<%s>' x$y\"${a[@]}\"")]
-    public void Transpile_QuotedArrayAloneOrBesideAnotherList_KeepsItsForm(string bash)
-        => Assert.DoesNotContain("BashQuotedWords", T(bash));
+    [InlineData("printf '<%s>' -\"${a[@]}\"", "-Parts @(2, '-', 5, (@(")]
+    [InlineData("printf '<%s>' \"p${a[@]}q\"", "-Parts @(1, ")]
+    [InlineData("printf '<%s>' k\"$@\"", "-Parts @(2, 'k', 5, (@(")]
+    [InlineData("for w in -\"${a[@]}\"; do :; done", "-Parts @(2, '-', 5, (@(")]
+    public void Transpile_QuotedArrayWithText_DistributesOverTheElements(string bash, string parts)
+        => Assert.Contains(parts, T(bash));
 
     [Fact]
-    public void Transpile_QuotedVarBesideQuotedArray_IsAffixText()
-        => Assert.Contains("Affix(\"$env:x\", ''", T("printf '<%s>' \"$x${a[@]}\""));
+    public void Transpile_QuotedArrayAlone_IsTheElementArray()
+        => Assert.DoesNotContain("ConvertTo-BashWords", T("printf '<%s>' \"${a[@]}\""));
+
+    // `"${a[@]}${b[@]}"`: the last element of a joins the first of b; `x$y"${a[@]}"`: $y is split, the list glued on.
+    [Theory]
+    [InlineData("printf '<%s>' \"${a[@]}${b[@]}\"", "-Parts @(5, (@(")]
+    [InlineData("printf '<%s>' x$y\"${a[@]}\"", "-Parts @(2, 'x', 3, ($env:y), 5, (@(")]
+    public void Transpile_QuotedArrayBesideAnotherExpansion_IsOneWordOfSegments(string bash, string parts)
+        => Assert.Contains(parts, T(bash));
+
+    [Fact]
+    public void Transpile_QuotedVarBesideQuotedArray_IsQuotedText()
+        => Assert.Contains("-Parts @(1, (\"$env:x\"), 5, (@(", T("printf '<%s>' \"$x${a[@]}\""));
 
     [Fact]
     public void Transpile_DeclareFedAQuotedArray_RunsThroughEval()
@@ -122,4 +124,5 @@ public class AffixWordSplitTests
     [Fact]
     public void Transpile_QuotedDeclarePrintFlag_StillPrints()
         => Assert.Contains("Invoke-BashDeclare", T("declare '-p' b"));
+
 }

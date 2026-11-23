@@ -21,10 +21,14 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(string))]
 public sealed class ConvertToBashWordsCommand : BashCmdlet
 {
+    /// <summary>One unquoted expansion's value: the word is that one <see cref="BashWordFields.Split"/> segment.</summary>
     [Parameter(Position = 0, ValueFromPipeline = true)]
     [AllowNull]
     [AllowEmptyString]
     public string? Text { get; set; }
+
+    /// <summary>The word as segments, kind then value (see <see cref="BashWordFields"/>): the general form.</summary>
+    [Parameter] [AllowNull] [AllowEmptyCollection] public object?[]? Parts { get; set; }
 
     /// <summary>With <see cref="Fields"/>: literal text glued before the expansion (<c>=$*=</c>, <c>a$x</c>).</summary>
     [Parameter] [AllowNull] [AllowEmptyString] public string? Prefix { get; set; }
@@ -32,7 +36,7 @@ public sealed class ConvertToBashWordsCommand : BashCmdlet
     /// <summary>With <see cref="Fields"/>: literal text glued after the expansion.</summary>
     [Parameter] [AllowNull] [AllowEmptyString] public string? Suffix { get; set; }
 
-    /// <summary>The expansion's values, one field source each (every positional parameter, or the one variable).</summary>
+    /// <summary>An unquoted list expansion's values (every positional parameter): one <see cref="BashWordFields.SplitList"/> segment.</summary>
     [Parameter] [AllowNull] [AllowEmptyCollection] public object?[]? Fields { get; set; }
 
     /// <summary>The prefix has quoted text, so it anchors a field even when empty (<c>""$x</c>).</summary>
@@ -44,38 +48,33 @@ public sealed class ConvertToBashWordsCommand : BashCmdlet
     protected override void ProcessRecord()
     {
         var ifs = BashVariableStore.Get("IFS");
-        var words = Fields is not null || Prefix is not null || Suffix is not null
-            ? BashWordSplitter.AffixFields(Prefix ?? "", Suffix ?? "",
-                (Fields ?? Array.Empty<object?>()).Select(f => f is null ? null : (f is PSObject p ? p.BaseObject : f).ToString()).ToList(), ifs,
-                PrefixQuoted.IsPresent, SuffixQuoted.IsPresent)
-            : BashWordSplitter.Split(Text, ifs);
         bool extglob = InvokeBashShoptCommand.IsEnabled("extglob");
-        foreach (var word in words)
+        System.Collections.IList parts = Parts
+            ?? (Fields is not null || Prefix is not null || Suffix is not null
+                ? BashWordSplitter.AffixParts(Prefix ?? "", Suffix ?? "", (System.Collections.IList?)Fields ?? Array.Empty<object?>(), PrefixQuoted.IsPresent, SuffixQuoted.IsPresent)
+                : new object?[] { BashWordFields.Split, Text });
+        bool noGlob = false, noGlobRead = false;
+        foreach (var field in BashWordFields.Expand(parts, ifs, extglob))
         {
-            if (!BashWordSplitter.HasGlobChars(word, extglob))
-            {
-                WriteObject(word);
-                continue;
-            }
-
-            foreach (var expanded in ExpandGlob(word))
+            if (field.Pattern is null) { WriteObject(field.Text); continue; }
+            if (!noGlobRead) { noGlob = ConvertToBashGlobCommand.IsNoGlob(SessionState); noGlobRead = true; }
+            if (noGlob) { WriteObject(field.Text); continue; }
+            foreach (var expanded in ExpandGlob(field.Pattern, field.Text))
                 WriteObject(expanded);
         }
     }
 
     /// <summary>
-    /// Pathname expansion of one split word (the shared <see cref="BashGlob"/> engine, so a word from a
-    /// substitution globs exactly like a literal pattern: relative matches, hidden files only for a
-    /// <c>.</c> pattern, sorted; no match keeps the word, <c>nullglob</c> / <c>failglob</c> honoured).
-    /// A Windows drive path written with backslashes is read as separators, not escapes.
+    /// Pathname expansion of one field (the shared <see cref="BashGlob"/> engine, so a field globs exactly like a literal
+    /// pattern: relative matches, hidden files only for a <c>.</c> pattern, sorted; no match keeps the field's text,
+    /// <c>nullglob</c> / <c>failglob</c> honoured). A Windows drive path written with backslashes is read as separators,
+    /// not escapes.
     /// </summary>
-    private IEnumerable<string> ExpandGlob(string word)
+    private IEnumerable<string> ExpandGlob(string pattern, string text)
     {
-        string pattern = OperatingSystem.IsWindows() && word.Length >= 3 && char.IsAsciiLetter(word[0])
-            && word[1] == ':' && word[2] == '\\'
-            ? BashPath.ToShell(word)
-            : word;
-        if (ConvertToBashGlobCommand.IsNoGlob(SessionState) || !BashGlob.HasPattern(pattern)) return new[] { word };
+        if (OperatingSystem.IsWindows() && pattern.Length >= 3 && char.IsAsciiLetter(pattern[0]) && pattern[1] == ':' && pattern[2] == '\\')
+            pattern = BashPath.ToShell(pattern);
+        if (!BashGlob.HasPattern(pattern)) return new[] { text };
 
         string cwd = SessionState.Path.CurrentFileSystemLocation.ProviderPath;
         var matches = BashGlob.Expand(pattern, cwd, InvokeBashShoptCommand.IsEnabled("dotglob"),
@@ -83,8 +82,8 @@ public sealed class ConvertToBashWordsCommand : BashCmdlet
             skipDots: InvokeBashShoptCommand.IsEnabled("globskipdots"));
         if (matches.Count > 0) return matches;
 
-        if (InvokeBashShoptCommand.IsEnabled("failglob")) ConvertToBashGlobCommand.FailGlob(this, word);
-        return InvokeBashShoptCommand.IsEnabled("nullglob") ? Array.Empty<string>() : new[] { word };
+        if (InvokeBashShoptCommand.IsEnabled("failglob")) ConvertToBashGlobCommand.FailGlob(this, text);
+        return InvokeBashShoptCommand.IsEnabled("nullglob") ? Array.Empty<string>() : new[] { text };
     }
 }
 
@@ -147,82 +146,33 @@ internal static class BashWordSplitter
     /// <c>$*</c> is one empty field, <c>=$*=</c> is <c>=</c> <c>=</c>; <c>set -- a "" b</c>: <c>$*</c> is a, "", b.
     /// An empty IFS splits nothing: each value is its own field (text glued to the first and last) and empty fields
     /// are dropped. No values at all is the prefix and suffix alone (<c>=$*=</c> is <c>==</c>).
-    /// </summary>
     /// <para>The prefix and suffix are literal text: they are never split (<c>IFS=:; x=c; a:b$x</c> is <c>a:bc</c>). A
     /// quoted affix (<paramref name="prefixQuoted"/> / <paramref name="suffixQuoted"/>) anchors a field even when it is
     /// empty, as bash's quoted null does: A='  abc  ', <c>""$A</c> is <c>""</c> <c>abc</c> and <c>$A""</c> is <c>abc</c> <c>""</c>.</para>
+    /// <para>The <see cref="BashWordFields"/> segments [prefix, list, suffix]; the fields are their text.</para>
+    /// </summary>
     public static List<string> AffixFields(string prefix, string suffix, IReadOnlyList<string?> values, string? ifs,
         bool prefixQuoted = false, bool suffixQuoted = false)
     {
-        if (ifs is { Length: 0 })
-        {
-            var fields = new List<string>(values.Count);
-            foreach (var v in values) fields.Add(v ?? "");
-            if (fields.Count == 0) fields.Add("");
-            fields[0] = prefix + fields[0];
-            fields[^1] = fields[^1] + suffix;
-            bool keepFirst = prefixQuoted || (fields.Count == 1 && suffixQuoted), keepLast = suffixQuoted;
-            for (int i = fields.Count - 1; i >= 0; i--)
-                if (fields[i].Length == 0 && !(i == 0 && keepFirst) && !(i == fields.Count - 1 && keepLast)) fields.RemoveAt(i);
-            return fields;
-        }
-        char sep = ifs is null ? ' ' : ifs[0];
-        // Each character is tagged: 0 = expansion text (split on IFS), 1 = literal affix text, 2 = a quoted-null anchor
-        // (kept in no field, but it makes the field it sits in exist).
-        var sb = new System.Text.StringBuilder(prefix.Length + suffix.Length + 16);
-        var kind = new List<byte>(prefix.Length + suffix.Length + 16);
-        void Add(string text, byte k) { sb.Append(text); for (int j = 0; j < text.Length; j++) kind.Add(k); }
-        Add(prefix, 1);
-        if (prefixQuoted) { sb.Append('\0'); kind.Add(2); }
-        for (int i = 0; i < values.Count; i++)
-        {
-            if (i > 0) Add(sep.ToString(), 0);
-            Add(values[i] ?? "", 0);
-        }
-        if (suffixQuoted) { sb.Append('\0'); kind.Add(2); }
-        Add(suffix, 1);
-        return SplitTagged(sb.ToString(), kind, ifs ?? " \t\n");
-    }
-
-    /// <summary><see cref="Split"/> where only characters tagged 0 can delimit and characters tagged 2 are dropped from
-    /// the fields they anchor (see <see cref="AffixFields"/>).</summary>
-    private static List<string> SplitTagged(string text, List<byte> kind, string ifs)
-    {
-        var words = new List<string>();
-        bool IsWs(int k) => kind[k] == 0 && ifs.IndexOf(text[k]) >= 0 && IsIfsWhitespace(text[k]);
-        bool IsNonWs(int k) => kind[k] == 0 && ifs.IndexOf(text[k]) >= 0 && !IsIfsWhitespace(text[k]);
-        bool IsIfs(int k) => kind[k] == 0 && ifs.IndexOf(text[k]) >= 0;
-        var field = new System.Text.StringBuilder();
-        int i = 0, n = text.Length;
-        while (i < n && IsWs(i)) i++;
-        while (i < n)
-        {
-            field.Clear();
-            while (i < n && !IsIfs(i))
-            {
-                if (kind[i] != 2) field.Append(text[i]);
-                i++;
-            }
-            words.Add(field.ToString());
-            if (i >= n) break;
-
-            if (IsWs(i))
-            {
-                while (i < n && IsWs(i)) i++;
-                if (i < n && IsNonWs(i))
-                {
-                    i++;
-                    while (i < n && IsWs(i)) i++;
-                }
-            }
-            else
-            {
-                i++;
-                while (i < n && IsWs(i)) i++;
-            }
-        }
+        var list = new object?[values.Count];
+        for (int i = 0; i < values.Count; i++) list[i] = values[i];
+        var fields = BashWordFields.Expand(AffixParts(prefix, suffix, list, prefixQuoted, suffixQuoted), ifs, extglob: false);
+        var words = new List<string>(fields.Count);
+        foreach (var f in fields) words.Add(f.Text);
         return words;
     }
+
+    /// <summary>The segments of <see cref="AffixFields"/>: prefix (pattern text), a quoted-null anchor when the prefix is
+    /// quoted, the list, the suffix's anchor, the suffix.</summary>
+    public static object?[] AffixParts(string prefix, string suffix, System.Collections.IList values, bool prefixQuoted, bool suffixQuoted)
+        => new object?[]
+        {
+            BashWordFields.Pattern, prefix,
+            prefixQuoted ? BashWordFields.Quoted : BashWordFields.Pattern, "",
+            BashWordFields.SplitList, values,
+            suffixQuoted ? BashWordFields.Quoted : BashWordFields.Pattern, "",
+            BashWordFields.Pattern, suffix,
+        };
 
     /// <summary>A pattern character, or with <paramref name="extglob"/> an extglob group (<c>${undef:-@(foo|bar).py}</c> globs).</summary>
     public static bool HasGlobChars(string word, bool extglob = false)

@@ -15,14 +15,14 @@ public class QuotedAltWordTests
     [InlineData("printf '[%s]' ${x:+\"--opt=$x\"}")]
     [InlineData("r=x; for e in ${!r+\"${!r}\"}; do echo $e; done")]
     public void Transpile_UnquotedQuotedAlternative_IsNoWordWhenNotChosen(string bash)
-        => Assert.Contains("@(if ([string](", T(bash));
+        => Assert.Contains("} else { ,@() }", T(bash)); // the arm not chosen is an empty group: no field
 
     [Fact]
     public void Transpile_QuotedAlternativeOfAllParameters_KeepsEachParameter()
     {
         var ps = T("command rg ${1+\"$@\"}");
-        Assert.Contains("@(if ([string](", ps);
-        Assert.Contains("BashPositional", ps);
+        Assert.Contains("} else { ,@() }", ps);
+        Assert.Contains("{ ,@(5, (@($(if ($null -ne $global:BashPositional) { $global:BashPositional } else { $args })))) }", ps); // one field per parameter
     }
 
     // bash: `false; for x in $(true); do :; done; echo $?` prints 0 -- a loop whose body never ran has status 0. A failed
@@ -44,5 +44,6 @@ public class QuotedAltWordTests
     [InlineData("echo \"${x+\"$x\"}\"")]
     [InlineData("echo ${x:-\"$y\"}")]
     public void Transpile_QuotedOrDefaultForm_KeepsItsForm(string bash)
-        => Assert.DoesNotContain("@(if ([string](", T(bash));
+        => Assert.DoesNotContain(",@() }", T(bash));
+
 }

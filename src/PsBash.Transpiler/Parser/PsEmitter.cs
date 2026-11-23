@@ -2373,7 +2373,7 @@ public static partial class PsEmitter
             if (list[0].Parts is [WordPart.DoubleQuoted { Parts: [WordPart.BracedVarSub { Suffix: { } opSuffix } opVar] }]
                 && (IsArrayElementOperator(opSuffix) || IsArraySliceSuffix(opSuffix) || (opVar.Name == "@" && IsPositionalSliceSuffix(opSuffix))))
                 return EmitBracedVar(opVar);
-            if (IsArrayAllWord(list[0], out var arrName))
+            if (IsArrayAllWord(list[0], out var arrName) && list[0].Parts[0] is WordPart.DoubleQuoted)
                 return $"$(if (${arrName} -is [System.Collections.IDictionary]) {{ ${arrName}.Values }} else {{ ${arrName} }})";
             // `for k in "${!m[@]}"`: the KEYS (or indices), one iteration each.
             var keysWord = list[0].Parts switch
@@ -2390,24 +2390,8 @@ public static partial class PsEmitter
             // to command arguments but not to a for-in list, so the loop ran ONCE
             // over the whole string — a silent wrong result, not a parse error.
             // (The quoted form `for w in "$x"` correctly stays one iteration.)
-            if (IsPureUnquotedVarWord(list[0]))
-                return EmitUnquotedVarSplitArray(list[0]);
-
-            // `for f in $(cmd)` / `` `cmd` ``: the substitution's TEXT is word-split on IFS and each
-            // word glob-expanded (the capture array only splits on lines, so `$(echo a b c)` ran once).
-            if (IsPureUnquotedCommandSubWord(list[0]))
-                return EmitUnquotedSplitWordArray(list[0]);
-
-            // `for f in *.txt`: pathname expansion by the shell (relative names, no hidden files, sorted;
-            // an unmatched pattern is the one literal item, nullglob off) -- see EmitGlobPatternExpr.
-            if (IsGlobWord(list[0]) || IsUnquotedDefaultAltWord(list[0]) || IsUnquotedPositionalListWord(list[0]) || IsUnquotedQuotedAltWord(list[0]))
-                return EmitUnquotedSplitWordArray(list[0]);
-
-            // `for i in a$x` / `=$*=`: split like bash; it used to iterate once over the literal text `a$env:x`.
-            if (UnquotedAffixExpansionIndex(list[0], ordinaryVar: true) is var affixAt and >= 0)
-                return EmitAffixWordArray(list[0], affixAt);
-            // `for w in -"${a[@]}"`: one item per element, the text glued to the first and last.
-            if (IsQuotedArrayAffixWord(list[0]))
+            // Every expansion, glob or brace word: its fields (IsUnquotedSplitWord, the one predicate).
+            if (IsUnquotedSplitWord(list[0]))
                 return EmitUnquotedSplitWordArray(list[0]);
 
             var single = EmitWord(list[0]);
@@ -2434,18 +2418,13 @@ public static partial class PsEmitter
         // into one flat array. A glob word in such a list expands on its own (`Resolve-BashGlob`).
         bool anySplit = false;
         foreach (var word in list)
-            anySplit |= IsUnquotedSplitWord(word) || UnquotedAffixExpansionIndex(word, ordinaryVar: true) >= 0;
+            anySplit |= IsUnquotedSplitWord(word);
 
         if (anySplit)
         {
             var flat = new List<string>();
             foreach (var word in list)
             {
-                if (UnquotedAffixExpansionIndex(word, ordinaryVar: true) is var wordAffixAt and >= 0)
-                {
-                    flat.Add(EmitAffixWordArray(word, wordAffixAt));
-                    continue;
-                }
                 if (IsUnquotedSplitWord(word))
                 {
                     flat.Add(EmitUnquotedSplitWordArray(word));
@@ -5508,7 +5487,7 @@ public static partial class PsEmitter
             }
             // Behind `builtin`/`command` every operand expands like a command argument (split, globbed). A quoted array
             // (`typeset -"${a[@]}"`, a=(x foo=F)) is one operand per element: `typeset -x foo=F`.
-            if (w.Parts.All(IsExpansion) || operandsAreOrdinaryWords || IsQuotedArrayAllWord(w) || IsQuotedArrayAffixWord(w))
+            if (w.Parts.All(IsExpansion) || operandsAreOrdinaryWords || IsQuotedArrayAllWord(w) || IsQuotedListWord(w))
             {
                 // The FIELDS of `$names` are names, never code: eval gets each one single-quoted
                 // ("$(for w in $names; do printf '%s ' "${w@Q}"; done)"), so `a;echo x` stays one word.
@@ -8112,7 +8091,7 @@ public static partial class PsEmitter
             && (IsBareVariableCommandWord(cmd.Words[0]) || cmd.Words[0].Parts is [WordPart.DoubleQuoted { Parts: [WordPart.CommandSub] }]);
         // `${b}uiltin declare x`, `${z}ommand readonly y`: a name glued to text is split and looked up the same way. A word
         // with a path separator (`$dir/bin/tool`) keeps its path emission.
-        bool affixName = needsCallOperator && dashName is null && !dynamicName && IsUnquotedVarAffixWord(cmd.Words[0])
+        bool affixName = needsCallOperator && dashName is null && !dynamicName && IsAffixedSplitName(cmd.Words[0])
             && cmd.Words[0].Parts.All(p => p is not WordPart.Literal { Value: var lv } || lv.IndexOfAny(['/', '\\']) < 0);
         dynamicName |= affixName;
         // `$(cmd) args`, `` `true` X ``: the substitution's words split, the first is the command; none leaves the next
@@ -8438,7 +8417,7 @@ public static partial class PsEmitter
     {
         // `> "$@"`, `> "${a[@]}"`: one word per element, so anything but exactly one is ambiguous too.
         // `> two-$star`: a variable glued to text is split and pathname-expanded too (star='*' writes two-bar).
-        if (IsGlobWord(word) || IsPureUnquotedVarWord(word) || IsQuotedArrayAllWord(word) || IsUnquotedVarAffixWord(word))
+        if (IsUnquotedSplitWord(word) && !HasBraceExpansion(word.Parts))
             return OneWordOrAmbiguous(EmitUnquotedSplitWordArray(word), word);
         // `> a-{one,two}`: brace expansion gives several words, also an ambiguous redirect (the array reached -Path).
         if (!word.Parts.IsDefaultOrEmpty && word.Parts.Any(p => p is WordPart.BracedTuple or WordPart.BracedRange))
@@ -9571,49 +9550,18 @@ public static partial class PsEmitter
         // With 2+ brace parts, compute the full Cartesian product across all segments
         // (each brace contributes its item list; every other part is one literal segment).
         int braceCount = 0;
-        bool dynamicPart = false;
         foreach (var p in parts)
-        {
-            if (p is WordPart.BracedTuple or WordPart.BracedRange)
-            {
-                braceCount++;
-                // `{$a,b}`: an item with an expansion is text that must be expanded, not printed.
-                if (p is WordPart.BracedTuple t && t.Items.Any(i => i.Contains('$') || i.Contains('`')))
-                    dynamicPart = true;
-                else if (braceCount == 1 && ReferenceEquals(p, parts[0]) && p is WordPart.BracedTuple lead && lead.Items.Any(i => i.StartsWith('~')))
-                    dynamicPart = true;
-            }
-            else if (p is not (WordPart.Literal or WordPart.EscapedLiteral or WordPart.SingleQuoted or WordPart.GlobPart))
-                dynamicPart = true;
-        }
-        // `~{/src,root}`: the parser left the leading ~ as text (brace expansion comes first); each resulting word's
-        // tilde prefix is expanded afterwards (`~/src ~root`).
-        bool leadingTilde = parts.Length > 1 && parts[0] is WordPart.Literal { Value: "~" } && parts[1] is WordPart.BracedTuple or WordPart.BracedRange;
-        if (leadingTilde) dynamicPart = true;
+            if (p is WordPart.BracedTuple or WordPart.BracedRange) braceCount++;
         // `{a,b}$x`, `{1..3}"$y"`, `{a,b}$(cmd)`: a non-literal part cannot be spliced into a single-quoted
-        // item (it emitted `a$env:x`). Build each combination as a part list and emit it as one expansion-aware word.
-        if (dynamicPart)
+        // item (it emitted `a$env:x`). Each combination is a part list, emitted as one expansion-aware word.
+        if (DynamicBraceCombos(parts) is { } dynCombos)
         {
-            var combos = new List<ImmutableArray<WordPart>> { ImmutableArray<WordPart>.Empty };
-            foreach (var part in parts)
-            {
-                var alts = part is WordPart.BracedTuple or WordPart.BracedRange
-                    ? BraceAlternatives(part, leading: combos.Count == 1 && combos[0].IsEmpty)
-                    : new List<ImmutableArray<WordPart>> { ImmutableArray.Create(part) };
-                CheckBraceWords((long)combos.Count * alts.Count);
-                var next = new List<ImmutableArray<WordPart>>(combos.Count * alts.Count);
-                foreach (var head in combos)
-                    foreach (var alt in alts)
-                        next.Add(AppendBraceParts(head, alt));
-                combos = next;
-            }
-            if (leadingTilde) combos = combos.ConvertAll(RetildeBraceWord);
             // A word with no quoted part that comes out empty is dropped (DropsEmptyBraceWord): known now when its text
             // is literal (`{a,}`), at run time when it holds an expansion (`{$a,b}_c` with `$a_c` unset). A quoted one
             // stays (`{"$a",b}`). A run-time drop needs the `;` form: in a comma list an empty pipeline is a $null item.
-            var elements = new List<string>(combos.Count);
+            var elements = new List<string>(dynCombos.Count);
             bool runtimeDrop = false;
-            foreach (var combo in combos)
+            foreach (var combo in dynCombos)
             {
                 string word = FlattenPartsToDoubleQuotedString(combo);
                 if (!DropsEmptyBraceWord(combo)) elements.Add(word);
@@ -10601,169 +10549,10 @@ public static partial class PsEmitter
         return PsBuild.WordSplitArray(varRef);
     }
 
-    /// <summary>
-    /// True when <paramref name="word"/> is a single bare (unquoted) command substitution
-    /// (<c>$(cmd)</c> or <c>`cmd`</c>): bash word-splits its output on IFS and glob-expands each word.
-    /// A substitution mixed into a longer word (<c>x$(cmd)y</c>) or inside quotes is not "pure" here.
-    /// </summary>
-    private static bool IsPureUnquotedCommandSubWord(CompoundWord word)
-        => word.Parts.Length == 1 && word.Parts[0] is WordPart.CommandSub;
-
-    /// <summary>A word whose expansion is word-split (and elided when empty): see RC-7 and
-    /// <see cref="IsPureUnquotedCommandSubWord"/>.</summary>
-    private static bool IsUnquotedSplitWord(CompoundWord word)
-        => IsPureUnquotedVarWord(word) || IsUnquotedPositionalListWord(word) || IsPureUnquotedCommandSubWord(word) || IsGlobWord(word)
-           || IsBraceGlobWord(word) || IsArrayValuedWord(word) || IsUnquotedDefaultAltWord(word) || IsUnquotedElementWord(word) || IsUnquotedPositionalOpWord(word)
-           || IsUnquotedPositionalAffixWord(word) || IsUnquotedVarAffixWord(word) || IsQuotedArrayAffixWord(word) || IsUnquotedQuotedAltWord(word)
-           || IsUnquotedPositionalSliceWord(word);
-
-    /// <summary>
-    /// Bare <c>${@:2:2}</c> / <c>${*: -1}</c>: the slice is a list of parameters, each split again like bare <c>$@</c>.
-    /// Emitted as one argument it was an array beside the other words (<c>echo ${@:2:2} ${*: -1}</c>: "Cannot convert
-    /// System.Object[] to System.String").
-    /// </summary>
-    private static bool IsUnquotedPositionalSliceWord(CompoundWord word)
-        => word.Parts is [WordPart.BracedVarSub { Name: "@" or "*", Suffix: { } s }] && IsPositionalSliceSuffix(s);
-
-    /// <summary>
-    /// Bare <c>${x+"$x"}</c> / <c>${x:+"--opt=$x"}</c> / <c>${a[@]+"${a[@]}"}</c>: the quoted alternative is its words when it is
-    /// chosen and NO word when it is not (x unset: <c>for e in ${x+"$x"}</c> runs zero times). It was one empty argument.
-    /// </summary>
-    private static bool IsUnquotedQuotedAltWord(CompoundWord word)
-        => word.Parts is [WordPart.BracedVarSub { Suffix: { } s, Name: var n, ArgWord: { } aw }]
-           && aw is [WordPart.DoubleQuoted] && n is not ("@" or "*") && QuotedAltOp(s) is not null;
-
-    /// <summary>`:+` / `+` for an alternative suffix, read past the `!indirect` mark of <c>${!r+word}</c>; null otherwise.</summary>
-    private static string? QuotedAltOp(string suffix)
-    {
-        string s = suffix.StartsWith("!indirect", StringComparison.Ordinal) ? suffix["!indirect".Length..] : suffix;
-        return s.StartsWith(":+", StringComparison.Ordinal) ? ":+" : s.StartsWith('+') ? "+" : null;
-    }
-
-    /// <summary>The words of an <see cref="IsUnquotedQuotedAltWord"/> word: the same expansion with the alternative <c>x</c>
-    /// tells whether the alternative is chosen (every name form goes through the one operator path), then the quoted word.</summary>
-    private static string EmitQuotedAltWordArray(CompoundWord word)
-    {
-        var bvs = (WordPart.BracedVarSub)word.Parts[0];
-        string op = (bvs.Suffix!.StartsWith("!indirect", StringComparison.Ordinal) ? "!indirect" : "") + QuotedAltOp(bvs.Suffix)!;
-        string probe = EmitBracedVar(new WordPart.BracedVarSub(bvs.Name, op + "x", ImmutableArray.Create<WordPart>(new WordPart.Literal("x"))));
-        var alt = new CompoundWord(bvs.ArgWord!.Value);
-        string words = IsUnquotedSplitWord(alt) ? EmitUnquotedSplitWordArray(alt) : EmitArgWord(alt);
-        return "@(if ([string](" + probe + ") -ceq 'x') { " + words + " })";
-    }
-
-    /// <summary>Bare <c>${@#a}</c> / <c>${*/x/y}</c> / <c>${@%d}</c>: the operator applies to each parameter, so the result is a list of words.</summary>
-    private static bool IsUnquotedPositionalOpWord(CompoundWord word)
-        => word.Parts is [WordPart.BracedVarSub { Name: "@" or "*", Suffix: { Length: > 0 } s }] && (s[0] is '^' or ',' || s.Length > 1 && s[0] is '/' or '%' or '#'
-           || s == "@a"); // bare `${@@a}`: every result is empty, so no word at all (it printed one space per parameter)
-
-    /// <summary>Bare <c>$@</c> / <c>$*</c> (also <c>${@}</c>): every parameter, each split again on IFS and globbed.</summary>
+    /// <summary>Bare <c>$@</c> / <c>$*</c> (also <c>${@}</c>): every parameter (<c>set $@ x</c> starts the parameters).</summary>
     private static bool IsUnquotedPositionalListWord(CompoundWord word)
         => word.Parts is [WordPart.SimpleVarSub { Name: "@" or "*" }]
            or [WordPart.BracedVarSub { Name: "@" or "*", Suffix: null }];
-
-    /// <summary>
-    /// The index of the one unquoted expansion in a word that glues literal or quoted text to it: <c>=$*=</c>, <c>a$@</c>,
-    /// and with <paramref name="ordinaryVar"/> also <c>a$x</c> / <c>$x.bak</c>. -1 when the word is not that shape (no text,
-    /// two expansions, a glob, a substitution, an operator). bash splits such a word: see BashWordSplitter.AffixFields.
-    /// </summary>
-    private static int UnquotedAffixExpansionIndex(CompoundWord word, bool ordinaryVar)
-    {
-        if (word.Parts.Length < 2) return -1;
-        int found = -1;
-        for (int i = 0; i < word.Parts.Length; i++)
-        {
-            var p = word.Parts[i];
-            string? name = p switch { WordPart.SimpleVarSub s => s.Name, WordPart.BracedVarSub { Suffix: null } b => b.Name, _ => null };
-            // `[$(echo " ")]`, `x$(cmd)y`: an unquoted command substitution glued to text splits the same way (it was
-            // one argument, so `$(echo " ")]` kept the space).
-            // `${v:-AxBxC}x`, `${f%.c}.o`: an operator result glued to text is split like the bare `${v:-.}` word.
-            if ((name is not null && (name is "@" or "*" || ordinaryVar && (IsOrdinaryVarName(name) || name.Length > 0 && name.All(char.IsAsciiDigit))))
-                || (ordinaryVar && p is WordPart.CommandSub)
-                || (ordinaryVar && p is WordPart.BracedVarSub { Suffix: not null, Name: var opName } && opName is not ("@" or "*")
-                    && IsUnquotedDefaultAltWord(new CompoundWord(ImmutableArray.Create(p)))))
-            {
-                if (found >= 0) return -1;
-                found = i;
-                continue;
-            }
-            if (p is not (WordPart.Literal or WordPart.EscapedLiteral or WordPart.SingleQuoted or WordPart.DoubleQuoted)) return -1;
-        }
-        return found;
-    }
-
-    /// <summary>The text before an affixed expansion, mapped like a path word's start: <c>/tmp/a$x</c> names the temp directory
-    /// and <c>/c/Users/$x</c> the drive, as <see cref="TransformWordPath"/> does for the unsplit word.</summary>
-    private static string AffixPrefixExpr(ImmutableArray<WordPart> prefix)
-    {
-        if (!_operandsAreText && TryStripTmpPrefix(prefix, out var rest))
-            return "(" + PsBuild.TempDirExpr + " + '/'" + (rest.IsDefaultOrEmpty ? "" : " + " + FlattenPartsToDoubleQuotedString(rest)) + ")";
-        if (!_operandsAreText && prefix[0] is WordPart.Literal { Value: var first } && TryTranslateMsysDrivePath(first, out var drive))
-            return FlattenPartsToDoubleQuotedString(prefix.SetItem(0, new WordPart.Literal(drive)));
-        return FlattenPartsToDoubleQuotedString(prefix);
-    }
-
-    /// <summary><c>=$*=</c> / <c>a$@</c> unquoted: one field per parameter (each split on IFS), the text glued to the first and last.</summary>
-    private static bool IsUnquotedPositionalAffixWord(CompoundWord word) => UnquotedAffixExpansionIndex(word, ordinaryVar: false) >= 0;
-
-    /// <summary><c>a$x</c> / <c>$x.c</c> / <c>"q"$x</c> / <c>f=$x</c> unquoted: the variable's value is split on IFS, the text glued to the
-    /// first and last field (x='a b': <c>a$x</c> is <c>aa</c> <c>b</c>). A word with a glob keeps its glob form.</summary>
-    private static bool IsUnquotedVarAffixWord(CompoundWord word)
-        => UnquotedAffixExpansionIndex(word, ordinaryVar: true) >= 0 && !IsGlobWord(word) && !IsBraceGlobWord(word);
-
-    /// <summary>The fields of an affixed expansion word (see <see cref="UnquotedAffixExpansionIndex"/>), as an array expression.</summary>
-    private static string EmitAffixWordArray(CompoundWord word, int idx)
-    {
-        var parts = word.Parts;
-        string pre = idx == 0 ? "''" : AffixPrefixExpr(ImmutableArray.Create(parts, 0, idx));
-        string suf = idx == parts.Length - 1 ? "''" : FlattenPartsToDoubleQuotedString(ImmutableArray.Create(parts, idx + 1, parts.Length - idx - 1));
-        string values = parts[idx] is WordPart.SimpleVarSub { Name: "@" or "*" } or WordPart.BracedVarSub { Name: "@" or "*" }
-            ? "@(" + PsBuild.BuildPositionalExpansion("@") + ")"
-            : "@(" + EmitWord(new CompoundWord(ImmutableArray.Create(parts[idx]))) + ")";
-        // `""$A` / `$A""`: a quoted affix is a field of its own when the value starts / ends with IFS whitespace, even empty.
-        string quoted = (HasQuotedPart(parts, 0, idx) ? " -PrefixQuoted" : "") + (HasQuotedPart(parts, idx + 1, parts.Length) ? " -SuffixQuoted" : "");
-        return "@(ConvertTo-BashWords -Prefix " + pre + " -Suffix " + suf + " -Fields " + values + quoted + ")";
-    }
-
-    private static bool HasQuotedPart(ImmutableArray<WordPart> parts, int from, int to)
-    {
-        for (int i = from; i < to; i++)
-            if (parts[i] is WordPart.SingleQuoted or WordPart.DoubleQuoted) return true;
-        return false;
-    }
-
-    /// <summary>
-    /// Bare <c>${a[i]}</c> (one subscript, not <c>@</c>/<c>*</c>): the element is word-split like any unquoted expansion, so an
-    /// unset or empty element is no argument at all (<c>echo x ${a[7]} y</c> prints <c>x y</c>).
-    /// </summary>
-    private static bool IsUnquotedElementWord(CompoundWord word)
-        => word.Parts is [WordPart.BracedVarSub { Name: var n, Suffix: { Length: > 2 } s }]
-           && IsOrdinaryVarName(n) && s[0] == '[' && s[^1] == ']' && BashParser.FindSubscriptClose(s, 0) == s.Length - 1
-           && s is not ("[@]" or "[*]") && s[1] != '@' && s[1] != '*';
-
-    /// <summary>
-    /// Bare <c>${v:-x}</c> / <c>${v+x}</c> / <c>${v#p}</c> / <c>${v/a/b}</c> / <c>${v:1}</c> / <c>${v^^}</c>: the result is word-split like any unquoted
-    /// expansion, so an empty result is no argument at all (<c>echo ${empty:+x} y</c> prints <c>y</c>, not <c> y</c>).
-    /// Positional-parameter names (<c>$@</c>, <c>$*</c>) are arrays with their own rules and are left alone.
-    /// </summary>
-    private static bool IsUnquotedDefaultAltWord(CompoundWord word)
-        => word.Parts is [WordPart.BracedVarSub { Suffix: { } s, Name: var n }]
-           && (IsOrdinaryVarName(n) && n is not ("@" or "*") || IsPositionalListDefaultAlt(n, s))
-           // `${v:-"A B"}`: the quoted default is one word and is not split again.
-           && !(s.Length > 1 && s[0] is ':' or '-' or '+' && s.IndexOf('"') > 0)
-           && (s.StartsWith(":-") || s.StartsWith(":+") || (s.Length > 0 && s[0] is '-' or '+')
-               // Trim / replace / slice / case-change results are split like any other unquoted expansion:
-               // `${s#*o}` of "Hello World" is the two words " World" -> World, not one argument with its space.
-               // A length `${#v}` is split too: with IFS=5, the 5 of a five-character value is no word at all.
-               || (s.Length > 0 && s[0] is '#' or '%' or '/' or '^' or ',')
-               // `echo ${A@P} - x` of an assoc A with no key 0: the empty result is no argument (it printed ` - x`).
-               || (s.Length == 2 && s[0] == '@' && s[1] is 'Q' or 'K' or 'k' or 'A' or 'a' or 'P' or 'E')
-               || (s.Length > 1 && s[0] == ':' && s[1] is not ('-' or '+' or '=' or '?')));
-
-    /// <summary>`${@-w}` `${*:+w}`: the default / alternative operators on the positional LIST (see <see cref="EmitPositionalWordOp"/>).</summary>
-    private static bool IsPositionalListDefaultAlt(string name, string suffix)
-        => name is "@" or "*" && (suffix.StartsWith(":-") || suffix.StartsWith(":+") || suffix.StartsWith('-') || suffix.StartsWith('+'));
-
     /// <summary>
     /// Bare <c>${a[@]}</c> / <c>${a[*]}</c>: every element, each split again on IFS. Left as a bare array it is
     /// ONE argument, and an array beside any other argument cannot bind (<c>echo ${a[@]} x</c> failed with
@@ -10924,55 +10713,6 @@ public static partial class PsEmitter
     };
 
     /// <summary>
-    /// The one quoted all-elements expansion (<c>"${a[@]}"</c>, <c>"$@"</c>) of a word that glues text to it: <c>-"${a[@]}"</c>,
-    /// <c>"p${a[@]}q"</c>, <c>k"$@"</c>. <paramref name="outer"/> is its double-quoted part, <paramref name="inner"/> its place
-    /// inside. Every other part is literal or quoted text (an unquoted expansion or a glob keeps the old form).
-    /// </summary>
-    private static bool TryQuotedArrayAffix(CompoundWord word, out int outer, out int inner)
-    {
-        outer = inner = -1;
-        if (word.Parts.IsDefaultOrEmpty || IsQuotedArrayAllWord(word)) return false;
-        for (int i = 0; i < word.Parts.Length; i++)
-        {
-            switch (word.Parts[i])
-            {
-                case WordPart.Literal or WordPart.EscapedLiteral or WordPart.SingleQuoted:
-                    break;
-                case WordPart.DoubleQuoted dq:
-                    for (int j = 0; j < dq.Parts.Length; j++)
-                    {
-                        if (!IsQuotedArrayAllWord(new CompoundWord([new WordPart.DoubleQuoted([dq.Parts[j]])]))) continue;
-                        if (outer >= 0) return false;
-                        outer = i;
-                        inner = j;
-                    }
-                    break;
-                default:
-                    return false;
-            }
-        }
-        return outer >= 0 && !IsGlobWord(word);
-    }
-
-    private static bool IsQuotedArrayAffixWord(CompoundWord word) => TryQuotedArrayAffix(word, out _, out _);
-
-    /// <summary>The fields of a <see cref="TryQuotedArrayAffix"/> word: each element whole, the text glued to the first and last.</summary>
-    private static string EmitQuotedArrayAffixArray(CompoundWord word, int outer, int inner)
-    {
-        var dq = (WordPart.DoubleQuoted)word.Parts[outer];
-        var pre = new List<WordPart>();
-        for (int i = 0; i < outer; i++) pre.Add(word.Parts[i]);
-        if (inner > 0) pre.Add(new WordPart.DoubleQuoted(ImmutableArray.Create(dq.Parts, 0, inner)));
-        var suf = new List<WordPart>();
-        if (inner < dq.Parts.Length - 1) suf.Add(new WordPart.DoubleQuoted(ImmutableArray.Create(dq.Parts, inner + 1, dq.Parts.Length - inner - 1)));
-        for (int i = outer + 1; i < word.Parts.Length; i++) suf.Add(word.Parts[i]);
-        return PsBuild.QuotedAffixArray(
-            pre.Count == 0 ? "''" : AffixPrefixExpr([.. pre]),
-            suf.Count == 0 ? "''" : FlattenPartsToDoubleQuotedString([.. suf]),
-            EmitQuotedArrayElements(dq.Parts[inner]));
-    }
-
-    /// <summary>
     /// <c>ab+($ABC)</c> / <c>+($v)</c>: an extglob whose one expansion is a bare unquoted variable arm is split like
     /// <c>ab$ABC</c>, because bash expands and IFS-splits the word before it is a pattern (IFS=c ABC='c?d' gives the
     /// fields <c>ab+(</c> and <c>?d)</c>, each then globbed). <paramref name="flat"/> is the word with the extglob's
@@ -11025,42 +10765,6 @@ public static partial class PsEmitter
         flat = new CompoundWord(parts.ToImmutable());
         return true;
     }
-
-    private static string EmitUnquotedSplitWordArray(CompoundWord word)
-        => TryFlattenSplitExtglob(word, out var flatExtglob)
-            ? EmitAffixWordArray(flatExtglob, UnquotedAffixExpansionIndex(flatExtglob, ordinaryVar: true))
-            : IsUnquotedQuotedAltWord(word)
-            ? EmitQuotedAltWordArray(word)
-            : TryQuotedArrayAffix(word, out var qaOuter, out var qaInner)
-            ? EmitQuotedArrayAffixArray(word, qaOuter, qaInner)
-            : IsUnquotedPositionalAffixWord(word) || IsUnquotedVarAffixWord(word)
-            ? EmitAffixWordArray(word, UnquotedAffixExpansionIndex(word, ordinaryVar: true))
-            : IsUnquotedPositionalOpWord(word)
-            ? "@(" + EmitBracedVar((WordPart.BracedVarSub)word.Parts[0]) + " | ConvertTo-BashWords)"
-            : IsQuotedArrayAllWord(word)
-            ? EmitQuotedArrayElements(((WordPart.DoubleQuoted)word.Parts[0]).Parts[0])
-            : IsPlainBraceWord(word)
-            ? "@(" + EmitBraceExpandedWord(word.Parts) + ")"
-            : IsUnquotedArrayAllWord(word)
-            // ConvertTo-BashWords takes ONE string: the elements joined by a space split back apart on IFS.
-            ? PsBuild.WordSplitArray("(@(" + EmitBracedVar((WordPart.BracedVarSub)word.Parts[0]) + ") -join ' ')")
-            : IsUnquotedPositionalSliceWord(word)
-            ? "@(ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @(" + EmitBracedVar((WordPart.BracedVarSub)word.Parts[0]) + "))"
-            : IsUnquotedPositionalListWord(word)
-            // Joined with IFS[0] and split again (IFS=x, `"" ""` is one empty field); IFS='' keeps each parameter whole.
-            ? "@(ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @(" + PsBuild.BuildPositionalExpansion("@") + "))"
-            : IsBraceGlobWord(word)
-            // `*.{c,h}` / `sub/{a,b}*`: brace expansion comes FIRST, then every resulting word globs.
-            ? "@(" + EmitBraceExpandedWord(word.Parts) + " | ConvertTo-BashGlob)"
-            : IsGlobWord(word)
-            ? PsBuild.GlobWordArray(EmitGlobPatternExpr(word))
-            : IsUnquotedDefaultAltWord(word) && word.Parts[0] is WordPart.BracedVarSub { Name: "@" or "*" }
-                ? "@(" + EmitBracedVar((WordPart.BracedVarSub)word.Parts[0]) + ")"
-            : IsUnquotedDefaultAltWord(word) || IsUnquotedElementWord(word)
-                ? PsBuild.WordSplitArray("(" + EmitBracedVar((WordPart.BracedVarSub)word.Parts[0]) + ")")
-            : word.Parts[0] is WordPart.CommandSub cs
-                ? "@(ConvertTo-BashWords " + EmitCommandSubString(cs, nested: false) + ")"
-                : EmitUnquotedVarSplitArray(word);
 
     // ───────────────────────────── Pathname expansion (globbing) ─────────────────────────────
     //
