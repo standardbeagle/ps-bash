@@ -55,7 +55,7 @@ public class WordFieldsDifferentialTests
     // R6: `$'…'` in a quoted expansion's word is still ANSI-C quoting (extquote).
     [SkippableFact]
     public Task AnsiCQuoteInAQuotedDefaultWord_IsDecoded() => AssertOracle.EqualAsync(
-        P + "p \"${e:-$'t\\x41'}\"; p \"${e:-$'a\\tb'}x\"; p ${e:-$'q\\x42'}");
+        P + "p \"${e:-$'t\\x41'}\"; p \"${e:-$'a\\tb'}x\"; p ${e:-$'q\\x42'}; p \"${e:-'t\\x41'}\"; p ${e:-'t\\x41'}");
 
     // R8: every quoted `*` form joins with the first IFS character.
     [SkippableTheory]
