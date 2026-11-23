@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Core.Tests;
@@ -11,6 +12,7 @@ namespace PsBash.Core.Tests;
 /// Differential <c>RawBytesDifferentialTests.Scalars_KeepTheInvalidByte</c>. The store itself has no bash equivalent
 /// (qa-rubric Directive 1), so these assert it directly; each test owns a unique variable name.
 /// </summary>
+[Collection(ProcessEnvironmentCollection.Name)] // three tests write the environment directly, as the host's reset does
 public class ProcessScalarsTests
 {
     private static readonly string Ff = "a" + RawBytes.ToMarker(0xFF) + "b";
@@ -62,7 +64,7 @@ public class ProcessScalarsTests
         try
         {
             ProcessScalars.Set(name, Ff);
-            Environment.SetEnvironmentVariable(name, "direct");
+            using var direct = ProcessEnv.Set(name, "direct");
             Assert.Equal("direct", ProcessScalars.Get(name));
         }
         finally { ProcessScalars.Set(name, null); }
@@ -134,6 +136,7 @@ public class ProcessScalarsTests
     {
         if (ProcessScalars.EnvironmentHoldsEveryString) return; // nothing is ever kept there
         var name = Name();
+        IDisposable? direct = null;
         try
         {
             ProcessScalars.Set(name, Ff);
@@ -143,11 +146,11 @@ public class ProcessScalarsTests
             {
                 case "unset": ProcessScalars.Set(name, null); break;
                 case "plain": ProcessScalars.Set(name, "ok"); break;
-                case "direct": Environment.SetEnvironmentVariable(name, "direct"); break;
+                case "direct": direct = ProcessEnv.Set(name, "direct"); break;
             }
             Assert.False(KeptAndExported(name));
         }
-        finally { ProcessScalars.Set(name, null); }
+        finally { direct?.Dispose(); ProcessScalars.Set(name, null); }
     }
 
     // This name's own part of KeepsAnyExported: its exact value is kept (the stored form maps back to it) and exported.
@@ -161,11 +164,7 @@ public class ProcessScalarsTests
     public void EnvironmentHoldsEveryString_MatchesWhatTheEnvironmentGivesBack()
     {
         var name = Name();
-        try
-        {
-            Environment.SetEnvironmentVariable(name, Ff);
+        using (ProcessEnv.Set(name, Ff))
             Assert.Equal(Environment.GetEnvironmentVariable(name) == Ff, ProcessScalars.EnvironmentHoldsEveryString);
-        }
-        finally { Environment.SetEnvironmentVariable(name, null); }
     }
 }

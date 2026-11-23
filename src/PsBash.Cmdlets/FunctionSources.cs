@@ -40,7 +40,7 @@ public static class FunctionSources
     /// </summary>
     public static void Defined(SessionState session, string name)
     {
-        session.PSVariable.Set("global:LASTEXITCODE", 0);
+        FileSystemHelpers.SetStatementStatus(session, 0);
         var files = VarFrameStack.BashSource(session.PSVariable.GetValue("global:BASH_SOURCE"));
         if (Unwrap(session.PSVariable.GetValue("global:" + TableVariable)) is not Hashtable table)
         {

@@ -602,8 +602,7 @@ public sealed class LifecycleScaleAndFaultTests
     public async Task OlderProtocolHost_IsReplaced_NeverSentACommand(bool withSidecar)
     {
         var (spec, scheme, endpoint) = NewIsolatedEndpoint("oldproto");
-        var prior = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
-        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, spec);
+        using var env = ProcessEnv.Set(IpcTransportFactory.EndpointEnvVar, spec);
 
         int oldProtocol = HostProtocol.ProtocolVersion - 1;
         var requests = new System.Collections.Concurrent.ConcurrentQueue<string>();
@@ -671,7 +670,6 @@ public sealed class LifecycleScaleAndFaultTests
         {
             try { fakeCts.Cancel(); } catch { }
             try { if (fakeTask is not null) await fakeTask.WaitAsync(TimeSpan.FromSeconds(3)); } catch { }
-            Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, prior);
             CleanupEndpoint(scheme, endpoint);
         }
     }

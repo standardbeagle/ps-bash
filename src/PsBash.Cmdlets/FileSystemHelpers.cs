@@ -423,6 +423,13 @@ internal static class FileSystemHelpers
         => cmdlet.SessionState.PSVariable.Set("global:LASTEXITCODE", status);
 
     /// <summary>
+    /// The status of a statement that is no cmdlet's (a function definition, run from emitted code through a static
+    /// helper): the variable only, since there is no <see cref="BashCmdlet"/> to record and re-assert it.
+    /// </summary>
+    public static void SetStatementStatus(SessionState session, int code)
+        => session.PSVariable.Set("global:LASTEXITCODE", code);
+
+    /// <summary>
     /// <paramref name="cmdlet"/> ran another command (<c>command ls</c>, <c>env prog</c>, <c>flock f cmd</c>) and that
     /// command's status is now the cmdlet's own. A wrapper sets 0 as it starts and the command it runs sets
     /// <c>$LASTEXITCODE</c> as ITSELF (a native, a script, another cmdlet's instance), so the wrapper's recorded status

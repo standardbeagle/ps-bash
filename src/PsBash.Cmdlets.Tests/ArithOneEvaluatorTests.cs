@@ -295,14 +295,18 @@ public class ArithOneEvaluatorTests
 /// The cmdlet's text substitution and recursion report against bash 5.2.21: <c>$x</c> is replaced by its value's TEXT,
 /// with nothing around it (it was padded with blanks, so <c>16#$h</c> became <c>16# ff</c>: "invalid integer constant").
 /// </summary>
+[Collection(ProcessEnvironmentCollection.Name)] // its scripts write $env:zz* (the cmdlet reads shell variables there)
 public class ArithOneEvaluatorCmdletTests : IClassFixture<SharedPwshFixture>
 {
     private readonly SharedPwshFixture _fixture;
 
     public ArithOneEvaluatorCmdletTests(SharedPwshFixture fixture) => _fixture = fixture;
 
-    private CmdResult Run(string script) => CmdResult.Run(_fixture.AcquireFresh(),
-        "try { " + script + " } finally { Remove-Item env:zzh, env:zzx, env:zzr1, env:zzr2, env:zza, env:zzb, env:zzc, env:zzi -ErrorAction Ignore }");
+    private CmdResult Run(string script)
+    {
+        using var _ = PsBash.Testing.ProcessEnv.Preserve("zza", "zzb", "zzc", "zzh", "zzi", "zzr1", "zzr2", "zzx");
+        return CmdResult.Run(_fixture.AcquireFresh(), script);
+    }
 
     // bash: i=0; a=(10 20 30); (( a[i++] += i )) -> i=1, a=(11 20 30); (( a[i++]++ )) -> i=1, a=(11 20 30) from (10 20 30).
     // REGRESSION: the read and the write each evaluated the subscript (i=2, a[1] written).
