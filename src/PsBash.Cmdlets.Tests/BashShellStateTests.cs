@@ -36,6 +36,21 @@ public class BashShellStateTests : IClassFixture<SharedPwshFixture>
         Assert.Matches(@"shopt=\[nullglob\s+off\]", r.Stdout);   // the body's `shopt -s` is undone
     }
 
+    // `x=1; ( shopt -s failglob; echo zz* ); echo $?`: the body's failglob ends the body only. The line mark it set
+    // skipped the parent's `echo $?` (and every later command on the line, a command substitution's too).
+    [Fact]
+    public void Restore_PutsBackTheLineMark()
+    {
+        var r = Run(
+            "$global:__BashFailGlob = $false; "
+            + "$s = [PsBash.Cmdlets.BashShellState]::Save($ExecutionContext.SessionState); "
+            + "$global:__BashFailGlob = $true; "
+            + "[void][PsBash.Cmdlets.BashShellState]::Restore($ExecutionContext.SessionState, $s); "
+            + "\"mark=$global:__BashFailGlob\"").AssertSuccess();
+
+        Assert.Contains("mark=False", r.Stdout);
+    }
+
     [Fact]
     public void Restore_EndsReadonlyMadeInsideTheBody()
     {

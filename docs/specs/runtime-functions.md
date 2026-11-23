@@ -325,17 +325,20 @@ route hands the producer's objects to a consumer that follows the rules above.
 ## Word fields (`ConvertTo-BashWords`)
 
 Word splitting and pathname expansion of an unquoted word run at the emitter step through ONE runtime
-primitive, `PsBash.Cmdlets.BashWordFields` (`src/PsBash.Cmdlets/BashWordFields.cs`), called by
-`ConvertTo-BashWords` (`ConvertToBashWordsCommand.cs`). The emitter hands it the word as ordered
-segments, `-Parts @(kind, value, …)`: 1 quoted text, 2 pattern text, 3 a split value, 4 an unquoted list,
-5 a quoted list, 6 a field break; a nested list is a group spliced in place (null = empty group).
-`Expand` IFS-splits only kind 3/4 text, glues a quoted list's first and last elements to their
-neighbours, drops a field made only of empty split text (a quoted null keeps it), and gives a field a
-glob pattern only when it holds an active glob character (quoted ones escaped). The cmdlet globs those
-fields with the `ConvertTo-BashGlob` engine (`set -f`, nullglob, failglob). `SplitNumber` is the
-allocation-light path for a lone `$((…))`. The short forms (`ConvertTo-BashWords $x`, `-Fields`) are the
-same rules with one segment. Emission and the predicate: `emitter-strategy.md` §Word expansion: one
-primitive. Engine tests: `Cmdlets.Tests/BashWordFieldsTests`.
+primitive, `PsBash.Cmdlets.BashWordFields` (`src/PsBash.Cmdlets/BashWordFields.cs`). The emitter hands it the
+word as ordered segments, `@(kind, value, ...)`: 1 quoted text, 2 pattern text, 3 a split value, 4 an unquoted
+list, 5 a quoted list, 6 a field break, 7 quoted text with no literal character; a nested list is a group
+spliced in place (null = empty group). `Expand` IFS-splits only kind 3/4 text (IFS characters are code
+points), glues a quoted list's first and last elements to their neighbours, drops a field made only of empty
+split text (a quoted null or literal quoted text keeps it), and gives a field a glob pattern only when it
+holds an active glob character (quoted ones, extglob operators included, escaped).
+
+Two entry points: the static `BashWordFields.Words(parts[, ifsVariable])` gives the fields, or null when a
+field must be pathname-expanded; only then does `ConvertTo-BashWords -Parts` (`ConvertToBashWordsCommand.cs`)
+run, which globs those fields with the `ConvertTo-BashGlob` engine (`set -f`, nullglob, failglob). `SplitNumber`
+is the allocation-light path for a lone `$((...))`. `ifsVariable` / `-IfsVariable` names the variable holding
+the IFS (`__psbash_ea_IFS` for the words of `IFS=: cmd $x`, parked by `BashVariableStore.Copy`). Emission and
+the predicate: `emitter-strategy.md` Word expansion: one primitive. Engine tests: `Cmdlets.Tests/BashWordFieldsTests`.
 
 ## Memory / streaming
 

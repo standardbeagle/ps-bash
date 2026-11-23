@@ -45,9 +45,13 @@ public sealed class ConvertToBashWordsCommand : BashCmdlet
     /// <summary>The suffix has quoted text (<c>$x""</c>).</summary>
     [Parameter] public SwitchParameter SuffixQuoted { get; set; }
 
+    /// <summary>The variable that holds the IFS to split with (default <c>IFS</c>): the word of a command with an
+    /// <c>IFS=…</c> binding is expanded before the binding, so it reads the value the emitter parked.</summary>
+    [Parameter] public string? IfsVariable { get; set; }
+
     protected override void ProcessRecord()
     {
-        var ifs = BashVariableStore.Get("IFS");
+        var ifs = BashVariableStore.Get(IfsVariable ?? "IFS");
         bool extglob = InvokeBashShoptCommand.IsEnabled("extglob");
         System.Collections.IList parts = Parts
             ?? (Fields is not null || Prefix is not null || Suffix is not null
@@ -67,13 +71,11 @@ public sealed class ConvertToBashWordsCommand : BashCmdlet
     /// <summary>
     /// Pathname expansion of one field (the shared <see cref="BashGlob"/> engine, so a field globs exactly like a literal
     /// pattern: relative matches, hidden files only for a <c>.</c> pattern, sorted; no match keeps the field's text,
-    /// <c>nullglob</c> / <c>failglob</c> honoured). A Windows drive path written with backslashes is read as separators,
-    /// not escapes.
+    /// <c>nullglob</c> / <c>failglob</c> honoured). A Windows drive path's backslashes are already separators in the
+    /// pattern (<see cref="BashWordFields"/> converts them before it escapes quoted text).
     /// </summary>
     private IEnumerable<string> ExpandGlob(string pattern, string text)
     {
-        if (OperatingSystem.IsWindows() && pattern.Length >= 3 && char.IsAsciiLetter(pattern[0]) && pattern[1] == ':' && pattern[2] == '\\')
-            pattern = BashPath.ToShell(pattern);
         if (!BashGlob.HasPattern(pattern)) return new[] { text };
 
         string cwd = SessionState.Path.CurrentFileSystemLocation.ProviderPath;

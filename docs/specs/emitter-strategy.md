@@ -1101,13 +1101,23 @@ nobody had listed kept one field: with x='a b', `$x$x`, `~/$x`, `$x*`, `"$@"$x`,
   globbed?" decision, made from the AST parts: an unquoted expansion that splits (`ExpansionSplits`: not
   a loop variable or a `$?`-style special), a quoted list part (`HasQuotedListPart`), or a glob / brace
   word. A word it rejects is one field, emitted as before (the fast path).
-- `EmitUnquotedSplitWordArray` builds the word's SEGMENTS from its parts (never raw text) and emits one
-  call, `@(ConvertTo-BashWords -Parts @(kind, value, …))` (`PsBuild.WordFieldsArray` / `WordSegment`). A
-  lone expansion keeps its short form (`@(ConvertTo-BashWords $env:x)`, `ListFieldsArray` for `$@`,
-  `NumberFieldsArray` for `$((…))`) — the same segments with one element.
+- `EmitUnquotedSplitWordArray` builds the word's SEGMENTS from its parts (never raw text) and emits them
+  through `PsBuild.WordFieldsArray` / `WordSegment`: first the static `[BashWordFields]::Words(@(kind, value,
+  …))` (~5 µs), which gives the fields unless one must be pathname-expanded (it returns null); only then the
+  `ConvertTo-BashWords -Parts` cmdlet (~90 µs) globs, on the segments already evaluated (a substitution never
+  runs twice). A lone expansion uses the same call with one segment (`WordSplitArray` for `$x`,
+  `ListFieldsArray` for `$@`); a lone `$((…))` is `NumberFieldsArray` (`BashWordFields.SplitNumber`, no glob).
+  `PsBuild.ExpandsWords` / `MayFailGlob` recognise the emitted text.
+- `IFS=: cmd $x` expands its words BEFORE the binding applies, so they read the IFS parked from before it
+  (`PsBuild.ParkShellVariable` = `BashVariableStore.Copy`, one store call: unset stays unset, empty stays
+  empty) under `__psbash_ea_IFS`, the name passed to `Words` / `SplitNumber`.
 - The kinds (`PsBash.Cmdlets.BashWordFields`): 1 quoted text, 2 pattern text (unquoted literals and glob
   parts, never split), 3 a split value, 4 an unquoted list (values joined with IFS[0], then split), 5 a
-  quoted list, 6 a field break (between the words of a dynamic brace expansion). In place of a kind a
+  quoted list, 6 a field break (between the words of a dynamic brace expansion; the next word's leading IFS
+  whitespace makes no field), 7 quoted text with no literal character (`"$@$e"`: no field when the list and
+  the value are empty, bash 5.2). Quoted extglob operators are escaped like any quoted glob character
+  (`$d/"+(a)"*` is literal `+(a)`); a Windows drive path is mapped to `C:/` before the quoted characters are
+  escaped. IFS characters are code points (a surrogate pair is never cut). In place of a kind a
   nested group may stand: `${v:-word}` / `${v:+word}` emit `PsBuild.WordSegmentGroup`, which picks at run
   time between the value's segments and the WORD's own segments (`${e:-'a b'}` is one field, `${e:-a b}` two,
   `${u:-"a b"$x}` splits only `$x`). `${v:=w}` / `${v:?m}` are one split value (bash splits the assigned
@@ -1124,9 +1134,19 @@ and emission are defined only in `PsEmitter.Fields.cs`; that file scans no raw q
 spells the segments call). Behavior: `Differential.Tests/WordFieldsDifferentialTests`, engine rules
 `Cmdlets.Tests/BashWordFieldsTests`.
 
-Known gaps: `${!a[*]}` and `${!p*}` are parsed as their `@` forms, so `"${!a[*]}"` is not joined with IFS
-(parser); loop variables and `$? $# $$ $!` are never split (a word with one of them beside another expansion
-splits only the other).
+Quoted `*` forms (`"$*"`, `"${a[*]}"`, `"${!a[*]}"`, `"${!p*}"`) join with the first IFS character
+(`PsBuild.IfsJoinSeparator`); the parser keeps `![*]` and `!names*` apart from `![@]` / `!names`.
+
+failglob: `ConvertTo-BashGlob` throws `BashNoMatchException` and sets the line mark `$global:__BashFailGlob`.
+A subshell or `$( )` is one command to bash, so the error ends only it: the subshell scope
+(`PsBuild.ShellStateGuard`) catches it (reported to the subshell's stderr, so `( … ) 2>/dev/null` silences
+it) and restores the mark; a substitution that skips that scope but can glob gets `PsBuild.FailGlobScope`
+(catch + mark only). Without it the mark dropped the rest of the parent's line (`echo "c=$(echo zz*)"; echo $?`).
+
+Known gaps: loop variables and `$? $# $$ $!` are never split (a word with one of them beside another
+expansion splits only the other); failglob in a pipeline stage (`echo zz* | cat; echo $?`) still drops the
+rest of the line (bash runs the stage in a subshell); top-level `echo zz* 2>/dev/null` silences the message
+(bash reports it before the redirect applies).
 
 ---
 

@@ -68,7 +68,7 @@ public class WordShapeAndLineAbandonTests
     [Fact]
     public void Transpile_ExtglobWithBareVariableArm_IsSplitAroundTheVariable()
     {
-        Assert.Contains("ConvertTo-BashWords -Parts @(2, 'ab+(', 3, ($env:ABC), 2, ')')", T("echo ab+($ABC)"));
+        Assert.Contains("$__psbash_wp = @(2, 'ab+(', 3, ($env:ABC), 2, ')')", T("echo ab+($ABC)"));
         Assert.DoesNotContain("3, ($env:ABC)", T("echo ab+(\"$ABC\")"));
     }
 

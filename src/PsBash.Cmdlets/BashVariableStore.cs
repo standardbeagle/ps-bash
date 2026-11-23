@@ -56,6 +56,13 @@ public static class BashVariableStore
         else Environment.SetEnvironmentVariable(name, value);
     }
 
+    /// <summary>
+    /// <paramref name="to"/> becomes what <paramref name="from"/> is: its value, set but empty, or UNSET. One call, so the
+    /// value never crosses PowerShell: <c>Set('t', Get('f'))</c> in script passes an unset (null) value as '' to the
+    /// string parameter, and the copy of an unset IFS read as an empty one (<c>unset IFS; IFS=: cmd $x</c> did not split).
+    /// </summary>
+    public static void Copy(string from, string to) => Set(to, Get(from));
+
     // An in-process background job's scalars are its own copy, taken at the `&` (ScalarOverlay, keyed by the job's
     // runspace): the foreground and the other jobs go on writing the process environment while it runs
     // (background-jobs.md section 3, environment-model.md section 8). Every member here resolves the store per call.

@@ -549,12 +549,15 @@ public sealed partial class BashParser
                 }
             }
 
+            // ${!p@} / ${!p*}: the names that start with p. Quoted, `@` is one word per name and `*` one word joined with the
+            // first IFS character, so the two stay apart ("!names" / "!names*").
             if (pos < len && (raw[pos] == '*' || raw[pos] == '@'))
             {
+                bool star = raw[pos] == '*';
                 pos++; // skip * or @
                 if (pos < len && raw[pos] == '}')
                     pos++; // skip }
-                parts.Add(new WordPart.BracedVarSub(name, "!names"));
+                parts.Add(new WordPart.BracedVarSub(name, star ? "!names*" : "!names"));
                 return pos;
             }
 
@@ -566,9 +569,11 @@ public sealed partial class BashParser
                 return pos;
             }
 
+            // ${!a[@]} / ${!a[*]}: the keys; `*` joins them in quotes, as above.
             string keysSuffix = "![@]";
             if (pos < len && raw[pos] == '[')
             {
+                if (pos + 2 < len && raw[pos + 1] == '*' && raw[pos + 2] == ']') keysSuffix = "![*]";
                 pos = SubscriptCloseWithin(raw, pos, len);
                 if (pos < len)
                     pos++; // skip ]

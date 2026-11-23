@@ -25,7 +25,7 @@ public class ShellSemanticsRegressionTests
     public void Transpile_DynamicCommandInFunction_ChecksForAReturnItRan()
     {
         var ps = BashTranspiler.Transpile("f(){ $b; }");
-        Assert.Contains("& (Resolve-BashCommand -Fed -Words @(ConvertTo-BashWords $env:b)); if ($global:__BashEvalReturn) { $global:__BashEvalReturn = $false; return }", ps);
+        Assert.Contains("& (Resolve-BashCommand -Fed -Words " + PsBuild.WordSplitArray("$env:b") + "); if ($global:__BashEvalReturn) { $global:__BashEvalReturn = $false; return }", ps);
         // At top level there is no function to leave.
         Assert.DoesNotContain("__BashEvalReturn", BashTranspiler.Transpile("$b"));
     }

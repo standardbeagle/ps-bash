@@ -9,7 +9,8 @@ namespace PsBash.Core.Parser;
 /// Word expansion of an unquoted word (bash §3.5: word splitting, pathname expansion, quote removal), decided in ONE
 /// place. <see cref="IsUnquotedSplitWord"/> is the only predicate for "this word may become a number of fields other
 /// than one"; <see cref="EmitUnquotedSplitWordArray"/> turns the word's parts into the ordered segments of the runtime
-/// primitive <c>PsBash.Cmdlets.BashWordFields</c> (via <c>ConvertTo-BashWords -Parts</c>). No other code decides
+/// primitive <c>PsBash.Cmdlets.BashWordFields</c> (via <c>PsBuild.WordFieldsArray</c>: the static <c>Words</c> call, the
+/// <c>ConvertTo-BashWords -Parts</c> cmdlet only when a field is pathname-expanded). No other code decides
 /// splitting by the shape of a word or by scanning its text (guard <c>WordFieldsGuardTests</c>; spec
 /// emitter-strategy.md "Word expansion: one primitive").
 /// </summary>
@@ -22,6 +23,11 @@ public static partial class PsEmitter
     private const int SegSplitList = 4;
     private const int SegQuotedList = 5;
     private const int SegBreak = 6;
+    private const int SegQuotedValue = 7;
+
+    /// <summary>The variable a split word reads its IFS from: the parked one inside an <c>IFS=: cmd</c> binding (bash expands
+    /// the words before the binding applies), else null (<c>IFS</c>).</summary>
+    private static string? WordIfs => EnvShadowName("IFS");
 
     /// <summary>
     /// THE predicate: true when expanding the unquoted <paramref name="word"/> may give other than exactly one field, so it
@@ -84,13 +90,14 @@ public static partial class PsEmitter
     }
 
     /// <summary>A double-quoted part that expands to one field per value: <c>"$@"</c>, <c>"${a[@]}"</c>, <c>"${!a[@]}"</c>,
-    /// <c>"${@/x/y}"</c>, <c>"${a[@]:1}"</c>, <c>"${@:-d}"</c>. Not a length (<c>"${#a[@]}"</c>).</summary>
+    /// <c>"${!p@}"</c>, <c>"${@/x/y}"</c>, <c>"${a[@]:1}"</c>, <c>"${@:-d}"</c>. Not a length (<c>"${#a[@]}"</c>), not a <c>*</c>
+    /// form (<c>"${!a[*]}"</c>, <c>"${!p*}"</c> join with the first IFS character).</summary>
     private static bool IsQuotedListPart(WordPart part) => part switch
     {
         WordPart.SimpleVarSub { Name: "@" } => true,
         WordPart.BracedVarSub { Name: "@", Suffix: null } => true,
         WordPart.BracedVarSub { Name: "@", Suffix: { } s } => !IsLengthOrBadSuffix(s),
-        WordPart.BracedVarSub { Suffix: "![@]" } => true,
+        WordPart.BracedVarSub { Suffix: "![@]" or "!names" } => true,
         WordPart.BracedVarSub { Suffix: { } s } => s.StartsWith("[@]", StringComparison.Ordinal),
         _ => false,
     };
@@ -163,7 +170,7 @@ public static partial class PsEmitter
         AppendWordSegments(segs, parts, topLevel: true);
         // Only text and globs: the word is one pattern (`'a b'*`, `x[ab]`).
         if (!segs.AnyExpansion) return PsBuild.GlobWordArray(EmitGlobPatternExpr(word));
-        return PsBuild.WordFieldsArray(segs.ToList());
+        return PsBuild.WordFieldsArray(segs.ToList(), WordIfs);
     }
 
     /// <summary>The segments of one word, in order; adjacent quoted parts collect into one quoted segment and adjacent
@@ -299,7 +306,7 @@ public static partial class PsEmitter
     private static string GlobPartPatternText(string pattern)
     {
         if (pattern.StartsWith('[')) return BashParser.UnquoteClass(pattern);
-        if (pattern.Length > 1 && pattern[1] == '(' && pattern.AsSpan().IndexOfAny('\'', '"') >= 0)
+        if (pattern.Length > 1 && pattern[1] == '(')
         {
             var sb = new StringBuilder(pattern.Length);
             foreach (var (text, isOperator) in SplitExtglob(pattern))
@@ -352,6 +359,8 @@ public static partial class PsEmitter
     /// The parts of a double-quoted string that holds a quoted list: text runs are quoted segments, each list a quoted list
     /// (the first element joins the text before it, the last the text after). <c>"${@:-d}"</c> is the list when set and the
     /// quoted word otherwise; <c>"${@:+w}"</c> the quoted word when set and NO field otherwise.
+    /// <para>A text run with literal characters makes its field exist (<c>"x$@"</c> is <c>x</c> with no parameters); a run
+    /// of expansions only does not (<c>"$@$e"</c> is no word when both are empty, bash 5.2), so it is a quoted value.</para>
     /// </summary>
     private static void AppendQuotedListSegments(WordSegments segs, ImmutableArray<WordPart> dqParts)
     {
@@ -360,7 +369,10 @@ public static partial class PsEmitter
         void FlushText()
         {
             if (run.Count == 0) return;
-            segs.Add(SegQuoted, FlattenPartsToDoubleQuotedString(ImmutableArray.Create<WordPart>(new WordPart.DoubleQuoted(run.ToImmutable()))));
+            bool literal = false;
+            foreach (var r in run) literal |= r is WordPart.Literal { Value.Length: > 0 } or WordPart.EscapedLiteral;
+            segs.Add(literal ? SegQuoted : SegQuotedValue,
+                FlattenPartsToDoubleQuotedString(ImmutableArray.Create<WordPart>(new WordPart.DoubleQuoted(run.ToImmutable()))));
             run.Clear();
         }
         foreach (var p in dqParts)
@@ -425,7 +437,7 @@ public static partial class PsEmitter
         if (IsLengthOrBadSuffix(suffix)) return false; // a length is one number
         if (name is "@" or "*") return true;
         return suffix.StartsWith("[@]", StringComparison.Ordinal) || suffix.StartsWith("[*]", StringComparison.Ordinal)
-            || suffix is "![@]" or "![*]" or "!names";
+            || suffix is "![@]" or "![*]" or "!names" or "!names*";
     }
 
     /// <summary>
@@ -438,26 +450,26 @@ public static partial class PsEmitter
         {
             case WordPart.SimpleVarSub { Name: "@" or "*" }:
             case WordPart.BracedVarSub { Name: "@" or "*", Suffix: null }:
-                return PsBuild.ListFieldsArray("@(" + PsBuild.BuildPositionalExpansion("@") + ")");
+                return PsBuild.ListFieldsArray("@(" + PsBuild.BuildPositionalExpansion("@") + ")", WordIfs);
             case WordPart.SimpleVarSub v:
-                return PsBuild.WordSplitArray(EmitSimpleVar(v.Name, strict: true));
+                return PsBuild.WordSplitArray(EmitSimpleVar(v.Name, strict: true), WordIfs);
             case WordPart.BracedVarSub { Suffix: null } b:
-                return PsBuild.WordSplitArray(EmitSimpleVar(b.Name, strict: true));
+                return PsBuild.WordSplitArray(EmitSimpleVar(b.Name, strict: true), WordIfs);
             case WordPart.CommandSub cs:
-                return PsBuild.WordSplitArray(EmitCommandSubString(cs, nested: false));
+                return PsBuild.WordSplitArray(EmitCommandSubString(cs, nested: false), WordIfs);
             case WordPart.ArithSub a:
-                return PsBuild.NumberFieldsArray(EmitArithSub(a));
+                return PsBuild.NumberFieldsArray(EmitArithSub(a), WordIfs);
             case WordPart.BracedVarSub { Suffix: { } s } b:
                 if (TryDefaultOperator(s, out var pre, out var op))
                 {
                     // A word of plain text and expansions is split as one value with the result: `${v:-a b}`, `${v:+$x}`.
                     if (op is ":-" or "-" or ":+" or "+" && (IsListBase(b.Name, pre) || !IsPlainDefaultWord(b.ArgWord)))
                         return null;
-                    return PsBuild.WordSplitArray("(" + EmitBracedVar(b) + ")");
+                    return PsBuild.WordSplitArray("(" + EmitBracedVar(b) + ")", WordIfs);
                 }
                 return IsListSuffix(b.Name, s)
-                    ? PsBuild.ListFieldsArray("@(" + EmitBracedVar(b) + ")")
-                    : PsBuild.WordSplitArray("(" + EmitBracedVar(b) + ")");
+                    ? PsBuild.ListFieldsArray("@(" + EmitBracedVar(b) + ")", WordIfs)
+                    : PsBuild.WordSplitArray("(" + EmitBracedVar(b) + ")", WordIfs);
             case WordPart.DoubleQuoted { Parts: [var only] } when IsQuotedListPart(only)
                 && !(only is WordPart.BracedVarSub { Suffix: { } qs } && TryDefaultOperator(qs, out _, out _)):
                 return EmitQuotedArrayElements(only);
@@ -466,7 +478,8 @@ public static partial class PsEmitter
         }
     }
 
-    /// <summary>A default word whose fields are those of its value split as a whole: unquoted literal text and scalar expansions.</summary>
+    /// <summary>A default word whose fields are those of its value split as a whole: unquoted literal text and scalar expansions.
+    /// A nested default operator's word counts too: <c>${v:-${w:-'a b'}}</c> keeps the quoted <c>a b</c> one field.</summary>
     private static bool IsPlainDefaultWord(ImmutableArray<WordPart>? word)
     {
         if (word is not { } parts) return true;
@@ -478,7 +491,9 @@ public static partial class PsEmitter
                     break;
                 case WordPart.SimpleVarSub v when v.Name is not ("@" or "*"):
                     break;
-                case WordPart.BracedVarSub bv when bv.Name is not ("@" or "*") && (bv.Suffix is null || !IsListSuffix(bv.Name, bv.Suffix)):
+                case WordPart.BracedVarSub bv when bv.Name is not ("@" or "*") && (bv.Suffix is null || !IsListSuffix(bv.Name, bv.Suffix))
+                    && !(bv.Suffix is { } inner && TryDefaultOperator(inner, out _, out var innerOp) && innerOp is ":-" or "-" or ":+" or "+"
+                         && !IsPlainDefaultWord(bv.ArgWord)):
                     break;
                 default:
                     return false;
@@ -510,7 +525,7 @@ public static partial class PsEmitter
             if (list.Length > 0) items.Add(list);
             items.Add(PsBuild.WordSegment(SegBreak, "$null"));
         }
-        return PsBuild.WordFieldsArray(string.Join(", ", items));
+        return PsBuild.WordFieldsArray(string.Join(", ", items), WordIfs);
     }
 
     /// <summary>

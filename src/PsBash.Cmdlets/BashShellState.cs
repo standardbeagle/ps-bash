@@ -358,6 +358,11 @@ public static class BashShellState
 
         /// <summary>The descriptor table: a subshell gets a copy (`( exec >f ); echo x` prints x).</summary>
         internal BashFdTable.Snapshot? Fds { get; init; }
+
+        /// <summary>The line mark (<c>$global:__BashFailGlob</c>): a failglob error or bad substitution in the body ends the
+        /// body only, so the parent's commands after it on its line still run (<c>x=1; ( echo zz* ); echo $?</c>, also a
+        /// command substitution).</summary>
+        internal object? LineMark { get; init; }
     }
 
     /// <summary>The working directory a subshell must put back (see <see cref="SaveWorkingDirectory"/>).</summary>
@@ -457,7 +462,10 @@ public static class BashShellState
         return new Snapshot(env, globals, InvokeBashShoptCommand.SnapshotOptions(),
             IsTrue(session.PSVariable.GetValue("global:__BashXtrace")), SaveTables(), SaveAliasFunctions(session),
             VarFrameStack.Current.Save(), PsBash.Core.ShellExports.Save(), SaveWorkingDirectory(session))
-        { Umask = InvokeBashUmaskCommand.ShellMask, ArrayWrites = BashVariableLookup.OpenJournal(session), Fds = BashFdTable.Save() };
+        {
+            Umask = InvokeBashUmaskCommand.ShellMask, ArrayWrites = BashVariableLookup.OpenJournal(session), Fds = BashFdTable.Save(),
+            LineMark = session.PSVariable.GetValue("global:" + LineMarkVariable),
+        };
     }
 
     /// <summary>
@@ -499,6 +507,9 @@ public static class BashShellState
         return RestoreRunspaceGlobals(session, saved);
     }
 
+    /// <summary>The line mark a failglob error or bad substitution sets (<c>PsBuild.UnlessGlobFailed</c> reads it).</summary>
+    private const string LineMarkVariable = "__BashFailGlob";
+
     /// <summary>Set to <c>$true</c> in a background job's pooled runspace by Invoke-BashBackground.</summary>
     public const string BackgroundRunspaceMark = "__psbashBgRunspace";
 
@@ -509,6 +520,9 @@ public static class BashShellState
         // `( mapfile -t arr <<< x )`, `( f )` with `f() { arr+=(z); }`: the arrays are the runspace's, so in a job too.
         saved.ArrayWrites?.Undo(session);
         RestoreWorkingDirectory(session, saved.Cwd);
+        // REGRESSION: `x=1; ( shopt -s failglob; echo zz* ); echo $?` printed nothing after the subshell: its failglob
+        // mark ended the parent's line too.
+        session.PSVariable.Set("global:" + LineMarkVariable, saved.LineMark);
         // REGRESSION: `( umask 077 ); umask` printed 0077 - the mask was not part of the snapshot.
         InvokeBashUmaskCommand.ShellMask = saved.Umask;
         RestoreAliasFunctions(session, saved.AliasFunctions);

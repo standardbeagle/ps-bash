@@ -64,6 +64,36 @@ public class WordFieldsDifferentialTests
     [InlineData(P + "set -- a b c; IFS=; p \"${*:2}\" \"$*\" \"${*}\"; a=(a b); p \"${a[*]}\" \"${a[*]:-d}\"")]
     public Task QuotedStarForms_JoinWithTheFirstIfsCharacter(string script) => AssertOracle.EqualAsync(script);
 
+    // `"${!a[*]}"` and `"${!p*}"` are `*` forms too (the parser kept them as the `@` forms); the `@` forms are a word each.
+    [SkippableFact]
+    public Task QuotedStarKeysAndNames_JoinWithTheFirstIfsCharacter() => AssertOracle.EqualAsync(
+        P + "qzpa=1 qzpb=2; a=(x y z); IFS=-; p \"${!a[*]}\" \"${!qzp*}\" \"${!a[@]}\" \"${!qzp@}\"; IFS=; p \"${!a[*]}\" \"${!qzp*}\"; "
+        + "unset IFS; p \"${!a[*]}\" \"${!qzp*}\"; p ${!a[*]} ${!qzp*}");
+
+    // Review cases: a nested default's quoted word is one field; after a brace break leading IFS whitespace is no field;
+    // `IFS=: cmd $z` splits $z on the IFS from before the binding; quoted extglob operators are literal; `"$@$e"` with no
+    // parameters and e empty is no word; `"${!p@}"` is a word per name.
+    [SkippableTheory]
+    [InlineData(P + "unset v w; p ${v:-${w:-'a b'}}; p ${v:-${w:-a b}}; p ${v:-${w:-\"a b\"}}; p ${v:-x${w:-'a b'}}")]
+    [InlineData(P + "y=' a'; p ${y}{1,2}; p {1,2}${y}; y='a '; p ${y}{1,2}")]
+    [InlineData(P + "z='a:b c'; IFS=: printf '<%s>' $z; echo; IFS= printf '<%s>' $z; echo; IFS=: p \"$z\" $z; IFS=: p $((12)); echo \"[${IFS-unset}]\"")]
+    [InlineData(P + "z='a:b c'; unset IFS; IFS=: p $z; IFS=; unset IFS; IFS=: p $z; IFS=; IFS=: p $z; IFS=' '; IFS=: p $z; echo \"[${IFS-unset}]\"")]
+    [InlineData(P + "touch ab; d=.; p $d/\"+(a)\"*; p $d/\"*\"b; p $d/'[a]'*\nshopt -s extglob\np $d/\"+(a)\"* $d/+(a)*")]
+    [InlineData(P + "set --; p \"$@$e\" \"$e$@\" \"$@\"\"$e\" \"$@\"\"\" \"x$@\"; e2=q; p \"$@$e2\"; set -- a b; p \"$@$e\" \"$e$@\"")]
+    [InlineData(P + "qzv1=1 qzv2=2; p \"${!qzv@}\"; p x\"${!qzv@}\"y; set -- \"${!qzv@}\"; echo $#")]
+    public Task ReviewedWordShapes_MatchBash(string script) => AssertOracle.EqualAsync(script);
+
+    // failglob in a subshell or `$( )` ends that subshell only (status 1); its message goes to the subshell's stderr, so a
+    // redirect on the subshell silences it. The substitution was ending the command around it.
+    [SkippableTheory]
+    [InlineData(P + ": ; ( shopt -s failglob; echo zz*nomatch; echo after ); echo \"rc=$?\"")]
+    [InlineData(P + ": ; ( shopt -s failglob; echo zz*nomatch ) 2>/dev/null; echo \"rc=$?\"")]
+    [InlineData(P + ": ; echo \"c=$( shopt -s failglob; echo zz*nomatch; echo more )\"; echo \"rc=$?\"")]
+    [InlineData(P + "c=$( shopt -s failglob; for f in zz*q; do echo \"$f\"; done; echo more ); echo \"[$c] rc=$?\"")]
+    [InlineData(P + "shopt -s failglob\n: ; echo \"c=$(echo zz*)\"; echo \"rc=$?\"; c=$(echo zz*); echo \"[$c] rc=$?\"\n"
+        + "g='zz*'; echo x $(echo $g) y; echo \"rc=$?\"; echo done")]
+    public Task FailglobInASubshell_EndsOnlyTheSubshell(string script) => AssertOracle.EqualAsync(script);
+
     // R4: a brace expansion's words each expand and split.
     [SkippableFact]
     public Task BraceWordsWithExpansions_SplitEachWord() => AssertOracle.EqualAsync(

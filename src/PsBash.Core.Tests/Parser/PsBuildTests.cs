@@ -243,15 +243,64 @@ public class PsBuildTests
         // The OUTER @(...) is required so the empty branch stays an empty array (not $null,
         // which would splat one spurious empty argument).
         var result = PsBuild.WordSplitArray("$env:x");
-        // ConvertTo-BashWords splits on $IFS (leading/trailing IFS whitespace discarded, blank = no
-        // word) and pathname-expands each word, matching bash word splitting + globbing.
-        Assert.Equal("@(ConvertTo-BashWords $env:x)", result);
+        // One split segment: the words of $IFS splitting (leading/trailing IFS whitespace discarded, blank = no word),
+        // each pathname-expanded, matching bash word splitting + globbing.
+        Assert.StartsWith("@(", result);
+        Assert.EndsWith(")", result);
+        Assert.Equal(PsBuild.WordFieldsArray("3, ($env:x)"), result);
+    }
+
+    // The static call first; the cmdlet only when a field must be pathname-expanded, on the segments already evaluated.
+    [Fact]
+    public void WordFieldsArray_CallsTheStaticWordsFirstAndTheCmdletOnlyForAPattern()
+        => Assert.Equal("@(if ($null -eq ($__psbash_wf = [PsBash.Cmdlets.BashWordFields]::Words(($__psbash_wp = @(2, 'a', 3, ($env:x)))))) { "
+                + "ConvertTo-BashWords -Parts $__psbash_wp } else { $__psbash_wf })",
+            PsBuild.WordFieldsArray(PsBuild.WordSegment(2, "'a'") + ", " + PsBuild.WordSegment(3, "$env:x")));
+
+    // Inside `IFS=: cmd $x` the words read the IFS parked from before the binding.
+    [Fact]
+    public void WordFieldsArray_WithAnIfsVariable_PassesItToBothCalls()
+        => Assert.Equal("@(if ($null -eq ($__psbash_wf = [PsBash.Cmdlets.BashWordFields]::Words(($__psbash_wp = @(3, ($env:x))), '__psbash_ea_IFS'))) { "
+                + "ConvertTo-BashWords -Parts $__psbash_wp -IfsVariable '__psbash_ea_IFS' } else { $__psbash_wf })",
+            PsBuild.WordFieldsArray("3, ($env:x)", "__psbash_ea_IFS"));
+
+    [Fact]
+    public void NumberFieldsArray_WithAnIfsVariable_PassesIt()
+        => Assert.Equal("@([PsBash.Cmdlets.BashWordFields]::SplitNumber(5, '__psbash_ea_IFS'))", PsBuild.NumberFieldsArray("5", "__psbash_ea_IFS"));
+
+    // An empty IFS is set, not unset: the park goes through the store, never a `$env:` write of ''. And in ONE store call:
+    // `Set('t', Get('IFS'))` in script passed an unset IFS (null) as '' (`unset IFS; IFS=: cmd $x` did not split).
+    [Fact]
+    public void ParkShellVariable_CopiesInsideTheStore()
+        => Assert.Equal("[PsBash.Cmdlets.BashVariableStore]::Copy('IFS', '__psbash_ea_IFS')",
+            PsBuild.ParkShellVariable("__psbash_ea_IFS", "IFS"));
+
+    // `echo "c=$(echo zz*)"; echo $?` under failglob: the error ends the substitution only, and the line mark it set is
+    // put back (the parent's `echo $?` was dropped).
+    [Fact]
+    public void FailGlobScope_CatchesTheErrorAndRestoresTheLineMark()
+    {
+        string s = PsBuild.FailGlobScope("Invoke-BashEcho @(ConvertTo-BashGlob 'zz*')");
+        Assert.StartsWith("& { $__psbash_fg = $global:__BashFailGlob; try { Invoke-BashEcho", s);
+        Assert.Contains("catch [PsBash.Cmdlets.BashNoMatchException]", s);
+        Assert.EndsWith(" finally { $global:__BashFailGlob = $__psbash_fg } }", s);
+    }
+
+    [Theory]
+    [InlineData("@(ConvertTo-BashGlob 'zz*')", true)]
+    [InlineData("Invoke-BashEcho 'zz*'", false)]
+    public void MayFailGlob_SeesGlobsAndWordFields(string emitted, bool expected)
+    {
+        Assert.Equal(expected, PsBuild.MayFailGlob(emitted));
+        Assert.True(PsBuild.MayFailGlob(PsBuild.WordSplitArray("$env:x")));
     }
 
     [Fact]
-    public void WordFieldsArray_IsOneConvertToBashWordsCallOverTheSegments()
-        => Assert.Equal("@(ConvertTo-BashWords -Parts @(2, 'a', 3, ($env:x)))",
-            PsBuild.WordFieldsArray(PsBuild.WordSegment(2, "'a'") + ", " + PsBuild.WordSegment(3, "$env:x")));
+    public void ExpandsWords_SeesTheBuiltWordFields()
+    {
+        Assert.True(PsBuild.ExpandsWords("Invoke-BashEcho @" + PsBuild.WordSplitArray("$env:x")));
+        Assert.False(PsBuild.ExpandsWords("Invoke-BashEcho $env:x"));
+    }
 
     // A quoted literal stays bare; any other value is parenthesised so a command or `,` in it stays one element.
     [Theory]

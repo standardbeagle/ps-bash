@@ -59,13 +59,25 @@ public sealed class ConvertToBashGlobCommand : BashCmdlet
     }
 
     /// <summary>The <c>failglob</c> error: status 1, the command ends, and <c>$global:__BashFailGlob</c> is set so a
-    /// <c>for</c> list that failed keeps status 1 though its body never ran (PsBuild.ZeroIterationStatus).</summary>
+    /// <c>for</c> list that failed keeps status 1 though its body never ran (PsBuild.ZeroIterationStatus). Inside a
+    /// subshell or <c>$( )</c> it ends that subshell (bash discards its input: the subshell is one command), whose
+    /// scope (<c>PsBuild.ShellStateGuard</c>) reports it to its own stderr (<see cref="BashNoMatchException"/>).</summary>
     internal static void FailGlob(PSCmdlet cmdlet, string word)
     {
         FileSystemHelpers.SetLastExitCode(cmdlet, 1);
         cmdlet.SessionState.PSVariable.Set("global:__BashFailGlob", true);
         cmdlet.ThrowTerminatingError(new ErrorRecord(
-            new InvalidOperationException(ShellDiagnostic.Prefix(cmdlet.SessionState) + "no match: " + word),
+            new BashNoMatchException(ShellDiagnostic.Prefix(cmdlet.SessionState) + "no match: " + word),
             "NoGlobMatch", ErrorCategory.ObjectNotFound, word));
     }
+}
+
+/// <summary>
+/// The <c>failglob</c> error (<c>no match: w</c>, the message with its diagnostic prefix). A typed error so a subshell
+/// scope can catch it: in a <c>try</c> a terminating error passes every enclosing block, so <c>c=$(echo zz*)</c> ended the
+/// assignment's own command too (bash: the substitution is empty, status 0 for the echo after it).
+/// </summary>
+public sealed class BashNoMatchException : InvalidOperationException
+{
+    public BashNoMatchException(string message) : base(message) { }
 }

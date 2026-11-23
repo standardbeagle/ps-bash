@@ -556,10 +556,10 @@ public class BashTranspilerReviewRegressionTests
     // and an empty name with no operands runs nothing (status 0). Before, the unsplit value was the name: empty leaked
     // PowerShell's "expression after '&'" error, and `x="echo a"; $x b` looked up the command `echo a`.
     [Theory]
-    [InlineData("$x echo hi", "& (Resolve-BashCommand -Words @(ConvertTo-BashWords $env:x)) echo hi")]
-    [InlineData("${x} echo hi", "& (Resolve-BashCommand -Words @(ConvertTo-BashWords $env:x)) echo hi")]
-    public void Transpile_UnquotedRunTimeCommandName_IsSplitAtRunTime(string bash, string expected)
-        => Assert.Contains(expected, BashTranspiler.Transpile(bash));
+    [InlineData("$x echo hi")]
+    [InlineData("${x} echo hi")]
+    public void Transpile_UnquotedRunTimeCommandName_IsSplitAtRunTime(string bash)
+        => Assert.Contains("& (Resolve-BashCommand -Words " + PsBuild.WordSplitArray("$env:x") + ") echo hi", BashTranspiler.Transpile(bash));
 
     // Oracle: `"$x" echo hi` with x empty is `bash: : command not found` (127): a quoted name stays one word.
     [Fact]
@@ -588,7 +588,7 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_RunTimeCommandNameInStdinScope_LetsTheRuntimeDecideTheFeed()
     {
         var ps = BashTranspiler.Transpile("printf 'a\\n' | { p=printf; $p 'X\\n'; c=cat; \"$c\"; }");
-        Assert.Contains("& (Resolve-BashCommand -Fed -Words @(ConvertTo-BashWords $env:p))", ps);
+        Assert.Contains("& (Resolve-BashCommand -Fed -Words " + PsBuild.WordSplitArray("$env:p") + ")", ps);
         Assert.Contains("& (Resolve-BashCommand -Fed \"$env:c\")", ps);
         Assert.DoesNotContain("} | & (Resolve-BashCommand", ps);
     }
@@ -1105,7 +1105,7 @@ public class BashTranspilerReviewRegressionTests
     // Oracle: unquoted $@ / $* split each parameter on IFS (IFS='' keeps "b c" whole) — never a bare array argument.
     [Fact]
     public void Transpile_UnquotedPositionalList_IsSplitPerParameter()
-        => Assert.Contains("ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @(", BashTranspiler.Transpile("printf '[%s]\\n' $@"));
+        => Assert.Contains("$__psbash_wp = @(4, (@(", BashTranspiler.Transpile("printf '[%s]\\n' $@"));
 
     // Oracle: `echo -"$v"-` is ONE argument (-abc-); wrapping the dash-led word in more quotes split it into three.
     [Fact]

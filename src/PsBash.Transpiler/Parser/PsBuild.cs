@@ -461,7 +461,7 @@ public static class PsBuild
     public static bool MayReportDiagnostic(string emitted) =>
         emitted.Contains(DiagnosticPrefix, StringComparison.Ordinal)
         || emitted.Contains("ConvertTo-BashGlob", StringComparison.Ordinal)
-        || emitted.Contains("ConvertTo-BashWords", StringComparison.Ordinal)
+        || ExpandsWords(emitted)
         || CanDiscardLine(emitted);
 
     /// <summary><c>shift 1 2</c>: Invoke-BashShift reports "too many arguments" and drops the line (<c>BashLineDiscard.UsageError</c>).</summary>
@@ -574,7 +574,7 @@ public static class PsBuild
     public static string ShellStateGuard(string body) =>
         ShellStateSave + "; try { "
         + body
-        + " }" + ParamErrorCatch + SubshellExitCatch + " finally { " + ShellStateRestore + " }";
+        + " }" + ParamErrorCatch + NoMatchCatch + SubshellExitCatch + " finally { " + ShellStateRestore + " }";
 
     /// <summary>The save half of <see cref="ShellStateGuard"/> (into <c>$__psbash_ss</c>).</summary>
     private const string ShellStateSave = "$__psbash_ss = [PsBash.Cmdlets.BashShellState]::Save($ExecutionContext.SessionState)";
@@ -587,6 +587,13 @@ public static class PsBuild
     /// <summary>A parameter error ends the subshell it happens in (reported once, status 1), not the script.</summary>
     private const string ParamErrorCatch =
         " catch [PsBash.Cmdlets.BashParamErrorException] { if (-not $_.Exception.Data['psbash.reported']) { Write-Error -Message (" + DiagnosticPrefix + " + $_.Exception.Message) -ErrorAction Continue }; $global:LASTEXITCODE = 1 }";
+    /// <summary>
+    /// A <c>failglob</c> error (<c>BashNoMatchException</c>) ends the subshell it happens in, status 1, reported to the
+    /// subshell's stderr (so <c>( echo zz* ) 2&gt;/dev/null</c> is silent); the commands after the subshell run.
+    /// </summary>
+    private const string NoMatchCatch =
+        " catch [PsBash.Cmdlets.BashNoMatchException] { Write-Error -Message $_.Exception.Message -ErrorAction Continue; $global:LASTEXITCODE = 1 }";
+
     /// <summary>
     /// An <c>exit</c> that <see cref="DynamicExit"/> threw from a callee ends the enclosing subshell scope with its status.
     /// </summary>
@@ -625,7 +632,7 @@ public static class PsBuild
         string entryVar = statusVar + "in";
         return "& { begin { " + gateVar + " = [PsBash.Cmdlets.BashPipeGate]::Claim(); " + statusVar + " = 0; " + ShellStateSave + " } "
             + "process { if (" + gateVar + ".Done) { return }; " + entryVar + " = $global:LASTEXITCODE; $global:LASTEXITCODE = 0; "
-            + gateVar + ".Done = $true; try { " + perRecord + " }" + ParamErrorCatch + SubshellExitCatch
+            + gateVar + ".Done = $true; try { " + perRecord + " }" + ParamErrorCatch + NoMatchCatch + SubshellExitCatch
             + " finally { " + statusVar + " = $global:LASTEXITCODE; $global:LASTEXITCODE = " + entryVar + " } } "
             + "end { $global:LASTEXITCODE = " + statusVar + "; " + ShellStateRestore + "; $__psbash_ss = $null } "
             + "clean { if ($null -ne $__psbash_ss) { " + ShellStateRestore + " } } }";
@@ -1432,16 +1439,44 @@ public static class PsBuild
     /// word that has a glob character. The OUTER <c>@(...)</c> is required: an empty result must stay an
     /// empty array that splats to nothing (a bare <c>$null</c> would inject one spurious empty argument).
     /// </summary>
-    public static string WordSplitArray(string varRef) =>
-        "@(ConvertTo-BashWords " + varRef + ")";
+    public static string WordSplitArray(string varRef, string? ifsVariable = null) =>
+        WordFieldsArray(WordSegment(3, varRef), ifsVariable);
 
     /// <summary>
     /// The fields of one word given as segments (<c>PsBash.Cmdlets.BashWordFields</c>): <paramref name="segments"/> is a
     /// comma list of <see cref="WordSegment"/> / <see cref="WordSegmentGroup"/> items. The one general form of word
     /// expansion (spec emitter-strategy.md "Word expansion: one primitive").
+    /// <para>Fast path first: <c>BashWordFields.Words</c>, a static call, gives the words unless a field must be
+    /// pathname-expanded; only then does the <c>ConvertTo-BashWords</c> cmdlet (glob, nullglob, failglob's error) run, on
+    /// the segments already evaluated (a substitution never runs twice). A cmdlet call per word cost ~90 µs, the static
+    /// call ~5 µs. <paramref name="ifsVariable"/>: the variable holding the IFS when it is not <c>IFS</c> (a word of
+    /// <c>IFS=: cmd $x</c> reads the parked value, see <see cref="ParkShellVariable"/>).</para>
     /// </summary>
-    public static string WordFieldsArray(string segments) =>
-        "@(ConvertTo-BashWords -Parts @(" + segments + "))";
+    public static string WordFieldsArray(string segments, string? ifsVariable = null)
+    {
+        string ifsArg = ifsVariable is null ? "" : ", " + SingleQuote(ifsVariable);
+        string ifsParam = ifsVariable is null ? "" : " -IfsVariable " + SingleQuote(ifsVariable);
+        return "@(if ($null -eq (" + WordFieldsResult + " = [PsBash.Cmdlets.BashWordFields]::Words((" + WordFieldsParts + " = @(" + segments + "))" + ifsArg + "))) { "
+            + WordFieldsCmdlet + " -Parts " + WordFieldsParts + ifsParam + " } else { " + WordFieldsResult + " })";
+    }
+
+    private const string WordFieldsCmdlet = "ConvertTo-BashWords";
+    private const string WordFieldsResult = "$__psbash_wf";
+    private const string WordFieldsParts = "$__psbash_wp";
+
+    /// <summary>True when emitted text expands a word into fields (<see cref="WordFieldsArray"/>): it may glob, so it may
+    /// raise failglob's error. Quote-blind on purpose: a false hit only adds a line check.</summary>
+    public static bool ExpandsWords(string emitted) =>
+        emitted.Contains(WordFieldsCmdlet, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Parks a shell variable's value under <paramref name="parkName"/> through the variable store, which keeps a set but
+    /// empty value apart from an unset one (a <c>$env:</c> write of '' removes the variable). For <c>IFS=: cmd $x</c>: the
+    /// words read the IFS from before the binding. One store call (<c>Copy</c>): a value read in script and passed back
+    /// to <c>Set</c> turns unset (null) into '' at the string parameter, so an unset IFS parked as an empty one.
+    /// </summary>
+    public static string ParkShellVariable(string parkName, string name) =>
+        "[PsBash.Cmdlets.BashVariableStore]::Copy(" + SingleQuote(name) + ", " + SingleQuote(parkName) + ")";
 
     /// <summary>One segment of <see cref="WordFieldsArray"/>: its kind, then its value (a PowerShell expression; anything but
     /// a quoted literal is parenthesised so it stays one element of the comma list).</summary>
@@ -1463,13 +1498,13 @@ public static class PsBuild
 
     /// <summary>An unquoted list expansion alone (<c>$@</c>, <c>${a[@]}</c>, <c>${@:2}</c>): the values joined with IFS[0] and
     /// split again; with an empty IFS each value is its own field.</summary>
-    public static string ListFieldsArray(string valuesExpr) =>
-        "@(ConvertTo-BashWords -Prefix '' -Suffix '' -Fields " + valuesExpr + ")";
+    public static string ListFieldsArray(string valuesExpr, string? ifsVariable = null) =>
+        WordFieldsArray(WordSegment(4, valuesExpr), ifsVariable);
 
     /// <summary>An unquoted arithmetic result alone (<c>$((n))</c>): split on IFS (it holds no glob character), without the
     /// cmdlet: <c>IFS=1</c> makes <c>$((11+0))</c> two empty fields.</summary>
-    public static string NumberFieldsArray(string valueExpr) =>
-        "@([PsBash.Cmdlets.BashWordFields]::SplitNumber(" + valueExpr + "))";
+    public static string NumberFieldsArray(string valueExpr, string? ifsVariable = null) =>
+        "@([PsBash.Cmdlets.BashWordFields]::SplitNumber(" + valueExpr + (ifsVariable is null ? "" : ", " + SingleQuote(ifsVariable)) + "))";
 
     /// <summary>
     /// The array an unquoted GLOB word (<c>*.txt</c>, <c>src/*</c>, <c>$d/[ab]*</c>) pathname-expands into:
@@ -2439,8 +2474,23 @@ public static class PsBuild
 
     /// <summary>True when emitted text can abandon the rest of its line: a glob (failglob) or a bad substitution.</summary>
     public static bool CanAbandonLine(string emitted) =>
-        emitted.Contains("ConvertTo-BashGlob", StringComparison.Ordinal)
-        || emitted.Contains(ExpansionErrorFunction, StringComparison.Ordinal);
+        MayFailGlob(emitted) || emitted.Contains(ExpansionErrorFunction, StringComparison.Ordinal);
+
+    /// <summary>True when emitted text expands a pattern or a word into fields, so under <c>failglob</c> it can raise the
+    /// <c>no match</c> error. Quote-blind on purpose: a false hit only adds a check.</summary>
+    public static bool MayFailGlob(string emitted) =>
+        emitted.Contains("ConvertTo-BashGlob", StringComparison.Ordinal) || ExpandsWords(emitted);
+
+    /// <summary>
+    /// A command substitution that cannot change shell state but can fail a glob (<c>$(echo zz*)</c>, <c>$(ls $d)</c>):
+    /// <c>failglob</c> ends the substitution only (bash runs it in a subshell), so its error is caught here (reported to the
+    /// substitution's stderr, status 1) and the line mark it set is put back. Without it the mark leaked out and dropped
+    /// the rest of the PARENT's line (<c>echo "c=$(echo zz*)"; echo $?</c> printed no status), and inside any
+    /// <c>try</c> the error ended the parent command. Lighter than <see cref="ShellStateScope"/>: only the mark.
+    /// </summary>
+    public static string FailGlobScope(string pipeline) =>
+        "& { $__psbash_fg = $global:__BashFailGlob; try { " + pipeline + " }" + NoMatchCatch
+        + " finally { $global:__BashFailGlob = $__psbash_fg } }";
 
     /// <summary>
     /// eval / source / trap text that <see cref="CanAbandonLine"/>: a failure in it abandons the rest of ITS line only,
@@ -2600,7 +2650,7 @@ public static class PsBuild
     /// </summary>
     public const string IfsJoinSeparator =
         "$(& { $__psbash_ifs = if ($null -ne $IFS) { [string]$IFS } else { $env:IFS }; "
-        + "if ($null -eq $__psbash_ifs) { ' ' } elseif ($__psbash_ifs.Length -eq 0) { '' } else { $__psbash_ifs.Substring(0, 1) } })";
+        + "if ($null -eq $__psbash_ifs) { ' ' } elseif ($__psbash_ifs.Length -eq 0) { '' } else { [PsBash.Cmdlets.BashWordFields]::FirstIfsCharacter($__psbash_ifs) } })";
 
     // ───────────────────────────── Special-variable mapping ────────────────────────────
 

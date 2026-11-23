@@ -5,37 +5,38 @@ namespace PsBash.Core.Tests.Parser;
 
 /// <summary>An unquoted variable glued to text (<c>a$x</c>, <c>$x.c</c>, <c>"q"$x</c>, <c>f=$x</c>) is field-split like a bare
 /// <c>$x</c>, the text joined to the first and last field: with x='a b', <c>printf '[%s]' a$x</c> prints <c>[aa][b]</c>. Only
-/// for-lists split it; command arguments passed <c>"aa b"</c> as one. Every such word is one <c>ConvertTo-BashWords -Parts</c>
-/// call: kind 1 quoted text, 2 pattern text, 3 a split value, 5 a quoted list (PsBash.Cmdlets.BashWordFields).</summary>
+/// for-lists split it; command arguments passed <c>"aa b"</c> as one. Every such word is one list of segments
+/// (<c>$__psbash_wp</c>, PsBuild.WordFieldsArray): kind 1 quoted text, 2 pattern text, 3 a split value, 5 a quoted list,
+/// 7 quoted text with no anchor (PsBash.Cmdlets.BashWordFields).</summary>
 public class AffixWordSplitTests
 {
     private static string T(string bash) => PsEmitter.Transpile(bash)!;
 
     [Theory]
-    [InlineData("printf '[%s]' a$x", "-Parts @(2, 'a', 3, ($env:x))")]
-    [InlineData("f $x.c", "-Parts @(3, ($env:x), 2, '.c')")]
+    [InlineData("printf '[%s]' a$x", "$__psbash_wp = @(2, 'a', 3, ($env:x))")]
+    [InlineData("f $x.c", "$__psbash_wp = @(3, ($env:x), 2, '.c')")]
     [InlineData("printf '[%s]' \"q\"$x", ", 3, ($env:x))")]
-    [InlineData("echo $y'x'", "-Parts @(3, ($env:y), 1, ")]
-    [InlineData("p=printf; $p '[%s]' f=$x", "-Parts @(2, 'f=', 3, ($env:x))")]
+    [InlineData("echo $y'x'", "$__psbash_wp = @(3, ($env:y), 1, ")]
+    [InlineData("p=printf; $p '[%s]' f=$x", "$__psbash_wp = @(2, 'f=', 3, ($env:x))")]
     public void Transpile_UnquotedVarGluedToText_SplitsTheValue(string bash, string parts)
         => Assert.Contains(parts, T(bash));
 
     // `""$A` / `$A""`: a quoted affix anchors a field of its own (bash's quoted null): it is a quoted (kind 1) segment.
     [Theory]
-    [InlineData("for i in \"\"$A; do :; done", "-Parts @(1, ")]
-    [InlineData("for i in $A\"\"; do :; done", "-Parts @(3, ($env:A), 1, ")]
+    [InlineData("for i in \"\"$A; do :; done", "$__psbash_wp = @(1, ")]
+    [InlineData("for i in $A\"\"; do :; done", "$__psbash_wp = @(3, ($env:A), 1, ")]
     public void Transpile_QuotedAffix_IsAQuotedSegment(string bash, string parts)
         => Assert.Contains(parts, T(bash));
 
     [Fact]
     public void Transpile_TmpPathGluedToVar_MapsTheTempDirectory()
-        => Assert.Contains("-Parts @(1, (" + PsBuild.TempDirExpr + "), 2, '/a', 3, ($env:x))", T("cat /tmp/a$x"));
+        => Assert.Contains("$__psbash_wp = @(1, (" + PsBuild.TempDirExpr + "), 2, '/a', 3, ($env:x))", T("cat /tmp/a$x"));
 
     // bash splits every unquoted expansion of a word, beside a glob or another expansion too (x='a b': `$x*` is a and
     // b*, `a$x$x` is aa, ba, b). Both kept one field before.
     [Theory]
-    [InlineData("ls *$x", "-Parts @(2, '*', 3, ($env:x))")]
-    [InlineData("echo a$x$y", "-Parts @(2, 'a', 3, ($env:x), 3, ($env:y))")]
+    [InlineData("ls *$x", "$__psbash_wp = @(2, '*', 3, ($env:x))")]
+    [InlineData("echo a$x$y", "$__psbash_wp = @(2, 'a', 3, ($env:x), 3, ($env:y))")]
     public void Transpile_GlobOrTwoExpansions_SplitsEveryExpansion(string bash, string parts)
         => Assert.Contains(parts, T(bash));
 
@@ -48,7 +49,7 @@ public class AffixWordSplitTests
     [InlineData("${b}uiltin declare g=$x")]
     [InlineData("${z}ommand readonly d=$x")]
     public void Transpile_AffixCommandName_ResolvesAtRunTime(string bash)
-        => Assert.Contains("Resolve-BashCommand -Words @(ConvertTo-BashWords -Parts", T(bash));
+        => Assert.Contains("Resolve-BashCommand -Words @(if ($null -eq ($__psbash_wf = [PsBash.Cmdlets.BashWordFields]::Words(", T(bash));
 
     [Fact]
     public void Transpile_PathCommandWordWithVar_KeepsItsPathForm()
@@ -64,10 +65,10 @@ public class AffixWordSplitTests
 
     // `-"${a[@]}"`, `"p$@q"`: the text goes on the first and last element, each element whole (a quoted list, kind 5).
     [Theory]
-    [InlineData("printf '<%s>' -\"${a[@]}\"", "-Parts @(2, '-', 5, (@(")]
-    [InlineData("printf '<%s>' \"p${a[@]}q\"", "-Parts @(1, ")]
-    [InlineData("printf '<%s>' k\"$@\"", "-Parts @(2, 'k', 5, (@(")]
-    [InlineData("for w in -\"${a[@]}\"; do :; done", "-Parts @(2, '-', 5, (@(")]
+    [InlineData("printf '<%s>' -\"${a[@]}\"", "$__psbash_wp = @(2, '-', 5, (@(")]
+    [InlineData("printf '<%s>' \"p${a[@]}q\"", "$__psbash_wp = @(1, ")]
+    [InlineData("printf '<%s>' k\"$@\"", "$__psbash_wp = @(2, 'k', 5, (@(")]
+    [InlineData("for w in -\"${a[@]}\"; do :; done", "$__psbash_wp = @(2, '-', 5, (@(")]
     public void Transpile_QuotedArrayWithText_DistributesOverTheElements(string bash, string parts)
         => Assert.Contains(parts, T(bash));
 
@@ -77,14 +78,23 @@ public class AffixWordSplitTests
 
     // `"${a[@]}${b[@]}"`: the last element of a joins the first of b; `x$y"${a[@]}"`: $y is split, the list glued on.
     [Theory]
-    [InlineData("printf '<%s>' \"${a[@]}${b[@]}\"", "-Parts @(5, (@(")]
-    [InlineData("printf '<%s>' x$y\"${a[@]}\"", "-Parts @(2, 'x', 3, ($env:y), 5, (@(")]
+    [InlineData("printf '<%s>' \"${a[@]}${b[@]}\"", "$__psbash_wp = @(5, (@(")]
+    [InlineData("printf '<%s>' x$y\"${a[@]}\"", "$__psbash_wp = @(2, 'x', 3, ($env:y), 5, (@(")]
     public void Transpile_QuotedArrayBesideAnotherExpansion_IsOneWordOfSegments(string bash, string parts)
         => Assert.Contains(parts, T(bash));
 
+    // `"$x${a[@]}"`: the quoted $x is text with no anchor of its own (kind 7): with x and a empty there is no word (bash
+    // 5.2: `set --; e=; set -- "$e$@"` gives $# 0), while literal text (`"p$@"`) makes the field exist (kind 1).
     [Fact]
-    public void Transpile_QuotedVarBesideQuotedArray_IsQuotedText()
-        => Assert.Contains("-Parts @(1, (\"$env:x\"), 5, (@(", T("printf '<%s>' \"$x${a[@]}\""));
+    public void Transpile_QuotedVarBesideQuotedArray_IsQuotedTextWithoutAnchor()
+        => Assert.Contains("$__psbash_wp = @(7, (\"$env:x\"), 5, (@(", T("printf '<%s>' \"$x${a[@]}\""));
+
+    [Theory]
+    [InlineData("set -- \"$@$e\"", "$__psbash_wp = @(5, (@(")]
+    [InlineData("set -- \"$@$e\"", "))), 7, (\"")]
+    [InlineData("set -- \"x$@\"", "$__psbash_wp = @(1, ")]
+    public void Transpile_QuotedListWithExpansionsOnly_HasNoAnchor(string bash, string parts)
+        => Assert.Contains(parts, T(bash));
 
     [Fact]
     public void Transpile_DeclareFedAQuotedArray_RunsThroughEval()
@@ -134,6 +144,70 @@ public class AffixWordSplitTests
     [InlineData("echo \"${a[*]:-d}\"")]
     public void Transpile_QuotedStarForm_JoinsWithTheFirstIfsCharacter(string bash)
         => Assert.Contains(PsBuild.IfsJoinSeparator, T(bash));
+
+    // `"${!a[*]}"` / `"${!p*}"` too (IFS=-: `0-1-2`, `pa-pb`); the parser kept them as the `@` forms, which join with a
+    // space. The `@` forms stay one word per key or name.
+    [Theory]
+    [InlineData("echo \"${!a[*]}\"")]
+    [InlineData("echo \"${!qzp*}\"")]
+    public void Transpile_QuotedStarKeysOrNames_JoinWithTheFirstIfsCharacter(string bash)
+        => Assert.Contains(PsBuild.IfsJoinSeparator, T(bash));
+
+    [Theory]
+    [InlineData("echo \"${!a[@]}\"")]
+    [InlineData("echo \"${!qzp@}\"")]
+    public void Transpile_QuotedAtKeysOrNames_DoNotJoin(string bash)
+        => Assert.DoesNotContain(PsBuild.IfsJoinSeparator, T(bash));
+
+    // `p1=1 p2=2; set -- "${!p@}"`: one word per name ($# 2), like "${!a[@]}"; it was one joined word.
+    [Theory]
+    [InlineData("set -- \"${!p@}\"", "Get-ChildItem env:")]
+    [InlineData("set -- x\"${!p@}\"", "$__psbash_wp = @(2, 'x', 5, (@(")]
+    public void Transpile_QuotedPrefixNamesAt_IsAList(string bash, string expected)
+    {
+        var ps = T(bash);
+        Assert.Contains(expected, ps);
+        Assert.DoesNotContain("$(@(@(Get-ChildItem env:", ps);
+    }
+
+    // `${v:-${w:-'a b'}}`: the nested default's quoted space is not a split point (bash: one field), so the word is not
+    // the lone-value shortcut (its value split as a whole) but the general segments with the nested word's own quoting.
+    [Fact]
+    public void Transpile_NestedDefaultWithQuotedWord_UsesTheSegments()
+    {
+        var ps = T("set -- ${v:-${w:-'a b'}}");
+        // Two groups: the outer default, and inside its word the nested one, whose word is a quoted (kind 1) segment.
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(ps, System.Text.RegularExpressions.Regex.Escape("-ceq 'x') { ,@(")).Count);
+        Assert.Contains("} else { ,@(1, ", ps);
+    }
+
+    [Fact]
+    public void Transpile_NestedDefaultWithPlainWord_KeepsTheShortcut()
+        => Assert.DoesNotContain("-ceq 'x') { ,@(", T("set -- ${v:-${w:-a b}}"));
+
+    // `IFS=: printf '<%s>' $x` (x='a:b c'): bash expands the words before the binding applies, so $x splits on the old
+    // IFS (`<a:b><c>`). The word reads the IFS parked from before the binding, through the store (an empty IFS stays set).
+    [Fact]
+    public void Transpile_TempIfsBinding_SplitsTheWordsOnTheIfsFromBefore()
+    {
+        var ps = T("IFS=: printf '<%s>' $x");
+        Assert.Contains(PsBuild.ParkShellVariable("__psbash_ea_IFS", "IFS"), ps);
+        Assert.Contains(PsBuild.WordSplitArray("$env:x", "__psbash_ea_IFS"), ps);
+        Assert.True(ps.IndexOf(PsBuild.ParkShellVariable("__psbash_ea_IFS", "IFS"), System.StringComparison.Ordinal)
+            < ps.IndexOf("$env:IFS = ", System.StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Transpile_SplitWordWithoutTempIfs_ReadsIfs()
+        => Assert.DoesNotContain("__psbash_ea_IFS", T("v=1 printf '<%s>' $x"));
+
+    // `c=$(shopt -s failglob; echo zz*)`: the failglob error ends the substitution (status 1, reported to its stderr), not
+    // the command around it: in a `try` a terminating error passed every enclosing block.
+    [Theory]
+    [InlineData("echo \"c=$(echo zz*)\"")]
+    [InlineData("( echo zz* ) 2>/dev/null")]
+    public void Transpile_SubshellScope_CatchesTheFailglobError(string bash)
+        => Assert.Contains("catch [PsBash.Cmdlets.BashNoMatchException] { Write-Error -Message $_.Exception.Message -ErrorAction Continue; $global:LASTEXITCODE = 1 }", T(bash));
 
     // bash: `unset z; f "${z[@]}"` passes no argument. The scalar fallback (`${s[@]}` of a scalar s is s) yielded one
     // $null word for an unset name: `printf '%q,' "${z[@]}"` failed with a null reference, `$#` was 1.

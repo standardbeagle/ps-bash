@@ -78,7 +78,7 @@ public class BashTranspilerTests
     public void Transpile_VariableInCommandPosition_UsesCallOperator()
     {
         var result = BashTranspiler.Transpile("CMD=echo; $CMD hello");
-        Assert.Contains("& (Resolve-BashCommand -Words @(ConvertTo-BashWords $env:CMD)) hello", result);
+        Assert.Contains("& (Resolve-BashCommand -Words " + PsBuild.WordSplitArray("$env:CMD") + ") hello", result);
     }
 
     // #2: array elements were blindly single-quoted around EmitWord, storing the
@@ -644,7 +644,7 @@ public class BashTranspilerTests
         // is appended after the splat command wrapper.
         var result = BashTranspiler.Transpile("echo $FOO 2> /dev/null");
         Assert.Equal(
-            "& { $__bashsplat0 = @(ConvertTo-BashWords $env:FOO); " +
+            "& { $__bashsplat0 = " + PsBuild.WordSplitArray("$env:FOO") + "; " +
             "Invoke-BashEcho @__bashsplat0 } 2>$null",
             result);
     }
@@ -670,7 +670,7 @@ public class BashTranspilerTests
         // RC-7: the `echo $MSG` operand is a bare unquoted env var → word-split
         // splat, wrapped in $(& { ... }) as a single and-or-list element.
         var result = BashTranspiler.Transpile("[ -f /etc/config ] && echo $MSG");
-        Assert.Equal("$(if ((Test-Path \"/etc/config\" -PathType Leaf)) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue }) && $(& { $__bashsplat0 = @(ConvertTo-BashWords $env:MSG); Invoke-BashEcho @__bashsplat0 })", result);
+        Assert.Equal("$(if ((Test-Path \"/etc/config\" -PathType Leaf)) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue }) && $(& { $__bashsplat0 = " + PsBuild.WordSplitArray("$env:MSG") + "; Invoke-BashEcho @__bashsplat0 })", result);
     }
 
     [Fact]
@@ -756,7 +756,7 @@ public class BashTranspilerTests
         var result = BashTranspiler.Transpile("export FOO=\"bar\" && echo $FOO");
         Assert.Equal(
             "[void]$($env:FOO = \"bar\"; [PsBash.Cmdlets.BashVariableStore]::Export('FOO')) && $(& { $__bashsplat0 = " +
-            "@(ConvertTo-BashWords $env:FOO); " +
+            PsBuild.WordSplitArray("$env:FOO") + "; " +
             "Invoke-BashEcho @__bashsplat0 })",
             result);
     }
@@ -891,9 +891,10 @@ public class BashTranspilerTests
         var result = BashTranspiler.Transpile("eval 'echo ${USER}'");
         // RC-7: the inlined `echo ${USER}` has a bare unquoted env-var operand
         // → word-split splat (oracle: Differential_UnquotedVar_WordSplitsOnSpaces).
+        // A split word can fail a glob (failglob), so the eval text clears the line mark at its end.
         Assert.Equal(
-            "& { $__bashsplat0 = @(ConvertTo-BashWords $env:USER); " +
-            "Invoke-BashEcho @__bashsplat0 }",
+            PsBuild.EndOfEvalText("& { $__bashsplat0 = " + PsBuild.WordSplitArray("$env:USER") + "; " +
+            "Invoke-BashEcho @__bashsplat0 }"),
             result);
     }
 

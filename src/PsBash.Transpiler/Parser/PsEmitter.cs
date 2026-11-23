@@ -2285,7 +2285,7 @@ public static partial class PsEmitter
             sb.Append(" }");
             string body = sb.ToString();
             // A list that globs can fail (failglob): then the loop's status is 1, not the zero-iteration 0.
-            bool globs = (listPrelude + body).Contains("ConvertTo-BashGlob", StringComparison.Ordinal) || (listPrelude + body).Contains("ConvertTo-BashWords", StringComparison.Ordinal);
+            bool globs = (listPrelude + body).Contains("ConvertTo-BashGlob", StringComparison.Ordinal) || PsBuild.ExpandsWords(listPrelude + body);
             body = body + "; " + (globs ? PsBuild.ZeroIterationStatusAfterGlob(IterVar(depth)) : PsBuild.ZeroIterationStatus(IterVar(depth)));
             // A list expanded ahead of the loop (it can fail) runs the loop only when it did not.
             if (listPrelude.Length > 0) body = listPrelude + PsBuild.UnlessExpansionFailed(body);
@@ -8052,7 +8052,7 @@ public static partial class PsEmitter
         // nothing no command runs and the status is the substitution's (+""+"true"+""+, $(false), $(exit 42)).
         if (cmd.EnvPairs.IsEmpty && cmd.Words.Length == 1 && cmd.Words[0].Parts.Length == 1
             && cmd.Words[0].Parts[0] is WordPart.CommandSub)
-            return "$__psbash_cs = " + EmitAssignmentValue(cmd.Words[0]) + "; if ($__psbash_cs) { $__psbash_cw = @(ConvertTo-BashWords $__psbash_cs); & (Resolve-BashCommand $__psbash_cw[0]" + RunTimeNameLoopModeArg() + ") @($__psbash_cw | Select-Object -Skip 1) }";
+            return "$__psbash_cs = " + EmitAssignmentValue(cmd.Words[0]) + "; if ($__psbash_cs) { $__psbash_cw = " + PsBuild.WordSplitArray("$__psbash_cs", WordIfs) + "; & (Resolve-BashCommand $__psbash_cw[0]" + RunTimeNameLoopModeArg() + ") @($__psbash_cw | Select-Object -Skip 1) }";
 
         // Env-var prefix: VAR=value cmd — set VAR only for the duration of cmd,
         // then restore to its previous value to prevent leaking into the shell.
@@ -8355,7 +8355,8 @@ public static partial class PsEmitter
             if (!inner.Contains(shadow, StringComparison.Ordinal)
                 && !values.Any(v => v.Contains(shadow, StringComparison.Ordinal)))
                 continue;
-            sb.Append($"$env:{shadow} = $env:{p.Name}; ");
+            // IFS through the store: an empty IFS is set, not unset (a `$env:` write of '' removes the variable).
+            sb.Append(p.Name == "IFS" ? PsBuild.ParkShellVariable(shadow, p.Name) : $"$env:{shadow} = $env:{p.Name}").Append("; ");
             parked.Add(shadow);
         }
         // The binding is exported for the command, whatever the name's attribute was.
@@ -10108,7 +10109,9 @@ public static partial class PsEmitter
             && !inner.Contains(PsBuild.BashPidRead, StringComparison.Ordinal)
             // ... and so does `$(echo $BASH_SUBSHELL)`, whose depth the scope raises.
             && !inner.Contains(PsBuild.SubshellDepthRead, StringComparison.Ordinal)
-            ? inner : PsBuild.ShellStateScope(WithSubshellExitTrap(inner));
+            // A glob or split word can fail (failglob): that ends only the substitution, never the parent's line.
+            ? (PsBuild.MayFailGlob(inner) ? PsBuild.FailGlobScope(inner) : inner)
+            : PsBuild.ShellStateScope(WithSubshellExitTrap(inner));
     }
 
     /// <summary>The command a `builtin`/`command` wrapper runs (`builtin command read v` -> `read`), or null when a
@@ -10635,7 +10638,7 @@ public static partial class PsEmitter
                 "word; guard with IsPureUnquotedVarWord."),
         };
 
-        return PsBuild.WordSplitArray(varRef);
+        return PsBuild.WordSplitArray(varRef, WordIfs);
     }
 
     /// <summary>Bare <c>$@</c> / <c>$*</c> (also <c>${@}</c>): every parameter (<c>set $@ x</c> starts the parameters).</summary>
@@ -10658,7 +10661,7 @@ public static partial class PsEmitter
         => word.Parts is [WordPart.DoubleQuoted { Parts: [var only] }]
            && (only is WordPart.SimpleVarSub { Name: "@" }
                or WordPart.BracedVarSub { Name: "@", Suffix: null }
-               or WordPart.BracedVarSub { Suffix: "[@]" or "![@]" }
+               or WordPart.BracedVarSub { Suffix: "[@]" or "![@]" or "!names" }
                || only is WordPart.BracedVarSub { Suffix: { } opSfx } && (IsArrayElementOperator(opSfx) || IsArraySliceSuffix(opSfx))
                || only is WordPart.BracedVarSub { Name: "@", Suffix: { } posSlice } && IsPositionalSliceSuffix(posSlice));
 
@@ -11574,13 +11577,15 @@ public static partial class PsEmitter
             return $"$({lookup})";
         }
 
-        if (bvs.Suffix == "!names")
+        if (bvs.Suffix is "!names" or "!names*")
         {
             // Listed and matched under the BASH name: a diverted `path` (stored __psbash_cv_0_PATH, BashNameCase) matches
             // ${!pa*} and prints as path.
             string prefix = BashNameCase.ToBash(bvs.Name);
             string expr = $"@(@(Get-ChildItem env: | ForEach-Object {{ [PsBash.Core.BashNameCase]::ToListed($_.Name) }} | Where-Object {{ $_ -clike '{prefix}*' }}) + @(Get-Variable -Name '{prefix}*', '{BashNameCase.Prefix}*' -ErrorAction SilentlyContinue | Where-Object {{ $_.Options -eq 'None' -and ($_.Value -is [array] -or $_.Value -is [System.Collections.IDictionary]) -and $_.Name -cnotin 'args','input','Error','Matches','PSBoundParameters' }} | ForEach-Object {{ [PsBash.Core.BashNameCase]::ToBash($_.Name) }} | Where-Object {{ $_ -clike '{prefix}*' }}) | Sort-Object -Unique -CaseSensitive)";
-            return inDoubleQuote ? $"$({expr})" : expr;
+            // Quoted, ${!p*} is one word joined with the first IFS character; ${!p@} in a string joins with spaces.
+            if (inDoubleQuote) return bvs.Suffix == "!names*" ? $"$(@({expr}) -join {PsBuild.IfsJoinSeparator})" : $"$({expr})";
+            return expr;
         }
 
         // Array keys/indices: ${!arr[@]}. bash gives the KEYS of an associative
@@ -11601,7 +11606,9 @@ public static partial class PsEmitter
             string idxBody = $"if (${bvs.Name} -is [System.Collections.IDictionary]) "
                 + $"{{ ${bvs.Name}.Keys }} elseif (${bvs.Name}.Count -gt 0) "
                 + $"{{ 0..(${bvs.Name}.Count - 1) }} else {{ @() }}";
-            return inDoubleQuote ? $"$({idxBody})" : $"@({idxBody})";
+            if (inDoubleQuote)
+                return bvs.Suffix == "![*]" ? $"$(@({idxBody}) -join {PsBuild.IfsJoinSeparator})" : $"$({idxBody})";
+            return $"@({idxBody})";
         }
 
         // Scalar suffix operators (default/assign/alt/error, removal, replace, slice,

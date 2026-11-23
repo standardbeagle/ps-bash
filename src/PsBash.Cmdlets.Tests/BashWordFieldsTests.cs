@@ -105,6 +105,68 @@ public class BashWordFieldsTests
         Assert.Equal("1:x", Run(null, null, Pattern, "x"));
     }
 
+    // x=' a': `${x}{1,2}` is a1 a2. The word after a break starts like a word, so its leading IFS whitespace makes no
+    // field (it gave a1, "", a2).
+    [Fact]
+    public void Break_SkipsTheNextWordsLeadingIfsWhitespace()
+        => Assert.Equal("2:a1|a2", Run(null, Split, " a", Pattern, "1", Break, null, Split, " a", Pattern, "2"));
+
+    // touch ab; d=.: `$d/"+(a)"*` is ./+(a)* in bash, extglob on or off: quoted extglob operators are escaped like the
+    // pattern compiler escapes literal text (BashPattern.EscapeLiteral), so the quoted `(a)` is no group.
+    [Fact]
+    public void QuotedExtglobOperators_AreEscapedInThePattern()
+    {
+        var fields = Expand(new object?[] { Split, ".", Pattern, "/", Quoted, "+(a)|", Pattern, "*" }, null, extglob: true);
+        Assert.Single(fields);
+        Assert.Equal("./+(a)|*", fields[0].Text);
+        Assert.Equal("./+\\(a\\)\\|*", fields[0].Pattern);
+    }
+
+    // An unquoted extglob after an expansion stays active: `$d/+(a)*`.
+    [Fact]
+    public void UnquotedExtglob_StaysActive()
+    {
+        var fields = Expand(new object?[] { Split, ".", Pattern, "/+(a)*" }, null, extglob: true);
+        Assert.Equal("./+(a)*", fields[0].Pattern);
+    }
+
+    // `"C:\tmp\[x]"$n*` on Windows: the drive path's backslashes are separators, mapped BEFORE the quoted `[` `]` are
+    // escaped (mapping after made the escape `\[` a separator, `/[`, and the class active). Elsewhere a backslash is text.
+    [Fact]
+    public void QuotedDrivePath_MapsSeparatorsBeforeEscaping()
+        => Assert.Equal(OperatingSystem.IsWindows() ? "1:C:\\tmp\\[x]*~C:/tmp/\\[x\\]*" : "1:C:\\tmp\\[x]*~C:\\\\tmp\\\\\\[x\\]*",
+            Run(null, Quoted, "C:\\tmp\\[x]", Split, "", Pattern, "*"));
+
+    // IFS of one character outside the BMP: it delimits as a whole, and a different character sharing its high surrogate
+    // is never cut in half.
+    [Theory]
+    [InlineData("a\uD83D\uDE00b", "2:a|b")]
+    [InlineData("a\uD83D\uDE01b", "1:a\uD83D\uDE01b")]
+    [InlineData("\uD83D\uDE00a\uD83D\uDE00", "2:|a")]
+    public void NonBmpIfs_SplitsOnWholeCodePoints(string value, string expected)
+        => Assert.Equal(expected, Run("\uD83D\uDE00", Split, value));
+
+    // Unquoted `$@` with that IFS joins with the whole character, then splits on it.
+    [Fact]
+    public void NonBmpIfs_SplitListJoinsWithTheWholeCharacter()
+        => Assert.Equal("2:a|b", Run("\uD83D\uDE00", SplitList, new[] { "a", "b" }));
+
+    [Theory]
+    [InlineData("\uD83D\uDE00-", "\uD83D\uDE00")]
+    [InlineData("-x", "-")]
+    [InlineData(" \t\n", " ")]
+    public void FirstIfsCharacter_KeepsASurrogatePairWhole(string ifs, string expected) => Assert.Equal(expected, FirstIfsCharacter(ifs));
+
+    // `set --; e=; set -- "$@$e"` is no word (bash 5.2); `"$@$e"` with e=q is q; literal text (`"x$@"`) anchors.
+    [Fact]
+    public void QuotedValue_BesideAnEmptyList_IsNoField()
+    {
+        Assert.Equal("0:", Run(null, QuotedList, new string[0], QuotedValue, ""));
+        Assert.Equal("1:q", Run(null, QuotedList, new string[0], QuotedValue, "q"));
+        Assert.Equal("1:", Run(null, QuotedList, new string[0], Quoted, ""));
+        Assert.Equal("2:a|b", Run(null, QuotedList, new[] { "a", "b" }, QuotedValue, ""));
+    }
+
     [Fact]
     public void UnknownKind_Throws() => Assert.Throws<System.ArgumentException>(() => Expand(new object?[] { 9, "x" }, null, false));
 }

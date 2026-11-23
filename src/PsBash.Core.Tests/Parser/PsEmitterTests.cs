@@ -293,14 +293,14 @@ public class PsEmitterTests
     public void Transpile_ForListExpansionWithText_IsSplitByConvertToBashWords(string src, string leaked)
     {
         var ps = PsEmitter.Transpile(src)!;
-        Assert.Contains("ConvertTo-BashWords -Parts @(", ps);
+        Assert.Contains("ConvertTo-BashWords -Parts $__psbash_wp", ps);
         Assert.DoesNotContain(leaked, ps);
     }
 
     // Bare unquoted $* / $@ is joined with IFS[0] and split again (IFS=x, `"" ""` is one empty field).
     [Fact]
     public void Transpile_UnquotedPositionalList_JoinsThenSplits()
-        => Assert.Contains("ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @(", PsEmitter.Transpile("for i in $*; do echo $i; done")!);
+        => Assert.Contains("$__psbash_wp = @(4, (@(", PsEmitter.Transpile("for i in $*; do echo $i; done")!);
 
     [Theory]
     [InlineData("echo ${a[0]:-x} ${a[@]:1:2} ${a[0]#p} ${a[0]%s} ${a[0]/x/y} ${a[0]^^} ${a[0],,} ${a[0]@Q} ${a[0]-d} ${a[0]+d} ${a[0]=d} ${a[0]?m}")]
@@ -2045,7 +2045,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("echo $FOO");
 
         Assert.Equal(
-            "& { $__bashsplat0 = @(ConvertTo-BashWords $env:FOO); " +
+            "& { $__bashsplat0 = " + PsBuild.WordSplitArray("$env:FOO") + "; " +
             "Invoke-BashEcho @__bashsplat0 }",
             result);
     }
@@ -2059,14 +2059,14 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("echo ${PATH}");
 
         Assert.Equal(
-            "& { $__bashsplat0 = @(ConvertTo-BashWords $env:PATH); " +
+            "& { $__bashsplat0 = " + PsBuild.WordSplitArray("$env:PATH") + "; " +
             "Invoke-BashEcho @__bashsplat0 }",
             result);
     }
 
     /// <summary>An unquoted default/alternative expansion is word-split: its value goes through ConvertTo-BashWords (empty elides, spaces split).</summary>
     private static string SplitEcho(string expr)
-        => $"& {{ $__bashsplat0 = @(ConvertTo-BashWords ({expr})); Invoke-BashEcho @__bashsplat0 }}";
+        => "& { $__bashsplat0 = " + PsBuild.WordSplitArray("(" + expr + ")") + "; Invoke-BashEcho @__bashsplat0 }";
 
     /// <summary>`echo $((…))`: an arithmetic result is split on IFS like any unquoted expansion (IFS=1: `$((11+0))` is two
     /// empty fields), through the cheap number path.</summary>
@@ -2110,7 +2110,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $@");
 
-        Assert.Contains("ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @(", result);
+        Assert.Contains("$__psbash_wp = @(4, (@(", result);
     }
 
     [Fact]
@@ -2374,14 +2374,14 @@ public class PsEmitterTests
     public void Transpile_BracedParamAt_EmitsArgs()
     {
         var result = PsEmitter.Transpile("echo ${@}");
-        Assert.Contains("ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @(", result);
+        Assert.Contains("$__psbash_wp = @(4, (@(", result);
     }
 
     [Fact]
     public void Transpile_BracedParamStar_EmitsArgs()
     {
         var result = PsEmitter.Transpile("echo ${*}");
-        Assert.Contains("ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @(", result);
+        Assert.Contains("$__psbash_wp = @(4, (@(", result);
     }
 
     [Fact]
@@ -2458,7 +2458,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $*");
 
-        Assert.Contains("ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @(", result);
+        Assert.Contains("$__psbash_wp = @(4, (@(", result);
     }
 
     [Fact]
@@ -2478,7 +2478,7 @@ public class PsEmitterTests
         // `| ForEach-Object { Get-BashText $_ }` so the captured value is the
         // bash-text payload, never a typed BashObject's default ToString(). Glued to `x`, the
         // unquoted substitution is word-split with the text glued to its first and last field.
-        Assert.Equal("& { $__bashsplat0 = @(ConvertTo-BashWords -Parts @(2, 'x', 3, ($((@(Invoke-BashWhoami | ConvertTo-BashCapture -Join)))))); Invoke-BashEcho @__bashsplat0 }", result);
+        Assert.Equal("& { $__bashsplat0 = " + PsBuild.WordFieldsArray("2, 'x', 3, ($((@(Invoke-BashWhoami | ConvertTo-BashCapture -Join))))") + "; Invoke-BashEcho @__bashsplat0 }", result);
     }
 
     [Fact]
@@ -2513,8 +2513,8 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo x$(echo y$(whoami))");
 
-        Assert.StartsWith("& { $__bashsplat0 = @(ConvertTo-BashWords -Parts @(2, 'x', 3, ($((@(", result);
-        Assert.Contains("& { $__bashsplat0 = @(ConvertTo-BashWords -Parts @(2, 'y', 3, ($((@(Invoke-BashWhoami | ConvertTo-BashCapture -Join)))))); Invoke-BashEcho @__bashsplat0 }", result);
+        Assert.StartsWith("& { $__bashsplat0 = @(if ($null -eq ($__psbash_wf = [PsBash.Cmdlets.BashWordFields]::Words(($__psbash_wp = @(2, 'x', 3, ($((@(", result);
+        Assert.Contains("& { $__bashsplat0 = " + PsBuild.WordFieldsArray("2, 'y', 3, ($((@(Invoke-BashWhoami | ConvertTo-BashCapture -Join))))") + "; Invoke-BashEcho @__bashsplat0 }", result);
     }
 
     /// <summary>
@@ -2575,7 +2575,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("cat /tmp/$(echo hi).txt");
 
         // The temp directory is the split word's prefix; the substitution's fields keep the suffix.
-        Assert.Contains("-Parts @(1, (" + PsBuild.TempDirExpr + "), 2, '/', 3, ($((@(Invoke-BashEcho hi | ConvertTo-BashCapture -Join)))), 2, '.txt')", result);
+        Assert.Contains("$__psbash_wp = @(1, (" + PsBuild.TempDirExpr + "), 2, '/', 3, ($((@(Invoke-BashEcho hi | ConvertTo-BashCapture -Join)))), 2, '.txt')", result);
     }
 
     [Fact]
@@ -3231,7 +3231,7 @@ public class PsEmitterTests
         // RC-7 splitting applied to command arguments but not to a for-in list.
         var result = PsEmitter.Transpile("for x in $list; do echo $x; done");
 
-        Assert.Contains("@(ConvertTo-BashWords $env:list)", result);
+        Assert.Contains(PsBuild.WordSplitArray("$env:list"), result);
         Assert.DoesNotContain("foreach ($__psbash_lv0 in $env:list)", result);
     }
 
@@ -3240,8 +3240,8 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for x in $a $b; do echo $x; done");
 
-        Assert.Contains("ConvertTo-BashWords $env:a", result);
-        Assert.Contains("ConvertTo-BashWords $env:b", result);
+        Assert.Contains(PsBuild.WordSplitArray("$env:a"), result);
+        Assert.Contains(PsBuild.WordSplitArray("$env:b"), result);
     }
 
     [Fact]
@@ -3251,7 +3251,7 @@ public class PsEmitterTests
         // arrays must flatten (oracle: `a="x y"; for w in $a z` runs x, y, z).
         var result = PsEmitter.Transpile("for w in $a z; do echo $w; done");
 
-        Assert.Contains("foreach ($__psbash_lv0 in @(@(ConvertTo-BashWords $env:a)", result);
+        Assert.Contains("foreach ($__psbash_lv0 in @(" + PsBuild.WordSplitArray("$env:a"), result);
         Assert.Contains("; 'z')", result);
     }
 
@@ -3261,7 +3261,7 @@ public class PsEmitterTests
         // `for f in $(echo a b c)` ran ONCE over "a b c": the capture array only splits on lines.
         var result = PsEmitter.Transpile("for f in $(echo a b c); do echo \"<$f>\"; done");
 
-        Assert.Contains("foreach ($__psbash_lv0 in @(ConvertTo-BashWords $((@(Invoke-BashEcho a b c | ConvertTo-BashCapture -Join", result);
+        Assert.Contains("foreach ($__psbash_lv0 in @(if ($null -eq ($__psbash_wf = [PsBash.Cmdlets.BashWordFields]::Words(($__psbash_wp = @(3, ($((@(Invoke-BashEcho a b c | ConvertTo-BashCapture -Join", result);
     }
 
     [Fact]
@@ -3269,7 +3269,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for f in `echo a b`; do echo $f; done");
 
-        Assert.Contains("foreach ($__psbash_lv0 in @(ConvertTo-BashWords ", result);
+        Assert.Contains("foreach ($__psbash_lv0 in @(if ($null -eq ($__psbash_wf = [PsBash.Cmdlets.BashWordFields]::Words(", result);
     }
 
     [Fact]
@@ -3288,7 +3288,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for f in x $(echo a b) y; do echo $f; done");
 
-        Assert.Contains("foreach ($__psbash_lv0 in @('x'; @(ConvertTo-BashWords ", result);
+        Assert.Contains("foreach ($__psbash_lv0 in @('x'; @(if ($null -eq ($__psbash_wf = [PsBash.Cmdlets.BashWordFields]::Words(", result);
         Assert.Contains("; 'y')", result);
     }
 
@@ -3299,7 +3299,7 @@ public class PsEmitterTests
         // elided) exactly like an unquoted $var operand (RC-7).
         var result = PsEmitter.Transpile("printf '%s\\n' $(echo a b)");
 
-        Assert.StartsWith("& { $__bashsplat0 = @(ConvertTo-BashWords $((@(Invoke-BashEcho a b | ConvertTo-BashCapture -Join", result);
+        Assert.StartsWith("& { $__bashsplat0 = @(if ($null -eq ($__psbash_wf = [PsBash.Cmdlets.BashWordFields]::Words(($__psbash_wp = @(3, ($((@(Invoke-BashEcho a b | ConvertTo-BashCapture -Join", result);
         Assert.EndsWith("; Invoke-BashPrintf '%s\\n' @__bashsplat0 }", result);
     }
 
@@ -4556,7 +4556,7 @@ public class PsEmitterTests
         var unquoted = PsEmitter.Transpile("echo $d/*");
         var quoted = PsEmitter.Transpile("echo \"$d\"/*");
 
-        Assert.Contains("ConvertTo-BashWords -Parts @(3, ($env:d), 2, '/*')", unquoted); // split first, each field globbed
+        Assert.Contains("$__psbash_wp = @(3, ($env:d), 2, '/*')", unquoted); // split first, each field globbed
         Assert.Contains("ConvertTo-BashGlob ('' + ([PsBash.Cmdlets.BashGlobText]::Escape(\"$env:d\")) + '/*')", quoted);
     }
 
@@ -5201,7 +5201,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for item in ${arr[@]}; do echo $item; done");
         // Unquoted, each element is split and globbed again (arr=('a b' c) iterates a, b, c).
-        Assert.Contains(":__psbash_l0 foreach ($__psbash_lv0 in @(ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @($(if ($arr -is [System.Collections.IDictionary]) { $arr.Values } else { $(if ($null -ne $arr) { $arr } else { @($env:arr) -ne $null }) })))) {", result);
+        Assert.Contains(":__psbash_l0 foreach ($__psbash_lv0 in " + PsBuild.ListFieldsArray("@($(if ($arr -is [System.Collections.IDictionary]) { $arr.Values } else { $(if ($null -ne $arr) { $arr } else { @($env:arr) -ne $null }) }))") + ") {", result);
         Assert.Contains("[PsBash.Cmdlets.BashVariableStore]::Set('item', [string]($__psbash_lv0)); Invoke-BashEcho $env:item }", result);
     }
 
@@ -5542,7 +5542,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("export FOO=bar && echo $FOO");
         Assert.Equal(
             "[void]$($env:FOO = \"bar\"; [PsBash.Cmdlets.BashVariableStore]::Export('FOO')) && $(& { $__bashsplat0 = " +
-            "@(ConvertTo-BashWords $env:FOO); " +
+            PsBuild.WordSplitArray("$env:FOO") + "; " +
             "Invoke-BashEcho @__bashsplat0 })",
             result);
     }
@@ -7377,7 +7377,7 @@ public class PsEmitterTests
     public void Transpile_CommandSubCommandWordWithOperands_IsResolvedFirstAtRunTime()
     {
         var r = PsEmitter.Transpile("$(exit 42) $(exit 43)")!;
-        Assert.Contains("$__bashhead = (Resolve-BashCommand -Words @(ConvertTo-BashWords", r);
+        Assert.Contains("$__bashhead = (Resolve-BashCommand -Words @(if ($null -eq ($__psbash_wf = [PsBash.Cmdlets.BashWordFields]::Words(", r);
         Assert.Contains("-KeepStatus)", r);
         Assert.True(r.IndexOf("$__bashhead =", StringComparison.Ordinal) < r.IndexOf("$__bashsplat0 =", StringComparison.Ordinal));
         Assert.StartsWith("& (Resolve-BashCommand -Words", PsEmitter.Transpile("`true` X")!);
@@ -7531,7 +7531,7 @@ public class PsEmitterTests
         // and PowerShell-splats it.
         var result = PsEmitter.Transpile("echo a $x b");
 
-        Assert.Contains("$__bashsplat0 = @(ConvertTo-BashWords $env:x)", result);
+        Assert.Contains("$__bashsplat0 = " + PsBuild.WordSplitArray("$env:x"), result);
         Assert.Contains("@__bashsplat0", result);
         // Wrapped in & { } so the temp assignment never leaks into a pipeline.
         Assert.Contains("& {", result);
@@ -7563,7 +7563,7 @@ public class PsEmitterTests
         // the splat so a custom IFS and globbing apply per parameter.
         var result = PsEmitter.Transpile("echo $@");
 
-        Assert.Contains("ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @(", result);
+        Assert.Contains("$__psbash_wp = @(4, (@(", result);
     }
 
     [Fact]
@@ -7609,7 +7609,7 @@ public class PsEmitterTests
 
         // The word-split array is still built (bash word-splitting semantics),
         // it is just consumed as a VALUE rather than splatted.
-        Assert.Contains("ConvertTo-BashWords $env:code", result);
+        Assert.Contains(PsBuild.WordSplitArray("$env:code"), result);
         Assert.Contains("$__bashexit[0]", result);
     }
 
@@ -7818,8 +7818,8 @@ public class PsEmitterTests
         // `[$x]` made PowerShell read `$x` as ITS OWN (undefined) variable and
         // `x="a b"; echo [$x]` printed `[]` — total, silent data loss.
         // Unquoted, the value is split too: the text is glued to the first and last field.
-        Assert.Contains("ConvertTo-BashWords -Parts @(2, '[', 3, ($env:x), 2, ']')", PsEmitter.Transpile("echo [$x]"));
-        Assert.Contains("ConvertTo-BashWords -Parts @(2, 'x[', 3, ($env:y), 2, ']z')", PsEmitter.Transpile("echo x[$y]z"));
+        Assert.Contains("$__psbash_wp = @(2, '[', 3, ($env:x), 2, ']')", PsEmitter.Transpile("echo [$x]"));
+        Assert.Contains("$__psbash_wp = @(2, 'x[', 3, ($env:y), 2, ']z')", PsEmitter.Transpile("echo x[$y]z"));
     }
 
     [Fact]
@@ -7891,7 +7891,7 @@ public class PsEmitterTests
         // `""` alternative is safe; what must hold is that no outer "$( … )" string exists.
         // `git` is not a mapped command (it could be a function), so the body gets the subshell scope.
         Assert.StartsWith("Invoke-BashEcho $((@(& { $__psbash_ss = ", result);
-        Assert.Contains("ConvertTo-BashWords (($env:x ? ", result);
+        Assert.Contains("$__psbash_wp = @(3, ((($env:x ? ", result);
         Assert.DoesNotContain("\"$(", result);
     }
 
@@ -7968,7 +7968,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("cmd $x,y a,\"b\"");
         Assert.DoesNotContain(" $env:x,y", result);
         // `$x,y` unquoted splits $x; the comma stays inside the quoted suffix.
-        Assert.Contains("-Parts @(3, ($env:x), 2, ',y')", result);
+        Assert.Contains("$__psbash_wp = @(3, ($env:x), 2, ',y')", result);
         Assert.Contains("\"a,b\"", result);
     }
 

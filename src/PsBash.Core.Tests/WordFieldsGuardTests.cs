@@ -80,12 +80,18 @@ public class WordFieldsGuardTests
     [InlineData("Contains('\"')")]
     [InlineData("Contains(\"\\\"\")")]
     [InlineData(".RawText")]
+    [InlineData("IndexOfAny(")]
     public void TheFieldsFileReadsNoRawQuoteText(string scan)
         => Assert.DoesNotContain(scan, File.ReadAllText(Path.Combine(ParserDir(), "PsEmitter.Fields.cs")), StringComparison.Ordinal);
 
-    // Every split word reaches the run time as one ConvertTo-BashWords -Parts call, built by PsBuild.
-    [Fact]
-    public void OnlyPsBuildSpellsTheSegmentsCall()
+    // Every split word reaches the run time through PsBuild.WordFieldsArray (the static BashWordFields.Words call, then
+    // the ConvertTo-BashWords cmdlet when a field globs): no other file spells either call. A hand-written
+    // `@(ConvertTo-BashWords $s)` (a run-time command word) once skipped the IFS of an `IFS=: cmd` binding.
+    [Theory]
+    [InlineData("-Parts @(")]
+    [InlineData("ConvertTo-BashWords")]
+    [InlineData("BashWordFields]::")]
+    public void OnlyPsBuildSpellsTheWordFieldsCalls(string spelling)
     {
         var offenders = new List<string>();
         foreach (var file in Directory.EnumerateFiles(ParserDir(), "*.cs"))
@@ -93,10 +99,48 @@ public class WordFieldsGuardTests
             if (Path.GetFileName(file) == "PsBuild.cs") continue;
             var lines = File.ReadAllLines(file);
             for (int i = 0; i < lines.Length; i++)
-                if (lines[i].Contains("-Parts @(", StringComparison.Ordinal) && !lines[i].TrimStart().StartsWith("//", StringComparison.Ordinal)
-                    && !lines[i].TrimStart().StartsWith("///", StringComparison.Ordinal))
+                if (lines[i].Contains(spelling, StringComparison.Ordinal) && !lines[i].TrimStart().StartsWith("//", StringComparison.Ordinal))
                     offenders.Add($"{Path.GetFileName(file)}:{i + 1}: {lines[i].Trim()}");
         }
-        Assert.True(offenders.Count == 0, "Emit the segments call via PsBuild.WordFieldsArray:\n" + string.Join('\n', offenders));
+        Assert.True(offenders.Count == 0, "Emit the word fields via PsBuild (WordFieldsArray, WordSplitArray, ListFieldsArray, NumberFieldsArray):\n"
+            + string.Join('\n', offenders));
+    }
+
+    /// <summary>
+    /// Every <c>Is…Word(</c> predicate of the transpiler, pinned. A new word-shape predicate is how the bug class came back
+    /// (a review found <c>IsPlainDefaultWord</c> taking a nested <c>${w:-'a b'}</c> as plain text and splitting the
+    /// quoted space): one that decides fields belongs in PsEmitter.Fields.cs beside <c>IsUnquotedSplitWord</c>, and any
+    /// other is added here with the reason it does not decide splitting.
+    /// </summary>
+    public static readonly string[] KnownWordPredicates =
+    {
+        // Fields: the one predicate, the quoted-list operand form, the lone-default shortcut.
+        "PsEmitter.Fields.cs:IsUnquotedSplitWord", "PsEmitter.Fields.cs:IsQuotedListWord", "PsEmitter.Fields.cs:IsPlainDefaultWord",
+        // Lexing and parsing, not expansion.
+        "BashEreClasses.cs:IsWord", "BashLexer.cs:IsReservedWord", "BashParser.Simple.cs:IsInertWord",
+        // shopt/set scans of a static word.
+        "PsEmitter.ShellOptions.cs:IsQuotedWholeWord", "PsEmitter.ShellOptions.cs:IsLoopWord",
+        // Command words and binding forms (how a word is passed, never how many fields it has).
+        "PsEmitter.cs:IsPositionalAllWord", "PsEmitter.cs:IsArrayAllWord", "PsEmitter.cs:IsPlainVarRefWord", "PsEmitter.cs:IsEmptyQuotedWord",
+        "PsEmitter.cs:IsPureUnquotedVarWord", "PsEmitter.cs:IsUnquotedPositionalListWord", "PsEmitter.cs:IsArrayValuedWord",
+        "PsEmitter.cs:IsQuotedArrayAllWord", "PsEmitter.cs:IsPlainBraceWord", "PsEmitter.cs:IsUnquotedArrayAllWord",
+        "PsEmitter.cs:IsGlobWord", "PsEmitter.cs:IsBraceGlobWord", "PsEmitter.cs:IsQuotedCommandWord", "PsEmitter.cs:IsVariableCommandWord",
+        "PsEmitter.cs:IsBareVariableCommandWord", "PsEmitter.cs:IsExpandedCommandWord", "PsEmitter.cs:IsPureProcessSubWord",
+    };
+
+    [Fact]
+    public void NoNewWordShapePredicate()
+    {
+        var found = new List<string>();
+        var definition = new System.Text.RegularExpressions.Regex(@"\bbool\s+(Is\w*Word)\s*\(");
+        foreach (var file in Directory.EnumerateFiles(ParserDir(), "*.cs"))
+            foreach (var line in File.ReadAllLines(file))
+                foreach (System.Text.RegularExpressions.Match m in definition.Matches(line))
+                    found.Add(Path.GetFileName(file) + ":" + m.Groups[1].Value);
+        var added = new List<string>(found);
+        added.RemoveAll(n => Array.IndexOf(KnownWordPredicates, n) >= 0);
+        Assert.True(added.Count == 0,
+            "A new Is…Word predicate: decide fields in PsEmitter.Fields.cs (IsUnquotedSplitWord + the segments), or pin it here with why it does not:\n"
+            + string.Join('\n', added));
     }
 }
