@@ -1533,8 +1533,24 @@ octal 8, `08` is an error, `-010` is -8, and `1+1`, `i`, `$j` (j=`1+1`) are expr
 same test is `PsBuild.ArithPlainDecimal` (`[PsBash.Core.Parser.BashArithmeticParser]::PlainDecimal`, a number or
 `$null`), and an evaluated operand used as a number is `PsBuild.ArithValue` (`[long]$(Invoke-BashArith …)`). It is a
 WORD, so a failed operand abandons the command like `$(( 08 ))`. A slice bound goes through
-`PsEmitter.EmitArithOperandValue`, which labels its error with the expansion (`s: 08: value too great for base
-(error token is "08")`, `a[@]: …`, `@: …`).
+`PsEmitter.EmitArithOperandValue`, which names the expansion in its error (`s: 08: value too great for base
+(error token is "08")`, `a[@]: …`, `@: …`) with `Invoke-BashArith -Expansion`.
+
+**Word or command: one rule.** bash 5.2 ends the COMMAND and drops the rest of the input line for an arithmetic
+error in any word: a slice bound, a subscript, `$(( ))`, a `$(( ))` nested in another expression, in an assignment as
+in a command, inside a function, a loop or `case`/`for` words (status 1, the next line runs; `bash -c` ends the shell
+only for a subscript error). A failed `(( ))`, `let` or `[[ -eq ]]` only fails. `InvokeBashArithmeticCommand.
+IsWordExpansion` decides from how the call is written: right after `$(` or `$__psbash_av = ` is a word; `-Label`
+names a COMMAND (`((`, `let`, `[[`), so a labelled call is never a word; `-Expansion` names a slice's parameter and
+is always one. REGRESSION: slices passed their name as `-Label`, so `x=${s:08}; echo same` printed same. A
+`$(( ))` inside an expression is expanded first as a word of its own and pasted as TEXT (`x$((1))` is the name x1,
+`1 + $((08))` fails as `08: …`), not paren grouping. `a[08]=x` is an expression with a bad constant
+(`BashArithmeticParseException.InConstant`), evaluated when the write runs, not refused as a key-only subscript.
+The words of a `case`/`for` record its line. Guard `Core.Tests/Parser/ArithmeticWordGuardTests` (every evaluation of
+a bad constant in a word is word-shaped and unlabelled, every `-Label` is a command's); differential
+`ArithExpansionFailureTests.FailedArithWord_InASliceSubscriptOrNestedWord_DropsTheLine` (script and `-c`),
+`NestedArithWord_IsExpandedFirst_AndItsFailureDropsTheLine`. Known gap: after such an error inside a multi-line
+`case`/`for` header, bash 5.2 reports later lines short by the header's extra lines; ps-bash reports the real line.
 
 **The bug class.** Each context had its own shortcut: `int.TryParse` (slices, literal subscripts), `long.TryParse`
 (`declare -i`, `unset`), `[long]` after `-match '^-?[0-9]+$'` (`${a[$k]}`, the indirect element, `Set-BashElement`),

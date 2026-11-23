@@ -898,7 +898,10 @@ public static partial class PsEmitter
         _statementLine = (cmd is Command.Simple { Line: > 0 } ls ? SimpleCommandLine(ls) : FirstSimpleLine(cmd)) is > 0 and var line
             ? _lineBase + line
             // `{ ...; } > nodir/f`, `done < missing`: the redirect's open error names a line too.
-            : HasOpenableRedirect(CompoundRedirects(cmd)) && (_redirectLine > 0 ? _redirectLine : CompoundStartLine(cmd)) is > 0 and var start ? _lineBase + start : 0;
+            : HasOpenableRedirect(CompoundRedirects(cmd)) && (_redirectLine > 0 ? _redirectLine : CompoundStartLine(cmd)) is > 0 and var start ? _lineBase + start
+            // `case ${s:08} in`, `for i in ${s:08}`: the words a `case` / `for` expands itself are on its own line, which
+            // an error in them names. REGRESSION: such an error on line 2 reported the line of the statement before.
+            : cmd is Command.Case { Line: > 0 } or Command.ForIn { Line: > 0 } ? _lineBase + CompoundStartLine(cmd) : 0;
         // A loop that reaches past line 1 runs its line-1 statements again after later lines recorded theirs.
         if (statement && _functionDepth == 0 && _loopDepth == 0) _loopReachesPastLine1 = RunsPastLine1(cmd);
         bool lineAlreadyRecorded = _statementLine == 1 && _scriptRoot && _functionDepth == 0 && (_loopDepth == 0 || !_loopReachesPastLine1);
@@ -5121,7 +5124,9 @@ public static partial class PsEmitter
 
     /// <summary>
     /// The array name of <c>NAME[SUB]</c> when SUB is static text (no <c>$</c> or backtick) that does not parse as an
-    /// arithmetic expression (<c>'2'</c>, <c>0+</c>); otherwise null.
+    /// arithmetic expression (<c>'2'</c>, <c>0+</c>); otherwise null. A bad integer constant (<c>08</c>) parses: bash
+    /// rejects it when it evaluates the subscript (<c>08: value too great for base</c>, the line dropped), which the
+    /// element write does at run time. REGRESSION: <c>a[08]=x; echo same</c> reported a syntax error and printed same.
     /// </summary>
     private static string? IsNonArithmeticSubscript(string name)
     {
@@ -5130,6 +5135,7 @@ public static partial class PsEmitter
         string sub = name[(open + 1)..^1];
         if (sub.Length == 0 || sub is "@" or "*" || sub.AsSpan().IndexOfAny('$', '`') >= 0) return null;
         try { BashArithmeticParser.Parse(sub); return null; }
+        catch (BashArithmeticParseException ex) when (ex.InConstant) { return null; }
         catch (BashArithmeticParseException ex) when (!ex.Message.Contains(NestingGuard.TooDeepMessage, StringComparison.Ordinal)
                                                       && !ex.Message.Contains(NestingGuard.TooLongMessage, StringComparison.Ordinal))
         {
@@ -10523,7 +10529,9 @@ public static partial class PsEmitter
     /// <param name="label">The command evaluating it, which bash names in an error (<c>let</c>, <c>((</c>):
     /// <c>s.sh: line 3: let: 1/0: division by 0</c> (Invoke-BashArith -Label). After the expression, so the
     /// invocation still starts <c>Invoke-BashArith 'EXPR'</c>.</param>
-    private static string EmitArithmeticInvocation(ArithmeticSyntax syntax, string? label = null)
+    /// <param name="expansion">The parameter expansion whose slice bound the expression is (<c>s</c> in <c>${s:08}</c>),
+    /// named in an error as a label is (Invoke-BashArith -Expansion), but a WORD: its failure abandons the command.</param>
+    private static string EmitArithmeticInvocation(ArithmeticSyntax syntax, string? label = null, string? expansion = null)
     {
         // Left-trimmed only: bash's error names the expression with its trailing blanks and its error token runs to the
         // end (`$(( 1/0 ))`: `1/0 : division by 0 (error token is "0 ")`).
@@ -10532,7 +10540,8 @@ public static partial class PsEmitter
         string argument = fragments is null
             ? PsBuild.SingleQuote(expr)
             : $"('' + {string.Join(" + ", fragments)})";
-        var invocation = $"Invoke-BashArith {argument}" + (label is null ? "" : " -Label " + PsBuild.SingleQuote(label));
+        var invocation = $"Invoke-BashArith {argument}" + (label is null ? "" : " -Label " + PsBuild.SingleQuote(label))
+            + (expansion is null ? "" : " -Expansion " + PsBuild.SingleQuote(expansion));
         // The command and condition forms (`((`, `let`) are not words: a failure there sets status 1 and the line goes on.
         return _nounsetMode ? PsBuild.ArithNounsetGuard(invocation, word: label is not (ArithCommandLabel or "let")) : invocation;
     }
@@ -10568,6 +10577,17 @@ public static partial class PsEmitter
                 if (close < 0) continue;
                 spanEnd = close + 1;
                 replacement = EmitArithCommandSubValue(expr[(i + 1)..close]);
+            }
+            else if (c == '$' && i + 2 < expr.Length && expr[i + 1] == '(' && expr[i + 2] == '('
+                     && BashArithmeticParser.FindMatchingParen(expr, i + 1) is var outer and > 0
+                     && BashArithmeticParser.FindMatchingParen(expr, i + 2) == outer - 1)
+            {
+                // `$(( 1 + $((08)) ))`, `${s:$((08))}`: the inner expansion is a WORD of its own, expanded to its value's
+                // TEXT before the outer expression is evaluated (bash: `x$((1))` is the name x1). Its failure is its own
+                // (`08: value too great for base`) and drops the line as `$((08))` does. REGRESSION: it was paren grouping
+                // in the outer expression, whose error named `$((08` and, as a slice bound, let the command run.
+                spanEnd = outer + 1;
+                replacement = "$(" + EmitArithmeticInvocation(BashArithmeticParser.ParseOrDefer(expr[(i + 3)..(outer - 1)])) + ")";
             }
             else if (c == '$' && i + 1 < expr.Length && expr[i + 1] == '('
                      && !(i + 2 < expr.Length && expr[i + 2] == '('))
@@ -12201,7 +12221,8 @@ public static partial class PsEmitter
     /// A slice bound that bash evaluates as ARITHMETIC, as a PowerShell number: an empty one is 0, a plain decimal its
     /// literal (BashArithmeticParser.TryPlainDecimal, the one fast path), anything else the one evaluator's value
     /// (`010` is 8; `08` is an error that abandons the command; `i+1`; `$j` with j='1+1'). <paramref name="label"/> names
-    /// the expansion in an error: `s: 08: value too great for base (error token is "08")`.
+    /// the expansion in an error: `s: 08: value too great for base (error token is "08")`. It is passed as the
+    /// evaluator's -Expansion, never its -Label: a label names a COMMAND (`((`, `let`), whose failure lets the line go on.
     /// <para>A bound that is ONE variable (`${a[@]:$i:1}`, `${@:$i}`, `${@:$#}`) is read first and, when its value is a
     /// plain decimal, used without an evaluator call (PsBuild.ArithPlainOrValue, as EmitVarSubscript does): a loop over
     /// `${a[@]:$i:1}` ran one Invoke-BashArith per expansion.</para>
@@ -12212,7 +12233,7 @@ public static partial class PsEmitter
         if (expr.Trim().Length == 0) return "0";
         if (BashArithmeticParser.TryPlainDecimal(expr.TrimEnd(), out long n))
             return n.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        string invocation = EmitArithmeticInvocation(BashArithmeticParser.ParseOrDefer(expr), label);
+        string invocation = EmitArithmeticInvocation(BashArithmeticParser.ParseOrDefer(expr), expansion: label);
         var one = s_oneVariableBound.Match(expr.TrimEnd());
         if (one.Success)
             return PsBuild.ArithPlainOrValue("[string](" + EmitSimpleVar(one.Groups[1].Success ? one.Groups[1].Value : one.Groups[2].Value) + ")", invocation);

@@ -344,7 +344,7 @@ public sealed class BashArithmeticParser
                 try { number = ParseNumber(text); }
                 catch (BashArithmeticParseException ex)
                 {
-                    throw new BashArithmeticParseException($"{ex.Message} (error token is \"{text}\")") { Expression = source[..i] };
+                    throw new BashArithmeticParseException($"{ex.Message} (error token is \"{text}\")") { Expression = source[..i], InConstant = true };
                 }
                 result.Add(new Tok(T.Num, number)); continue;
             }
@@ -591,4 +591,11 @@ public sealed class BashArithmeticParseException : Exception
     /// (<c>1 + 08 + 2</c> reports <c>1 + 08: value too great for base</c>). Null: the whole expression.
     /// </summary>
     public string? Expression { get; init; }
+
+    /// <summary>
+    /// A bad integer constant (<c>08</c>, <c>2#12</c>, <c>1#1</c>): a well-formed expression that bash rejects when it
+    /// EVALUATES it (expr.c <c>strlong</c>), with its own message, not an arithmetic syntax error. <c>a[08]=x</c> is
+    /// <c>08: value too great for base</c> and drops the line like <c>$(( 08 ))</c>.
+    /// </summary>
+    public bool InConstant { get; init; }
 }
