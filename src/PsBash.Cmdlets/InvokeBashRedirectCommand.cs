@@ -260,9 +260,10 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
         => FileSystemHelpers.IsNullDevice(raw) ? null : FileSystemHelpers.NormalizeOperandPath(raw);
 
     /// <summary>
-    /// Open the targets in <paramref name="plan"/>'s order (bash's), each open error reported where fd 2 pointed when
-    /// that redirect was reached. A failure leaves the later targets unopened (bash never reaches them). The targets
-    /// opened so far stay open until then, so a report can go into one (<c>2&gt;e &gt;nodir/f</c>).
+    /// Open the targets and check the dup'd descriptors in <paramref name="plan"/>'s order (bash's), each error reported
+    /// where fd 2 pointed when that redirect was reached. A failure leaves the later targets unopened (bash never reaches
+    /// them). The targets opened so far stay open until then, so a report can go into one (<c>2&gt;e &gt;nodir/f</c>,
+    /// <c>2&gt;e &gt;&amp;5</c>).
     /// </summary>
     private void OpenInPlanOrder(IReadOnlyList<RedirectOpenPlan.Step> plan)
     {
@@ -271,6 +272,17 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
         {
             foreach (var step in plan)
             {
+                if (RedirectOpenPlan.IsCheck(step.Role, out int fd))
+                {
+                    // `>&5` with 5 not open: bash's dup2 fails, "5: Bad file descriptor", and the command does not run.
+                    if (!BashFdTable.IsOpen(fd))
+                    {
+                        FailOpen(fd.ToString(System.Globalization.CultureInfo.InvariantCulture), "Bad file descriptor",
+                            message => ReportTo(step.Report, message, held));
+                        return;
+                    }
+                    continue;
+                }
                 var (raw, append, force) = RoleTarget(step.Role);
                 if (!TryOpen(raw, append, force, out var s, message => ReportTo(step.Report, message, held), readWrite: step.Role switch { "p" => ReadWrite, "e" => ErrorReadWrite, _ => false })) return;
                 held[step.Role] = (raw, s);
@@ -296,13 +308,25 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
 
     /// <summary>
     /// An open error, reported where fd 2 pointed: stderr (<paramref name="report"/> null), nowhere (<c>2&gt;/dev/null</c>
-    /// first), the original stdout (<c>2&gt;&amp;1</c> first), or a target opened earlier (<c>2&gt;e</c> first). Through a
-    /// target that names a device, the device's stream.
+    /// first), the original stdout (<c>2&gt;&amp;1</c> first), a table descriptor (<c>2&gt;&amp;3</c> first), or a target
+    /// opened earlier (<c>2&gt;e</c> first). Through a target that names a device, the device's stream.
     /// </summary>
     private void ReportTo(string? report, string message, Dictionary<string, (string Raw, RedirectFileWriter? Stream)> held)
     {
         if (report is null) { FileSystemHelpers.WriteBashError(this, message); return; }
         if (report == RedirectOpenPlan.Discard) return;
+        if (RedirectOpenPlan.IsDescriptorReport(report, out int fd))
+        {
+            try
+            {
+                int std = BashFdTable.Write(fd, message + "\n");
+                if (std == 1) foreach (var line in BashRuntime.EmitBashLines(message + "\n")) WriteObject(line);
+                else if (std == 2) FileSystemHelpers.WriteStderr(this, message);
+                BashFdTable.Flush(fd);
+            }
+            catch (InvalidOperationException) { /* a closed descriptor: the report is lost, as bash's write fails */ }
+            return;
+        }
         DeviceKind device = DeviceKind.Stdout;
         RedirectFileWriter? stream = null;
         if (report != RedirectOpenPlan.Stdout && held.TryGetValue(report, out var target))

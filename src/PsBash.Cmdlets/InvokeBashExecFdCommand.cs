@@ -76,6 +76,8 @@ public sealed class InvokeBashExecFdCommand : BashCmdlet
                 ? BashFdTable.Dup(fd, from)
                 : $"{Target}: ambiguous redirect";
         }
+        // `3>$v` with v='a b' (PsEmitter.FdOpenStep's stand-in): bash's "$v: ambiguous redirect", nothing opened.
+        if (PsBash.Core.RedirectTarget.IsAmbiguous(Target, out string shown)) return $"{shown}: ambiguous redirect";
         return BashFdTable.Open(fd, FileSystemHelpers.ProviderPath(this, Target ?? ""), Operator);
     }
 }
@@ -196,19 +198,11 @@ public sealed class InvokeBashFdRouteCommand : BashCmdlet, IStatusTransparentSta
     /// end at the same place.</summary>
     internal bool KeepsStderrWithStdout() => string.Equals(Out, Err, StringComparison.Ordinal);
 
-    protected override void BeginProcessing()
-    {
-        // bash opens (dups) every redirection before the command runs: a descriptor that is not open fails it, one
-        // message, status 1, and the command does not run.
-        foreach (var dest in new[] { Out, Err })
-        {
-            if (!IsTableFd(dest, out int fd) || BashFdTable.IsOpen(fd)) continue;
-            _failed = true;
-            FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + $"{fd}: Bad file descriptor");
-            UpstreamStop.Throw(this);
-            return;
-        }
-    }
+    // A descriptor that is not open is not this stage's to report: bash dups every redirection before the command runs,
+    // in order, and reports a failed one where fd 2 points at that point of the list (`echo y 2>/dev/null >&5` is
+    // silent). The emitter puts that check in the plan of the Invoke-BashRedirect stage after this one (`-OpenPlan 'd5'`,
+    // PsEmitter.TryAppendModelledRedirectTail), which stops the command before it runs. A write that still fails (the
+    // descriptor closed while the command ran) is reported once by Route.
 
     protected override void ProcessRecord()
     {
@@ -283,6 +277,21 @@ public sealed class InvokeBashFdRouteCommand : BashCmdlet, IStatusTransparentSta
             if (IsTableFd(dest, out int fd)) BashFdTable.Flush(fd);
         if (_failed || _writeErrorReported) FileSystemHelpers.SetLastExitCode(this, 1);
     }
+}
+
+/// <summary>
+/// Status 0 when table descriptor N is open, else 1, silently: the check of a <c>cmd &lt;&amp;N</c> before the command
+/// runs (PsBuild.DescriptorInputGuard), whose "N: Bad file descriptor" goes where fd 2 points at that point of the
+/// redirect list (<c>cat 2&gt;/dev/null &lt;&amp;5</c> is silent, <c>cat &lt;&amp;5 2&gt;/dev/null</c> is not).
+/// </summary>
+[Cmdlet(VerbsDiagnostic.Test, "BashFd")]
+public sealed class TestBashFdCommand : BashCmdlet
+{
+    [Parameter(Position = 0, Mandatory = true)]
+    public int Descriptor { get; set; }
+
+    protected override void EndProcessing()
+        => FileSystemHelpers.SetLastExitCode(this, BashFdTable.IsOpen(Descriptor) ? 0 : 1);
 }
 
 /// <summary><c>cmd &lt;&amp;N</c>: the rest of descriptor N, one record per line, as the command's stdin.</summary>

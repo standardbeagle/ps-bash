@@ -212,7 +212,8 @@ public static partial class PsEmitter
         string? stdoutPath = fd1.Kind == FdDestKind.File ? opened[fd1.File].Target : null;
         string? errorPath = fd2.Kind == FdDestKind.File && !(fd1.Kind == FdDestKind.File && fd1.File == fd2.File)
             ? opened[fd2.File].Target : null;
-        if (stdoutPath is null && errorPath is null && truncate.Count == 0 && touch.Count == 0) return;
+        // A stage that only checks a dup'd descriptor (`>&3`: -OpenPlan 'd3') still runs, before the command.
+        if (stdoutPath is null && errorPath is null && truncate.Count == 0 && touch.Count == 0 && openPlan is null) return;
         sb.Append(PsBuild.RedirectStage(
             stdoutPath, stdoutPath is not null && opened[fd1.File].Append,
             errorPath, errorPath is not null && opened[fd2.File].Append,
@@ -221,6 +222,89 @@ public static partial class PsEmitter
             errorForce: errorPath is not null && opened[fd2.File].Force,
             openPlan: openPlan,
             readWrite: stdoutPath is not null && opened[fd1.File].ReadWrite));
+    }
+
+    /// <summary>
+    /// The <c>-OpenPlan</c> of an <c>Invoke-BashRedirect</c> stage (PsBash.Cmdlets.RedirectOpenPlan reads it): the stage's
+    /// targets in the order bash opens them and the table descriptors the list dups (<paramref name="checks"/>, each placed
+    /// after the opens before it), each with where its error is reported -- fd 2 as it is at that point of the list. Null
+    /// when that is what the stage does without a plan (no check; superseded <c>-Truncate</c> then <c>-Touch</c> targets,
+    /// <c>-Path</c>, <c>-ErrorPath</c>, every error on stderr), which keeps the common tails unchanged. A role is <c>p</c>
+    /// (-Path), <c>e</c> (-ErrorPath), <c>tN</c> / <c>aN</c> (-Truncate / -Touch element N) or <c>dN</c> (descriptor N must
+    /// be open); a report target after <c>:</c> is <c>null</c>, <c>out</c> (the original stdout, after <c>2&gt;&amp;1</c>),
+    /// <c>fdM</c> (table descriptor M, after <c>2&gt;&amp;M</c>) or the role of a target opened earlier.
+    /// </summary>
+    private static string? RedirectOpenPlan(List<(string Target, bool Append, bool Force, bool ReadWrite)> opened, List<FdDest> openDiag,
+        List<(int Fd, int OpensBefore, FdDest Diag)> checks, FdDest fd1, FdDest fd2)
+    {
+        if (opened.Count == 0 && checks.Count == 0) return null;
+        // The roles, numbered as the stage's -Truncate / -Touch lists are built (in open order).
+        var roles = new string[opened.Count];
+        var ranks = new int[opened.Count];
+        int truncates = 0, touches = 0;
+        for (int i = 0; i < opened.Count; i++)
+        {
+            if (fd1.Kind == FdDestKind.File && fd1.File == i) { roles[i] = "p"; ranks[i] = 2 * opened.Count; }
+            else if (fd2.Kind == FdDestKind.File && fd2.File == i) { roles[i] = "e"; ranks[i] = 2 * opened.Count + 1; }
+            else if (opened[i].Append || opened[i].ReadWrite) { roles[i] = "a" + touches; ranks[i] = opened.Count + touches++; }
+            else { roles[i] = "t" + truncates; ranks[i] = truncates++; }
+        }
+        bool needed = checks.Count > 0;
+        var steps = new List<string>(opened.Count + checks.Count);
+        int c = 0;
+        for (int i = 0; i <= opened.Count; i++)
+        {
+            for (; c < checks.Count && checks[c].OpensBefore == i; c++)
+                steps.Add(PlanStep("d" + checks[c].Fd.ToString(System.Globalization.CultureInfo.InvariantCulture), PlanReport(checks[c].Diag, roles)));
+            if (i == opened.Count) break;
+            // The stage's own order is ascending rank; any inversion means bash opens them in a different order.
+            if (i > 0 && ranks[i] < ranks[i - 1]) needed = true;
+            string? report = PlanReport(openDiag[i], roles);
+            if (report is not null) needed = true;
+            steps.Add(PlanStep(roles[i], report));
+        }
+        return needed ? string.Join(' ', steps) : null;
+    }
+
+    private static string PlanStep(string role, string? report) => report is null ? role : role + ":" + report;
+
+    /// <summary>Where a redirect error goes when fd 2 is <paramref name="diag"/>; null = stderr.</summary>
+    private static string? PlanReport(FdDest diag, string[] roles) => diag.Kind switch
+    {
+        FdDestKind.Null or FdDestKind.Closed => "null",
+        FdDestKind.StdoutDefault => "out",
+        FdDestKind.File => roles[diag.File],
+        FdDestKind.Table => "fd" + diag.File.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        _ => null,
+    };
+
+    /// <summary><c>&lt;&amp;N</c> with N &gt;= 3: stdin is table descriptor <paramref name="fd"/> (<c>cat &lt;&amp;5</c>,
+    /// <c>while read l; do ...; done &lt;&amp;5</c>). The one test of that form.</summary>
+    private static bool IsDescriptorInput(Redirect r, out int fd)
+    {
+        fd = -1;
+        return r.Fd == 0 && r.Op == "<&" && r.FdVar is null && r.Here is null
+               && TryParseDescriptor(GetLiteralValue(r.Target), out fd) && fd >= 3;
+    }
+
+    /// <summary>
+    /// <c>&gt;&amp;N</c>, <c>2&gt;&amp;N</c> or <c>&lt;&amp;N</c> (N &gt;= 3) copying a table descriptor that no earlier redirect of
+    /// <paramref name="all"/> opened (or one it closed): whether N is open is only known when the list reaches it.
+    /// </summary>
+    private static bool IsUncheckedDescriptorCopy(IReadOnlyList<Redirect> all, Redirect r, out int fd)
+    {
+        fd = -1;
+        if (r.FdVar is not null || r.Here is not null) return false;
+        if (!(r.Op == ">&" && r.Fd is 1 or 2) && !IsDescriptorInput(r, out _)) return false;
+        if (!TryParseDescriptor(GetLiteralValue(r.Target), out fd) || fd < 3) return false;
+        bool open = false;
+        foreach (var earlier in all)
+        {
+            if (ReferenceEquals(earlier, r)) break;
+            if (earlier.FdVar is null && earlier.Fd == fd)
+                open = !(earlier.Op is ">&" or "<&" && GetLiteralValue(earlier.Target) == "-");
+        }
+        return !open;
     }
 
     private static string RouteName(FdDest dest, bool stdout) => dest.Kind switch

@@ -353,6 +353,15 @@ public static class PsBuild
     public static string Subshell(string body) => "& { " + body + " }";
 
     /// <summary>
+    /// <paramref name="body"/> as a stage after a <c>|</c>: a command as it is; an expression (a command that writes and
+    /// reads nothing, <c>: &lt;&amp;7</c> is <c>$(...)</c>) in a dot-sourced block - after a <c>|</c> it was "Expressions are
+    /// only allowed as the first element of a pipeline" and the whole script failed to parse.
+    /// </summary>
+    public static string PipeStage(string body) =>
+        body.StartsWith("$(", StringComparison.Ordinal) || body.StartsWith("[void]", StringComparison.Ordinal)
+            ? ". { " + body + " }" : body;
+
+    /// <summary>
     /// A bash SUBSHELL scope: <c>&amp; { save; try { BODY } finally { restore } }</c>. The child scope
     /// isolates PS-scoped state (arrays, functions, <c>set -e</c>'s <c>$ErrorActionPreference</c>,
     /// <c>set -u</c>'s StrictMode); <c>PsBash.Cmdlets.BashShellState</c> saves and restores what a scope
@@ -1587,13 +1596,32 @@ public static class PsBuild
     }
 
     /// <summary>
-    /// <c>cmd 3&gt;f</c>, <c>{ ...; } 3&gt;&amp;1</c>: numbered descriptors opened (<paramref name="open"/>) for one command
-    /// only. What those descriptors named before is saved first and put back after (<c>exec 3&gt;a; cmd 3&gt;b; echo &gt;&amp;3</c>
-    /// writes to a), the command's status kept.
+    /// <c>cmd 3&gt;f</c>, <c>{ ...; } 3&gt;&amp;1</c>: numbered descriptors opened (<paramref name="opens"/>, in the list's
+    /// order) for one command only. What those descriptors named before is saved first and put back after
+    /// (<c>exec 3&gt;a; cmd 3&gt;b; echo &gt;&amp;3</c> writes to a), the command's status kept.
+    /// <para>An open that fails (<c>3&gt;&amp;5</c> with 5 not open, <c>3&gt;/nodir/f</c>, <c>3&gt;$v</c> ambiguous) fails the
+    /// command: status 1, the later opens are not made and the command never runs; its report goes through the open's
+    /// FailTail (<see cref="RedirectFailure"/>: <c>echo y 2&gt;/dev/null 3&gt;&amp;5</c> is silent, <c>2&gt;e 3&gt;&amp;5</c>
+    /// writes it into e). The command ran anyway, status 0.</para>
     /// </summary>
-    public static string ScopedDescriptors(IEnumerable<int> fds, string open, string command)
-        => "& { $__psbash_fdSave = Save-BashFd " + string.Join(",", fds) + "; " + open + "; try { " + command
-           + " } finally { $__psbash_fdRc = $global:LASTEXITCODE; Restore-BashFd $__psbash_fdSave; $global:LASTEXITCODE = $__psbash_fdRc } }";
+    public static string ScopedDescriptors(IEnumerable<int> fds, IReadOnlyList<(string Open, string? FailTail)> opens, string command)
+    {
+        var sb = new System.Text.StringBuilder("& { $__psbash_fdSave = Save-BashFd ").Append(string.Join(",", fds)).Append("; ");
+        if (opens.Count == 0) sb.Append("$__psbash_fdOk = $true; ");
+        for (int i = 0; i < opens.Count; i++)
+        {
+            var (open, failTail) = opens[i];
+            string step = failTail is { Length: > 0 }
+                // The open's own report is held and written through the tail of the redirects before it.
+                ? "$__psbash_fdErr = @(" + open + " 2>&1); $__psbash_fdOk = $global:LASTEXITCODE -eq 0; if (-not $__psbash_fdOk) { "
+                  + "& { foreach ($__psbash_fdE in $__psbash_fdErr) { Write-BashHostStderr ([string]$__psbash_fdE) } }" + failTail + " }"
+                : open + "; $__psbash_fdOk = $global:LASTEXITCODE -eq 0";
+            sb.Append(i == 0 ? step : "if ($__psbash_fdOk) { " + step + " }").Append("; ");
+        }
+        return sb.Append("try { if ($__psbash_fdOk) { ").Append(command).Append(" } else { $global:LASTEXITCODE = 1; ")
+            .Append(RedirectFailedVariable).Append(" = $true } } finally { $__psbash_fdRc = $global:LASTEXITCODE; ")
+            .Append("Restore-BashFd $__psbash_fdSave; $global:LASTEXITCODE = $__psbash_fdRc } }").ToString();
+    }
 
     // ───────────────────────── Redirect target without output ──────────────────────────
 
@@ -2474,12 +2502,54 @@ public static class PsBuild
     /// still creates <c>out</c>); null when there are none. <paramref name="onFail"/> runs last (the errexit exit).
     /// See docs/specs/error-handling.md "Redirect open errors".
     /// </summary>
-    public static string InputRedirectFailure(string? failTail, string? onFail = null)
+    public static string InputRedirectFailure(string? failTail, string? onFail = null) =>
+        RedirectFailure("$__psbash_ir + ': No such file or directory'", failTail, onFail);
+
+    /// <summary>
+    /// A redirection that failed before the command runs: <paramref name="message"/> (a PowerShell string expression) as
+    /// a shell diagnostic, written through <paramref name="failTail"/> - the stdout/stderr redirects written BEFORE the
+    /// failing one, which bash has applied when it reaches it, so the report goes where fd 2 points at that point of the
+    /// list - then status 1 and <paramref name="onFail"/>. The one report path of every pre-command redirect check
+    /// (<see cref="InputRedirectFailure"/>, <see cref="DescriptorInputGuard"/>, <see cref="ScopedDescriptors"/>).
+    /// </summary>
+    public static string RedirectFailure(string message, string? failTail, string? onFail = null)
     {
-        string report = ShellDiagnosticLine("$__psbash_ir + ': No such file or directory'");
+        string report = ShellDiagnosticLine(message);
         if (failTail is { Length: > 0 }) report = "& { " + report + " }" + failTail;
         return report + "; $global:LASTEXITCODE = 1" + (onFail is null ? "" : "; " + onFail);
     }
+
+    /// <summary>
+    /// <c>cmd &lt;&amp;N</c>, <c>while ...; done &lt;&amp;N</c> (N &gt;= 3): the command's stdin is descriptor N, which must be
+    /// open when bash applies the redirection; when it is not, bash reports <c>N: Bad file descriptor</c> where fd 2 points
+    /// at that point of the list (<paramref name="failTail"/>, <see cref="RedirectFailure"/>: <c>cat 2&gt;/dev/null &lt;&amp;5</c>
+    /// is silent), status 1, and the command never runs. It ran with an empty stdin and status 0, after a
+    /// <c>5: invalid file descriptor</c> message. <paramref name="dotSourced"/> as <see cref="SimpleInputRedirectGuard"/> (a
+    /// simple command) or <see cref="InputRedirectGuard"/> (a compound one, which also <paramref name="clearsNested"/>).
+    /// </summary>
+    public static string DescriptorInputGuard(int fd, string ok, string? failTail, bool dotSourced, bool clearsNested)
+    {
+        string n = fd.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return (dotSourced ? ". { " : "& { ") + "Test-BashFd " + n + "; if ($global:LASTEXITCODE -eq 0) { " + ok
+            + (clearsNested ? "; " + RedirectFailedVariable + " = $false" : "")
+            + " } else { " + RedirectFailure(SingleQuote(n + ": Bad file descriptor"), failTail, RedirectFailedVariable + " = $true") + " } }";
+    }
+
+    /// <summary>
+    /// <c>: &gt;&amp;7</c>, <c>true 2&gt;/dev/null &gt;&amp;7</c>: a command that writes nothing still makes its redirections, so a
+    /// copy of descriptor <paramref name="fd"/> that is not open fails it - <c>N: Bad file descriptor</c> through
+    /// <paramref name="failTail"/> (<see cref="RedirectFailure"/>), status 1. The copy was skipped (status 0), so
+    /// <c>if { true &gt;&amp;7; } 2&gt;/dev/null</c> said 7 was open.
+    /// </summary>
+    public static string DescriptorCheck(int fd, string? failTail)
+    {
+        string n = fd.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return "Test-BashFd " + n + "; if ($global:LASTEXITCODE -ne 0) { "
+            + RedirectFailure(SingleQuote(n + ": Bad file descriptor"), failTail, RedirectFailedVariable + " = $true") + " }";
+    }
+
+    /// <summary><paramref name="step"/> only while the status is 0: a redirection after one that failed is never made.</summary>
+    public static string WhileRedirectsSucceed(string step) => "if ($global:LASTEXITCODE -eq 0) { " + step + " }";
 
     /// <summary>
     /// After a <c>for</c> loop: a loop whose body never ran has status 0 (<c>false; for x in $(true); do :; done</c> leaves 0),

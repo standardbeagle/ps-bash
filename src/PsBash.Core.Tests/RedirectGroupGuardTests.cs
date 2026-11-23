@@ -43,7 +43,7 @@ public class RedirectGroupGuardTests
     private static readonly string[] BlockMakers =
     [
         "\". { \"", "$\". {{", "PsBuild.WithRedirectTail(", "WithScopedHighFds(", "new StringBuilder(\". { \")",
-        "PsBuild.ErrexitFinalOperand", "PsBuild.EmptyStdinScope(", "PsBuild.SimpleInputRedirectGuard(", "PsBuild.RunTimeNameBranch(",
+        "PsBuild.ErrexitFinalOperand", "PsBuild.EmptyStdinScope(", "PsBuild.SimpleInputRedirectGuard(", "PsBuild.DescriptorInputGuard(", "PsBuild.RunTimeNameBranch(",
         "PsBuild.WithPipeEntryStatus(", "PsBuild.ExitCodeTest(", "PsBuild.ExitCodeTestFlaggingBad(", "\"(& { \"", "$\"(& {{",
     ];
 

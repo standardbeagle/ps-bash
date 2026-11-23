@@ -94,8 +94,15 @@ ONE table per shell, fds 0..N, as bash has one per process (`Cmdlets/BashFdTable
   the tail is `2>&1 | Invoke-BashFdRoute -Out D -Err D [-Name cmd]` (`PsBuild.FdRouteStage`), D = `out` / `err` (the
   command's original stdout / stderr), `null`, `close`, `pass` (a file: the `Invoke-BashRedirect` stage after it), or a
   table fd number. `cmd 2>&3`, `cmd 2>&1 1>&3`, `cmd 3>&1 1>&2 2>&3`, `{ …; } >&3`, `for … done >&3`, `if … fi 2>&3`.
-  A descriptor the route writes to that is not open: `script: line N: 3: Bad file descriptor`, status 1, the command
-  does not run. A closed stdout (`echo hi >&-`): `echo: write error: Bad file descriptor`, status 1.
+  A dup of a descriptor that is not open (`>&5`, `2>&5`; 5 not set by this list, or closed by it): `script: line N: 5:
+  Bad file descriptor`, status 1, the command does not run, and the report goes where fd 2 points AT THAT POINT of the
+  list (`2>/dev/null >&5` silent, `>&5 2>/dev/null` on stderr, `2>e >&5` into e, `2>&1 >&5` down the pipe, `2>&3 >&5`
+  into descriptor 3; `>&5 2>e` never creates e). The check is a `dN` step of the `Invoke-BashRedirect -OpenPlan` after
+  the route, placed among the stage's opens (docs/specs/error-handling.md "Redirect open errors"); the route stage
+  itself does not check. `cmd <&5` checks first (`Test-BashFd 5`, `PsBuild.DescriptorInputGuard`), and a scoped open
+  (`cmd 3>&5`, `3>/nodir/f`, `3>$v` ambiguous) gates the later opens and the command (`PsBuild.ScopedDescriptors`), each
+  reporting through the stdout/stderr redirects before it (`PsEmitter.InputFailTail`). A closed stdout
+  (`echo hi >&-`): `echo: write error: Bad file descriptor`, status 1.
 - Guards: `Core.Tests/Parser/FdRedirectEmitGuardTests` (no redirect of the table's forms is emitted as a comment, on any
   command kind; an exec inside a compound reaches the table), `Differential.Tests/FdTableDifferentialTests` (dup form x
   command kind x exec context against bash), `Cmdlets.Tests/BashFdTableTests`.
@@ -120,7 +127,7 @@ Gaps (each a known difference, not a model):
   carry its path (GNU grep refuses it, GNU cat reads it).
 - A program's stdout is a pipe the host reads, never the file fd 1 names: a native reader of that file
   (`sh -c 'cat < log'`) reads it and is not refused (GNU cat under bash: refused, status 1).
-- `<&-` and `0<&N` on a compound are not modelled; `cmd 4>&3-` does not close 3 for the command (see the table above).
+- `<&-` on a compound is not modelled (`<&N` is: the body reads `Read-BashFd N`); `cmd 4>&3-` does not close 3 for the command (see the table above).
 
 ### Using a descriptor
 - `read -u N [names]` reads one line from N (`InvokeBashReadCommand`); status 1 at end of file or on a closed N.

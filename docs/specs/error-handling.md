@@ -400,16 +400,28 @@ POINTS AT THAT MOMENT, and the redirects after it are never opened (bash 5.2, WS
 | `echo hi > nodir/y > b` | stderr | not `b` |
 | `cat 2>/dev/null < nofile` | nowhere | — |
 | `cat < nofile 2>/dev/null`, `x=$(< nofile 2>/dev/null)` | stderr | — |
+| `echo y 2>/dev/null >&5` (5 not open), `cat 2>/dev/null <&5`, `echo y 2>/dev/null 3>&5` | nowhere | — |
+| `echo y >&5 2>/dev/null` | stderr | — |
+| `exec 3>t; echo y 2>&3 >&5` | into `t` (descriptor 3) | — |
+| `echo y >&5 2>e`, `echo y 3>&5 2>e` | stderr | not `e` |
+| `v='a b'; echo y 2>/dev/null 3>$v` | nowhere (`$v: ambiguous redirect`) | — |
 
 - *Output redirects* (the modelled tail, `PsEmitter.TryAppendModelledRedirectTail`): the `Invoke-BashRedirect` stage
   opens its targets in bash's order and reports each open error where fd 2 pointed when that redirect was reached. The
   emitter passes both as `-OpenPlan` (`PsEmitter.RedirectOpenPlan` writes it, `PsBash.Cmdlets.RedirectOpenPlan`
   reads it): space-separated `ROLE[:REPORT]` steps. ROLE is `p` (-Path), `e` (-ErrorPath), `tN`/`aN` (-Truncate/-Touch
-  element N). REPORT is `null`, `out` (the stage's output) or an EARLIER step's role; absent is stderr. The plan is
-  written only when it differs from the stage's own order (-Truncate, -Touch, -Path, -ErrorPath; reports on stderr),
-  so the common tails are unchanged; a plan that does not match the stage's targets is ignored.
+  element N), or `dN`: a check that table descriptor N is open, for a dup `>&N` / `2>&N` the list did not open itself
+  (any number, each placed after the opens before it; `N: Bad file descriptor`). REPORT is `null`, `out` (the stage's
+  output), `fdM` (table descriptor M, after `2>&M`) or an EARLIER target's role; absent is stderr. The plan is written
+  when the stage checks a descriptor or differs from the stage's own order (-Truncate, -Touch, -Path, -ErrorPath;
+  reports on stderr), so the common tails are unchanged; a plan that does not match the stage's targets is ignored.
+- *Checks before the command* (`<&N`: `PsBuild.DescriptorInputGuard`; a numbered descriptor opened for one command,
+  `cmd 3>&5`, `3>/nodir/f`, `3>$v`: `PsBuild.ScopedDescriptors`): the report is `PsBuild.RedirectFailure` through the
+  stdout/stderr redirects written before the failing one (`PsEmitter.InputFailTail`); the later opens and the command
+  never run. Guard: `Core.Tests/Parser/FdRedirectEmitGuardTests` (`DescriptorUses`, every command kind); Differential:
+  `FdTableDifferentialTests.RedirectError_*`.
 - *Input redirects* (`PsBuild.SimpleInputRedirectGuard`, `InputRedirectGuard`, `InputRedirectGuardInline`): the
-  report is `PsBuild.InputRedirectFailure`, run through the stdout/stderr redirects written BEFORE the `<`
+  report is `PsBuild.InputRedirectFailure` (= `RedirectFailure`), run through the stdout/stderr redirects written BEFORE the `<`
   (`PsEmitter.InputFailTail`). A lone `$(< file)` is guarded too (it was a PowerShell `Get-Content` error, status 0).
 - INVARIANT: a redirect that cannot be opened is a STATUS, never an errexit decision. The stage (`Invoke-BashRedirect`,
   `FailOpen`) writes the report, sets status 1 (`$LASTEXITCODE`, `$global:__BashRedirectFailed`) and stops its upstream;
