@@ -861,6 +861,15 @@ public sealed class IpcWorker : IWorker
     /// </summary>
     private async Task YieldToAnotherSlotAsync(System.Diagnostics.Stopwatch busyFor, CancellationToken ct)
     {
+        // Our ticket's overflow slot: only the ticket holder sends it commands, so BUSY is the previous holder's command
+        // still stopping (its launcher gone, the disconnect not yet seen). Wait for it rather than take a second ticket.
+        if (_overflowTicket is not null)
+        {
+            await Task.Delay(_busyBackoffMs, ct).ConfigureAwait(false);
+            _busyBackoffMs = Math.Min(_busyBackoffMs * 2, 40);
+            return;
+        }
+
         // Inside an enclosing host's command, every busy slot of the session counts as nested: slot hosts are spawned
         // detached, so the ancestor chain of a launcher started by slot k's command stops at slot k and never reaches
         // the host that is waiting on slot k (measured: ~300 ms of contended back-off per nested `bash -c`).
@@ -886,20 +895,24 @@ public sealed class IpcWorker : IWorker
                 await MoveToPrivateHostAsync(ct).ConfigureAwait(false);
                 return;
             }
-            // Contended: overflow to a private host once the slots stayed busy for the grace (short commands free one
-            // well inside it, so a burst starts no host) and a ticket is free (at most ExecOverflowTicket.Max() extra
-            // hosts per session: each is ~70-150 MB). Otherwise go round again. REGRESSION: going round was the only
-            // option, so with six long builds in flight every further `bash -c` from an agent waited minutes.
+            // Contended: overflow once the slots stayed busy for the grace (short commands free one well inside it, so
+            // a burst starts no host) and a ticket is free (at most ExecOverflowTicket.Max() extra hosts per session:
+            // each is ~70-150 MB). Otherwise go round again. REGRESSION: going round was the only option, so with six
+            // long builds in flight every further `bash -c` from an agent waited minutes.
+            // The ticket's own overflow slot, a warm daemon like any slot. REGRESSION: the overflow went to a private
+            // host started and killed for the one command, ~3 CPU-seconds each, 60-310 an hour under ~7 agents.
             if (busyFor.ElapsedMilliseconds >= SpillDelayMs() + ExecOverflowTicket.GraceMs()
                 && ExecOverflowTicket.TryAcquire(_scheme, _baseEndpoint, ExecOverflowTicket.Max()) is { } ticket)
             {
                 _overflowTicket = ticket;
-                await MoveToPrivateHostAsync(ct).ConfigureAwait(false);
-                return;
+                next = IpcTransportFactory.OverflowSlot(ticket.Index);
             }
-            await Task.Delay(_roundBackoffMs, ct).ConfigureAwait(false);
-            _roundBackoffMs = Math.Min(_roundBackoffMs * 2, 250);
-            next = 0;
+            else
+            {
+                await Task.Delay(_roundBackoffMs, ct).ConfigureAwait(false);
+                _roundBackoffMs = Math.Min(_roundBackoffMs * 2, 250);
+                next = 0;
+            }
         }
 
         _slot = next;

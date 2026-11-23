@@ -118,7 +118,8 @@ public class EnclosingHostTests
             Assert.Equal(budget, endpoint.Length);
             string slot = IpcTransportFactory.ResolveSlotEndpoint("unix", endpoint, 1).Endpoint;
             Assert.StartsWith("psbash-slot-", Path.GetFileName(slot));
-            Assert.Equal(IpcTransportFactory.MaxExecSlots, IpcTransportFactory.HashedSlotNames(endpoint).Count);
+            // Every executor slot and every overflow slot a session could have (a `kill` must reach a script on either).
+            Assert.Equal(IpcTransportFactory.OverflowSlot(ExecOverflowTicket.Ceiling - 1), IpcTransportFactory.HashedSlotNames(endpoint).Count);
 
             Assert.True(Sidecar(2, endpoint, HostStart).Write("unix", endpoint));
             Assert.True(Sidecar(3, slot, HostStart).Write("unix", slot));

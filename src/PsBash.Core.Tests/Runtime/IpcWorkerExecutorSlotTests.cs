@@ -171,11 +171,15 @@ public sealed class IpcWorkerExecutorSlotTests
         return await body();
     }
 
-    /// <summary>Every slot of a fresh session busy, plus a free scripted host standing in for the overflow host.</summary>
+    /// <summary>
+    /// Every slot of a fresh session busy, free scripted hosts on its two overflow slots, and a free scripted host
+    /// standing in for a private host.
+    /// </summary>
     private sealed class AllBusySession : IAsyncDisposable
     {
         public readonly string Base = NewBase();
         public readonly SlotHost[] Slots = new SlotHost[IpcTransportFactory.MaxExecSlots + 1];
+        public readonly SlotHost[] Overflow = new SlotHost[2];
         public SlotHost Private = null!;
 
         public static async Task<AllBusySession> StartAsync()
@@ -185,6 +189,12 @@ public sealed class IpcWorkerExecutorSlotTests
             {
                 s.Slots[k] = new SlotHost(IpcTransportFactory.ResolveSlotEndpoint("unix", s.Base, k).Endpoint, busy: true);
                 await s.Slots[k].StartAsync();
+            }
+            for (int i = 0; i < s.Overflow.Length; i++)
+            {
+                s.Overflow[i] = new SlotHost(
+                    IpcTransportFactory.ResolveSlotEndpoint("unix", s.Base, IpcTransportFactory.OverflowSlot(i)).Endpoint, busy: false);
+                await s.Overflow[i].StartAsync();
             }
             s.Private = new SlotHost(Path.Combine(Path.GetDirectoryName(s.Base)!, $"priv-{Guid.NewGuid():N}"[..13] + ".sock"), busy: false);
             await s.Private.StartAsync();
@@ -202,6 +212,7 @@ public sealed class IpcWorkerExecutorSlotTests
         public async ValueTask DisposeAsync()
         {
             foreach (var host in Slots) await host.DisposeAsync();
+            foreach (var host in Overflow) await host.DisposeAsync();
             await Private.DisposeAsync();
         }
     }
@@ -209,19 +220,61 @@ public sealed class IpcWorkerExecutorSlotTests
     // REGRESSION: an unrelated launcher that found every slot busy went round them again until one freed — with six
     // long builds in flight, every further `bash -c` from an agent waited minutes. Before the fix this test spun until
     // its safety net cancelled it.
+    // REGRESSION (private-host churn): the overflow then went to a private host started for the one command and killed
+    // after it, ~3 CPU-seconds of cold start per command. A desktop whose one Claude session ran ~7 agents kept all
+    // seven slots busy with their long commands and started 60-310 such hosts an hour (hooks included). An overflow
+    // ticket now names a warm slot of its own past the last executor slot, which the next overflow command reuses.
     [Fact]
-    public async Task EverySlotBusy_PastTheGrace_UnrelatedLauncher_RunsOnAnOverflowHost()
+    public async Task EverySlotBusy_PastTheGrace_RunsOnTheWarmOverflowSlot_TheNextLauncherReusesIt()
     {
         await using var session = await AllBusySession.StartAsync();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var outputs = await WithEnv([("PSBASH_EXEC_SPILL_MS", "0"), ("PSBASH_EXEC_OVERFLOW_MS", "0"), ("PSBASH_EXEC_OVERFLOW_MAX", "2")],
+            async () =>
+            {
+                var ran = new System.Collections.Generic.List<string>();
+                for (int i = 0; i < 2; i++)
+                {
+                    await using var worker = session.Worker();  // one launcher per command, as the Bash tool runs them
+                    ran.Add(await worker.QueryAsync("echo x", cts.Token));
+                }
+                return ran;
+            });
+
+        string overflowHost = "ran-on-" + Path.GetFileName(session.Overflow[0].Endpoint);
+        Assert.All(outputs, output => Assert.Contains(overflowHost, output));
+        Assert.Equal(2, session.Overflow[0].Commands);
+        Assert.Equal(0, session.Private.Commands);                             // no host started for one command
+        foreach (var host in session.Slots) Assert.Equal(2, host.Commands);    // one refusal each per command, no second round
+    }
+
+    // Two overflow commands at once: each ticket has its own slot, so they never queue on one host.
+    [Fact]
+    public async Task EverySlotBusy_FirstOverflowTicketHeld_RunsOnTheSecondOverflowSlot()
+    {
+        await using var session = await AllBusySession.StartAsync();
+        using var held = ExecOverflowTicket.TryAcquire("unix", session.Base, 2);
+        Assert.NotNull(held);
         await using var worker = session.Worker();
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
 
         var output = await WithEnv([("PSBASH_EXEC_SPILL_MS", "0"), ("PSBASH_EXEC_OVERFLOW_MS", "0"), ("PSBASH_EXEC_OVERFLOW_MAX", "2")],
             () => worker.QueryAsync("echo x", cts.Token));
 
-        Assert.Contains("ran-on-" + Path.GetFileName(session.Private.Endpoint), output);
-        Assert.Equal(1, session.Private.Commands);
-        foreach (var host in session.Slots) Assert.Equal(1, host.Commands);  // one refusal each, no second round
+        Assert.Contains("ran-on-" + Path.GetFileName(session.Overflow[1].Endpoint), output);
+        Assert.Equal(0, session.Overflow[0].Commands);
+        Assert.Equal(0, session.Private.Commands);
+    }
+
+    [Fact]
+    public void OverflowSlots_FollowTheLastExecutorSlot_AndParseBack()
+    {
+        Assert.Equal(IpcTransportFactory.MaxExecSlots + 1, IpcTransportFactory.OverflowSlot(0));
+        var endpoint = IpcTransportFactory.ResolveSlotEndpoint("unix", "/r/host.sock", IpcTransportFactory.OverflowSlot(1)).Endpoint;
+        Assert.Equal("/r/host.sock-x" + (IpcTransportFactory.MaxExecSlots + 2), endpoint);
+        Assert.Equal("/r/host.sock", IpcTransportFactory.BaseOfSlotEndpoint(endpoint));
+        Assert.Equal(IpcTransportFactory.OverflowSlot(1), IpcTransportFactory.SlotIndexOf(endpoint));
     }
 
     // Memory: a burst of short commands frees a slot inside the grace, so it must start no host.
@@ -254,6 +307,7 @@ public sealed class IpcWorkerExecutorSlotTests
             });
 
             Assert.Equal(0, session.Private.Commands);
+            foreach (var host in session.Overflow) Assert.Equal(0, host.Commands);
         }
         finally { foreach (var t in held) t?.Dispose(); }
     }

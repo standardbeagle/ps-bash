@@ -5,10 +5,12 @@ namespace PsBash.Core.Runtime.Ipc;
 
 /// <summary>
 /// The memory bound on overflow hosts (docs/specs/executor-slots.md §Overflow). When every executor slot of a session
-/// is busy, an unrelated launcher may run its command on a private per-invocation host instead of waiting — but each
-/// host costs ~70-150 MB private memory, so at most <see cref="Max"/> such hosts run per session at once. A ticket is
-/// one of <see cref="Max"/> exclusively-opened files under <see cref="PsBashRuntimeDirectory"/>: held for the
-/// command's life, dropped by the OS on <see cref="Dispose"/> or process death (a crashed holder never leaks one).
+/// is busy, an unrelated launcher may run its command on an overflow host instead of waiting — but each host costs
+/// ~70-150 MB private memory, so at most <see cref="Max"/> run per session. A ticket is one of <see cref="Max"/>
+/// exclusively-opened files under <see cref="PsBashRuntimeDirectory"/>: held for the command's life, dropped by the OS
+/// on <see cref="Dispose"/> or process death (a crashed holder never leaks one). Ticket <see cref="Index"/> i runs its
+/// command on overflow slot <see cref="IpcTransportFactory.OverflowSlot"/>(i), a slot daemon that stays warm between
+/// overflow commands (idle window as any slot) instead of a host started and killed for each one.
 /// <see cref="FileShare.None"/> is the deliberate lock exception to <c>temp-files.md</c>, as in <see cref="HostSpawnLock"/>.
 /// </summary>
 internal sealed class ExecOverflowTicket : IDisposable
@@ -19,12 +21,19 @@ internal sealed class ExecOverflowTicket : IDisposable
     /// <summary>Default wait for a slot before overflowing (<c>PSBASH_EXEC_OVERFLOW_MS</c>): a burst of short commands frees a slot well inside it, so it starts no host.</summary>
     public const int DefaultGraceMs = 2000;
 
+    /// <summary>Most overflow slots a session may have, whatever <c>PSBASH_EXEC_OVERFLOW_MAX</c> says: a slot name carries at most two digits.</summary>
+    public const int Ceiling = 16;
+
     private FileStream? _stream;
 
-    private ExecOverflowTicket(FileStream? stream) => _stream = stream;
+    private ExecOverflowTicket(FileStream? stream, int index) { _stream = stream; Index = index; }
+
+    /// <summary>Which of the session's tickets this is (0-based); it names the overflow slot the command runs on.</summary>
+    public int Index { get; }
 
     public static int Max()
-        => int.TryParse(Environment.GetEnvironmentVariable("PSBASH_EXEC_OVERFLOW_MAX"), out var n) && n >= 0 ? n : DefaultMax;
+        => int.TryParse(Environment.GetEnvironmentVariable("PSBASH_EXEC_OVERFLOW_MAX"), out var n) && n >= 0
+            ? Math.Min(n, Ceiling) : DefaultMax;
 
     public static int GraceMs()
         => int.TryParse(Environment.GetEnvironmentVariable("PSBASH_EXEC_OVERFLOW_MS"), out var ms) && ms >= 0 ? ms : DefaultGraceMs;
@@ -39,7 +48,7 @@ internal sealed class ExecOverflowTicket : IDisposable
         if (max <= 0) return null;
         string dir;
         try { dir = PsBashRuntimeDirectory.EnsureDirectory(); }
-        catch { return new ExecOverflowTicket(null); }
+        catch { return new ExecOverflowTicket(null, 0); }
 
         string stem = "overflow-" + scheme + "-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(baseEndpoint)))[..16];
         for (int i = 0; i < max; i++)
@@ -47,7 +56,7 @@ internal sealed class ExecOverflowTicket : IDisposable
             try
             {
                 return new ExecOverflowTicket(new FileStream(
-                    Path.Combine(dir, $"{stem}-{i}.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None));
+                    Path.Combine(dir, $"{stem}-{i}.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None), i);
             }
             catch (IOException) { }                 // held by another launcher's overflow host
             catch (UnauthorizedAccessException) { } // same, seen as access denied on Windows

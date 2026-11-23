@@ -46,6 +46,12 @@ public static class IpcTransportFactory
     /// <summary>Executor slots per endpoint: slot 0 is the endpoint itself, slots 1..N spill (docs/specs/executor-slots.md).</summary>
     public const int MaxExecSlots = 6;
 
+    /// <summary>
+    /// The slot an overflow ticket (<see cref="ExecOverflowTicket.Index"/>) runs its command on: the slots past the last
+    /// executor slot, one per ticket (docs/specs/executor-slots.md §Overflow). Launchers reach them only through a ticket.
+    /// </summary>
+    public static int OverflowSlot(int ticketIndex) => MaxExecSlots + 1 + ticketIndex;
+
     private const string SlotMarker = "-x";
 
     /// <summary>
@@ -245,12 +251,15 @@ public static class IpcTransportFactory
         return all;
     }
 
-    /// <summary>The file names of <paramref name="endpoint"/>'s executor slots that <see cref="ResolveSlotEndpoint"/> hashes.</summary>
+    /// <summary>
+    /// The file names of <paramref name="endpoint"/>'s executor and overflow slots that <see cref="ResolveSlotEndpoint"/>
+    /// hashes (every overflow slot a session could have, whatever <c>PSBASH_EXEC_OVERFLOW_MAX</c> says now).
+    /// </summary>
     internal static List<string> HashedSlotNames(string endpoint)
     {
         var names = new List<string>();
         var baseEndpoint = BaseOfSlotEndpoint(endpoint);
-        for (int slot = 1; slot <= MaxExecSlots; slot++)
+        for (int slot = 1; slot <= OverflowSlot(ExecOverflowTicket.Ceiling - 1); slot++)
         {
             string resolved;
             try { resolved = ResolveSlotEndpoint("unix", baseEndpoint, slot).Endpoint; }
