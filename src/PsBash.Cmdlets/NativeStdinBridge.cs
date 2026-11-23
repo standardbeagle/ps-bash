@@ -302,13 +302,15 @@ public sealed class EnterBashNativeStdinCommand : BashCmdlet
         if (bridge is not null) WriteObject(bridge);
     }
 
-    /// <summary>True when <paramref name="name"/> runs a real program (not a function, alias, cmdlet or script).</summary>
+    /// <summary>
+    /// True when <paramref name="name"/> runs a real program (not a function, alias, cmdlet or script), also while a
+    /// lookup hook stands in for it (<see cref="ProgramLookup"/>).
+    /// </summary>
     internal static bool ResolvesToApplication(PSCmdlet cmdlet, string name)
     {
         // A question, not a use: the host's hash table must not count it (the command itself runs right after).
         using var probe = PsBash.Core.CommandHashTable.Probe();
-        try { return cmdlet.InvokeCommand.GetCommand(name, CommandTypes.All) is ApplicationInfo; }
-        catch { return false; }
+        return ProgramLookup.Find(cmdlet, name) is not null;
     }
 }
 

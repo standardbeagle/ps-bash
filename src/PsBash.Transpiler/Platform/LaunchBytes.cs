@@ -38,14 +38,22 @@ public static class LaunchBytes
         ArgumentNullException.ThrowIfNull(name);
         ArgumentNullException.ThrowIfNull(value);
         if (!OperatingSystem.IsLinux() || value.IndexOf(Replacement) < 0) return value;
-        var raw = s_environ.Value;
-        if (raw is null) return value;
+        return s_environ.Value is { } raw ? ExactValue(name, value, raw) : value;
+    }
+
+    /// <summary>
+    /// The first <c>NAME=</c> entry of <paramref name="environ"/> whose bytes .NET decodes to <paramref name="value"/>,
+    /// exactly; else <paramref name="value"/>. A name may appear twice in an environment block (a hand-built one):
+    /// which entry .NET took is the one that decodes to its value, so a duplicate whose value differs is skipped.
+    /// </summary>
+    internal static string ExactValue(string name, string value, IReadOnlyList<byte[]> environ)
+    {
         var prefix = RawBytes.GetBytes(name + "=");
-        foreach (var entry in raw)
+        foreach (var entry in environ)
         {
             if (!entry.AsSpan().StartsWith(prefix)) continue;
             var bytes = entry[prefix.Length..];
-            return Decodes(bytes, value) ? RawBytes.GetString(bytes) : value;
+            if (Decodes(bytes, value)) return RawBytes.GetString(bytes);
         }
         return value;
     }

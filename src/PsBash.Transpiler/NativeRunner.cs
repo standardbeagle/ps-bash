@@ -6,7 +6,7 @@ namespace PsBash.Core;
 /// A command word that resolved to a program, started by <c>Invoke-BashNative</c> (through <c>ChildStdio</c>) instead of
 /// PowerShell's native-command processor. A runspace's command-lookup hook hands back <see cref="StandIn"/> for it:
 /// a background job's always (its environment is the job's scalars, <c>JobProgramLookup</c>), the shell's while a
-/// scalar holds a value the process environment cannot (<see cref="ProcessScalars.KeepsAny"/>).
+/// scalar a program would get holds a value the process environment cannot (<see cref="ProcessScalars.KeepsAnyExported"/>).
 /// <para>
 /// <b>Why the shell's.</b> PowerShell gives a program a copy of the process environment and marshals its argv with
 /// plain UTF-8; on Linux both turn an escaped-byte marker (<see cref="RawBytes"/>) into U+FFFD, so

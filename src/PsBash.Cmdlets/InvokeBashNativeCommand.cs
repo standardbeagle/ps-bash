@@ -163,17 +163,7 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
     {
         // In a background job always: PowerShell would start it with the process environment, not the job's scalars.
         if (string.IsNullOrEmpty(name) || (!StderrMerge.Redirected(cmdlet) && PsBash.Core.ScalarOverlay.Current is null)) return null;
-        try
-        {
-            return JobProgramLookup.Raw(() => cmdlet.InvokeCommand.GetCommand(name, CommandTypes.All)) is ApplicationInfo app && !IsBatchFile(app.Path)
-                   && PsBash.Core.ProgramFile.Plan(app.Path) is null
-                ? app.Path
-                : null;
-        }
-        catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex))
-        {
-            return null;
-        }
+        return ProgramLookup.Find(cmdlet, name) is { } app && !IsBatchFile(app.Path) ? app.Path : null;
     }
 
     /// <summary>

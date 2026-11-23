@@ -955,7 +955,8 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         foreach (var entry in environment)
         {
             if (!entry.Key.StartsWith("PSBASH_", StringComparison.Ordinal)) continue;
-            Environment.SetEnvironmentVariable(entry.Key, entry.Value);
+            // Through the shell's store: a stateful session keeps its variables, exact values included, between commands.
+            PsBash.Core.ProcessScalars.Set(entry.Key, entry.Value);
         }
     }
 

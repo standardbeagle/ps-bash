@@ -143,6 +143,56 @@ public class RawBytesGuardTests
         Assert.True(offenders.Count == 0, "Use ProcessScalars.Get / Set / Entries. Offenders:\n  " + string.Join("\n  ", offenders));
     }
 
+    /// <summary>file (path under src/) -> why its direct environment write cannot make a kept exact value wrong.</summary>
+    private static readonly Dictionary<string, string> DirectEnvironmentWrites = new(StringComparer.Ordinal)
+    {
+        ["PsBash.Transpiler/ProcessScalars.cs"] = "the store itself",
+        ["PsBash.Host/Program.cs"] = "host configuration at startup and at the interactive host's end ($PWD, PSBASH_INTERACTIVE, the "
+            + "stateful switch): ASCII values outside any command, never one with an invalid byte",
+        ["PsBash.Host/Runtime/SdkRunspace.cs"] = "host startup: the execution policy, before any shell variable is set",
+        ["PsBash.Host/Runtime/SdkWorker.cs"] = "the reset's sweep: unsets only (an unset variable has no kept value to read)",
+    };
+
+    /// <summary>
+    /// The process environment is written only through <see cref="ProcessScalars"/>. Its staleness check compares the
+    /// environment's value with the stored form of the kept one, and that form cannot tell <c>\xff</c> from <c>\xfe</c>
+    /// (both U+FFFD): a direct write of another invalid byte would read back as the old kept value. So nothing writes the
+    /// environment around the store, in C# or in PowerShell text (module, emitted code), except the inventoried places.
+    /// </summary>
+    [Fact]
+    public void TheEnvironment_IsWrittenOnlyThroughProcessScalars()
+    {
+        var root = Path.Combine(RepoRoot(), "src");
+        var write = new Regex(@"SetEnvironmentVariable\s*\(|\[(System\.)?Environment\]::SetEnvironmentVariable");
+        var offenders = new List<string>();
+        foreach (var project in new[] { "PsBash.Cmdlets", "PsBash.Transpiler", "PsBash.Host", "PsBash.Core", "PsBash.Module" })
+        {
+            foreach (var file in Directory.EnumerateFiles(Path.Combine(root, project), "*", SearchOption.AllDirectories))
+            {
+                if (!(file.EndsWith(".cs", StringComparison.Ordinal) || file.EndsWith(".psm1", StringComparison.Ordinal)
+                      || file.EndsWith(".ps1", StringComparison.Ordinal))) continue;
+                var rel = Path.GetRelativePath(root, file).Replace('\\', '/');
+                if (rel.Contains("/obj/", StringComparison.Ordinal) || rel.Contains("/bin/", StringComparison.Ordinal)) continue;
+                var lines = File.ReadAllLines(file);
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    var t = lines[i].TrimStart();
+                    if (t.StartsWith("//", StringComparison.Ordinal) || t.StartsWith("#", StringComparison.Ordinal)
+                        || t.StartsWith("*", StringComparison.Ordinal)) continue;
+                    if (!write.IsMatch(lines[i])) continue;
+                    if (DirectEnvironmentWrites.ContainsKey(rel)
+                        && (rel != "PsBash.Host/Runtime/SdkWorker.cs" || t.Contains(", null)", StringComparison.Ordinal))) continue;
+                    offenders.Add($"{rel}:{i + 1}: {t}");
+                }
+            }
+        }
+        Assert.True(offenders.Count == 0,
+            "Write a shell variable with ProcessScalars.Set (BashVariableStore.Set from a cmdlet): a direct environment write "
+            + "can leave a kept exact value that no longer matches. Offenders:\n  " + string.Join("\n  ", offenders));
+        foreach (var rel in DirectEnvironmentWrites.Keys)
+            Assert.True(File.Exists(Path.Combine(root, rel)), $"{rel} is gone: drop it from the inventory");
+    }
+
     [Fact]
     public void TheAllowList_OnlyNamesFilesThatStillExist()
     {

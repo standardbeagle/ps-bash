@@ -94,8 +94,11 @@ internal static class InnerCommand
 
         // `command prog 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4). In a
         // background job always through RunMerged: `& $c` would give it the process environment, not the job's scalars.
+        // Likewise when its environment or argv has a value PowerShell's launcher would turn into U+FFFD (NativeRunner):
+        // `& $c` on an ApplicationInfo passes no lookup hook.
         if (invokeTarget is ApplicationInfo app && !InvokeBashNativeCommand.IsBatchFile(app.Path)
-            && (StderrMerge.JoinsStdout(cmdlet) || PsBash.Core.ScalarOverlay.Current is not null))
+            && (StderrMerge.JoinsStdout(cmdlet) || PsBash.Core.ScalarOverlay.Current is not null
+                || PsBash.Core.ProcessScalars.ChildNeedsExactBytes(argv.Skip(1))))
         {
             try
             {

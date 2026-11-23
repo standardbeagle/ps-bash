@@ -96,6 +96,7 @@ public class RawBytesDifferentialTests
         printf '%s\n' "$s" > g; od -An -tx1 g | tr -s ' \n' ' '; echo ":redirect"
         printf '%q\n' "$s" "a${s}b"
         { t=$s; printf '%s' "$t" | x job; } & wait
+        ( s=$'\xfe' ); printf '%s' "$s" | x subshell
         """ + "\n");
 
     // REGRESSION (Linux): PowerShell's launcher copies the process environment and marshals argv with plain UTF-8, so a
@@ -112,6 +113,54 @@ public class RawBytesDifferentialTests
             /usr/bin/printf '%s' "$s" | x argv
             /usr/bin/printf '%s' "$s" 2>&1 | x merged
             { /usr/bin/printf '%s' "$s" | x job; } & wait
+            s=$'\xfe' /usr/bin/true; printf '%s' "$s" | x prefix-restore
+            """ + "\n");
+    }
+
+    // REGRESSION (Linux): while an exported scalar was kept, a program was a stand-in function, and the check "is this
+    // name a program?" behind a pipe into it saw a function: the pipe's text went in as lines (`printf ab | od -c` read
+    // `a b \n`, `wc -l` counted 3). Primitive: PsBash.Cmdlets.ProgramLookup (guard ProgramLookupGuardTests).
+    [SkippableFact] public Task Pipe_IntoAProgram_WhileAnExportedScalarIsKept()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "the programs are named by their Unix path");
+        return AssertOracle.EqualAsync("""
+            t=$'\xfe'
+            export s=$'\xff'
+            printf 'a\nb\n' | /usr/bin/wc -l
+            printf ab | /usr/bin/od -An -c
+            { printf 'a\nb\n' | /usr/bin/wc -l; } & wait
+            { printf ab | /usr/bin/od -An -c; } & wait
+            """ + "\n");
+    }
+
+    // REGRESSION (Linux): the same check kept a compound command's stdin from a program inside it while an exported
+    // scalar was kept: the program read the shell's own stdin instead.
+    [SkippableFact] public Task StdinScope_ReachesAProgram_WhileAnExportedScalarIsKept()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "the programs are named by their Unix path");
+        return AssertOracle.EqualAsync("""
+            export s=$'\xff'
+            printf 'x\n' | { /usr/bin/cat; }
+            { read -r l; echo "$l"; /usr/bin/cat; } <<< $'z\nw'
+            printf 'p\nq\n' > f
+            while read -r l; do echo "$l"; /usr/bin/cat; done < f
+            """ + "\n");
+    }
+
+    // The switch to the shell's own launcher turns off when no exported scalar is kept any more: programs still get
+    // their stdin and argv after each way the value goes.
+    [SkippableFact] public Task Programs_AfterTheKeptScalarGoes_GetTheirInput()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "the programs are named by their Unix path");
+        return AssertOracle.EqualAsync("""
+            export s=$'\xff'; unset s
+            printf ab | /usr/bin/od -An -c
+            export s=$'\xff'; s=ok
+            printf 'a\nb\n' | /usr/bin/wc -l; /usr/bin/printenv s
+            f() { local -x l=$'\xfd'; /usr/bin/printenv l | od -An -tx1; }; f
+            printf cd | /usr/bin/od -An -c
+            ( export z=$'\xfc' ); printf ef | /usr/bin/od -An -c
+            export n=$'\xfb'; export -n n; printf gh | /usr/bin/od -An -c
             """ + "\n");
     }
 

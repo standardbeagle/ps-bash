@@ -38,6 +38,35 @@ public class LaunchBytesTests
         Assert.Same(lossy, LaunchBytes.Exact(lossy, [[(byte)'y', 0xFF]]));
     }
 
+    // bash -c '...' '' x '' : empty arguments in the middle and at the end are arguments too (two NULs in a row, and
+    // an empty one before the last NUL).
+    [Fact]
+    public void SplitNul_EmptyMiddleAndTrailingArguments_AreKept()
+    {
+        var parts = LaunchBytes.SplitNul(new byte[] { (byte)'-', (byte)'c', 0, 0, 0xFE, 0, 0 });
+        Assert.Equal(4, parts.Count);
+        Assert.Empty(parts[1]);
+        Assert.Equal(new byte[] { 0xFE }, parts[2]);
+        Assert.Empty(parts[3]);
+    }
+
+    [Fact]
+    public void Exact_WithEmptyArguments_KeepsThePositions()
+    {
+        var exact = LaunchBytes.Exact(["", "�", ""], [[], [0xFE], []]);
+        Assert.Equal(new[] { "", RawBytes.ToMarker(0xFE).ToString(), "" }, exact);
+    }
+
+    // The same name twice in an environment block: the entry whose bytes decode to .NET's value is the one it took.
+    [Fact]
+    public void ExactValue_ADuplicateName_TakesTheEntryThatDecodesToTheValue()
+    {
+        byte[][] environ = [[(byte)'E', (byte)'=', (byte)'x'], [(byte)'E', (byte)'=', 0xFF], [(byte)'E', (byte)'=', 0xFE]];
+        Assert.Equal(RawBytes.ToMarker(0xFF).ToString(), LaunchBytes.ExactValue("E", "�", environ));
+        Assert.Equal("a�", LaunchBytes.ExactValue("E", "a�", environ)); // none decodes to it: .NET's value
+        Assert.Equal("�", LaunchBytes.ExactValue("EE", "�", environ)); // a longer name is another variable
+    }
+
     [Fact]
     public void Arguments_WithoutAReplacementCharacter_AreReturnedAsTheyAre()
     {

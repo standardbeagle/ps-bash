@@ -98,11 +98,46 @@ public class ProcessScalarsTests
             }
             Assert.True(ProcessScalars.ChildNeedsExactBytes([Ff]));
             ProcessScalars.Set(name, Ff);
-            Assert.True(ProcessScalars.KeepsAny);
+            ShellExports.Export(name);
+            Assert.True(ProcessScalars.KeepsAnyExported);
             Assert.True(ProcessScalars.ChildNeedsExactBytes(["plain"]));
         }
         finally { ProcessScalars.Set(name, null); }
     }
+
+    // The switch turns off as soon as no exported scalar holds such a value: programs go back to PowerShell's launcher
+    // (and keep the terminal). Each case is a way the value goes: unset, a plain value, and a direct environment write
+    // (the host's reset); the export attribute removed is Differential (RawBytesDifferentialTests). Kept values of other tests may run meanwhile, so each case
+    // asserts on its own name through ExactIfStored / Get rather than on the global switch alone.
+    [Theory]
+    [InlineData("unset")]
+    [InlineData("plain")]
+    [InlineData("direct")]
+    public void KeepsAnyExported_TurnsOff_WhenTheValueGoes(string how)
+    {
+        if (ProcessScalars.EnvironmentHoldsEveryString) return; // nothing is ever kept there
+        var name = Name();
+        try
+        {
+            ProcessScalars.Set(name, Ff);
+            ShellExports.Export(name);
+            Assert.True(ProcessScalars.KeepsAnyExported);
+            switch (how)
+            {
+                case "unset": ProcessScalars.Set(name, null); break;
+                case "plain": ProcessScalars.Set(name, "ok"); break;
+                case "direct": Environment.SetEnvironmentVariable(name, "direct"); break;
+            }
+            Assert.False(KeptAndExported(name));
+        }
+        finally { ProcessScalars.Set(name, null); }
+    }
+
+    // This name's own part of KeepsAnyExported: its exact value is kept (the stored form maps back to it) and exported.
+    private static bool KeptAndExported(string name)
+        => Environment.GetEnvironmentVariable(name) is { } stored
+           && !ReferenceEquals(ProcessScalars.ExactIfStored(name, stored), stored)
+           && ShellExports.IsExported(name);
 
     // Measured, not assumed: where the environment holds the marker nothing is kept, and the store is the environment.
     [Fact]

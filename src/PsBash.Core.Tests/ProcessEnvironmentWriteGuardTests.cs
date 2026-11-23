@@ -30,10 +30,9 @@ public class ProcessEnvironmentWriteGuardTests
             "startup, before the host serves anything: $PWD in shell form, PSBASH_INTERACTIVE for the interactive host's "
             + "life, and consuming the stateful-session switch so the commands it runs do not inherit it"),
         ("PsBash.Host/Runtime/SdkRunspace.cs", 1, "startup: the execution policy every runspace of the process uses"),
-        ("PsBash.Host/Runtime/SdkWorker.cs", 2,
-            "the launcher's PSBASH_* control variables, and the sweep that unsets what the launcher's block does not have, "
-            + "while the command holds the host's execution lease (docs/specs/environment-model.md); the block's own values "
-            + "go in through ProcessScalars"),
+        ("PsBash.Host/Runtime/SdkWorker.cs", 1,
+            "the sweep that unsets what the launcher's block does not have, while the command holds the host's execution "
+            + "lease (docs/specs/environment-model.md); the block's own values go in through ProcessScalars"),
         ("PsBash.Transpiler/ProcessScalars.cs", 3,
             "the shell's scalar store (environment-model.md section 8): an assignment, and the one-time probe of whether "
             + "the environment gives back every string, which sets and removes its own variable"),

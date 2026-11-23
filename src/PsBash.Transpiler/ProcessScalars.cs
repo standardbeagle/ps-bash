@@ -101,23 +101,41 @@ public static class ProcessScalars
             : value;
 
     /// <summary>
-    /// True while some scalar's exact value is kept beside the environment (only where the environment cannot hold
-    /// it). A program started then must get its environment and argv from this store, not from PowerShell's launcher
-    /// (<see cref="NativeRunner"/>).
+    /// True while an EXPORTED scalar's exact value is kept beside the environment (only where the environment cannot
+    /// hold it): every program started now gets it in its environment, so it must be started by ps-bash with exact bytes,
+    /// not by PowerShell's launcher (<see cref="NativeRunner"/>). A scalar that is not exported never reaches a program's
+    /// environment, so it takes no program off the terminal (a <c>line</c> left over from a read loop of a binary file).
+    /// A kept value the environment no longer has is dropped here, as it is on a read.
     /// </summary>
-    public static bool KeepsAny => !s_kept.IsEmpty;
+    public static bool KeepsAnyExported
+    {
+        get
+        {
+            if (s_kept.IsEmpty) return false;
+            foreach (var (name, kept) in s_kept)
+            {
+                if (!string.Equals(Environment.GetEnvironmentVariable(name), kept.Stored, StringComparison.Ordinal))
+                {
+                    s_kept.TryRemove(new KeyValuePair<string, Kept>(name, kept));
+                    continue;
+                }
+                if (ShellExports.IsExported(name)) return true;
+            }
+            return false;
+        }
+    }
 
     /// <summary>
     /// Whether a program started with <paramref name="argv"/> must be started by ps-bash with exact bytes
-    /// (<see cref="NativeRunner"/>): a scalar is kept (<see cref="KeepsAny"/>), or an argument has a marker the
-    /// launcher's UTF-8 would turn into U+FFFD. Never where the environment holds every string (Windows: a child gets
-    /// UTF-16 there whoever starts it).
+    /// (<see cref="NativeRunner"/>): an exported scalar is kept (<see cref="KeepsAnyExported"/>), or an argument has a
+    /// marker the launcher's UTF-8 would turn into U+FFFD. Never where the environment holds every string (Windows: a
+    /// child gets UTF-16 there whoever starts it).
     /// </summary>
     public static bool ChildNeedsExactBytes(IEnumerable<string> argv)
     {
         ArgumentNullException.ThrowIfNull(argv);
-        if (!s_kept.IsEmpty) return true;
-        if (EnvironmentHoldsEveryString) return false;
+        if (s_kept.IsEmpty && EnvironmentHoldsEveryString) return false;
+        if (KeepsAnyExported) return true;
         foreach (var a in argv)
             if (RawBytes.ContainsMarker(a)) return true;
         return false;
