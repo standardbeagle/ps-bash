@@ -153,4 +153,24 @@ public class FdRedirectEmitGuardTests
         Assert.Contains("Invoke-BashExecFd ", ps);
         Assert.DoesNotContain("Invoke-BashRedirect -Path log1", ps);
     }
+
+    // A subshell's exec of fd 1 ends with the subshell, but its output is handed on as PowerShell records, which a
+    // `$( )` around the subshell (an `&&` operand) passed on only after the subshell had put fd 1 back: the subshell's
+    // output must go through the stage that is its fd 1 (Invoke-BashRedirect -SubshellStdout), on every form that holds
+    // the exec, and only there.
+    [Theory]
+    [InlineData("true && ( exec >ex.txt; echo a ); echo z", true)]
+    [InlineData("( exec >ex.txt; echo a ) | cat", true)]
+    [InlineData("( if true; then exec >&2; fi; echo a ) || :", true)]
+    [InlineData("( fx() { exec >&-; }; fx; echo a )", true)]
+    [InlineData("( exec &>ex.txt; echo a )", true)]
+    [InlineData("( exec 2>ex.txt; echo a )", false)]
+    [InlineData("( exec 3>ex.txt; echo a )", false)]
+    [InlineData("( echo a ) && ( ( exec >f ) )", true)]
+    [InlineData("( echo a )", false)]
+    public void Transpile_SubshellThatMovesItsStdout_GoesThroughItsStdoutStage(string bash, bool staged)
+    {
+        string ps = PsEmitter.Transpile(bash) ?? "";
+        Assert.Equal(staged ? 1 : 0, Regex.Matches(ps, Regex.Escape(PsBuild.SubshellStdoutStage)).Count);
+    }
 }

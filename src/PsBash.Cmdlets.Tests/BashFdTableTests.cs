@@ -143,6 +143,136 @@ public class BashFdTableTests : IClassFixture<SharedPwshFixture>, IDisposable
         Assert.Equal("out\n", File.ReadAllText(F("log")));
     }
 
+    // ---- Stage order: PowerShell begins every stage of a pipeline before any runs, upstream (inner) first. ----------
+    // GUARD: a merge's target (the capture, the next pipe's merge) must stay what the merge passes on, and what the
+    // shell's fd 1 / 2 name after the pipeline must be what they named before it. Pushed in begin order, the capture
+    // of `x=$(cmd 2>&1)` sat ABOVE the merge, the merge's end put its prior back over it, and the capture's end left the
+    // finished merge as the shell's fd 1: everything after was written nowhere. In `f |& f |& tr` the first merge's end
+    // reset fd 2 under the second, whose input then went to the terminal.
+
+    private static readonly Func<object, object, bool> InnerFeedsOuter =
+        (from, to) => (string)from == "inner" && (string)to == "outer";
+
+    // `x=$(cmd 2>&1)`: cmd 2>&1 | Invoke-BashRedirect -MergeErrors (inner, begins first) | ConvertTo-BashCapture (outer).
+    [Fact]
+    public void Register_ADownstreamStageThatBeginsLater_IsBelowTheEarlierOne()
+    {
+        var merged = new System.Text.StringBuilder();
+        var captured = new System.Text.StringBuilder();
+        var (o, e) = BashFdTable.RegisterMerge(s => merged.Append(s), "inner", InnerFeedsOuter);
+        var c = BashFdTable.Register(1, BashFdTable.ForCapture(s => captured.Append(s)), "outer", InnerFeedsOuter);
+        // While cmd runs its fd 1 and fd 2 are the merge's stream, not the capture.
+        Assert.Equal(0, BashFdTable.Write(1, "o\n"));
+        Assert.Equal(0, BashFdTable.Write(2, "e\n"));
+        Assert.False(BashFdTable.Moved(o, out _));
+        Assert.False(BashFdTable.Moved(c, out _));
+        BashFdTable.Unregister(o);
+        BashFdTable.Unregister(e);
+        // The merge ended: fd 1 is the capture, fd 2 the original again.
+        Assert.Equal(0, BashFdTable.Write(1, "c\n"));
+        Assert.Equal(2, BashFdTable.Write(2, "x\n"));
+        BashFdTable.Unregister(c);
+        Assert.Equal(1, BashFdTable.Write(1, "x\n"));
+        Assert.Equal(2, BashFdTable.Write(2, "x\n"));
+        Assert.Equal("o\ne\n", merged.ToString());
+        Assert.Equal("c\n", captured.ToString());
+    }
+
+    // `f |& f |& tr`: the second merge (outer, downstream) begins before the first stage runs; the first merge's end
+    // leaves fd 1 and fd 2 on the second merge, and the second's end on the original.
+    [Fact]
+    public void RegisterMerge_TwoPipesInOnePipeline_EachEndHandsTheDescriptorToTheNext()
+    {
+        var first = new System.Text.StringBuilder();
+        var second = new System.Text.StringBuilder();
+        var (o1, e1) = BashFdTable.RegisterMerge(s => first.Append(s), "inner", InnerFeedsOuter);
+        var (o2, e2) = BashFdTable.RegisterMerge(s => second.Append(s), "outer", InnerFeedsOuter);
+        Assert.Equal(0, BashFdTable.Write(2, "a\n"));
+        BashFdTable.Unregister(e1);
+        BashFdTable.Unregister(o1);
+        Assert.Equal(0, BashFdTable.Write(2, "b\n"));
+        Assert.Equal(0, BashFdTable.Write(1, "c\n"));
+        Assert.False(BashFdTable.Moved(e2, out _));
+        BashFdTable.Unregister(e2);
+        BashFdTable.Unregister(o2);
+        Assert.Equal(1, BashFdTable.Write(1, "x\n"));
+        Assert.Equal(2, BashFdTable.Write(2, "x\n"));
+        Assert.Equal("a\n", first.ToString());
+        Assert.Equal("b\nc\n", second.ToString());
+    }
+
+    // A stage that ends while one inside it is still registered (stopped first) leaves the chain: the inner stage keeps
+    // the descriptor, and its end puts back what was below both.
+    [Fact]
+    public void Unregister_AnOuterStageFirst_KeepsTheInnerOne()
+    {
+        var merged = new System.Text.StringBuilder();
+        var (o, e) = BashFdTable.RegisterMerge(s => merged.Append(s), "inner", InnerFeedsOuter);
+        var c = BashFdTable.Register(1, BashFdTable.ForCapture(_ => { }), "outer", InnerFeedsOuter);
+        BashFdTable.Unregister(c);
+        Assert.Equal(0, BashFdTable.Write(1, "o\n"));
+        BashFdTable.Unregister(o);
+        BashFdTable.Unregister(e);
+        Assert.Equal(1, BashFdTable.Write(1, "x\n"));
+        Assert.Equal("o\n", merged.ToString());
+    }
+
+    // A stage of a pipeline that starts inside a running one (a function's, an eval's) is inside every stage registered
+    // before it, whatever the walk says, unless the earlier stage feeds it.
+    [Fact]
+    public void Register_AStageTheEarlierOneDoesNotFeed_GoesOnTop()
+    {
+        var outer = new System.Text.StringBuilder();
+        var inner = new System.Text.StringBuilder();
+        var c = BashFdTable.Register(1, BashFdTable.ForCapture(s => outer.Append(s)), "outer", InnerFeedsOuter);
+        var (o, e) = BashFdTable.RegisterMerge(s => inner.Append(s), "inner", InnerFeedsOuter);
+        Assert.Equal(0, BashFdTable.Write(1, "i\n"));
+        BashFdTable.Unregister(o);
+        BashFdTable.Unregister(e);
+        Assert.Equal(0, BashFdTable.Write(1, "c\n"));
+        BashFdTable.Unregister(c);
+        Assert.Equal("i\n", inner.ToString());
+        Assert.Equal("c\n", outer.ToString());
+    }
+
+    // The same through the stages the emitter writes, in a runspace: the pipeline walk (StderrMerge.Feeds) orders them.
+    // `x=$(echo o 2>&1); echo "[$x]"; exec 3>&1; echo after >&3`: after the capture, fd 1 is the original stdout again.
+    [Fact]
+    public void CaptureOfAMerge_LeavesTheShellsStdoutAsItWas()
+    {
+        using var pwsh = PwshTestFixture.Create();   // a runspace whose table no earlier test moved
+        var r = CmdResult.Run(pwsh,
+            "$x = Invoke-BashEcho o 2>&1 | Invoke-BashRedirect -MergeErrors | ConvertTo-BashCapture -Join; \"[$x]\"; "
+            + "Invoke-BashExecFd 3 '>&' 1; Invoke-BashEcho after | Write-BashFd 3; Invoke-BashExecFd 3 '>&' '-'").AssertSuccess();
+        Assert.Equal(["[o]", "after"], r.Lines);
+    }
+
+    // `f() { echo e >&2; }; f |& f |& tr e E`: the second f's stderr goes down the second pipe (bash prints E).
+    [Fact]
+    public void PipeAmp_TwoMergesInOnePipeline_TheSecondStderrReachesItsPipe()
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(),
+            "& { Invoke-BashEcho e | Write-BashHostStderr } 2>&1 | Invoke-BashRedirect -MergeErrors "
+            + "| & { $input | Out-Null; Invoke-BashEcho e | Write-BashHostStderr } 2>&1 | Invoke-BashRedirect -MergeErrors "
+            + "| Invoke-BashTr e E").AssertSuccess();
+        Assert.Equal(["E"], r.Lines);
+    }
+
+    // `eval 'cmd 2>&1' >o 2>e`: the merge, then the file stage after it in the same pipeline. The merged stderr is in o,
+    // e is empty, and the shell's fd 1 / 2 are the originals afterwards.
+    [Fact]
+    public void MergeUnderAFileStage_InOnePipeline_WritesTheFileAndPutsTheShellBack()
+    {
+        using var pwsh = PwshTestFixture.Create();   // a runspace whose table no earlier test moved
+        var r = CmdResult.Run(pwsh,
+            "& { Invoke-BashEcho out; Invoke-BashEcho err | Write-BashHostStderr } 2>&1 | Invoke-BashRedirect -MergeErrors 2>&1 "
+            + $"| Invoke-BashRedirect -Path '{Q(F("o"))}' -ErrorPath '{Q(F("e"))}'; "
+            + "Invoke-BashExecFd 3 '>&' 1; Invoke-BashEcho after | Write-BashFd 3; Invoke-BashExecFd 3 '>&' '-'").AssertSuccess();
+        Assert.Equal(["after"], r.Lines);
+        Assert.Equal("out\nerr\n", File.ReadAllText(F("o")));
+        Assert.Equal("", File.ReadAllText(F("e")));
+    }
+
     // What reaches the host while a stage is registered came out of that stage (or a pipe stage after it), which routed
     // it already: it goes where the descriptor was below the first stage, not where an exec inside moved it. Before, it
     // went to Low[1], so `cmd 2>&1 >f` put the merged stderr into f and `{ exec >g; ...; } 2>&1` re-routed into g.

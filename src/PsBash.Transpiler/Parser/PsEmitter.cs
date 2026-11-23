@@ -3462,6 +3462,11 @@ public static partial class PsEmitter
         // `( trap 'echo bye' EXIT; echo body )` prints body, then bye. Only a body that calls `trap` pays for it.
         body = WithSubshellExitTrap(body);
         var sb = new StringBuilder(PsBuild.ShellStateScope(body));
+        // `( exec >f; echo a )`: the subshell's output goes through a stage that is its fd 1 in the descriptor table, so
+        // each record goes where fd 1 named when it was written, also when a PowerShell `$( )` around the subshell (an
+        // `&&` operand) hands it on only after the subshell put fd 1 back (PsBuild.SubshellStdoutStage). A redirect of
+        // the subshell itself is such a stage already.
+        if (subshell.Redirects.IsDefaultOrEmpty && ExecMovesStdout(subshell.Body)) sb.Append(PsBuild.SubshellStdoutStage);
 
         // Partition out the input redirect: `(cmd) < file` feeds the file to the
         // subshell's stdin and wraps the WHOLE result (`Get-Content file | & { … }`),

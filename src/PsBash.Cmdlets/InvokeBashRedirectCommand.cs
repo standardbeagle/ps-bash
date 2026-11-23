@@ -91,6 +91,14 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
     [Parameter]
     public string? OpenPlan { get; set; }
 
+    /// <summary>
+    /// The stage after a subshell that moves its own fd 1 with <c>exec</c> (PsBuild.SubshellStdoutStage): it redirects
+    /// nothing, it is that subshell's fd 1 in the descriptor table, so a record goes where the subshell's fd 1 named when
+    /// it was written (<c>true &amp;&amp; ( exec &gt;f; echo a )</c> writes a to f) and the rest pass on.
+    /// </summary>
+    [Parameter]
+    public SwitchParameter SubshellStdout { get; set; }
+
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
@@ -147,6 +155,14 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
 
     private void RegisterTargets()
     {
+        if (SubshellStdout)
+        {
+            _outReg = BashFdTable.RegisterPass(text =>
+            {
+                lock (_writtenGate) (_written ??= new System.Text.StringBuilder()).Append(text);
+            }, this);
+            return;
+        }
         // A bare `2>&1` (-MergeErrors): fd 2 is a copy of fd 1, the stream this stage passes on, made before the command
         // runs. An `exec >log` inside then moves fd 1 only (`{ exec >log; echo e >&2; } 2>&1` prints e; bash's dup2).
         if (MergeErrors && !MyInvocation.BoundParameters.ContainsKey(nameof(Path))
@@ -155,16 +171,16 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet, IStatusTransparentSt
             (_outReg, _errReg) = BashFdTable.RegisterMerge(text =>
             {
                 lock (_writtenGate) (_written ??= new System.Text.StringBuilder()).Append(text);
-            });
+            }, this);
             return;
         }
         if (_stdoutToFile && _outDevice is DeviceKind.None or DeviceKind.Null)
         {
-            _outReg = BashFdTable.Register(1, BashFdTable.ForStage(_stream));
+            _outReg = BashFdTable.Register(1, BashFdTable.ForStage(_stream), this);
         }
         if (_stderrToFile && _errDevice is DeviceKind.None or DeviceKind.Null)
         {
-            _errReg = BashFdTable.Register(2, BashFdTable.ForStage(_errorStream));
+            _errReg = BashFdTable.Register(2, BashFdTable.ForStage(_errorStream), this);
         }
     }
 

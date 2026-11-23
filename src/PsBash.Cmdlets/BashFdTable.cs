@@ -49,7 +49,8 @@ internal static class BashFdTable
         Capture,
         /// <summary>
         /// The stream a <c>2&gt;&amp;1</c> stage passes on (<see cref="RegisterMerge"/>): fd 1 of the command under it, and
-        /// fd 2 as its copy. What is written to it through the table is passed on by the stage.
+        /// fd 2 as its copy. What is written to it through the table is passed on by the stage. Also a subshell's own fd 1
+        /// (<see cref="RegisterPass"/>), which passes the subshell's output on the same way.
         /// </summary>
         Merge,
     }
@@ -97,7 +98,11 @@ internal static class BashFdTable
         internal required Table Table { get; init; }
         internal required int Fd { get; init; }
         internal required Handle Handle { get; init; }
-        internal Handle? Prior { get; init; }
+        /// <summary>What the descriptor names below this stage (an owned reference). A stage of the same pipeline
+        /// downstream of this one, which begins after it, slides in here (<see cref="RegisterLocked"/>).</summary>
+        internal Handle? Prior { get; set; }
+        /// <summary>The stage that registered (a cmdlet in the running pipeline), or null.</summary>
+        internal object? Owner { get; init; }
         /// <summary>The stage does not redirect this descriptor, it only passes the stream on (the fd 1 of a
         /// <c>2&gt;&amp;1</c>): an <c>exec</c> inside that moved it stays when the stage ends, as in bash.</summary>
         internal bool Keep { get; init; }
@@ -426,12 +431,18 @@ internal static class BashFdTable
     /// <summary>
     /// Make <paramref name="handle"/> the running shell's <paramref name="fd"/> (1 or 2) while the caller's command runs,
     /// until <see cref="Unregister"/>; the caller keeps its own reference to <paramref name="handle"/>.
+    /// <paramref name="owner"/> is the registering stage (its pipeline position decides the nesting, see
+    /// <see cref="RegisterLocked"/>); <paramref name="feeds"/> replaces the pipeline walk (tests).
     /// </summary>
-    internal static Registration Register(int fd, Handle handle)
+    internal static Registration Register(int fd, Handle handle, object? owner = null, Func<object, object, bool>? feeds = null)
     {
         var t = Current;
-        lock (Gate) return RegisterLocked(t, fd, handle, keep: false);
+        lock (Gate) return RegisterLocked(t, fd, handle, keep: false, owner, feeds ?? StageFeeds);
     }
+
+    /// <summary>True when stage <c>from</c>'s output reaches stage <c>to</c> down the same pipeline.</summary>
+    private static readonly Func<object, object, bool> StageFeeds =
+        (from, to) => from is System.Management.Automation.Cmdlet a && to is System.Management.Automation.Cmdlet b && StderrMerge.Feeds(a, b);
 
     /// <summary>
     /// <c>cmd 2&gt;&amp;1</c>: fd 1 of the command is the stream the stage passes on, and fd 2 is COPIED from it before the
@@ -439,26 +450,74 @@ internal static class BashFdTable
     /// <paramref name="sink"/> takes what is written to that stream through the table (<c>exec 3&gt;&amp;1</c> inside, then
     /// <c>&gt;&amp;3</c>). Both registrations are the caller's to <see cref="Unregister"/>; fd 1's keeps an exec inside.
     /// </summary>
-    internal static (Registration Out, Registration Err) RegisterMerge(Action<string> sink)
+    internal static (Registration Out, Registration Err) RegisterMerge(Action<string> sink, object? owner = null, Func<object, object, bool>? feeds = null)
     {
         var h = new Handle { Kind = Kind.Merge, Sink = sink };
         var t = Current;
         lock (Gate)
         {
-            var outReg = RegisterLocked(t, 1, h, keep: true);
+            var outReg = RegisterLocked(t, 1, h, keep: true, owner, feeds ?? StageFeeds);
             h.Refs++;   // the caller's reference for the second registration (each Unregister lets one go)
-            var errReg = RegisterLocked(t, 2, h, keep: false);
+            var errReg = RegisterLocked(t, 2, h, keep: false, owner, feeds ?? StageFeeds);
             return (outReg, errReg);
         }
     }
 
-    private static Registration RegisterLocked(Table t, int fd, Handle handle, bool keep)
+    /// <summary>
+    /// A subshell's own fd 1 (Invoke-BashRedirect -SubshellStdout): a stage that passes the subshell's output on and is
+    /// its fd 1 while it runs, so an <c>exec &gt;f</c> inside moves what the stage receives (<see cref="Moved"/>) and the
+    /// subshell's end puts it back. What is written to it through the table goes to <paramref name="sink"/>.
+    /// </summary>
+    internal static Registration RegisterPass(Action<string> sink, object? owner = null, Func<object, object, bool>? feeds = null)
     {
-        var prior = t.Low[fd];
+        var h = new Handle { Kind = Kind.Merge, Sink = sink };
+        var t = Current;
+        lock (Gate) return RegisterLocked(t, 1, h, keep: false, owner, feeds ?? StageFeeds);
+    }
+
+    /// <summary>
+    /// Put <paramref name="handle"/> on <paramref name="fd"/> where its stage sits in the nesting, which is NOT always on
+    /// top. PowerShell begins every stage of a pipeline before any of them runs, upstream first, so in
+    /// <c>x=$(cmd 2&gt;&amp;1)</c> (<c>cmd 2&gt;&amp;1 | Invoke-BashRedirect -MergeErrors | ConvertTo-BashCapture</c>) the
+    /// merge registers BEFORE the capture that encloses it, and in <c>f |&amp; f |&amp; tr</c> the first merge before the second.
+    /// A stage downstream of a registered stage of the same pipeline is OUTSIDE it: it slides in below that stage
+    /// (that stage's <see cref="Registration.Prior"/>) and the descriptor keeps naming the inner stage until it ends.
+    /// Pushed on top instead, the capture / the later pipe became fd 1 / 2 of the command under the merge, and the
+    /// merge's end put its own prior back over them: the merged stream went to the terminal, and the capture's end
+    /// left the finished merge as the shell's fd 1, so everything after it was written nowhere.
+    /// A stage of another pipeline (one that starts while this one runs: a function, eval, group or subshell body)
+    /// is inside every stage registered before it, so it goes on top.
+    /// </summary>
+    private static Registration RegisterLocked(Table t, int fd, Handle handle, bool keep, object? owner, Func<object, object, bool> feeds)
+    {
         handle.Refs++;
-        Volatile.Write(ref t.Low[fd], handle);
-        var reg = new Registration { Table = t, Fd = fd, Handle = handle, Prior = prior, Keep = keep };
-        t.Active.Add(reg);
+        // The outermost registration on fd that this stage encloses: a run of the latest ones, each upstream of it.
+        int inner = -1;
+        if (owner is not null)
+        {
+            for (int i = t.Active.Count - 1; i >= 0; i--)
+            {
+                var r = t.Active[i];
+                if (r.Fd != fd) continue;
+                if (r.Owner is not { } o || ReferenceEquals(o, owner) || !feeds(o, owner)) break;
+                inner = i;
+            }
+        }
+
+        Registration reg;
+        if (inner < 0)
+        {
+            reg = new Registration { Table = t, Fd = fd, Handle = handle, Prior = t.Low[fd], Keep = keep, Owner = owner };
+            Volatile.Write(ref t.Low[fd], handle);
+            t.Active.Add(reg);
+        }
+        else
+        {
+            var below = t.Active[inner];
+            reg = new Registration { Table = t, Fd = fd, Handle = handle, Prior = below.Prior, Keep = keep, Owner = owner };
+            below.Prior = handle;   // the table's reference to handle
+            t.Active.Insert(inner, reg);
+        }
         Volatile.Write(ref t.ActiveCount, t.Active.Count);
         UpdateDivertLocked(t);
         return reg;
@@ -475,10 +534,23 @@ internal static class BashFdTable
             if (reg.Done) return;
             reg.Done = true;
             var t = reg.Table;
+            int at = t.Active.IndexOf(reg);
             t.Active.Remove(reg);
             Volatile.Write(ref t.ActiveCount, t.Active.Count);
             var current = t.Low[reg.Fd];
-            if (reg.Keep && !ReferenceEquals(current, reg.Handle))
+            // A stage that still has a stage inside it on this descriptor (it ends first only when stopped, or when a
+            // pipeline ends out of order): it leaves the chain, and the inner stage's prior becomes this one's. Putting
+            // this stage's prior back on the descriptor dropped the inner stage while it still ran.
+            Registration? above = null;
+            if (!ReferenceEquals(current, reg.Handle))
+                for (int i = Math.Max(at, 0); i < t.Active.Count; i++)
+                    if (t.Active[i] is { } r && r.Fd == reg.Fd && ReferenceEquals(r.Prior, reg.Handle)) { above = r; break; }
+            if (above is not null)
+            {
+                above.Prior = reg.Prior;
+                ReleaseLocked(reg.Handle);   // the reference the inner stage's prior held
+            }
+            else if (reg.Keep && !ReferenceEquals(current, reg.Handle))
             {
                 if (reg.Prior is not null) ReleaseLocked(reg.Prior);
             }

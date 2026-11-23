@@ -97,6 +97,23 @@ public static class StderrMerge
         }
     }
 
+    /// <summary>
+    /// True when <paramref name="from"/>'s output reaches <paramref name="to"/> down the same pipeline (through any stages
+    /// between them): <paramref name="to"/> encloses <paramref name="from"/>, as a capture encloses the <c>2&gt;&amp;1</c>
+    /// stage before it (BashFdTable's stage order). False when it does not, or the SMA internals cannot be read.
+    /// </summary>
+    internal static bool Feeds(Cmdlet from, Cmdlet to)
+    {
+        var stage = from;
+        // A pipeline is short; the bound only keeps a cycle in unreadable internals from spinning.
+        for (int i = 0; i < 64 && NextStage(stage) is { } next; i++)
+        {
+            if (ReferenceEquals(next, to)) return true;
+            stage = next;
+        }
+        return false;
+    }
+
     /// <summary>True when the SMA internals <see cref="JoinsStdout"/> reads were found (a guard test pins it).</summary>
     internal static bool CanDetect => s_accessors.Value is not null;
 

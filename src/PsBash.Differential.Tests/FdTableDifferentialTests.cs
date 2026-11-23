@@ -82,6 +82,31 @@ public class FdTableDifferentialTests
     public Task Merge_CopiesStderrFromStdoutBeforeTheCommandRuns(string script)
         => AssertOracle.EqualAsync(Prelude + script);
 
+    // Two redirections of one pipeline: PowerShell begins every stage before any runs, upstream first, so the stage that
+    // encloses (a capture, a later pipe's merge, a file redirect after a merge) registered AFTER the merge inside it. The
+    // merge's end then handed fd 1 / 2 to what was below both, and the capture's end left the finished merge as the
+    // shell's fd 1: `x=$(cmd 2>&1)` lost everything after it, `f |& f` sent the second f's stderr to the terminal.
+    [SkippableTheory]
+    [InlineData("x=$(echo o 2>&1)\necho \"x=$x\"\necho after\necho e-after >&2")]
+    [InlineData("f() { echo e >&2; }\nx=$(f 2>&1)\necho \"x=$x\"\ny=$(f 2>&1 >/dev/null)\necho \"y=$y\"\necho after")]
+    [InlineData("f() { echo e >&2; }\nf |& f |& tr e E\nf 2>&1 | { f 2>&1; } | tr e E\necho after")]
+    [InlineData("eval 'echo e >&2 2>&1' >o 2>e\necho \"o=[$(cat o)] e=[$(cat e)]\"\necho after")]
+    [InlineData("x=$( { echo o; echo e >&2; } 2>&1 | sed 's/^/P:/')\necho \"x=$x\"\necho after")]
+    public Task Stages_OfOnePipeline_NestDownstreamOutward(string script)
+        => AssertOracle.EqualAsync(Prelude + script);
+
+    // A subshell's `exec >f` moves its fd 1 until it ends: what it writes before then is in f, wherever the subshell
+    // is (an && operand, a pipe stage, a capture). Behind a PowerShell `$( )` (an && operand) the output reached the
+    // host after the subshell had put fd 1 back and went to the terminal; through a pipe it reached the next stage.
+    [SkippableTheory]
+    [InlineData("true && ( exec >f; echo a; cat f >&2 ); echo \"f=[$(cat f)]\"")]
+    [InlineData("( exec >f; echo a ) | tr a b\necho \"f=[$(cat f)]\"")]
+    [InlineData("x=$( (exec >f; echo a) )\necho \"x=[$x] f=[$(cat f)]\"")]
+    [InlineData("( exec 5>&1 >f; echo a; exec >&5; echo b ) && echo c\necho \"f=[$(cat f)]\"")]
+    [InlineData("( exec >f; false ) && echo no\necho \"s=$? f=[$(cat f)]\"")]
+    public Task Subshell_ExecOfStdout_HoldsWhatItWritesBeforeItEnds(string script)
+        => AssertOracle.EqualAsync(Prelude + script);
+
     // A reader of the file the shell's fd 1 names (`exec >log` persists): GNU cat and grep refuse it (grep unless it
     // writes nothing per line or one match at most); every other reader reads what was there. Each line ps-bash wrote
     // as it was made landed after what the reader had left, so it read for ever.

@@ -60,7 +60,7 @@ public sealed class ConvertToBashCaptureCommand : BashCmdlet
         _reg = BashFdTable.Register(1, BashFdTable.ForCapture(text =>
         {
             lock (_writtenGate) (_written ??= new StringBuilder()).Append(text);
-        }));
+        }), this);
     }
 
     private void DrainWritten()

@@ -73,10 +73,25 @@ ONE table per shell, fds 0..N, as bash has one per process (`Cmdlets/BashFdTable
   fd 1 only: `{ exec >log; echo err >&2; } 2>&1` prints err where fd 1 was, out goes to log, and log stays fd 1 after
   the group (the fd 1 registration is `Keep`). What the command writes to the merge entry through the table
   (`exec 3>&1` inside, then `>&3`) is passed on in order with its records.
-- Registrations stack (`Table.Active`, oldest first). A record a stage receives is its own unless the command moved
+- Registrations stack (`Table.Active`, outermost first). A record a stage receives is its own unless the command moved
   its fd (`BashFdTable.Moved`); a later registration on the same fd (a nested redirection, capture or merge) routed the
   record already. While stages are registered, what the host offers the divert came out of them, so it goes where the
   fd was below the first of them (`cmd 2>&1 >f`: stderr where fd 1 was, not into f).
+- Stage order within ONE pipeline: PowerShell begins every stage before any runs, upstream first, so the enclosing
+  stage registers AFTER the one it encloses (`x=$(cmd 2>&1)` = merge then capture; `f |& f |& tr` = first merge then
+  second; `eval 'cmd 2>&1' >o 2>e` = merge then file stage). A stage downstream of a registered stage of the same
+  pipeline (`StderrMerge.Feeds`, the pipe walk) slides in BELOW it (`BashFdTable.RegisterLocked`: it takes that stage's
+  `Prior`); a stage of a pipeline started later (a function, eval, group or subshell body) goes on top. An outer stage
+  that ends first leaves the chain (`Unregister` splices). Pushed on top, the merge's end put back its own prior over
+  the capture / the next pipe (merged stderr to the terminal) and the capture's end left the finished merge as the
+  shell's fd 1 (everything after it written nowhere). Guards: `BashFdTableTests` (Register_* / RegisterMerge_* /
+  Unregister_* seam cases, CaptureOfAMerge_*, PipeAmp_*, MergeUnderAFileStage_*), `FdTableDifferentialTests.Stages_*`.
+- A subshell whose body runs `exec` on fd 1 (`( exec >f; echo a )`, `PsEmitter.ExecMovesStdout`) and has no redirect of
+  its own is followed by `| Invoke-BashRedirect -SubshellStdout` (`PsBuild.SubshellStdoutStage`,
+  `BashFdTable.RegisterPass`): the subshell's fd 1 while it runs, so each record goes where fd 1 named when it was
+  written. The host's divert binds late: behind a PowerShell `$( )` (an `&&` operand) the record reached the host after
+  the subshell had put fd 1 back (`true && ( exec >f; echo a )` printed a), and through a pipe it went to the next
+  stage. Guard: `FdRedirectEmitGuardTests.Transpile_SubshellThatMovesItsStdout_*`, `FdTableDifferentialTests.Subshell_*`.
 - A reader of the file the shell's fd 1 names (`BashFdTable.StdoutFilePath`, after a persisting `exec >log`): GNU
   `cat` refuses it (`cat: log: input file is output file`, status 1; also `cat < log`, as `-`) while it has unread data;
   GNU `grep` refuses it (`grep: log: input file is also the output`, status 2, `-s` drops the message) unless it writes

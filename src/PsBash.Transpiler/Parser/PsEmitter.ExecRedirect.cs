@@ -63,6 +63,23 @@ public static partial class PsEmitter
            || (!cmd.Redirects.IsDefaultOrEmpty && cmd.Words.Length > 0 && GetLiteralValue(cmd.Words[0]) != "exec"
                && cmd.Redirects.Any(r => r.FdVar is not null));
 
+    /// <summary>
+    /// True when a command-less <c>exec</c> anywhere in <paramref name="body"/> (not in a nested subshell, which has its own)
+    /// redirects fd 1 (<c>exec &gt;f</c>, <c>exec &gt;&amp;2</c>, <c>exec &gt;&amp;-</c>, <c>exec &amp;&gt;f</c>): the subshell's
+    /// output then goes through <see cref="PsBuild.SubshellStdoutStage"/>.
+    /// </summary>
+    private static bool ExecMovesStdout(Command body)
+    {
+        bool found = false;
+        VisitCommands(body, c =>
+        {
+            if (!found && c is Command.Simple { Words.Length: 1 } s && GetLiteralValue(s.Words[0]) == "exec"
+                && !s.Redirects.IsDefaultOrEmpty && s.Redirects.Any(r => r.Fd == 1 && r.FdVar is null))
+                found = true;
+        }, c => c is not Command.Subshell);
+        return found;
+    }
+
     /// <summary>The statements after a standard-descriptor <c>exec</c>, as one brace group under its redirections.</summary>
     private static Command RestUnderExecRedirects(ImmutableArray<Command> rest, ImmutableArray<Redirect> redirects)
         => new Command.BraceGroup(rest.Length == 1 ? rest[0] : new Command.CommandList(rest), redirects);

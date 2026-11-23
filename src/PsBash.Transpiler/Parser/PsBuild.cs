@@ -375,6 +375,16 @@ public static class PsBuild
         "& { " + ShellStateGuard(body) + " }";
 
     /// <summary>
+    /// The stage after a subshell scope (<see cref="ShellStateScope"/>) whose body moves its own fd 1 with <c>exec</c>
+    /// (<c>( exec &gt;f; echo a )</c>): the subshell's fd 1 in the descriptor table while it runs, so each record it writes
+    /// goes where its fd 1 named at that moment (BashFdTable.Moved), and the rest pass on. Without it the record went
+    /// wherever the host's divert said when it got there: a PowerShell <c>$( )</c> around the subshell (an
+    /// <c>&amp;&amp;</c> operand) handed it over after the subshell had put fd 1 back, so <c>true &amp;&amp; ( exec &gt;f; echo a )</c>
+    /// printed a instead of writing it to f.
+    /// </summary>
+    public const string SubshellStdoutStage = " | Invoke-BashRedirect -SubshellStdout";
+
+    /// <summary>
     /// Statements that report a parameter error (<c>x: unbound variable</c>, <c>${x:?msg}</c>) on the
     /// ERROR STREAM where the failing command runs, then end the script with the typed exception. The
     /// report happens before the throw so an enclosing <c>2&gt; f</c> / <c>2&gt;/dev/null</c> applies to it
