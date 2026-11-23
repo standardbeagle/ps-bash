@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using PsBash.Core;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Core.Tests;
@@ -164,11 +165,17 @@ public class ChildEnvironmentGuardTests
             "Emit the export attribute through PsBuild.MarkExported / MarkUnexported / TempExportBegin / SetAllExport. "
             + "Offenders: " + string.Join(", ", offenders));
     }
+}
 
-    // ── the primitive itself ────────────────────────────────────────────────────────────────────────────────────
-    // Each test uses names of its own and puts back what it changed: the table is process-wide. Reset() is the shell
-    // start that turns tracking on (a plain PowerShell with the module has none, and exports everything).
-
+/// <summary>
+/// The primitive behind <see cref="ChildEnvironmentGuardTests"/>: <see cref="ShellExports"/> against the process
+/// environment. Each test uses names of its own and puts back what it changed (<see cref="ProcessEnv"/> for the values;
+/// the export table is process-wide too), so the class runs alone. Reset() is the shell start that turns tracking on
+/// (a plain PowerShell with the module has none, and exports everything).
+/// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
+public class ChildEnvironmentPrimitiveTests
+{
     private static Dictionary<string, string?> ChildOf(params string[] names)
     {
         var env = new Dictionary<string, string?>(ShellExports.NameComparer);
@@ -177,13 +184,9 @@ public class ChildEnvironmentGuardTests
         return env;
     }
 
-    private static void Clean(params string[] names)
+    private static void Forget(params string[] names)
     {
-        foreach (var n in names)
-        {
-            Environment.SetEnvironmentVariable(n, null);
-            ShellExports.Forget(n);
-        }
+        foreach (var n in names) ShellExports.Forget(n);
     }
 
     [Fact]
@@ -196,9 +199,10 @@ public class ChildEnvironmentGuardTests
         using var _ = BashNameCase.Override(windows: true);
         ShellExports.Reset();
         bool pathWasExported = ShellExports.IsExported("PATH");
+        using var env = ProcessEnv.Preserve(store);
         try
         {
-            Environment.SetEnvironmentVariable(store, "v");    // what `path=v` does
+            env.Change(store, "v");                               // what `path=v` does
             ShellExports.Export("path");
             Assert.True(ShellExports.IsExported("path"));
             Assert.True(ShellExports.IsExported(store));
@@ -207,17 +211,19 @@ public class ChildEnvironmentGuardTests
             Assert.False(ShellExports.IsExported(store));
             Assert.Equal(pathWasExported, ShellExports.IsExported("PATH"));
         }
-        finally { Clean(store); }
+        finally { Forget(store); }
     }
+
     [Fact]
     public void AVariableNobodyExported_IsNotInTheChildEnvironment()
     {
         const string plain = "PSB_GUARD_PLAIN", exported = "PSB_GUARD_EXPORTED";
         ShellExports.Reset();
+        using var env = ProcessEnv.Preserve(plain, exported);
         try
         {
-            Environment.SetEnvironmentVariable(plain, "1");      // what `x=1`, `read x`, `for x` all do
-            Environment.SetEnvironmentVariable(exported, "2");
+            env.Change(plain, "1");                               // what `x=1`, `read x`, `for x` all do
+            env.Change(exported, "2");
             ShellExports.Export(exported);
 
             Assert.False(ShellExports.IsExported(plain));
@@ -230,7 +236,7 @@ public class ChildEnvironmentGuardTests
             Assert.Contains(plain, ShellExports.UnexportedNames());
             Assert.DoesNotContain(exported, ShellExports.UnexportedNames());
         }
-        finally { Clean(plain, exported); }
+        finally { Forget(plain, exported); }
     }
 
     [Fact]
@@ -238,23 +244,24 @@ public class ChildEnvironmentGuardTests
     {
         const string a = "PSB_GUARD_UNEXPORT", b = "PSB_GUARD_FORGET";
         ShellExports.Reset();
+        using var env = ProcessEnv.Preserve(a, b);
         try
         {
-            Environment.SetEnvironmentVariable(a, "1");
-            Environment.SetEnvironmentVariable(b, "1");
+            env.Change(a, "1");
+            env.Change(b, "1");
             ShellExports.Export(a, b);
 
-            ShellExports.Unexport(a);                            // export -n / declare +x
+            ShellExports.Unexport(a);                             // export -n / declare +x
             Assert.False(ShellExports.IsExported(a));
             Assert.Equal("1", Environment.GetEnvironmentVariable(a));
             Assert.False(ChildOf(a).ContainsKey(a));
 
-            Environment.SetEnvironmentVariable(b, null);         // unset b; b=2
+            env.Change(b, null);                                  // unset b; b=2
             ShellExports.Forget(b);
-            Environment.SetEnvironmentVariable(b, "2");
+            env.Change(b, "2");
             Assert.False(ShellExports.IsExported(b));
         }
-        finally { Clean(a, b); }
+        finally { Forget(a, b); }
     }
 
     [Fact]
@@ -262,14 +269,14 @@ public class ChildEnvironmentGuardTests
     {
         const string name = "PSB_GUARD_OVERRIDE";
         ShellExports.Reset();
+        using var shell = ProcessEnv.Set(name, "shell");
         try
         {
-            Environment.SetEnvironmentVariable(name, "shell");
             var env = new Dictionary<string, string?>(ShellExports.NameComparer) { [name] = "for-the-child" };
-            ShellExports.RemoveUnexported(env);                  // `env NAME=v prog`: the caller's own entry
+            ShellExports.RemoveUnexported(env);                   // `env NAME=v prog`: the caller's own entry
             Assert.Equal("for-the-child", env[name]);
         }
-        finally { Clean(name); }
+        finally { Forget(name); }
     }
 
     [Fact]
@@ -277,16 +284,16 @@ public class ChildEnvironmentGuardTests
     {
         const string name = "PSB_GUARD_TEMP";
         ShellExports.Reset();
+        using var env = ProcessEnv.Set(name, "1");
         try
         {
-            Environment.SetEnvironmentVariable(name, "1");
             string[] names = [name];
-            bool[] was = ShellExports.BeginTemp(names);          // NAME=1 cmd
+            bool[] was = ShellExports.BeginTemp(names);           // NAME=1 cmd
             Assert.True(ShellExports.IsExported(name));
             ShellExports.EndTemp(names, was);
             Assert.False(ShellExports.IsExported(name));
         }
-        finally { Clean(name); }
+        finally { Forget(name); }
     }
 
     [Fact]
@@ -294,15 +301,15 @@ public class ChildEnvironmentGuardTests
     {
         const string name = "PSB_GUARD_SUBSHELL";
         ShellExports.Reset();
+        using var env = ProcessEnv.Set(name, "1");
         try
         {
-            Environment.SetEnvironmentVariable(name, "1");
-            var saved = ShellExports.Save();                     // ( export NAME )
+            var saved = ShellExports.Save();                      // ( export NAME )
             ShellExports.Export(name);
             Assert.True(ShellExports.IsExported(name));
             ShellExports.Restore(saved);
             Assert.False(ShellExports.IsExported(name));
         }
-        finally { Clean(name); }
+        finally { Forget(name); }
     }
 }

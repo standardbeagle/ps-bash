@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using PsBash.Core;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Core.Tests.Transpiler;
@@ -10,7 +11,7 @@ namespace PsBash.Core.Tests.Transpiler;
 /// working directory the OS resolves is the long one. The two are the same directory and must both read as /tmp.
 /// Oracle note: bash has no 8.3 names; this is a Windows-only spelling concern, so a hand-written test.
 /// </summary>
-[Collection("EnvVar")]
+[Collection(ProcessEnvironmentCollection.Name)]
 public class RuntimePathShortNameTests
 {
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetShortPathNameW")]
@@ -21,13 +22,12 @@ public class RuntimePathShortNameTests
     {
         Skip.IfNot(OperatingSystem.IsWindows(), "8.3 names are Windows-only");
         var root = Directory.CreateTempSubdirectory("ps-bash-a-rather-long-name-").FullName;
-        var old = Environment.GetEnvironmentVariable("TEMP");
         try
         {
             var sb = new StringBuilder(1024);
             Skip.If(GetShortPathName(root, sb, (uint)sb.Capacity) == 0 || sb.ToString().Equals(root, StringComparison.OrdinalIgnoreCase),
                 "8.3 short names are disabled on this volume");
-            Environment.SetEnvironmentVariable("TEMP", sb.ToString());
+            using var env = ProcessEnv.Set("TEMP", sb.ToString());
 
             Assert.True(RuntimePath.TryUnmapTmp(root, out var bash), "long spelling of the short TEMP");
             Assert.Equal("/tmp", bash);
@@ -39,7 +39,6 @@ public class RuntimePathShortNameTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("TEMP", old);
             try { Directory.Delete(root, recursive: true); } catch { }
         }
     }

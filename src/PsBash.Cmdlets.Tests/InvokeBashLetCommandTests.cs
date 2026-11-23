@@ -20,9 +20,11 @@ public class InvokeBashLetCommandTests : IClassFixture<SharedPwshFixture>
         _fixture = fixture;
     }
 
-    private long? RunAndReadIntVar(string script, string varName)
+    private long? RunAndReadIntVar(string script, string varName) => RunAndReadIntVar(_fixture, script, varName);
+
+    internal static long? RunAndReadIntVar(SharedPwshFixture fixture, string script, string varName)
     {
-        var pwsh = _fixture.AcquireFresh();
+        var pwsh = fixture.AcquireFresh();
         pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         var result = pwsh.AddScript(
@@ -96,15 +98,6 @@ public class InvokeBashLetCommandTests : IClassFixture<SharedPwshFixture>
         var r = RunAndReadIntVar("Invoke-BashLet 'r=17%5'", "r");
         Assert.Equal(3L, v);
         Assert.Equal(2L, r);
-    }
-
-    [Fact]
-    public void Let_VariableLookup_ReadsTheShellVariables()
-    {
-        var v = RunAndReadIntVar(
-            "$env:a = '10'; $env:b = '3'; try { Invoke-BashLet 'c=a*b+1' } finally { $env:a = $null; $env:b = $null }",
-            "c");
-        Assert.Equal(31L, v);
     }
 
     [Fact]
@@ -216,5 +209,22 @@ public class InvokeBashLetCommandTests : IClassFixture<SharedPwshFixture>
         // The semicolon falls through to the parser's "trailing tokens" error.
         Assert.DoesNotContain(lines, l => l.Contains("PWNED"));
         Assert.Contains("after", lines);
+    }
+}
+
+/// <summary>let cases that set the process environment (<c>$env:a</c>, <c>$env:b</c>), so they run alone and restore it.</summary>
+[Collection(ProcessEnvironmentCollection.Name)]
+public class InvokeBashLetEnvironmentTests : IClassFixture<SharedPwshFixture>
+{
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashLetEnvironmentTests(SharedPwshFixture fixture) => _fixture = fixture;
+
+    [Fact]
+    public void Let_VariableLookup_ReadsTheShellVariables()
+    {
+        using var env = PsBash.Testing.ProcessEnv.Preserve("a", "b", "c");
+        var v = InvokeBashLetCommandTests.RunAndReadIntVar(_fixture, "$env:a = '10'; $env:b = '3'; Invoke-BashLet 'c=a*b+1'", "c");
+        Assert.Equal(31L, v);
     }
 }

@@ -1,6 +1,7 @@
 using Xunit;
 using PsBash.Core.Parser;
 using PsBash.Core.Transpiler;
+using PsBash.Testing;
 
 namespace PsBash.Core.Tests.Transpiler;
 
@@ -292,242 +293,6 @@ public class BashTranspilerTests
         // because it is null." — so drop the redirect entirely.
         var result = BashTranspiler.Transpile("eval 'echo hi' < /dev/null");
         Assert.DoesNotContain("Get-Content $null", result);
-    }
-
-    [Fact]
-    public void MsysDrivePathInRedirectTarget_TranslatedToWindowsPath_WhenUnixPathsOn()
-    {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
-        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
-        try
-        {
-            var result = BashTranspiler.Transpile("echo hi > /c/Users/andyb/foo.log");
-            Assert.Contains("Invoke-BashRedirect -Path C:\\Users\\andyb\\foo.log", result);
-        }
-        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
-    }
-
-    [Theory]
-    [InlineData("dirname /x/y/z", "/x/y/z")]
-    [InlineData("basename /c/Users/x.txt", "/c/Users/x.txt")]
-    [InlineData("dirname /tmp/a/b", "/tmp/a/b")]
-    public void Transpile_DirnameBasenameOperand_IsTextNotRewrittenToAWindowsPath(string bash, string expected)
-    {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
-        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
-        try
-        {
-            var result = BashTranspiler.Transpile(bash);
-            Assert.Contains(expected, result);
-            Assert.DoesNotContain("TEMP", result);
-            Assert.DoesNotContain(":\\", result);
-        }
-        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
-    }
-
-    [Fact]
-    public void MsysDrivePathInRedirectTarget_PreservedLiteral_WhenUnixPathsOff()
-    {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
-        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "0");
-        try
-        {
-            var result = BashTranspiler.Transpile("echo hi > /c/Users/andyb/foo.log");
-            Assert.Contains("Invoke-BashRedirect -Path /c/Users/andyb/foo.log", result);
-        }
-        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
-    }
-
-    // Regression: an EXPANDED redirect target (`2> $d/e`, d=/c/Users/...) was emitted as a raw
-    // PowerShell redirect to `$env:d/e`, resolved against the current drive (`C:\c\Users\...`):
-    // "No such file or directory". Only a literal `/c/…` word was rewritten. Now the target is
-    // mapped at run time; a literal target keeps the static rewrite. File targets — stderr too — go
-    // through the Invoke-BashRedirect stage, which maps its targets (WindowsPath rules) when it opens
-    // them (RedirectStreamingTests.Redirect_UnixDrivePathTarget_IsMappedToTheDrive), never as a raw
-    // PowerShell `2>` resolved against the current drive.
-    [Theory]
-    [InlineData("ls x 2>$d/e", " -ErrorPath ", "2>$")]
-    [InlineData("ls x 2>>\"$d/e\"", " -ErrorPath ", "2>>")]
-    [InlineData("echo hi &> $d/e", " -Path ", ">$")]
-    public void ExpandedRedirectTarget_GoesToRuntimeMappedStage_WhenUnixPathsOn(string bash, string param, string nativeForm)
-    {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
-        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
-        try
-        {
-            var result = BashTranspiler.Transpile(bash);
-            Assert.Contains("| Invoke-BashRedirect", result);
-            // Unquoted, `$d/e` is split and pathname-expanded first (one field is the path), so the value reaches
-            // -Path through that expansion; quoted, it is the string itself.
-            string flat = result.Replace("\"", "");
-            Assert.Contains(param, flat);
-            Assert.Contains(bash.Contains('"') ? param + "$env:d/e" : "$env:d", flat);
-            Assert.DoesNotContain(nativeForm, result);
-        }
-        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
-    }
-
-    [Fact]
-    public void ExpandedRedirectTarget_LeftRaw_WhenUnixPathsOff()
-    {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
-        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "0");
-        try
-        {
-            var result = BashTranspiler.Transpile("ls x 2>$d/e");
-            Assert.DoesNotContain("WindowsPath", result);
-        }
-        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
-    }
-
-    [Fact]
-    public void LiteralStderrRedirectTarget_StaticRewriteOnly_WhenUnixPathsOn()
-    {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
-        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
-        try
-        {
-            var result = BashTranspiler.Transpile("ls x 2>/c/x/e");
-            Assert.Contains("-ErrorPath C:\\x\\e", result);
-            Assert.DoesNotContain("WindowsPath", result);
-        }
-        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
-    }
-
-    // Regression: MSYS drive paths were translated only in redirect targets, not
-    // in plain command operands. `cat /c/Users/andyb/foo` passed `/c/Users/...`
-    // through verbatim; the runtime resolved it against the current drive and got
-    // `C:\c\Users\...` ("No such file or directory"). Captured live from the Claude
-    // Code Bash tool, which runs with PSBASH_UNIX_PATHS=1.
-    [Fact]
-    public void MsysDrivePathInCommandOperand_TranslatedToWindowsPath_WhenUnixPathsOn()
-    {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
-        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
-        try
-        {
-            var result = BashTranspiler.Transpile("cat /c/Users/andyb/foo.log");
-            Assert.Contains("Invoke-BashCat C:\\Users\\andyb\\foo.log", result);
-        }
-        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
-    }
-
-    [Fact]
-    public void MsysDrivePathInCommandOperand_PreservedLiteral_WhenUnixPathsOff()
-    {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
-        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "0");
-        try
-        {
-            var result = BashTranspiler.Transpile("cat /c/Users/andyb/foo.log");
-            Assert.Contains("Invoke-BashCat /c/Users/andyb/foo.log", result);
-        }
-        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
-    }
-
-    // Regression: a bare single-letter operand (`cmd /c echo hi`, `find /i`, `robocopy /e`,
-    // `taskkill /f /pid 1`) is a Windows SWITCH, not the drive root. It was rewritten to
-    // `C:\`, so cmd lost its /c and started an interactive shell. `/c/x` stays a drive path.
-    [Theory]
-    [InlineData("cmd /c echo hi", "/c")]
-    [InlineData("robocopy a b /e", "/e")]
-    [InlineData("taskkill /f /pid 1", "/f")]
-    [InlineData("find /i", "/i")]
-    public void SingleLetterSwitchOperand_NotTranslatedToDriveRoot_WhenUnixPathsOn(string script, string sw)
-    {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
-        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
-        try
-        {
-            var result = BashTranspiler.Transpile(script);
-            Assert.Contains(sw, result);
-            Assert.DoesNotContain(":\\", result);
-        }
-        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
-    }
-
-    [Fact]
-    public void BareDriveRootForCd_StillTranslated_WhenUnixPathsOn()
-    {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
-        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
-        try
-        {
-            var result = BashTranspiler.Transpile("cd /c");
-            Assert.Contains("C:\\", result);
-        }
-        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
-    }
-
-    // WSL-style drive paths (/mnt/c/...) must translate the same as MSYS /c/...,
-    // since LLMs emit both. Operand + cd both go through the shared WindowsPath
-    // mapper now.
-    [Fact]
-    public void WslDrivePathInCommandOperand_TranslatedToWindowsPath_WhenUnixPathsOn()
-    {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
-        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
-        try
-        {
-            var result = BashTranspiler.Transpile("cat /mnt/c/Users/andyb/foo.log");
-            Assert.Contains("Invoke-BashCat C:\\Users\\andyb\\foo.log", result);
-        }
-        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
-    }
-
-    [Fact]
-    public void WslDrivePathInCdTarget_TranslatedToWindowsPath_WhenUnixPathsOn()
-    {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
-        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
-        try
-        {
-            var result = BashTranspiler.Transpile("cd /mnt/c/Users/andyb");
-            Assert.Contains("$__psbash_cd_target = 'C:\\Users\\andyb'", result);
-        }
-        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
-    }
-
-    [Fact]
-    public void WslDrivePathInRedirectTarget_TranslatedToWindowsPath_WhenUnixPathsOn()
-    {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
-        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
-        try
-        {
-            var result = BashTranspiler.Transpile("echo hi > /mnt/c/Users/andyb/foo.log");
-            Assert.Contains("Invoke-BashRedirect -Path C:\\Users\\andyb\\foo.log", result);
-        }
-        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
-    }
-
-    // Same gap for `cd`: `cd /c/Users/andyb` resolved `/c/Users/andyb` against the
-    // current drive via [Path]::GetFullPath -> `C:\c\Users\andyb`, which does not
-    // exist, so every `cd /c/...` failed with "No such file or directory".
-    [Fact]
-    public void MsysDrivePathInCdTarget_TranslatedToWindowsPath_WhenUnixPathsOn()
-    {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
-        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
-        try
-        {
-            var result = BashTranspiler.Transpile("cd /c/Users/andyb");
-            Assert.Contains("$__psbash_cd_target = 'C:\\Users\\andyb'", result);
-        }
-        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
-    }
-
-    [Fact]
-    public void MsysDrivePathInCdTarget_PreservedLiteral_WhenUnixPathsOff()
-    {
-        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
-        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "0");
-        try
-        {
-            var result = BashTranspiler.Transpile("cd /c/Users/andyb");
-            Assert.Contains("$__psbash_cd_target = '/c/Users/andyb'", result);
-        }
-        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
     }
 
     // Regression: a compound command (for/while/if/case, subshell, brace group)
@@ -1243,5 +1008,174 @@ public class BashTranspilerTests
         Assert.Contains("@(Get-BashFuncNames)[0]", result);
         // Outside a function it is unset, so `set -u` must still report it.
         Assert.Contains("unbound variable", result);
+    }
+}
+
+/// <summary>
+/// The PSBASH_UNIX_PATHS-dependent transpile (MSYS / WSL drive paths). The switch is process environment, so these run
+/// alone (<see cref="ProcessEnvironmentCollection"/>) and restore it; the rest of BashTranspilerTests stays parallel.
+/// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
+public class BashTranspilerUnixPathsTests
+{
+    [Fact]
+    public void MsysDrivePathInRedirectTarget_TranslatedToWindowsPath_WhenUnixPathsOn()
+    {
+        using var env = ProcessEnv.Set("PSBASH_UNIX_PATHS", "1");
+        var result = BashTranspiler.Transpile("echo hi > /c/Users/andyb/foo.log");
+        Assert.Contains("Invoke-BashRedirect -Path C:\\Users\\andyb\\foo.log", result);
+    }
+
+    [Theory]
+    [InlineData("dirname /x/y/z", "/x/y/z")]
+    [InlineData("basename /c/Users/x.txt", "/c/Users/x.txt")]
+    [InlineData("dirname /tmp/a/b", "/tmp/a/b")]
+    public void Transpile_DirnameBasenameOperand_IsTextNotRewrittenToAWindowsPath(string bash, string expected)
+    {
+        using var env = ProcessEnv.Set("PSBASH_UNIX_PATHS", "1");
+        var result = BashTranspiler.Transpile(bash);
+        Assert.Contains(expected, result);
+        Assert.DoesNotContain("TEMP", result);
+        Assert.DoesNotContain(":\\", result);
+    }
+
+    [Fact]
+    public void MsysDrivePathInRedirectTarget_PreservedLiteral_WhenUnixPathsOff()
+    {
+        using var env = ProcessEnv.Set("PSBASH_UNIX_PATHS", "0");
+        var result = BashTranspiler.Transpile("echo hi > /c/Users/andyb/foo.log");
+        Assert.Contains("Invoke-BashRedirect -Path /c/Users/andyb/foo.log", result);
+    }
+
+    // Regression: an EXPANDED redirect target (`2> $d/e`, d=/c/Users/...) was emitted as a raw
+    // PowerShell redirect to `$env:d/e`, resolved against the current drive (`C:\c\Users\...`):
+    // "No such file or directory". Only a literal `/c/…` word was rewritten. Now the target is
+    // mapped at run time; a literal target keeps the static rewrite. File targets — stderr too — go
+    // through the Invoke-BashRedirect stage, which maps its targets (WindowsPath rules) when it opens
+    // them (RedirectStreamingTests.Redirect_UnixDrivePathTarget_IsMappedToTheDrive), never as a raw
+    // PowerShell `2>` resolved against the current drive.
+    [Theory]
+    [InlineData("ls x 2>$d/e", " -ErrorPath ", "2>$")]
+    [InlineData("ls x 2>>\"$d/e\"", " -ErrorPath ", "2>>")]
+    [InlineData("echo hi &> $d/e", " -Path ", ">$")]
+    public void ExpandedRedirectTarget_GoesToRuntimeMappedStage_WhenUnixPathsOn(string bash, string param, string nativeForm)
+    {
+        using var env = ProcessEnv.Set("PSBASH_UNIX_PATHS", "1");
+        var result = BashTranspiler.Transpile(bash);
+        Assert.Contains("| Invoke-BashRedirect", result);
+        // Unquoted, `$d/e` is split and pathname-expanded first (one field is the path), so the value reaches
+        // -Path through that expansion; quoted, it is the string itself.
+        string flat = result.Replace("\"", "");
+        Assert.Contains(param, flat);
+        Assert.Contains(bash.Contains('"') ? param + "$env:d/e" : "$env:d", flat);
+        Assert.DoesNotContain(nativeForm, result);
+    }
+
+    [Fact]
+    public void ExpandedRedirectTarget_LeftRaw_WhenUnixPathsOff()
+    {
+        using var env = ProcessEnv.Set("PSBASH_UNIX_PATHS", "0");
+        var result = BashTranspiler.Transpile("ls x 2>$d/e");
+        Assert.DoesNotContain("WindowsPath", result);
+    }
+
+    [Fact]
+    public void LiteralStderrRedirectTarget_StaticRewriteOnly_WhenUnixPathsOn()
+    {
+        using var env = ProcessEnv.Set("PSBASH_UNIX_PATHS", "1");
+        var result = BashTranspiler.Transpile("ls x 2>/c/x/e");
+        Assert.Contains("-ErrorPath C:\\x\\e", result);
+        Assert.DoesNotContain("WindowsPath", result);
+    }
+
+    // Regression: MSYS drive paths were translated only in redirect targets, not
+    // in plain command operands. `cat /c/Users/andyb/foo` passed `/c/Users/...`
+    // through verbatim; the runtime resolved it against the current drive and got
+    // `C:\c\Users\...` ("No such file or directory"). Captured live from the Claude
+    // Code Bash tool, which runs with PSBASH_UNIX_PATHS=1.
+    [Fact]
+    public void MsysDrivePathInCommandOperand_TranslatedToWindowsPath_WhenUnixPathsOn()
+    {
+        using var env = ProcessEnv.Set("PSBASH_UNIX_PATHS", "1");
+        var result = BashTranspiler.Transpile("cat /c/Users/andyb/foo.log");
+        Assert.Contains("Invoke-BashCat C:\\Users\\andyb\\foo.log", result);
+    }
+
+    [Fact]
+    public void MsysDrivePathInCommandOperand_PreservedLiteral_WhenUnixPathsOff()
+    {
+        using var env = ProcessEnv.Set("PSBASH_UNIX_PATHS", "0");
+        var result = BashTranspiler.Transpile("cat /c/Users/andyb/foo.log");
+        Assert.Contains("Invoke-BashCat /c/Users/andyb/foo.log", result);
+    }
+
+    // Regression: a bare single-letter operand (`cmd /c echo hi`, `find /i`, `robocopy /e`,
+    // `taskkill /f /pid 1`) is a Windows SWITCH, not the drive root. It was rewritten to
+    // `C:\`, so cmd lost its /c and started an interactive shell. `/c/x` stays a drive path.
+    [Theory]
+    [InlineData("cmd /c echo hi", "/c")]
+    [InlineData("robocopy a b /e", "/e")]
+    [InlineData("taskkill /f /pid 1", "/f")]
+    [InlineData("find /i", "/i")]
+    public void SingleLetterSwitchOperand_NotTranslatedToDriveRoot_WhenUnixPathsOn(string script, string sw)
+    {
+        using var env = ProcessEnv.Set("PSBASH_UNIX_PATHS", "1");
+        var result = BashTranspiler.Transpile(script);
+        Assert.Contains(sw, result);
+        Assert.DoesNotContain(":\\", result);
+    }
+
+    [Fact]
+    public void BareDriveRootForCd_StillTranslated_WhenUnixPathsOn()
+    {
+        using var env = ProcessEnv.Set("PSBASH_UNIX_PATHS", "1");
+        var result = BashTranspiler.Transpile("cd /c");
+        Assert.Contains("C:\\", result);
+    }
+
+    // WSL-style drive paths (/mnt/c/...) must translate the same as MSYS /c/...,
+    // since LLMs emit both. Operand + cd both go through the shared WindowsPath
+    // mapper now.
+    [Fact]
+    public void WslDrivePathInCommandOperand_TranslatedToWindowsPath_WhenUnixPathsOn()
+    {
+        using var env = ProcessEnv.Set("PSBASH_UNIX_PATHS", "1");
+        var result = BashTranspiler.Transpile("cat /mnt/c/Users/andyb/foo.log");
+        Assert.Contains("Invoke-BashCat C:\\Users\\andyb\\foo.log", result);
+    }
+
+    [Fact]
+    public void WslDrivePathInCdTarget_TranslatedToWindowsPath_WhenUnixPathsOn()
+    {
+        using var env = ProcessEnv.Set("PSBASH_UNIX_PATHS", "1");
+        var result = BashTranspiler.Transpile("cd /mnt/c/Users/andyb");
+        Assert.Contains("$__psbash_cd_target = 'C:\\Users\\andyb'", result);
+    }
+
+    [Fact]
+    public void WslDrivePathInRedirectTarget_TranslatedToWindowsPath_WhenUnixPathsOn()
+    {
+        using var env = ProcessEnv.Set("PSBASH_UNIX_PATHS", "1");
+        var result = BashTranspiler.Transpile("echo hi > /mnt/c/Users/andyb/foo.log");
+        Assert.Contains("Invoke-BashRedirect -Path C:\\Users\\andyb\\foo.log", result);
+    }
+
+    // Same gap for `cd`: `cd /c/Users/andyb` resolved `/c/Users/andyb` against the
+    // current drive via [Path]::GetFullPath -> `C:\c\Users\andyb`, which does not
+    // exist, so every `cd /c/...` failed with "No such file or directory".
+    [Fact]
+    public void MsysDrivePathInCdTarget_TranslatedToWindowsPath_WhenUnixPathsOn()
+    {
+        using var env = ProcessEnv.Set("PSBASH_UNIX_PATHS", "1");
+        var result = BashTranspiler.Transpile("cd /c/Users/andyb");
+        Assert.Contains("$__psbash_cd_target = 'C:\\Users\\andyb'", result);
+    }
+
+    [Fact]
+    public void MsysDrivePathInCdTarget_PreservedLiteral_WhenUnixPathsOff()
+    {
+        using var env = ProcessEnv.Set("PSBASH_UNIX_PATHS", "0");
+        var result = BashTranspiler.Transpile("cd /c/Users/andyb");
+        Assert.Contains("$__psbash_cd_target = '/c/Users/andyb'", result);
     }
 }

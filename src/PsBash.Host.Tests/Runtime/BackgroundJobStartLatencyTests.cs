@@ -1,4 +1,5 @@
 using System.Globalization;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Host.Tests.Runtime;
@@ -25,18 +26,17 @@ public class BackgroundJobStartLatencyTests : IAsyncLifetime
     private static readonly TimeSpan StartBound = TimeSpan.FromMilliseconds(150);
 
     private readonly HostWorkerFixture _fixture = new();
-    private string? _bgMode;
+    private ProcessEnv? _env;
 
     public async Task InitializeAsync()
     {
-        _bgMode = Environment.GetEnvironmentVariable("PSBASH_BG_MODE");
-        Environment.SetEnvironmentVariable("PSBASH_BG_MODE", "inproc");
+        _env = ProcessEnv.Set("PSBASH_BG_MODE", "inproc");
         await _fixture.InitializeAsync();
     }
 
     public async Task DisposeAsync()
     {
-        Environment.SetEnvironmentVariable("PSBASH_BG_MODE", _bgMode);
+        _env?.Dispose();
         await _fixture.DisposeAsync();
     }
 

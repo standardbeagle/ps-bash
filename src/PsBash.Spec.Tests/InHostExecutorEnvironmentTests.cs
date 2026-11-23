@@ -1,9 +1,12 @@
+using PsBash.Testing;
+
 namespace PsBash.Spec.Tests;
 
 /// <summary>
 /// The environment a spec case runs with. REGRESSION (fleet g17): OLDPWD came from however the test process was started,
 /// so builtin-cd "cd - without OLDPWD" passed here (inherited) and failed on beagle-ab (ssh, none).
 /// </summary>
+[Collection(ProcessEnvironmentCollection.Name)] // NeverCarriesTheLauncherDashCMark sets PSBASH_DASH_C; runs alone
 public class InHostExecutorEnvironmentTests
 {
     [Fact]
@@ -23,13 +26,8 @@ public class InHostExecutorEnvironmentTests
     [Fact]
     public void CaseEnvironment_NeverCarriesTheLauncherDashCMark()
     {
-        var before = Environment.GetEnvironmentVariable("PSBASH_DASH_C");
-        Environment.SetEnvironmentVariable("PSBASH_DASH_C", "1");
-        try
-        {
-            var env = InHostExecutor.CaseEnvironment(@"C:\case-dir");
-            Assert.DoesNotContain(env, e => string.Equals(e.Key, "PSBASH_DASH_C", StringComparison.OrdinalIgnoreCase));
-        }
-        finally { Environment.SetEnvironmentVariable("PSBASH_DASH_C", before); }
+        using var scope = ProcessEnv.Set("PSBASH_DASH_C", "1");
+        var env = InHostExecutor.CaseEnvironment(@"C:\case-dir");
+        Assert.DoesNotContain(env, e => string.Equals(e.Key, "PSBASH_DASH_C", StringComparison.OrdinalIgnoreCase));
     }
 }

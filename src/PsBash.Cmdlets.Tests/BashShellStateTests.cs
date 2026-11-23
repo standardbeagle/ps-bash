@@ -6,15 +6,21 @@ namespace PsBash.Cmdlets.Tests;
 /// <see cref="BashShellState"/> round trip, driven the way the emitted subshell scope drives it
 /// (<c>PsBuild.ShellStateScope</c>): save, let the body change state, restore. Hand-written, not
 /// oracle: this is the runtime half of a transpiler construct; end to end in
-/// <c>SubshellScopeDifferentialTests</c>.
+/// <c>SubshellScopeDifferentialTests</c>. The scripts set <c>$env:PSB_*</c>/<c>$env:psbt_*</c> in the process
+/// environment, so the class runs alone and every run restores the environment.
 /// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
 public class BashShellStateTests : IClassFixture<SharedPwshFixture>
 {
     private readonly SharedPwshFixture _fixture;
 
     public BashShellStateTests(SharedPwshFixture fixture) => _fixture = fixture;
 
-    private CmdResult Run(string script) => CmdResult.Run(_fixture.AcquireFresh(), script);
+    private CmdResult Run(string script)
+    {
+        using var env = PsBash.Testing.ProcessEnv.PreserveAll();
+        return CmdResult.Run(_fixture.AcquireFresh(), script);
+    }
 
     [Fact]
     public void SaveRestore_UndoesVariablesFlagsPositionalsAndShopt()

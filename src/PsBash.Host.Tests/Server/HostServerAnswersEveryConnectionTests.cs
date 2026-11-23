@@ -1,6 +1,7 @@
 using PsBash.Core.Runtime.Ipc;
 using PsBash.Host.Runtime;
 using PsBash.Host.Server;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Host.Tests.Server;
@@ -10,12 +11,13 @@ namespace PsBash.Host.Tests.Server;
 /// just close the stream. Under load, HostServerTests / lifecycle tests failed with
 /// "Response stream closed before EXIT sentinel": a failure escaping Connection was caught only AFTER
 /// the stream had been disposed, and the request-read-timeout / malformed-request paths returned
-/// silently. Each is the same user-visible "host connection reset". Same collection as
-/// HostServerTests: <see cref="Connection.FaultForTest"/> and the env knob are process-wide.
+/// silently. Each is the same user-visible "host connection reset". <see cref="Connection.FaultForTest"/> and the env
+/// knob are process-wide: the class runs alone, so never beside HostServerTests.
 /// </summary>
-[Collection("SdkHost")]
+[Collection(ProcessEnvironmentCollection.Name)] // PSBASH_REQUEST_READ_TIMEOUT_MS; runs alone, so off the SdkHost lane too
 public sealed class HostServerAnswersEveryConnectionTests : IAsyncLifetime
 {
+    private readonly ProcessEnv _env = ProcessEnv.Preserve("PSBASH_REQUEST_READ_TIMEOUT_MS");
     private WorkerPool<SdkWorker> _pool = null!;
     private HostServer _server = null!;
     private CancellationTokenSource _cts = null!;
@@ -38,7 +40,7 @@ public sealed class HostServerAnswersEveryConnectionTests : IAsyncLifetime
     public async Task DisposeAsync()
     {
         Connection.FaultForTest = null;
-        Environment.SetEnvironmentVariable("PSBASH_REQUEST_READ_TIMEOUT_MS", null);
+        _env.Dispose();
         HostLog.PathOverride = null;
         _cts.Cancel();
         try { await _serverTask.WaitAsync(TimeSpan.FromSeconds(3)); } catch { }
@@ -74,7 +76,7 @@ public sealed class HostServerAnswersEveryConnectionTests : IAsyncLifetime
     public async Task RequestNeverArrives_IsAnsweredNotSilentlyClosed()
     {
         Skip.IfNot(OperatingSystem.IsWindows(), "named-pipe fixture");
-        Environment.SetEnvironmentVariable("PSBASH_REQUEST_READ_TIMEOUT_MS", "500");
+        _env.Change("PSBASH_REQUEST_READ_TIMEOUT_MS", "500");
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
         await using var client = new UnixSocketTransport(_socketPath);

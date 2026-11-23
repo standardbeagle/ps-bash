@@ -146,13 +146,19 @@ public class ColumnFillTests
     // ── end to end ──────────────────────────────────────────────────────────────────────────────
 }
 
-/// <summary>The cmdlet: width from -c, COLUMNS or the 80 default; -x; mutually exclusive with -t.</summary>
+/// <summary>The cmdlet: width from -c, COLUMNS or the 80 default; -x; mutually exclusive with -t. The COLUMNS cases set
+/// the process environment, so the class runs alone.</summary>
+[Collection(ProcessEnvironmentCollection.Name)]
 public class ColumnFillCmdletTests : IClassFixture<SharedPwshFixture>
 {
     private readonly SharedPwshFixture _fixture;
     public ColumnFillCmdletTests(SharedPwshFixture fixture) => _fixture = fixture;
 
-    private CmdResult Run(string script) => CmdResult.Run(_fixture.AcquireFresh(), script);
+    private CmdResult Run(string script)
+    {
+        using var env = PsBash.Testing.ProcessEnv.Preserve("COLUMNS");
+        return CmdResult.Run(_fixture.AcquireFresh(), script);
+    }
 
     [Fact]
     public void WidthOption_AndFillRows()

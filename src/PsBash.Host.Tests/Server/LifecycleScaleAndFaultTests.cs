@@ -4,6 +4,7 @@ using PsBash.Core.Runtime;
 using PsBash.Core.Runtime.Ipc;
 using PsBash.Host.Runtime;
 using PsBash.Host.Server;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Host.Tests.Server;
@@ -27,7 +28,7 @@ namespace PsBash.Host.Tests.Server;
 /// - Endpoint sidecars and unix socket files are cleaned up.
 /// - CI-safe timeouts: every wait has a hard deadline; nothing hangs.
 /// </summary>
-[Collection("SdkHost")]
+[Collection(ProcessEnvironmentCollection.Name)] // PSBASH_IPC_ENDPOINT, PSBASH_TIMEOUT; runs alone, so off the SdkHost lane too
 [Trait("Category", "Lifecycle")]
 public sealed class LifecycleScaleAndFaultTests
 {
@@ -111,8 +112,7 @@ public sealed class LifecycleScaleAndFaultTests
     public async Task ReuseHealthyCurrentBuildHost_StartAsync_DoesNotSpawn()
     {
         var (spec, scheme, endpoint) = NewIsolatedEndpoint("reuse");
-        var prior = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
-        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, spec);
+        using var env = ProcessEnv.Set(IpcTransportFactory.EndpointEnvVar, spec);
 
         await using var transport = NewTransport(scheme, endpoint);
         await using var pool = new WorkerPool<SdkWorker>(1, 2, SdkWorker.Create);
@@ -141,7 +141,6 @@ public sealed class LifecycleScaleAndFaultTests
         {
             try { serverCts.Cancel(); } catch { }
             try { if (serverTask is not null) await serverTask.WaitAsync(TimeSpan.FromSeconds(3)); } catch { }
-            Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, prior);
             CleanupEndpoint(scheme, endpoint);
         }
     }
@@ -159,8 +158,7 @@ public sealed class LifecycleScaleAndFaultTests
     public async Task WarmZeroPool_StartAsync_IsReadyAndRunsCommand()
     {
         var (spec, scheme, endpoint) = NewIsolatedEndpoint("warm0");
-        var prior = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
-        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, spec);
+        using var env = ProcessEnv.Set(IpcTransportFactory.EndpointEnvVar, spec);
 
         await using var transport = NewTransport(scheme, endpoint);
         await using var pool = new WorkerPool<SdkWorker>(0, 2, SdkWorker.Create);
@@ -187,7 +185,6 @@ public sealed class LifecycleScaleAndFaultTests
         {
             try { serverCts.Cancel(); } catch { }
             try { if (serverTask is not null) await serverTask.WaitAsync(TimeSpan.FromSeconds(3)); } catch { }
-            Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, prior);
             CleanupEndpoint(scheme, endpoint);
         }
     }
@@ -270,8 +267,7 @@ public sealed class LifecycleScaleAndFaultTests
     public async Task WedgedHost_NeverRepliesHealth_StartAsyncFailsBounded()
     {
         var (spec, scheme, endpoint) = NewIsolatedEndpoint("wedged");
-        var prior = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
-        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, spec);
+        using var env = ProcessEnv.Set(IpcTransportFactory.EndpointEnvVar, spec);
 
         // Wedged listener: accept, then sit forever on the stream until disposal.
         using var wedgedCts = new CancellationTokenSource();
@@ -327,7 +323,6 @@ public sealed class LifecycleScaleAndFaultTests
                     try { hs.Dispose(); } catch { }
                 heldStreams.Clear();
             }
-            Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, prior);
             CleanupEndpoint(scheme, endpoint);
         }
     }
@@ -357,10 +352,8 @@ public sealed class LifecycleScaleAndFaultTests
     public async Task PerCallTimeout_BusyHost_ThrowsTimeoutExceptionBounded()
     {
         var (spec, scheme, endpoint) = NewIsolatedEndpoint("calltimeout");
-        var priorEndpoint = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
-        var priorTimeout = Environment.GetEnvironmentVariable("PSBASH_TIMEOUT");
-        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, spec);
-        Environment.SetEnvironmentVariable("PSBASH_TIMEOUT", "1"); // 1s per-call budget
+        using var env = ProcessEnv.Set(IpcTransportFactory.EndpointEnvVar, spec);
+        using var timeout = ProcessEnv.Set("PSBASH_TIMEOUT", "1"); // 1s per-call budget
 
         await using var transport = NewTransport(scheme, endpoint);
         await using var pool = new WorkerPool<SdkWorker>(1, 2, SdkWorker.Create);
@@ -398,8 +391,6 @@ public sealed class LifecycleScaleAndFaultTests
         {
             try { serverCts.Cancel(); } catch { }
             try { if (serverTask is not null) await serverTask.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
-            Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, priorEndpoint);
-            Environment.SetEnvironmentVariable("PSBASH_TIMEOUT", priorTimeout);
             CleanupEndpoint(scheme, endpoint);
         }
     }
@@ -417,10 +408,8 @@ public sealed class LifecycleScaleAndFaultTests
     public async Task IdleTimeout_StreamingOutput_SurvivesPastIdleWindow()
     {
         var (spec, scheme, endpoint) = NewIsolatedEndpoint("idlestream");
-        var priorEndpoint = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
-        var priorTimeout = Environment.GetEnvironmentVariable("PSBASH_TIMEOUT");
-        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, spec);
-        Environment.SetEnvironmentVariable("PSBASH_TIMEOUT", "2"); // 2s IDLE window (1s tripped on a cold, loaded CI runner before the first frame)
+        using var env = ProcessEnv.Set(IpcTransportFactory.EndpointEnvVar, spec);
+        using var timeout = ProcessEnv.Set("PSBASH_TIMEOUT", "2"); // 2s IDLE window (1s tripped on a cold, loaded CI runner before the first frame)
 
         await using var transport = NewTransport(scheme, endpoint);
         await using var pool = new WorkerPool<SdkWorker>(1, 2, SdkWorker.Create);
@@ -459,8 +448,6 @@ public sealed class LifecycleScaleAndFaultTests
         {
             try { serverCts.Cancel(); } catch { }
             try { if (serverTask is not null) await serverTask.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
-            Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, priorEndpoint);
-            Environment.SetEnvironmentVariable("PSBASH_TIMEOUT", priorTimeout);
             CleanupEndpoint(scheme, endpoint);
         }
     }
@@ -478,10 +465,8 @@ public sealed class LifecycleScaleAndFaultTests
     public async Task IdleTimeout_None_DisablesTimeout_SilentCommandCompletes()
     {
         var (spec, scheme, endpoint) = NewIsolatedEndpoint("idlenone");
-        var priorEndpoint = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
-        var priorTimeout = Environment.GetEnvironmentVariable("PSBASH_TIMEOUT");
-        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, spec);
-        Environment.SetEnvironmentVariable("PSBASH_TIMEOUT", "none"); // disabled
+        using var env = ProcessEnv.Set(IpcTransportFactory.EndpointEnvVar, spec);
+        using var timeout = ProcessEnv.Set("PSBASH_TIMEOUT", "none"); // disabled
 
         await using var transport = NewTransport(scheme, endpoint);
         await using var pool = new WorkerPool<SdkWorker>(1, 2, SdkWorker.Create);
@@ -507,8 +492,6 @@ public sealed class LifecycleScaleAndFaultTests
         {
             try { serverCts.Cancel(); } catch { }
             try { if (serverTask is not null) await serverTask.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
-            Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, priorEndpoint);
-            Environment.SetEnvironmentVariable("PSBASH_TIMEOUT", priorTimeout);
             CleanupEndpoint(scheme, endpoint);
         }
     }
@@ -534,8 +517,7 @@ public sealed class LifecycleScaleAndFaultTests
     public async Task ObsoleteBuildHost_ForeignOwner_LauncherRefusesCleanup()
     {
         var (spec, scheme, endpoint) = NewIsolatedEndpoint("obsolete");
-        var prior = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
-        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, spec);
+        using var env = ProcessEnv.Set(IpcTransportFactory.EndpointEnvVar, spec);
 
         using var fakeCts = new CancellationTokenSource();
         Task? fakeTask = null;
@@ -600,7 +582,6 @@ public sealed class LifecycleScaleAndFaultTests
         {
             try { fakeCts.Cancel(); } catch { }
             try { if (fakeTask is not null) await fakeTask.WaitAsync(TimeSpan.FromSeconds(3)); } catch { }
-            Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, prior);
             CleanupEndpoint(scheme, endpoint);
         }
     }
@@ -712,8 +693,7 @@ public sealed class LifecycleScaleAndFaultTests
     public async Task ConcurrentClients_RaceForHealthyHost_ExactlyOneServes()
     {
         var (spec, scheme, endpoint) = NewIsolatedEndpoint("race");
-        var prior = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
-        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, spec);
+        using var env = ProcessEnv.Set(IpcTransportFactory.EndpointEnvVar, spec);
 
         await using var transport = NewTransport(scheme, endpoint);
         await using var pool = new WorkerPool<SdkWorker>(1, 2, SdkWorker.Create);
@@ -759,7 +739,6 @@ public sealed class LifecycleScaleAndFaultTests
                 try { await c.DisposeAsync(); } catch { }
             try { serverCts.Cancel(); } catch { }
             try { if (serverTask is not null) await serverTask.WaitAsync(TimeSpan.FromSeconds(3)); } catch { }
-            Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, prior);
             CleanupEndpoint(scheme, endpoint);
         }
     }
@@ -935,8 +914,7 @@ public sealed class LifecycleScaleAndFaultTests
         Skip.If(hostBinary is null, "ps-bash-host binary not found — build src/PsBash.Host first");
 
         var (spec, scheme, endpoint) = NewIsolatedEndpoint("stray-handle");
-        var prior = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
-        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, spec);
+        using var env = ProcessEnv.Set(IpcTransportFactory.EndpointEnvVar, spec);
 
         using var stray = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.Inheritable);
         int hostPid = 0;
@@ -970,7 +948,6 @@ public sealed class LifecycleScaleAndFaultTests
             {
                 try { using var p = Process.GetProcessById(hostPid); p.Kill(entireProcessTree: true); } catch { }
             }
-            Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, prior);
             CleanupEndpoint(scheme, endpoint);
         }
     }

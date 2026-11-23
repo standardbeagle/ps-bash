@@ -9,7 +9,8 @@ namespace PsBash.Host.Tests;
 /// These tests drive a real host in-process, so any inherited <c>PSBASH_*</c> setting changes what they
 /// observe: <c>PSBASH_COMPACT_OUTPUT</c> prepends a
 /// summary line to every result, <c>PSBASH_SESSION</c> moves the endpoint. Everything is cleared except what
-/// the test harness itself passes in; a test that needs a setting sets it inside a try/finally.
+/// the test harness itself passes in; a test that needs a setting sets it in a <c>ProcessEnv</c> scope
+/// (<see cref="ProcessEnvironmentCollection"/>).
 /// </summary>
 internal static class CanonicalTestEnvironment
 {

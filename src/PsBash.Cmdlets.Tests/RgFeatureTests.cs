@@ -10,9 +10,10 @@ namespace PsBash.Cmdlets.Tests;
 /// --max-depth, -L, --json, --stats, -z, -a, -E, -P, -U, -f, --trim, --iglob and friends. Every expectation was
 /// read from ripgrep 14.1.0 (`wsl rg`) on the fixture below (the fixture is byte-identical to the oracle's /tmp/rgx).
 /// Output is normalised to forward slashes; walked-directory runs use `--sort path` (ripgrep's unsorted order is
-/// thread-dependent). Runs with the native passthrough OFF (PSBASH_RG_NATIVE unset).
+/// thread-dependent). Runs with the native passthrough OFF (PSBASH_RG_NATIVE unset). The colour case sets
+/// $env:PSBASH_RG_TTY / PSBASH_RG_COLOR in the process environment, so the class runs alone.
 /// </summary>
-[Collection("PsBashSearchEnv")]
+[Collection(ProcessEnvironmentCollection.Name)]
 public class RgFeatureTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
     private const string Esc = "\u001b";
@@ -325,6 +326,7 @@ public class RgFeatureTests : IClassFixture<SharedPwshFixture>, IDisposable
         var p = Run("Invoke-BashRg '-p' foo a.txt").AssertSuccess().Lines.ToArray();
         Assert.Equal(Ln(1) + ":" + M("foo") + " bar", p[0]);   // one file: no path, no heading line
         // `auto` colours only on a real terminal (PSBASH_PTY_ATTACHED); PSBASH_RG_TTY alone is a layout override
+        using var env = PsBash.Testing.ProcessEnv.Preserve("PSBASH_RG_TTY", "PSBASH_RG_COLOR");
         Assert.Equal("foo bar", Run("$env:PSBASH_RG_TTY='1'; try { Invoke-BashRg '-N' foo a.txt } finally { Remove-Item Env:PSBASH_RG_TTY }").AssertSuccess().Lines[0]);
         Assert.Equal(M("foo") + " bar", Run("$env:PSBASH_RG_COLOR='1'; try { Invoke-BashRg '-N' foo a.txt } finally { Remove-Item Env:PSBASH_RG_COLOR }").AssertSuccess().Lines[0]);
     }

@@ -33,9 +33,11 @@ public class InvokeBashBashCommandTests : IClassFixture<SharedPwshFixture>
         _fixture = fixture;
     }
 
-    private (string[] stdout, string? errorMessage, int? lastExitCode) Run(string script)
+    private (string[] stdout, string? errorMessage, int? lastExitCode) Run(string script) => RunIn(_fixture, script);
+
+    internal static (string[] stdout, string? errorMessage, int? lastExitCode) RunIn(SharedPwshFixture fixture, string script)
     {
-        var pwsh = _fixture.AcquireFresh();
+        var pwsh = fixture.AcquireFresh();
 
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
@@ -57,7 +59,7 @@ public class InvokeBashBashCommandTests : IClassFixture<SharedPwshFixture>
         return (lines, errMsg, exit);
     }
 
-    private static string? LocatePsBash()
+    internal static string? LocatePsBash()
     {
         var fromPath = Environment.GetEnvironmentVariable("PATH")?.Split(Path.PathSeparator);
         var exe = OperatingSystem.IsWindows() ? "ps-bash.exe" : "ps-bash";
@@ -357,25 +359,6 @@ public class InvokeBashBashCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Equal(0, exit ?? 0);
     }
 
-    /// <summary>
-    /// bash puts no time limit on a child shell. The nested shell ran under the buffered spawn's budget
-    /// (PSBASH_TIMEOUT, else 120 s) and was killed with 124 and no message; inheriting PSBASH_TIMEOUT also gave the
-    /// child launcher an idle bound its quiet `sleep` tripped. Oracle: `bash -c 'sleep 4; echo done'` prints done, 0.
-    /// </summary>
-    [SkippableFact]
-    public void Bash_ChildOutlivesPsBashTimeout_IsNotKilled()
-    {
-        Skip.If(LocatePsBash() == null, "ps-bash binary not on PATH or next to test runtime");
-
-        var (lines, err, exit) = Run(
-            "$__prior = $env:PSBASH_TIMEOUT; $env:PSBASH_TIMEOUT = '2'; " +
-            "try { Invoke-BashBash -c 'sleep 4; echo done-after-timeout' } " +
-            "finally { if ($null -eq $__prior) { Remove-Item Env:PSBASH_TIMEOUT -ErrorAction Ignore } else { $env:PSBASH_TIMEOUT = $__prior } }");
-        Assert.True(string.IsNullOrEmpty(err), $"unexpected error: {err}");
-        Assert.Equal(new[] { "done-after-timeout" }, lines);
-        Assert.Equal(0, exit);
-    }
-
     [SkippableFact]
     public void Bash_DashCExit5_PropagatesExitCode()
     {
@@ -407,5 +390,32 @@ public class InvokeBashBashCommandTests : IClassFixture<SharedPwshFixture>
         {
             try { File.Delete(tmp); } catch { }
         }
+    }
+}
+
+/// <summary>Invoke-BashBash cases that set the process environment (<c>PSBASH_TIMEOUT</c>), so they run alone.</summary>
+[Collection(ProcessEnvironmentCollection.Name)]
+public class InvokeBashBashEnvironmentTests : IClassFixture<SharedPwshFixture>
+{
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashBashEnvironmentTests(SharedPwshFixture fixture) => _fixture = fixture;
+
+    /// <summary>
+    /// bash puts no time limit on a child shell. The nested shell ran under the buffered spawn's budget
+    /// (PSBASH_TIMEOUT, else 120 s) and was killed with 124 and no message; inheriting PSBASH_TIMEOUT also gave the
+    /// child launcher an idle bound its quiet `sleep` tripped. Oracle: `bash -c 'sleep 4; echo done'` prints done, 0.
+    /// </summary>
+    [SkippableFact]
+    public void Bash_ChildOutlivesPsBashTimeout_IsNotKilled()
+    {
+        Skip.If(InvokeBashBashCommandTests.LocatePsBash() == null, "ps-bash binary not on PATH or next to test runtime");
+
+        using var env = PsBash.Testing.ProcessEnv.Set("PSBASH_TIMEOUT", "2");
+        var (lines, err, exit) = InvokeBashBashCommandTests.RunIn(_fixture,
+            "Invoke-BashBash -c 'sleep 4; echo done-after-timeout'");
+        Assert.True(string.IsNullOrEmpty(err), $"unexpected error: {err}");
+        Assert.Equal(new[] { "done-after-timeout" }, lines);
+        Assert.Equal(0, exit);
     }
 }

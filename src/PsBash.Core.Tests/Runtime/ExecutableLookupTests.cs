@@ -1,7 +1,9 @@
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Core.Tests.Runtime;
 
+[Collection(ProcessEnvironmentCollection.Name)] // PathDirectories_* sets PATH
 public class ExecutableLookupTests : IDisposable
 {
     private readonly List<string> _dirs = new();
@@ -92,16 +94,11 @@ public class ExecutableLookupTests : IDisposable
     public void PathDirectories_PutsFirstDirAheadOfPath_AndDropsEmptyEntries()
     {
         var a = Dir(); var b = Dir(); var first = Dir();
-        var old = Environment.GetEnvironmentVariable("PATH");
-        try
-        {
-            Environment.SetEnvironmentVariable("PATH", string.Join(Path.PathSeparator, a, "", " ", b));
-            Assert.Equal(new[] { first, a, b }, ExecutableLookup.PathDirectories(first).Where(d => !string.IsNullOrWhiteSpace(d)));
-            Assert.Equal(new[] { a, b }, ExecutableLookup.PathDirectories());
-            Make(b, "tool", true);
-            Same(Path.Combine(b, Name("tool")), ExecutableLookup.Find("tool", ExecutableLookup.PathDirectories(first)));
-        }
-        finally { Environment.SetEnvironmentVariable("PATH", old); }
+        using var env = ProcessEnv.Set("PATH", string.Join(Path.PathSeparator, a, "", " ", b));
+        Assert.Equal(new[] { first, a, b }, ExecutableLookup.PathDirectories(first).Where(d => !string.IsNullOrWhiteSpace(d)));
+        Assert.Equal(new[] { a, b }, ExecutableLookup.PathDirectories());
+        Make(b, "tool", true);
+        Same(Path.Combine(b, Name("tool")), ExecutableLookup.Find("tool", ExecutableLookup.PathDirectories(first)));
     }
 
     // A script writes PATH with `:` (`PATH=_tmp:$PATH`); on Windows each separating colon becomes `;`, a drive colon stays.

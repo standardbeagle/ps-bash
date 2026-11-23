@@ -1,3 +1,4 @@
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Shell.Tests;
@@ -11,6 +12,7 @@ namespace PsBash.Shell.Tests;
 /// not built — consistent with InteractiveShellHarnessTests patterns.
 /// </summary>
 [Trait("Category", "Integration")]
+[Collection(ProcessEnvironmentCollection.Name)] // seeds USER for the child; runs alone
 public class InteractiveSmokeParity
 {
     private static readonly string? PsBashPath = InteractiveShellHarness.FindPsBashBinary();
@@ -46,14 +48,10 @@ public class InteractiveSmokeParity
         // harness child process inherits a non-empty value via env inheritance.
         var expectedUser = Environment.GetEnvironmentVariable("USER");
         if (string.IsNullOrEmpty(expectedUser))
-        {
-            expectedUser = Environment.GetEnvironmentVariable("USERNAME")
-                ?? Environment.UserName;
-            if (!string.IsNullOrEmpty(expectedUser))
-                Environment.SetEnvironmentVariable("USER", expectedUser);
-        }
+            expectedUser = Environment.GetEnvironmentVariable("USERNAME") ?? Environment.UserName;
 
         Skip.If(string.IsNullOrEmpty(expectedUser), "Cannot determine username");
+        using var env = ProcessEnv.Set("USER", expectedUser);
 
         await using var harness = await StartAsync();
 

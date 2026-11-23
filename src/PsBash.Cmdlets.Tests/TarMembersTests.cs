@@ -438,11 +438,32 @@ public class TarMembersTests : IDisposable, IClassFixture<SharedPwshFixture>
         InTmp("Invoke-BashTar '-tf' nosuch.tar")
             .AssertFailed(2, "Cannot open: No such file or directory", "tar: Error is not recoverable: exiting now");
     }
+}
+
+/// <summary>tar cases that set the process environment (<c>TAPE</c>), so they run alone and restore it.</summary>
+[Collection(ProcessEnvironmentCollection.Name)]
+public class TarMembersEnvironmentTests : IClassFixture<SharedPwshFixture>
+{
+    private readonly SharedPwshFixture _fixture;
+
+    public TarMembersEnvironmentTests(SharedPwshFixture fixture) => _fixture = fixture;
 
     [Fact]
     public void TapeEnvironment_IsTheDefaultArchive()
     {
-        InTmp("$env:TAPE = 'x.tape'; try { Invoke-BashTar 'c' t.txt } finally { $env:TAPE = $null }").AssertSuccess();
-        Assert.True(Exists("x.tape"));
+        var tmp = Path.Combine(Path.GetTempPath(), $"psb-tape-{Guid.NewGuid():N}".Substring(0, 23));
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            File.WriteAllText(Path.Combine(tmp, "t.txt"), "top");
+            using (PsBash.Testing.ProcessEnv.Set("TAPE", "x.tape"))
+                CmdResult.Run(_fixture.AcquireFresh(), $"Push-Location '{tmp}'; try {{ Invoke-BashTar 'c' t.txt }} finally {{ Pop-Location }}")
+                    .AssertSuccess();
+            Assert.True(File.Exists(Path.Combine(tmp, "x.tape")));
+        }
+        finally
+        {
+            try { Directory.Delete(tmp, recursive: true); } catch { /* best-effort */ }
+        }
     }
 }

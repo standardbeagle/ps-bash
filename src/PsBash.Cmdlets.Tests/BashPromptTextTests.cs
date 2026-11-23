@@ -43,18 +43,6 @@ public class BashPromptTextTests
     }
 
     [Fact]
-    public void Expand_InsertedWorkingDir_KeepsBackslashes()
-    {
-        var saved = Environment.GetEnvironmentVariable("PWD");
-        try
-        {
-            Environment.SetEnvironmentVariable("PWD", @"C:\a\$b");
-            Assert.Equal(@"[C:\a\$b]", BashPromptText.Expand("[\\w]"));
-        }
-        finally { Environment.SetEnvironmentVariable("PWD", saved); }
-    }
-
-    [Fact]
     public void Expand_EmptyStrftime_IsHourMinuteSecond() =>
         Assert.Matches(@"^foo \d\d:\d\d:\d\d bar$", BashPromptText.Expand("foo \\D{} bar"));
 
@@ -102,4 +90,16 @@ public class BashPromptTextTests
     [InlineData(2, 3)]
     public void HistoryNumberFor_InteractivePrompt_IsOnePastTheCount(int entries, int expected) =>
         Assert.Equal(expected, ShellReader.HistoryNumberFor(true, entries, interactive: true));
+}
+
+/// <summary>Prompt cases that set the process <c>PWD</c>, which every cmdlet reads: they run alone.</summary>
+[Collection(ProcessEnvironmentCollection.Name)]
+public class BashPromptTextEnvironmentTests
+{
+    [Fact]
+    public void Expand_InsertedWorkingDir_KeepsBackslashes()
+    {
+        using var env = PsBash.Testing.ProcessEnv.Set("PWD", @"C:\a\$b");
+        Assert.Equal(@"[C:\a\$b]", BashPromptText.Expand("[\\w]"));
+    }
 }

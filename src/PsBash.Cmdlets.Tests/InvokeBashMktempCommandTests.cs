@@ -14,8 +14,10 @@ namespace PsBash.Cmdlets.Tests;
 /// Failure-surface axes covered (per Directive 3):
 /// empty input (no args), unicode/template, alias resolution, <c>--help</c>,
 /// quoting/injection (Directive 12). Pipeline / large-input / streaming
-/// axes do not apply: mktemp produces a single name and exits.
+/// axes do not apply: mktemp produces a single name and exits. The TMPDIR case sets the process environment, so the
+/// class runs alone.
 /// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
 public class InvokeBashMktempCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
     private readonly List<string> _createdPaths = new();
@@ -163,6 +165,7 @@ public class InvokeBashMktempCommandTests : IDisposable, IClassFixture<SharedPws
         // The store is the process environment; off Windows .NET's own temp path reads TMPDIR, so a relative value
         // would leak into parallel classes. Unix coverage: Plan_IsGnuMktemp + the differential case.
         Skip.IfNot(OperatingSystem.IsWindows(), "TMPDIR is the .NET temp path off Windows");
+        using var env = PsBash.Testing.ProcessEnv.Preserve("TMPDIR");
         var dir = Scratch();
         Directory.CreateDirectory(Path.Combine(dir, "t"));
         Directory.CreateDirectory(Path.Combine(dir, "p"));

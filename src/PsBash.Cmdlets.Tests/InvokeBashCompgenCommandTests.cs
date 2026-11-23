@@ -20,11 +20,6 @@ public class InvokeBashCompgenCommandTests : IClassFixture<SharedPwshFixture>
         => Assert.Equal(new[] { "[nullglob]" }, Run("Invoke-BashCompgen '-A' shopt '-P' '[' '-S' ']' nu"));
 
     [Fact]
-    public void WordList_SplitsOnIfs_AndKeepsBackslashEscapedDelimiter()
-        => Assert.Equal(new[] { "spam", "eggs", "ham cheese:colon" },
-            Run("$env:IFS = ':%'; try { Invoke-BashCompgen '-W' 'spam:eggs%ham cheese\\:colon' } finally { $env:IFS = $null }"));
-
-    [Fact]
     public void WordList_FailingExpansion_IsStatusOneWithNoOutput()
         => Assert.Equal(new[] { "1" }, Run("$null = Invoke-BashCompgen '-W' 'a $(( 1 / 0 )) b' 2>$null; [string]$global:LASTEXITCODE"));
 
@@ -114,4 +109,22 @@ public class InvokeBashCompgenCommandTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void Exported_PathIsListedAsPATH()
         => Assert.Contains("PATH", Run("Invoke-BashCompgen '-e' PA"));
+}
+
+/// <summary>compgen cases that set the process environment (<c>$env:IFS</c>), so they run alone and restore it.</summary>
+[Collection(ProcessEnvironmentCollection.Name)]
+public class InvokeBashCompgenEnvironmentTests : IClassFixture<SharedPwshFixture>
+{
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashCompgenEnvironmentTests(SharedPwshFixture fixture) => _fixture = fixture;
+
+    [Fact]
+    public void WordList_SplitsOnIfs_AndKeepsBackslashEscapedDelimiter()
+    {
+        using var env = PsBash.Testing.ProcessEnv.Preserve("IFS");
+        var lines = _fixture.AcquireFresh().AddScript("$env:IFS = ':%'; Invoke-BashCompgen '-W' 'spam:eggs%ham cheese\\:colon'")
+            .Invoke().Select(o => o?.ToString() ?? "").ToArray();
+        Assert.Equal(new[] { "spam", "eggs", "ham cheese:colon" }, lines);
+    }
 }

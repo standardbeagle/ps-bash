@@ -16,16 +16,21 @@ namespace PsBash.Cmdlets.Tests;
 /// env reads in-process env vars, no I/O, no pipeline input.
 ///
 /// Reference conversion for the SharedPwshFixture migration — see
-/// MIGRATION RECIPE in PwshTestFixture.cs.
+/// MIGRATION RECIPE in PwshTestFixture.cs. The scripts set <c>$env:PSB_*</c> in the process environment, so the
+/// class runs alone and each test puts the whole environment back.
 /// </summary>
-public class InvokeBashEnvCommandTests : IClassFixture<SharedPwshFixture>
+[Collection(ProcessEnvironmentCollection.Name)]
+public class InvokeBashEnvCommandTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
     private readonly SharedPwshFixture _fixture;
+    private readonly PsBash.Testing.ProcessEnv _env = PsBash.Testing.ProcessEnv.PreserveAll();
 
     public InvokeBashEnvCommandTests(SharedPwshFixture fixture)
     {
         _fixture = fixture;
     }
+
+    public void Dispose() => _env.Dispose();
 
     private System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> RunRaw(string script)
     {

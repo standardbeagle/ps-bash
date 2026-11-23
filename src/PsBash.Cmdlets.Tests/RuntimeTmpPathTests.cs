@@ -7,9 +7,11 @@ namespace PsBash.Cmdlets.Tests;
 /// time — the value of an expansion, which the emitter's literal rewrite never sees — names the same
 /// directory as the literal rewrite (<c>$env:TEMP</c> on Windows). Hand-written, not oracle: on Linux
 /// /tmp is a real directory, the mapping is the Windows-only policy itself. Every assertion points
-/// $env:TEMP at a private directory, so nothing here depends on (or touches) a real C:\tmp.
+/// $env:TEMP at a private directory, so nothing here depends on (or touches) a real C:\tmp. Moving
+/// the process TEMP is why the class runs alone.
 /// </summary>
 [Trait("Platform", "Windows")]
+[Collection(ProcessEnvironmentCollection.Name)]
 public class RuntimeTmpPathTests : IClassFixture<SharedPwshFixture>
 {
     private readonly SharedPwshFixture _fixture;
@@ -29,18 +31,16 @@ public class RuntimeTmpPathTests : IClassFixture<SharedPwshFixture>
     public void NormalizeOperandPath_TmpRooted_MapsToEnvTemp()
     {
         Skip.IfNot(OperatingSystem.IsWindows(), "the /tmp mapping is the Windows policy");
-        var saved = Environment.GetEnvironmentVariable("TEMP");
         var root = NewTempRoot();
         try
         {
-            Environment.SetEnvironmentVariable("TEMP", root);
+            using var env = PsBash.Testing.ProcessEnv.Set("TEMP", root);
             Assert.Equal(Path.Combine(root, "a", "b.txt"), FileSystemHelpers.NormalizeOperandPath("/tmp/a/b.txt"));
             Assert.Equal(root, FileSystemHelpers.NormalizeOperandPath("/tmp"));
             Assert.Equal("/tmpx/a", FileSystemHelpers.NormalizeOperandPath("/tmpx/a"));
         }
         finally
         {
-            Environment.SetEnvironmentVariable("TEMP", saved);
             Directory.Delete(root, recursive: true);
         }
     }
@@ -52,6 +52,7 @@ public class RuntimeTmpPathTests : IClassFixture<SharedPwshFixture>
     {
         Skip.IfNot(OperatingSystem.IsWindows(), "the /tmp mapping is the Windows policy");
         var root = NewTempRoot();
+        using var env = PsBash.Testing.ProcessEnv.Preserve("TEMP");
         try
         {
             var r = Run(
