@@ -234,23 +234,28 @@ public static class BashPattern
             };
         if (value.Length == 0)
             return pattern.IsMatch(ReadOnlySpan<char>.Empty) ? rep.For("") : value;
+        // bash tries only candidates of the length it computed for the pattern (SubstituteMatchLength). For a pattern of
+        // fixed length that is every match's length, except where bash's count is wrong: then nothing matches.
+        int fixedLength = pattern.SubstituteLength;
+        bool WrongLength(int from, int to) => fixedLength >= 0 && CodePointCount(value, from, to) != fixedLength;
         switch (mode)
         {
             case SubstituteMode.Start:
             {
                 int n = pattern.MatchPrefix(value, longest: true);
-                return n < 0 ? value : rep.For(value[..n]) + value[n..];
+                return n < 0 || WrongLength(0, n) ? value : rep.For(value[..n]) + value[n..];
             }
             case SubstituteMode.End:
             {
                 int st = pattern.MatchSuffix(value, longest: true);
-                return st < 0 ? value : value[..st] + rep.For(value[st..]);
+                return st < 0 || WrongLength(st, value.Length) ? value : value[..st] + rep.For(value[st..]);
             }
         }
         StringBuilder? sb = null;
         int pos = 0;
         while (pos < value.Length && pattern.Find(value, pos, out int start, out int end))
         {
+            if (WrongLength(start, end)) break;
             sb ??= new StringBuilder(value.Length + 16);
             sb.Append(value, pos, start - pos);
             rep.AppendTo(sb, value, start, end - start);
@@ -266,6 +271,95 @@ public static class BashPattern
         if (sb is null) return value;
         sb.Append(value, pos, value.Length - pos);
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// The length bash's pattern substitution (<c>${v/p/r}</c> and its <c>// /# /%</c> forms, <c>match_upattern</c>)
+    /// gives <paramref name="pattern"/> (canonical text) before it matches: -1 when it varies (a <c>*</c>, an extglob
+    /// <c>?( *( +( @( !(</c>), else the count of characters, a bracket expression being one. bash (<c>MATCHLEN</c> in
+    /// sm_loop.c) ends a bracket at the first <c>]</c> AFTER its first character without skipping a leading
+    /// <c>!</c> / <c>^</c>, so <c>[^]]</c> counts as <c>[^]</c> and <c>]</c>, 2, while it matches one character: bash 5.2
+    /// then tries only 2-character candidates and <c>${s//[^]]/z}</c> changes nothing (as <c>[!]]</c>, <c>[^]a]</c>);
+    /// <c>case</c>, <c>[[ ]]</c> and <c>${s#[^]]}</c> match it as "not ]". REGRESSION: ps-bash replaced every character.
+    /// An unterminated bracket counts each of its characters, a <c>[:class:]</c>, <c>[.c.]</c>, <c>[=c=]</c> is skipped
+    /// whole (a <c>]</c> right after <c>[.</c> / <c>[=</c> is the symbol).
+    /// </summary>
+    internal static int SubstituteMatchLength(string pattern)
+    {
+        int len = 0, i = 0, n = pattern.Length;
+        char Peek() => i < n ? pattern[i] : '\0';
+        while (i < n)
+        {
+            char c = pattern[i++];
+            switch (c)
+            {
+                case '\\':
+                    if (i >= n) return len + 1;
+                    len++;
+                    i += char.IsHighSurrogate(pattern[i]) && i + 1 < n && char.IsLowSurrogate(pattern[i + 1]) ? 2 : 1;
+                    break;
+                case '*':
+                    return -1;
+                case '?' or '+' or '@' or '!':
+                    if (Peek() == '(') return -1;
+                    len++;
+                    break;
+                case '[':
+                {
+                    int bracketLength = 1;
+                    bool inClass = false, inSymbol = false, inEquivalence = false, closed = false;
+                    char b = i < n ? pattern[i++] : '\0';
+                    while (true)
+                    {
+                        if (b == '\0') break;
+                        if (b == '\\')
+                        {
+                            b = i < n ? pattern[i++] : '\0';
+                            bracketLength++;
+                            if (b == '\0') break;
+                        }
+                        else if (b == '[' && Peek() == ':') { i++; bracketLength++; inClass = true; }
+                        else if (inClass && b == ':' && Peek() == ']') { i++; bracketLength++; inClass = false; }
+                        else if (b == '[' && Peek() == '.')
+                        {
+                            i++; bracketLength++;
+                            if (Peek() == ']') { i++; bracketLength++; }
+                            inSymbol = true;
+                        }
+                        else if (inSymbol && b == '.' && Peek() == ']') { i++; bracketLength++; inSymbol = false; }
+                        else if (b == '[' && Peek() == '=')
+                        {
+                            i++; bracketLength++;
+                            if (Peek() == ']') { i++; bracketLength++; }
+                            inEquivalence = true;
+                        }
+                        else if (inEquivalence && b == '=' && Peek() == ']') { i++; bracketLength++; inEquivalence = false; }
+                        else bracketLength++;
+                        b = i < n ? pattern[i++] : '\0';
+                        if (b == ']') { closed = true; break; }
+                    }
+                    len += closed ? 1 : bracketLength;
+                    break;
+                }
+                default:
+                    len++;
+                    if (char.IsHighSurrogate(c) && i < n && char.IsLowSurrogate(pattern[i])) i++;
+                    break;
+            }
+        }
+        return len;
+    }
+
+    /// <summary>The characters of <paramref name="s"/>[<paramref name="from"/>, <paramref name="to"/>): a surrogate pair is one.</summary>
+    private static int CodePointCount(string s, int from, int to)
+    {
+        int count = 0;
+        for (int k = from; k < to; k++)
+        {
+            if (char.IsHighSurrogate(s[k]) && k + 1 < to && char.IsLowSurrogate(s[k + 1])) k++;
+            count++;
+        }
+        return count;
     }
 
     /// <summary>
@@ -790,6 +884,19 @@ public sealed class BashPatternProgram
 
     /// <summary>The canonical pattern text this program was compiled from.</summary>
     public string Pattern => _pattern;
+
+    private int _substituteLength = int.MinValue;
+
+    /// <summary>The candidate length bash's pattern substitution gives this pattern (<see cref="BashPattern.SubstituteMatchLength"/>).</summary>
+    internal int SubstituteLength
+    {
+        get
+        {
+            int n = _substituteLength;
+            if (n == int.MinValue) _substituteLength = n = BashPattern.SubstituteMatchLength(_pattern);
+            return n;
+        }
+    }
 
     /// <summary>The anchored .NET regex this program matches whole strings with (diagnostics and tests).</summary>
     public string AnchoredRegex => "^(?:" + _body + ")\\z";

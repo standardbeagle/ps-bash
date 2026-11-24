@@ -61,6 +61,19 @@ public class BashWordFieldsTests
     [Fact]
     public void PatternEscape_IsKeptInThePatternOnly() => Assert.Equal("1:[a]b]~[a\\]b]", Run(null, Pattern, "[a\\]b]"));
 
+    // Every escape in pattern text is removed from the text, whatever it escapes (bash 5.2, no such file):
+    // `A["5"]=$x` (x=1) prints A[5]=1, `a[\"key\"]=$x` a["key"]=1, `[\"]$x` ["]1. REGRESSION: only an escaped
+    // * ? [ ] \ | ( ) lost its backslash, so these printed A[\5]=1, a[\"key\"]=1 and [\"]1 (Spec dparen.spec.sh).
+    [Theory]
+    [InlineData("A[\\5]=", "1:A[5]=1~A[\\5]=1")]
+    [InlineData("a[\\\"key\\\"]=", "1:a[\"key\"]=1~a[\\\"key\\\"]=1")]
+    [InlineData("[\\\"]", "1:[\"]1~[\\\"]1")]
+    [InlineData("[\\']", "1:[']1~[\\']1")]
+    [InlineData("[\\*]", "1:[*]1~[\\*]1")]
+    [InlineData("x[\\a\\-\\z]", "1:x[a-z]1~x[\\a\\-\\z]1")]
+    public void PatternEscapeOfAnyCharacter_IsRemovedFromTheText(string pattern, string expected)
+        => Assert.Equal(expected, Run(null, Pattern, pattern, Split, "1"));
+
     // IFS=: v='a::b': a non-whitespace delimiter keeps the empty field; a trailing one adds none.
     [Theory]
     [InlineData("a::b", "3:a||b")]

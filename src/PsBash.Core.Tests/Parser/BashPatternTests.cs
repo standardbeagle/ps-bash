@@ -204,6 +204,68 @@ public class BashPatternTests
     public void Substitute_ReplacesLikeBash(string value, string pattern, string template, BashPattern.SubstituteMode mode, string expected)
         => Assert.Equal(expected, Sub(value, pattern, template, mode));
 
+    // bash 5.2.21 and 5.3.9 (Ubuntu 24.04, build3): pattern substitution tries only candidates of the length bash's
+    // MATCHLEN gives the pattern, and MATCHLEN ends `[^]]` at its first `]` (length 2), so a negated bracket whose
+    // first member is `]` matches nothing there; `case`, `[[ ]]` and `${s#[^]]}` still match it as "not ]".
+    // REGRESSION: `pat='[^]]'; s='ab^cd^'; echo ${s//$pat/z}` printed zzzzzz (Spec var-op-patsub.spec.sh).
+    [Theory]
+    [InlineData("ab^cd^", "[^]]", BashPattern.SubstituteMode.All, "ab^cd^")]
+    [InlineData("ab^cd^", "[^]]", BashPattern.SubstituteMode.First, "ab^cd^")]
+    [InlineData("ab]cd]", "[^]]", BashPattern.SubstituteMode.All, "ab]cd]")]
+    [InlineData("ab]cd]", "[!]]", BashPattern.SubstituteMode.All, "ab]cd]")]
+    [InlineData("abc", "[^]]", BashPattern.SubstituteMode.Start, "abc")]
+    [InlineData("abc", "[^]]", BashPattern.SubstituteMode.End, "abc")]
+    [InlineData("abc", "[^]b]", BashPattern.SubstituteMode.All, "abc")]
+    [InlineData("xabyab", "[^]a]b", BashPattern.SubstituteMode.All, "xabyab")]
+    [InlineData("a]]b", "[^]]]", BashPattern.SubstituteMode.All, "a]]b")]
+    [InlineData("ab", "[^]]", BashPattern.SubstituteMode.All, "ab")]
+    // Counted right, they match as usual: a leading ] without negation, an escaped ], a * (no fixed length),
+    // [^c]] (a class, then ]), a collating symbol, an extglob.
+    [InlineData("ab]cd]", "[]]", BashPattern.SubstituteMode.All, "abzcdz")]
+    [InlineData("a]b]", "[^\\]]", BashPattern.SubstituteMode.All, "z]z]")]
+    [InlineData("abc", "[^]]*", BashPattern.SubstituteMode.All, "z")]
+    [InlineData("a]", "[^c]]", BashPattern.SubstituteMode.All, "z")]
+    [InlineData("abc", "[^[.].]]", BashPattern.SubstituteMode.All, "zzz")]
+    [InlineData("ab^cd^", "[^x]", BashPattern.SubstituteMode.All, "zzzzzz")]
+    [InlineData("xabyab", "@(ab)", BashPattern.SubstituteMode.All, "xzyz")]
+    [InlineData("x\U0001F600y\U0001F600", "\U0001F600", BashPattern.SubstituteMode.All, "xzyz")]
+    public void Substitute_TriesOnlyBashsFixedLength(string value, string pattern, BashPattern.SubstituteMode mode, string expected)
+        => Assert.Equal(expected, Sub(value, pattern, "z", mode));
+
+    // The removal operators do not use that length: `${s#[^]]}` on ab^cd^ is b^cd^, `${s%[^]]}` on abc is ab.
+    [Fact]
+    public void Remove_DoesNotUseTheSubstituteLength()
+    {
+        Assert.Equal("b^cd^", Remove("ab^cd^", "[^]]", suffix: false, longest: false));
+        Assert.Equal("ab", Remove("abc", "[^]]", suffix: true, longest: false));
+    }
+
+    [Theory]
+    [InlineData("abc", 3)]
+    [InlineData("[^]]", 2)]
+    [InlineData("[!]]", 2)]
+    [InlineData("[]]", 1)]
+    [InlineData("[]b]", 1)]
+    [InlineData("[^]]]", 3)]
+    [InlineData("[^]a]b", 4)]
+    [InlineData("[^\\]]", 1)]
+    [InlineData("[[:alpha:]]", 1)]
+    [InlineData("[^[.].]]", 1)]
+    [InlineData("[^[=a=]]", 1)]
+    [InlineData("\\[\\^\\]\\]", 4)]
+    [InlineData("[^", 2)]
+    [InlineData("[ab", 3)]
+    [InlineData("a?b", 3)]
+    [InlineData("a*", -1)]
+    [InlineData("?(a)", -1)]
+    [InlineData("@(ab)", -1)]
+    [InlineData("!(ab)", -1)]
+    [InlineData("+(ab)", -1)]
+    [InlineData("@\\(ab\\)", 5)]
+    [InlineData("\U0001F600[\U0001F600]", 2)]
+    public void SubstituteMatchLength_IsBashsMatchlen(string pattern, int expected)
+        => Assert.Equal(expected, BashPattern.SubstituteMatchLength(pattern));
+
     [Fact]
     public void Substitute_PatsubReplacementOff_AmpersandIsText()
     {

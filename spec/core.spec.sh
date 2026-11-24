@@ -554,12 +554,13 @@ l2]
 #### ${!#} ${!n} ${@:$#} ${a[@]:$i} and ${a[@]:-w} on empty / non-empty arrays
 set -- a "b c" d; n=2; arr=(p q r s); i=1; e=()
 echo "${!#}" "${!n}" "${@:$#}" "${@:2:1}"; echo "${arr[@]:$i:2}" "${arr[@]:$i}"
+# "${e[@]:+alt}" on an empty array is NO word, not an empty one (bash 5.2.21 and 5.3.9): one space before alt.
 echo "${e[@]:-none}" "${arr[@]:-none}" "${e[@]:+alt}" "${arr[@]:+alt}"
 declare -A m; echo "${m[@]:-none}"; m[k]=v; echo "${m[@]:-none}"
 ## STDOUT:
 d b c d b c
 q r q r s
-none p q r s  alt
+none p q r s alt
 none
 v
 ## END

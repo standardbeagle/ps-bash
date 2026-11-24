@@ -4176,7 +4176,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("set -- a b c");
 
-        Assert.Equal("$global:BashPositional = @('a', 'b', 'c')", result);
+        Assert.Equal("$global:BashPositional = @('a', 'b', 'c')" + "; " + PsBuild.SetStatus(0), result);
     }
 
     [Fact]
@@ -4184,7 +4184,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("set --");
 
-        Assert.Equal("$global:BashPositional = @()", result);
+        Assert.Equal("$global:BashPositional = @()" + "; " + PsBuild.SetStatus(0), result);
     }
 
     // kill is on OrderedArgCommands: `-PIPE` bare prefix-matched the -PipelineVariable common parameter ("kill: usage").
@@ -4600,10 +4600,10 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_SetDashDashWithGlob_BuildsAFlatPositionalList()
     {
-        Assert.Equal("$global:BashPositional = @('a'; @(ConvertTo-BashGlob '*.txt'))",
+        Assert.Equal("$global:BashPositional = @('a'; @(ConvertTo-BashGlob '*.txt'))" + "; " + PsBuild.SetStatus(0),
             PsEmitter.Transpile("set -- a *.txt"));
         // No expansion in the list: unchanged comma form.
-        Assert.Equal("$global:BashPositional = @('a', 'b')", PsEmitter.Transpile("set -- a b"));
+        Assert.Equal("$global:BashPositional = @('a', 'b')" + "; " + PsBuild.SetStatus(0), PsEmitter.Transpile("set -- a b"));
     }
 
     [Fact]
@@ -6161,7 +6161,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("set -o errexit");
         // `set -o NAME` can fail (`set -o bogus`, status 2), so it is checked like any builtin.
-        Assert.Equal("$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true; if (-not (Test-Path variable:global:__BashErrexitSuppress)) { $global:__BashErrexitSuppress = 0 }; " + ErrexitCheckOnLine1(), result);
+        Assert.Equal("$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true; if (-not (Test-Path variable:global:__BashErrexitSuppress)) { $global:__BashErrexitSuppress = 0 }; " + PsBuild.SetStatus(0) + "; " + ErrexitCheckOnLine1(), result);
     }
 
     // errexit: a failing command at statement position must end a `set -e` script. Only the
@@ -6295,7 +6295,7 @@ public class PsEmitterTests
 
     [Fact]
     public void Transpile_SetPlusE_TurnsErrexitOff()
-        => Assert.Equal("$ErrorActionPreference = 'Continue'; $global:__BashErrexit = $false",
+        => Assert.Equal("$ErrorActionPreference = 'Continue'; $global:__BashErrexit = $false" + "; " + PsBuild.SetStatus(0),
             PsEmitter.Transpile("set +e"));
 
     [Fact]
@@ -6304,7 +6304,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("set -x");
         // The flag lets a subshell scope (BashShellState) undo a `set -x` made inside it.
         // The statement is itself traced first (a no-op unless xtrace is already on, as in bash).
-        Assert.Equal("Write-BashXtrace 'set' '-x'; Set-PSDebug -Trace 1; $global:__BashXtrace = $true", result);
+        Assert.Equal("Write-BashXtrace 'set' '-x'; Set-PSDebug -Trace 1; $global:__BashXtrace = $true" + "; " + PsBuild.SetStatus(0), result);
     }
 
     [Fact]
@@ -7821,7 +7821,7 @@ public class PsEmitterTests
 
     [Fact]
     public void Transpile_SetPlusOXtrace_TurnsTracingOffAndClearsTheFlag()
-        => Assert.Equal("Set-PSDebug -Off; $global:__BashXtrace = $false", PsEmitter.Transpile("set +o xtrace"));
+        => Assert.Equal("Set-PSDebug -Off; $global:__BashXtrace = $false" + "; " + PsBuild.SetStatus(0), PsEmitter.Transpile("set +o xtrace"));
 
     [Fact]
     public void Transpile_CommandSubWithOwnSetE_StartsErrexitOffAndChecksItsBody()

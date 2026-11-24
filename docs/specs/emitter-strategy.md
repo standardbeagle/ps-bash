@@ -825,7 +825,11 @@ negation included; `#`/`%` try every prefix / suffix length and keep the shortes
 (`${v##@(a|ab)}` on `abc` is `c`, not the regex's first arm). `${v/p/r}` takes the leftmost start and the
 longest match there; `//` after an empty match copies one character and never matches at the end
 (`${v//*([0-9])/X}` on `123x` is `XXx`); an empty pattern changes nothing except that `/#` prefixes and
-`/%` appends. The replacement is a bash template, never .NET substitution syntax: `&` is the match, `\&` a
+`/%` appends. Every substitution form (`/ // /# /%`, not `#`/`%`) tries only candidates of the length bash's
+`MATCHLEN` gives the pattern (`BashPattern.SubstituteMatchLength`, -1 for `*` or an extglob): MATCHLEN ends
+a bracket at the first `]` after its first character, so `[^]]` / `[!]]` count 2 and match nothing there
+(`s='ab^cd^'; ${s//[^]]/z}` is `ab^cd^`, bash 5.2 and 5.3) while `case`, `[[ ]]` and `${s#[^]]}` match them
+as "not ]" (`BashPatternTests.Substitute_TriesOnlyBashsFixedLength`). The replacement is a bash template, never .NET substitution syntax: `&` is the match, `\&` a
 literal `&`, `\\` a backslash; a quoted part (`"&"`) is literal and an unquoted variable's value is
 template text (`r='&'; ${v/b/$r}` is the match); with `shopt -u patsub_replacement` every `&` is literal.
 `^`/`,` test only the first character, `^^`/`,,` every character, each against the WHOLE pattern
@@ -927,6 +931,10 @@ records become stdout TEXT, so an enclosing stage no longer reads them as stderr
 - `set -u` / `set -o nounset` (any bundling) -> `$global:__BashNounset = $true`. A unit that can turn nounset on (`PsEmitter.CanSetNounset`) emits plain `$x` / `${x}` reads as a runtime check that throws `BashParamErrorException` ("x: unbound variable") when the flag is on and the variable is unset; `${x:-d}`-style forms and positional parameters are not checked. The check is per command string: a later `-c` does not inherit it.
 - `set -C` / `set -o noclobber` -> `$global:__BashNoclobber`; `Invoke-BashRedirect` refuses a truncating `>` onto an existing file unless `-Force` (`>|`).
 - Combined flags (e.g., `set -euo pipefail`) are decomposed.
+- Invariant: every option form and every positional form (`set -- a`, `set a b`) ends with `$global:LASTEXITCODE = 0`
+  (the end of `PsEmitter.EmitSet`): `set` succeeds whatever ran before it (`false; set -- a; echo $?` is 0). The errexit check after each statement reads that status, so a form that kept the previous
+  one exited at the `set` itself (`shopt -s nosuch` then `set -o errexit` on the next line ran nothing more). Guard
+  `Core.Tests/SetBuiltinStatusGuardTests`.
 - `set -o "$opt"` / `set "$flags"` (an option word known only at run time) runs `set` then, as its static form with
   the words it got (`PsBuild.BuiltinAtRunTime`, the runner of a builtin named at run time, see "General fallback").
 
@@ -1204,7 +1212,10 @@ nobody had listed kept one field: with x='a b', `$x$x`, `~/$x`, `$x*`, `"$@"$x`,
   result whole: `${e:='v w'}` is two fields).
 - `BashWordFields.Expand` tags every character (split / quoted / pattern, plus zero-width anchors for a
   quoted null and breaks between list values), splits on IFS, and gives each field a glob pattern only
-  when it holds an active glob character (quoted `* ? [ ] \` escaped). `ConvertTo-BashWords` globs those
+  when it holds an active glob character (quoted `* ? [ ] \` escaped). The field's TEXT (what an unmatched
+  word prints) drops every escape of pattern text, whatever character it escapes, as `BashGlob.Unescape`
+  does: `A["5"]=$x` is `A[5]=1`, `a[\"k\"]$x` is `a["k"]1` (a bracket's quoted members arrive as `\5`, `\"`
+  from `BashParser.UnquoteClass`; `BashWordFieldsTests.PatternEscapeOfAnyCharacter_IsRemovedFromTheText`). `ConvertTo-BashWords` globs those
   fields with the `ConvertTo-BashGlob` engine (`set -f`, nullglob, failglob honoured).
 
 The same emission serves command arguments (the RC-7 splat hoist), `for` lists, `a=( … )`, `set --`, a

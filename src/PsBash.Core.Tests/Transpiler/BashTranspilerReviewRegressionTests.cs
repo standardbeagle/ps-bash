@@ -1410,8 +1410,8 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_SetDashDashAfterAndAnd_IsAChainOperand()
     {
         var ps = BashTranspiler.Transpile("cd / && set -- a b");
-        Assert.Contains("&& $($global:BashPositional = @('a', 'b'))", ps);
-        Assert.Contains("|| $($global:BashPositional = @())", BashTranspiler.Transpile("false || set --"));
+        Assert.Contains("&& $($global:BashPositional = @('a', 'b'); " + PsBuild.SetStatus(0) + ")", ps);
+        Assert.Contains("|| $($global:BashPositional = @(); " + PsBuild.SetStatus(0) + ")", BashTranspiler.Transpile("false || set --"));
     }
 
     // Oracle: `case $(( 42 / 0 )) in (*) echo hi ;; esac; echo inside=$?` prints the error and `inside=1`, never "hi":

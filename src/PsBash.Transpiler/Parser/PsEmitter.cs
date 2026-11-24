@@ -8109,7 +8109,7 @@ public static partial class PsEmitter
         {
             var optText = EmitSet(cmd with { Words = cmd.Words.Take(1 + optEnd).ToImmutableArray() });
             var positionalText = EmitSetPositionals(cmd.Words.Skip(1 + posStart).ToList());
-            return (optText is null ? "" : optText + "; ") + positionalText;
+            return SetSucceeds((optText is null ? "" : optText + "; ") + positionalText);
         }
         // `set -o vi` / `set +o emacs`: option names ps-bash only remembers (for `shopt -po`) go to the shopt table.
         if (argsOverride is null && literalArgs.Count == 2 && literalArgs[0] is "-o" or "+o" && literalArgs[1] is { } remembered
@@ -8239,8 +8239,16 @@ public static partial class PsEmitter
                 if (parts.Count > 0) specialResult = string.Join("; ", parts);
             }
         }
-        return specialResult;
+        return SetSucceeds(specialResult);
     }
+
+    // `set` itself succeeds (status 0) whatever ran before it. The errexit / xtrace forms and the positional forms
+    // (`set -- a`, `set a b`, `set -e -- a`) used to leave the previous status in place, so `shopt -s nosuch` (or `false`)
+    // on one line and `set -o errexit` on the next exited at the set: the errexit check that follows every statement saw
+    // the old 1. Guard SetBuiltinStatusGuardTests.
+    private static string? SetSucceeds(string? setText)
+        => setText is null || setText.EndsWith(PsBuild.SetStatus(0), StringComparison.Ordinal)
+            ? setText : setText + "; " + PsBuild.SetStatus(0);
 
     // source FILE / . FILE -> . $(Invoke-BashSource -AsScriptBlock FILE args): the cmdlet resolves,
     // transpiles and sets $1.. (restored by the block's own finally); the CALLER dot-sources the

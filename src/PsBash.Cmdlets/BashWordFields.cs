@@ -258,10 +258,13 @@ public static class BashWordFields
                 byte tag = tags[i];
                 char c = text[i];
                 if (tag == TAnchor) anchored = true;
-                else if (tag == TPattern && c == '\\' && i + 1 < n && tags[i + 1] == TPattern && text[i + 1] is '*' or '?' or '[' or ']' or '\\' or '|' or '(' or ')')
+                else if (tag == TPattern && c == '\\' && i + 1 < n && tags[i + 1] == TPattern)
                 {
                     // An escape in pattern text (a class's quoted member, `[a"]"b]` is `[a\]b]`): the pattern keeps it,
-                    // the text (what an unmatched word prints) has it removed.
+                    // the text (what an unmatched word prints) has it removed, whatever character it escapes, as
+                    // BashGlob.Unescape does for a word without expansions. REGRESSION: only * ? [ ] \ | ( ) were, so
+                    // `A["5"]=$x` printed A[\5]=1 and `a[\"k\"]$x` a[\"k\"]1 (BashParser.UnquoteClass escapes every
+                    // quoted member).
                     rebuild = true;
                     field.Append(text[++i]);
                 }
