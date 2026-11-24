@@ -116,9 +116,7 @@ public class BashLocatorTests
 
         Assert.NotNull(psi);
         Assert.Equal("/bin/bash", psi!.FileName);
-        Assert.Equal(2, psi.ArgumentList.Count);
-        Assert.Equal("-c", psi.ArgumentList[0]);
-        Assert.Equal("echo hello", psi.ArgumentList[1]);
+        Assert.Equal(new[] { "-c", BashLocator.NativeArgv0Bash, "/bin/bash", "echo hello" }, psi.ArgumentList);
     }
 
     [Fact]
@@ -134,6 +132,27 @@ public class BashLocatorTests
         Assert.Equal("bash", psi.ArgumentList[1]);
         Assert.Equal("-c", psi.ArgumentList[2]);
         Assert.Equal("echo hello", psi.ArgumentList[3]);
+    }
+
+    // REGRESSION: a native host ran `/usr/bin/bash -c script`, so bash's messages read "/usr/bin/bash: line 2: ...",
+    // while wsl.exe -e bash, every cassette and ps-bash print "bash: line 2: ...": recording on a Linux runner rewrote
+    // 46 cassettes with the path and failed 8 cases ps-bash gets right. Stdin, $0 and the exit status pass through.
+    [SkippableFact]
+    public async Task BashLocator_BuildPsi_NativeHost_BashNamesItselfBash()
+    {
+        Skip.If(OperatingSystem.IsWindows() || !File.Exists("/bin/bash"), "needs a native /bin/bash");
+        var psi = BashLocator.BuildPsi(new BashHost(BashHostKind.Native, "/bin/bash", "5.0", "C"),
+            "read -r v; echo \"$0 $v\"; unset -fv g; exit 3")!;
+        using var p = System.Diagnostics.Process.Start(psi)!;
+        await p.StandardInput.WriteLineAsync("in");
+        p.StandardInput.Close();
+        var stdout = p.StandardOutput.ReadToEndAsync();
+        var stderr = p.StandardError.ReadToEndAsync();
+        await p.WaitForExitAsync();
+
+        Assert.Equal("bash in\n", await stdout);
+        Assert.Equal("bash: line 1: unset: cannot simultaneously unset a function and a variable\n", await stderr);
+        Assert.Equal(3, p.ExitCode);
     }
 
     // ── Integration: Find() and actually run bash if available ───────────────

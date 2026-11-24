@@ -268,6 +268,9 @@ public static class BashLocator
     /// Builds a <see cref="ProcessStartInfo"/> configured to run a bash script
     /// using the given <paramref name="host"/>. Returns null for Kind=None.
     /// </summary>
+    /// <summary>The native launcher: re-exec the same bash (<c>$0</c>) as <c>bash -c "$1"</c> with argv[0] "bash".</summary>
+    internal const string NativeArgv0Bash = "exec -a bash \"$0\" -c \"$1\"";
+
     public static ProcessStartInfo? BuildPsi(BashHost host, string script)
     {
         if (!host.IsAvailable) return null;
@@ -290,8 +293,13 @@ public static class BashLocator
         }
         else
         {
+            // bash names itself by argv[0] in its messages ("/usr/bin/bash: line 1: ..."); started by path it would
+            // print the path, where wsl.exe -e bash (and every recorded cassette, and ps-bash) prints "bash:".
+            // exec -a gives the script's bash argv[0] "bash", so $0 and the message prefix match on every host.
             psi.FileName = host.Path!;
             psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add(NativeArgv0Bash);
+            psi.ArgumentList.Add(host.Path!);
             psi.ArgumentList.Add(script);
         }
 
