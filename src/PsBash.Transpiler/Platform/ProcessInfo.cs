@@ -323,10 +323,9 @@ public static partial class ProcessInfo
         int close = stat.LastIndexOf((byte)')');
         if (close < 0) return false;
         var rest = stat[(close + 1)..];
-        ReadOnlySpan<byte> field = default;
-        for (int i = 0; i < 20; i++)
-            if (!NextField(ref rest, out field)) return false;
-        if (field.Length > 20) return false;
+        for (int i = 0; i < 19; i++)
+            if (!NextField(ref rest, out _)) return false;
+        if (!NextField(ref rest, out var field) || field.Length > 20) return false;
         ulong v = 0;
         foreach (var b in field)
         {
