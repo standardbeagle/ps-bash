@@ -484,7 +484,11 @@ Known gaps / not done:
   killed at command end in `-c` mode (Q1 detach not implemented).
 - `PSBASH_JOBS_MAX` (default 32) is enforced in `BashJobProcess.Start`. No POSIX hard-kill containment (Q3), no native fast path.
 - `JobHostSpares.Prewarm(n)` sizes the spare pool from the number of `Invoke-BashBackground` call sites in the command
-  (bounded by `MaxSpares`), so a command with several `&` starts its spares before the first one is reached. Effect on the
+  whose job runs in a host process of its own (`Connection.ProcessJobCount`: `-Isolated`, every one under
+  `PSBASH_BG_MODE=process`, none under `inproc`; bounded by `MaxSpares`), so a command with several `&` starts its
+  spares before the first one is reached. REGRESSION: every call site counted, so each command with an in-process `&`
+  started a private host that was never used and was torn down 60 s later (~3 CPU-seconds each; 10 of the 25 private
+  hosts started on a desktop running ~7 agents in 25 minutes). Effect on the
   cold-miss bar is NOT yet measured: the only run after the change was on a saturated machine (echo p50 1023 ms vs 278 ms)
   and is not comparable. Re-run `scripts/bench-warm.ps1` on a quiet machine before deciding the default flip.
 - A/B on the same Debug binary, back to back, machine at ~55% CPU (p50 ms, inproc -> process, 8 runs each):

@@ -49,12 +49,19 @@ path would overflow). Slots are separate daemons started on demand and kept warm
   (node, claude, python) are not climbed; an explicit `PSBASH_IPC_ENDPOINT`/`PSBASH_SESSION` wins; an unregistered host
   (an interactive terminal's) keeps the anchored session.
 - **Inside the enclosing session.** Such a launcher starts at the slot AFTER the enclosing host's own slot
-  (`IpcWorker.FirstSlotPastEnclosingHost`; past `MaxExecSlots` = a private host): the enclosing host is running the
+  (`IpcWorker.FirstSlotPastEnclosingHost`; past `MaxExecSlots` = an overflow slot, see below): the enclosing host is running the
   command that started it, and the slots below were busy when that host's own launcher spilled past them. Every BUSY it
   still meets counts as nested (spill at once, never the contended back-off). The ancestry walk alone cannot see this:
   slot hosts are spawned detached (Windows trampoline), so a launcher started by slot k's command never descends from
   the host waiting on slot k. Before this, each nested `bash -c` at depth 2 (or under a per-invocation host) paid the full
   spill delay, about 300 ms, plus one BUSY round trip per lower slot.
+- **Nested, every slot busy.** It must not wait on the slots (they may be its own ancestors), so it takes a free
+  overflow ticket at once (no grace) and runs on that ticket's warm overflow slot; only with every ticket held does it
+  start a private host. A ticket is exclusive, so its slot is never an ancestor's (an ancestor on an overflow slot holds
+  that slot's ticket); the unguarded ticket of a runtime directory without lock files is not used here. A slot it
+  spawns is anchored on the enclosing host's session (host-lifecycle-contract.md §Session anchor lifetime).
+  REGRESSION: it went straight to a private host; with ~7 agents keeping the slots busy that was 15 of the 25 private
+  hosts started in the 25 minutes after overflow slots were installed.
 
 The sequential warm path is unchanged: slot 0, lease free, no extra round trip.
 
