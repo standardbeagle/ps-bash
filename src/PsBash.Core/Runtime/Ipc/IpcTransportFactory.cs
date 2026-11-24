@@ -200,8 +200,8 @@ public static class IpcTransportFactory
     /// A launcher started by a command that a registered host is running (nested <c>bash -c</c>, awk getline) joins
     /// that host's session: it resolves the host's base endpoint, so it reuses an idle session host or spills to the
     /// session's executor slots (docs/specs/executor-slots.md), instead of anchoring a new session on the host and
-    /// starting another full daemon there. A host spawned from here is anchored on the enclosing host, which is alive
-    /// for as long as the command that started this launcher. False when no registered host encloses this launcher.
+    /// starting another full daemon there. A host spawned from here is anchored on the enclosing host's session
+    /// (<see cref="EnclosingHostAnchor"/>). False when no registered host encloses this launcher.
     /// </summary>
     private static bool TryResolveEnclosingHostEndpoint(
         out (string Scheme, string Endpoint) endpoint, out ProcessIdentity? anchor, out string? hostEndpoint)
@@ -211,12 +211,25 @@ public static class IpcTransportFactory
         hostEndpoint = null;
         var host = EnclosingHostOverride is { } seam ? seam() : ProcessAncestry.FindEnclosingHost();
         if (host is not { } id) return false;
-        if (EnclosingHostOwnEndpoint(id, ReachableHostSidecars()) is not { } own) return false;
-        endpoint = ("unix", BaseOfSlotEndpoint(own));
-        anchor = id;
-        hostEndpoint = own;
+        var sidecars = ReachableHostSidecars();
+        if (EnclosingHostSidecar(id, sidecars) is not { } own) return false;
+        endpoint = ("unix", BaseOfSlotEndpoint(own.Endpoint));
+        anchor = EnclosingHostAnchor(id, [own]);
+        hostEndpoint = own.Endpoint;
         return true;
     }
+
+    /// <summary>
+    /// What a host spawned by a launcher nested in <paramref name="host"/>'s command is anchored on: the session that
+    /// host lives for, as its sidecar records it, since the spawned slot serves that whole session's commands. A host
+    /// that records none (a private host, an explicit endpoint, an older build) bounds it itself.
+    /// REGRESSION: the slot was always anchored on the enclosing host, a sibling slot or the base; when that one was
+    /// retired or idled out, the slot hung up the session command it was running (exit 125).
+    /// </summary>
+    internal static ProcessIdentity EnclosingHostAnchor(ProcessIdentity host, IEnumerable<HostMetadata> sidecars)
+        => EnclosingHostSidecar(host, sidecars) is { } own && ProcessIdentity.TryParse(own.SessionAnchor, out var session)
+            ? session
+            : host;
 
     /// <summary>
     /// The sidecars of every host this user's launchers reach: the runtime directory's, plus, when
@@ -280,12 +293,15 @@ public static class IpcTransportFactory
 
     /// <summary>The endpoint <paramref name="host"/> itself serves (slot or base), per <see cref="EnclosingHostBase"/>'s sidecar rules.</summary>
     internal static string? EnclosingHostOwnEndpoint(ProcessIdentity host, IEnumerable<HostMetadata> sidecars)
+        => EnclosingHostSidecar(host, sidecars)?.Endpoint;
+
+    private static HostMetadata? EnclosingHostSidecar(ProcessIdentity host, IEnumerable<HostMetadata> sidecars)
     {
         foreach (var meta in sidecars)
         {
             if (meta.Pid != host.Pid || meta.TransportScheme != "unix") continue;
             if (meta.StartedAt.UtcTicks < host.StartTimeUtcTicks - TimeSpan.TicksPerSecond) continue;
-            return meta.Endpoint;
+            return meta;
         }
         return null;
     }

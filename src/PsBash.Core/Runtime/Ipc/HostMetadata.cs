@@ -9,7 +9,9 @@ namespace PsBash.Core.Runtime.Ipc;
 /// starts. Lets a launcher distinguish a stale endpoint (no live process) from
 /// an obsolete-but-running host (process alive but wrong protocol/build), and
 /// verify ownership before any invasive cleanup. Per
-/// <c>docs/specs/host-lifecycle-contract.md</c>.
+/// <c>docs/specs/host-lifecycle-contract.md</c>. <c>sessionAnchor</c> is the session the host lives for
+/// (<c>pid:startTicks</c>; absent when it has none): a launcher nested in the host's command gives a host it spawns
+/// that same session (<see cref="IpcTransportFactory.EnclosingHostAnchor"/>).
 /// </summary>
 /// <remarks>
 /// The record's <c>owner</c> is a display user name; it is advisory and, like
@@ -28,7 +30,8 @@ public sealed record HostMetadata(
     [property: JsonPropertyName("endpoint")] string Endpoint,
     [property: JsonPropertyName("startedAt")] DateTimeOffset StartedAt,
     [property: JsonPropertyName("owner")] string Owner,
-    [property: JsonPropertyName("stateful")] bool Stateful = false)
+    [property: JsonPropertyName("stateful")] bool Stateful = false,
+    [property: JsonPropertyName("sessionAnchor")] string? SessionAnchor = null)
 {
     private const long MaxMetadataBytes = 64 * 1024;
 

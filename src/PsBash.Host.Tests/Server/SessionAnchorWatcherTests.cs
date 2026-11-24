@@ -130,6 +130,16 @@ public sealed class SessionAnchorWatcherTests
     public void GetSessionAnchor_ParsesBothArgumentForms(string argLine)
         => Assert.Equal(new ProcessIdentity(4242, 99), Program.GetSessionAnchor(argLine.Split(' ')));
 
+    // A launcher nested in this host's command reads the session from the sidecar, so a slot it spawns lives as long
+    // as the session, not as long as this host.
+    [Fact]
+    public void HostMetadata_RecordsTheSessionAnchor()
+    {
+        var meta = Program.HostMetadataFor("unix", "/r/host.sock", stateful: false, Program.GetSessionAnchor(["--session-anchor=4242:99"]));
+        Assert.Equal("4242:99", meta.SessionAnchor);
+        Assert.Null(Program.HostMetadataFor("unix", "/r/host.sock", stateful: false, sessionAnchor: null).SessionAnchor);
+    }
+
     [Fact]
     public void GetSessionAnchor_AbsentOrMalformed_IsNull()
     {

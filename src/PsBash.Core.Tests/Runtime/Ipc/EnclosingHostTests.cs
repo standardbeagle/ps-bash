@@ -159,6 +159,38 @@ public class EnclosingHostTests
         => Assert.Equal("/r/host-u-s1-2.sock-x3",
             IpcTransportFactory.EnclosingHostOwnEndpoint(Host, [Sidecar(9, "/r/other.sock", HostStart), Sidecar(10, "/r/host-u-s1-2.sock-x3", HostStart.AddSeconds(2))]));
 
+    // REGRESSION: a slot that a nested launcher spawned was anchored on the host running the nested command, yet it
+    // serves the whole session's commands. When that sibling host was retired (an install's drain) or idled out, the
+    // slot hung up the session command it was running 10 s later: an agent's command ended with exit 125. The slot
+    // lives as long as the session the enclosing host belongs to.
+    [Fact]
+    public void EnclosingHostAnchor_HostAnchoredOnASession_IsThatSession()
+    {
+        var session = new ProcessIdentity(20732, 639310591186582169);
+        var sidecar = Sidecar(10, "/r/host-u-s1-2.sock-x5", HostStart.AddSeconds(2)) with { SessionAnchor = session.ToArgumentValue() };
+        Assert.Equal(session, IpcTransportFactory.EnclosingHostAnchor(Host, [Sidecar(9, "/r/other.sock", HostStart), sidecar]));
+    }
+
+    [Fact]
+    public void Sidecar_RoundTripsTheSessionAnchor()
+    {
+        string endpoint = Path.Combine(Path.GetTempPath(), "ps-bash", $"anchor-{Guid.NewGuid():N}"[..20] + ".sock");
+        try
+        {
+            Assert.True((Sidecar(1, endpoint, HostStart) with { SessionAnchor = "4242:99" }).Write("unix", endpoint));
+            Assert.Equal("4242:99", HostMetadata.TryRead("unix", endpoint)?.SessionAnchor);
+        }
+        finally { HostMetadata.Remove("unix", endpoint); }
+    }
+
+    // A host that records no session (a private host, PSBASH_SESSION, an older build) still bounds what it started.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("garbage")]
+    public void EnclosingHostAnchor_HostWithNoSession_IsTheHostItself(string? recorded)
+        => Assert.Equal(Host, IpcTransportFactory.EnclosingHostAnchor(Host,
+            [Sidecar(10, "/r/host-pi-1-abc.sock", HostStart.AddSeconds(2)) with { SessionAnchor = recorded }]));
+
     [Fact]
     public void EnclosingHostOwnEndpoint_StaleSidecar_IsNull()
         => Assert.Null(IpcTransportFactory.EnclosingHostOwnEndpoint(Host, [Sidecar(10, "/r/old.sock-x1", HostStart.AddMinutes(-5))]));

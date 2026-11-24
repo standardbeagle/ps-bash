@@ -236,7 +236,7 @@ internal sealed class Program
         // Defense in depth: HostMetadata.Write is already best-effort, but the
         // host has bound and is about to serve — nothing about advisory
         // ownership metadata is worth crashing a live host over.
-        try { WriteHostMetadata(scheme, endpoint, stateful); }
+        try { HostMetadataFor(scheme, endpoint, stateful, GetSessionAnchor(args)).Write(scheme, endpoint); }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"ps-bash-host: host metadata sidecar write failed (non-fatal): {ex.Message}");
@@ -247,9 +247,12 @@ internal sealed class Program
         return 0;
     }
 
-    private static void WriteHostMetadata(string scheme, string endpoint, bool stateful)
-    {
-        var meta = new HostMetadata(
+    /// <summary>
+    /// This host's sidecar. It records the session the host lives for, so a launcher nested in one of its commands
+    /// anchors a host it spawns on that session rather than on this host (IpcTransportFactory.EnclosingHostAnchor).
+    /// </summary>
+    internal static HostMetadata HostMetadataFor(string scheme, string endpoint, bool stateful, ProcessIdentity? sessionAnchor)
+        => new HostMetadata(
             Pid: Environment.ProcessId,
             ExecutablePath: Environment.ProcessPath ?? "<unknown>",
             ProtocolVersion: HostProtocol.ProtocolVersion,
@@ -261,9 +264,8 @@ internal sealed class Program
             Endpoint: endpoint,
             StartedAt: DateTimeOffset.UtcNow,
             Owner: Environment.UserName,
-            Stateful: stateful);
-        meta.Write(scheme, endpoint);
-    }
+            Stateful: stateful,
+            SessionAnchor: sessionAnchor?.ToArgumentValue());
 
     private static (IIpcTransport Transport, string Scheme, string Endpoint) CreateTransport(string[] args)
     {
