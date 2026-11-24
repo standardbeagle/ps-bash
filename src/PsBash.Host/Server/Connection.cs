@@ -299,13 +299,14 @@ internal sealed class Connection
             if (sessionMode == SessionMode.Framed)
                 await HostProtocol.WriteStartedAsync(_stream, execCts.Token).ConfigureAwait(false);
 
-            // A command that backgrounds work will need a private host soon: start one now, while this
-            // command runs, instead of when the `&` statement is reached.
+            // A command whose jobs run in a host process of their own will need a private host soon: start one now,
+            // while this command runs, instead of when the `&` statement is reached. A job that runs in this process
+            // needs none (a spare started for it was never used and was torn down 60 s later).
             // In-process jobs: open their runspaces now too (once per host; docs/specs/background-jobs.md section 12.5).
             if (UsesBackgroundJobs(command))
             {
-                JobHostSpares.Prewarm(CountBackgroundJobs(command));
                 var bgMode = Environment.GetEnvironmentVariable("PSBASH_BG_MODE");
+                if (ProcessJobCount(command, bgMode) is var processJobs and > 0) JobHostSpares.Prewarm(processJobs);
                 if (UsesInProcessJobs(command, bgMode))
                 {
                     // The jobs' bodies compiled before the command starts, not between its launches (section 12.5).
@@ -612,12 +613,19 @@ internal sealed class Connection
         return false;
     }
 
-    /// <summary>Call sites of <c>Invoke-BashBackground</c> in the command text: how many spares the command can use at once.</summary>
-    private static int CountBackgroundJobs(string? command)
+    /// <summary>
+    /// Call sites of <c>Invoke-BashBackground</c> whose job runs in a host process of its own (<c>-Isolated</c>, or every
+    /// one under <c>PSBASH_BG_MODE=process</c>, none under <c>inproc</c>): how many spare hosts the command can use at once.
+    /// </summary>
+    internal static int ProcessJobCount(string command, string? bgMode)
     {
-        if (command is null) return 0;
-        int n = 0, i = 0;
-        while ((i = command.IndexOf("Invoke-BashBackground", i, StringComparison.Ordinal)) >= 0) { n++; i += 21; }
+        const string Call = "Invoke-BashBackground", Isolated = " -Isolated";
+        if (bgMode == "inproc") return 0;
+        int n = 0;
+        for (int i = 0; (i = command.IndexOf(Call, i, StringComparison.Ordinal)) >= 0; i += Call.Length)
+        {
+            if (bgMode == "process" || string.CompareOrdinal(command, i + Call.Length, Isolated, 0, Isolated.Length) == 0) n++;
+        }
         return n;
     }
 }

@@ -25,4 +25,19 @@ public class ConnectionJobRunspaceWarmTests
     {
         Assert.Equal(expected, Connection.UsesInProcessJobs(command, bgMode));
     }
+
+    // REGRESSION (private-host churn): every command with a `&` pre-started a private host for its job, but a job runs
+    // in this process unless it is -Isolated (or PSBASH_BG_MODE=process). The spare was never used and was torn down
+    // 60 s later: one ~3 CPU-second cold start wasted per agent command that backgrounds something. Only jobs that run
+    // in a host process of their own are warmed for.
+    [Theory]
+    [InlineData("Invoke-BashBackground { Invoke-BashEcho x }", null, 0)]
+    [InlineData("Invoke-BashBackground -Live { Invoke-BashEcho x }", null, 0)]
+    [InlineData("Invoke-BashBackground -Isolated { $global:bar = 2 }", null, 1)]
+    [InlineData("Invoke-BashBackground -Isolated -Live { $global:bar = 2 }; Invoke-BashBackground { Invoke-BashEcho x }", null, 1)]
+    [InlineData("Invoke-BashBackground -Isolated { $global:bar = 2 }", "inproc", 0)]
+    [InlineData("Invoke-BashBackground { Invoke-BashEcho x }; Invoke-BashBackground { Invoke-BashEcho y }", "process", 2)]
+    [InlineData("Invoke-BashEcho x", "process", 0)]
+    public void ProcessJobCount_OnlyJobsThatRunInAHostProcessOfTheirOwn(string command, string? bgMode, int expected)
+        => Assert.Equal(expected, Connection.ProcessJobCount(command, bgMode));
 }
