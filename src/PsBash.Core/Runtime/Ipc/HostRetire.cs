@@ -38,57 +38,110 @@ public static class HostRetire
 
     public static async Task<Outcome> TryRetireIdleAsync(Func<IIpcTransport> newTransport, int shutdownDeadlineMs, CancellationToken ct)
     {
-        await using var holdTransport = newTransport();
-        Stream hold;
-        using (var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
-        {
-            connectCts.CancelAfter(AnswerTimeout);
-            try { hold = await holdTransport.ConnectAsync(connectCts.Token).ConfigureAwait(false); }
-            catch (Exception ex) when (IsUnreachable(ex, ct)) { return Outcome.Unreachable; }
-        }
+        var (claim, refused) = await TryClaimIdleAsync(newTransport, ct).ConfigureAwait(false);
+        if (claim is null) return refused;
+        await using (claim) await claim.RetireAsync(shutdownDeadlineMs, ct).ConfigureAwait(false);
+        return Outcome.Retired;
+    }
 
-        await using (hold)
+    /// <summary>
+    /// Takes an idle host's execution lease and keeps it until the claim is retired or disposed: meanwhile no one
+    /// else's command starts on the host, and a launcher sees it busy (and spills past it) instead of retiring it.
+    /// Returns no claim and why (<see cref="Outcome.Busy"/> or <see cref="Outcome.Unreachable"/>) when it was not idle.
+    /// </summary>
+    public static async Task<(Claim? Claim, Outcome Refused)> TryClaimIdleAsync(Func<IIpcTransport> newTransport, CancellationToken ct)
+    {
+        var holdTransport = newTransport();
+        Claim? claim = null;
+        Stream? hold = null;
+        CancellationTokenSource? readCts = null;
+        Task<int>? response = null;
+        try
         {
+            using (var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+            {
+                connectCts.CancelAfter(AnswerTimeout);
+                try { hold = await holdTransport.ConnectAsync(connectCts.Token).ConfigureAwait(false); }
+                catch (Exception ex) when (IsUnreachable(ex, ct)) { return (null, Outcome.Unreachable); }
+            }
+
             var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            using var readCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            Task<int> response;
+            readCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             try
             {
                 await HostProtocol.WriteRequestAsync(
                     hold, new Mode.Command(HoldBody, SessionMode.Framed, CurrentEnvironment()), ct).ConfigureAwait(false);
                 response = HostProtocol.ReadResponseAsync(hold, (_, _) => { }, () => started.TrySetResult(), readCts.Token);
             }
-            catch (Exception ex) when (IsUnreachable(ex, ct)) { return Outcome.Unreachable; }
+            catch (Exception ex) when (IsUnreachable(ex, ct)) { return (null, Outcome.Unreachable); }
 
             var first = await Task.WhenAny(started.Task, response, Task.Delay(AnswerTimeout, ct)).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();
-            if (first != started.Task)
+            if (first == started.Task)
             {
-                readCts.Cancel();
-                if (first == response && response.IsCompletedSuccessfully && response.Result == HostProtocol.ExecBusyExitCode)
-                    return Outcome.Busy;
-                // Answered with something other than STARTED or BUSY, closed, or said nothing in time: not ours to retire.
-                try { await response.ConfigureAwait(false); } catch { }
-                return Outcome.Unreachable;
+                claim = new Claim(newTransport, holdTransport, hold, readCts, response);   // it owns them now
+                return (claim, Outcome.Retired);
             }
+            readCts.Cancel();
+            if (first == response && response.IsCompletedSuccessfully && response.Result == HostProtocol.ExecBusyExitCode)
+                return (null, Outcome.Busy);
+            // Answered with something other than STARTED or BUSY, closed, or said nothing in time: not ours to retire.
+            return (null, Outcome.Unreachable);
+        }
+        finally
+        {
+            if (claim is null)
+            {
+                readCts?.Cancel();
+                if (response is not null) { try { await response.ConfigureAwait(false); } catch { } }
+                readCts?.Dispose();
+                if (hold is not null) await hold.DisposeAsync().ConfigureAwait(false);
+                await holdTransport.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+    }
 
-            // The lease is ours, so no one else's command can start on this host now. Shut it down while holding it.
+    /// <summary>A host's execution lease, held by the claim command <see cref="HoldBody"/> until disposed.</summary>
+    public sealed class Claim : IAsyncDisposable
+    {
+        private readonly Func<IIpcTransport> _newTransport;
+        private readonly IIpcTransport _transport;
+        private readonly Stream _hold;
+        private readonly CancellationTokenSource _readCts;
+        private readonly Task<int> _response;
+        private int _disposed;
+
+        internal Claim(Func<IIpcTransport> newTransport, IIpcTransport transport, Stream hold, CancellationTokenSource readCts, Task<int> response)
+            => (_newTransport, _transport, _hold, _readCts, _response) = (newTransport, transport, hold, readCts, response);
+
+        /// <summary>
+        /// Shuts the host down while the lease is ours, so the only command it can interrupt is the claim, then ends
+        /// the claim. A host that went away meanwhile is retired all the same.
+        /// </summary>
+        public async Task RetireAsync(int shutdownDeadlineMs, CancellationToken ct)
+        {
             try
             {
                 using var sdCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 sdCts.CancelAfter(AnswerTimeout);
-                await using var control = newTransport();
+                await using var control = _newTransport();
                 using var stream = await control.ConnectAsync(sdCts.Token).ConfigureAwait(false);
                 await HostProtocol.WriteRequestAsync(stream, new Mode.Shutdown(shutdownDeadlineMs), sdCts.Token).ConfigureAwait(false);
                 await HostProtocol.ReadResponseAsync(stream, _ => { }, sdCts.Token).ConfigureAwait(false);
             }
-            catch (Exception ex) when (IsUnreachable(ex, ct)) { /* it went away on its own: retired all the same */ }
-            finally
-            {
-                readCts.Cancel();   // closing the claim's connection ends the hold, whichever host build this is
-                try { await response.ConfigureAwait(false); } catch { }
-            }
-            return Outcome.Retired;
+            catch (Exception ex) when (IsUnreachable(ex, ct)) { /* it went away on its own */ }
+            finally { await DisposeAsync().ConfigureAwait(false); }
+        }
+
+        /// <summary>Ends the claim: closing its connection ends the hold, whichever host build this is.</summary>
+        public async ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            _readCts.Cancel();
+            try { await _response.ConfigureAwait(false); } catch { }
+            _readCts.Dispose();
+            await _hold.DisposeAsync().ConfigureAwait(false);
+            await _transport.DisposeAsync().ConfigureAwait(false);
         }
     }
 

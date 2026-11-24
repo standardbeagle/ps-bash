@@ -155,6 +155,77 @@ public sealed class HostRetireTests
         Assert.Empty(replaced.Events);
     }
 
+    private static bool Shut(ScriptedHost h) => h.Events.Contains("shutdown");
+
+    private static async Task WaitForAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "condition never held");
+            await Task.Delay(20);
+        }
+    }
+
+    // REGRESSION: the install's drain retired an idle slot host while another slot host, anchored on it, ran an agent's
+    // command; 10 s later that slot hung the command up (exit 125). A host another one is anchored on is claimed first,
+    // so no launcher's command starts on it and no launcher retires it, and it is shut down only once its dependents
+    // are gone.
+    [Fact]
+    public async Task Drain_HoldsAHostWhileOneAnchoredOnItRuns_ThenRetiresIt()
+    {
+        await using var anchor = new ScriptedHost(busy: false);
+        await using var dependent = new ScriptedHost(busy: true);
+        await anchor.StartAsync();
+        await dependent.StartAsync();
+        var targets = new[]
+        {
+            new HostDrain.Target(201, "unix", anchor.Endpoint),
+            new HostDrain.Target(202, "unix", dependent.Endpoint, AnchorPid: 201),
+        };
+
+        var drain = HostDrain.DrainAsync(targets, TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50),
+            pid => pid == 201 ? !Shut(anchor) : !Shut(dependent), t => t.Pid, report: null, CancellationToken.None);
+
+        await WaitForAsync(() => anchor.Events.Contains("started:" + HostRetire.HoldBody));
+        Assert.Equal(HostRetire.Outcome.Busy,
+            await HostRetire.TryRetireIdleAsync(() => new UnixSocketTransport(anchor.Endpoint), 5000, CancellationToken.None));
+        await Task.Delay(300);
+        Assert.False(Shut(anchor), "the anchor was shut down while a host anchored on it ran a command");
+
+        dependent.Release();
+        var byPid = (await drain.WaitAsync(TimeSpan.FromSeconds(30))).ToDictionary(r => r.Target.Pid, r => r.State);
+
+        Assert.Equal(HostDrain.State.Retired, byPid[201]);
+        Assert.Equal(HostDrain.State.Retired, byPid[202]);
+        Assert.True(Shut(anchor));
+    }
+
+    // At the deadline the held anchor is released untouched and reported busy, like its dependent: the caller decides.
+    [Fact]
+    public async Task Drain_DependentStillBusyAtTheDeadline_ReleasesItsAnchorUnretired()
+    {
+        await using var anchor = new ScriptedHost(busy: false);
+        await using var dependent = new ScriptedHost(busy: true);
+        await anchor.StartAsync();
+        await dependent.StartAsync();
+        var targets = new[]
+        {
+            new HostDrain.Target(301, "unix", anchor.Endpoint),
+            new HostDrain.Target(302, "unix", dependent.Endpoint, AnchorPid: 301),
+        };
+
+        var results = await HostDrain.DrainAsync(targets, TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(50),
+            _ => true, t => t.Pid, report: null, CancellationToken.None);
+        await anchor.ClaimClosed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var byPid = results.ToDictionary(r => r.Target.Pid, r => r.State);
+        Assert.Equal(HostDrain.State.Busy, byPid[301]);
+        Assert.Equal(HostDrain.State.Busy, byPid[302]);
+        Assert.False(Shut(anchor));
+        Assert.False(Shut(dependent));
+    }
+
     [Fact]
     public async Task NoHost_IsUnreachable()
     {
