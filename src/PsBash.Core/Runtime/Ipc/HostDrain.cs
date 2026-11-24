@@ -14,8 +14,10 @@ namespace PsBash.Core.Runtime.Ipc;
 /// </summary>
 public static class HostDrain
 {
-    /// <param name="AnchorPid">The listed host this one is anchored on (<c>--session-anchor</c>), if any: this host
-    /// exits, hanging up its command, once that one is gone, so that one is held and retired only after this one.</param>
+    /// <summary>
+    /// A host to retire. <c>AnchorPid</c> is the listed host this one is anchored on (<c>--session-anchor</c>), if any:
+    /// this host exits, hanging up its command, once that one is gone, so that one is held and retired only after it.
+    /// </summary>
     public sealed record Target(int Pid, string Scheme, string Endpoint, int? AnchorPid = null);
 
     /// <summary>
@@ -26,7 +28,12 @@ public static class HostDrain
 
     public sealed record Result(Target Target, State State);
 
-    /// <param name="ownerPid">The pid the endpoint's sidecar names now, or null when there is none (test seam).</param>
+    /// <summary>
+    /// Drains <paramref name="targets"/> until each is settled or <paramref name="deadline"/> passes, polling every
+    /// <paramref name="poll"/>. <paramref name="isAlive"/> and <paramref name="ownerPid"/> (the pid the endpoint's
+    /// sidecar names now, or null when there is none) are test seams; <paramref name="report"/> sees each result as it
+    /// is settled.
+    /// </summary>
     public static async Task<IReadOnlyList<Result>> DrainAsync(
         IReadOnlyList<Target> targets, TimeSpan deadline, TimeSpan poll, Func<int, bool> isAlive,
         Func<Target, int?> ownerPid, Action<Result>? report, CancellationToken ct)
