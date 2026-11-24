@@ -1,0 +1,51 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1034
+stdout-length: 113
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+{
+printf 'f1\nf2\n' > f
+echo "1:$(echo q | { X=1 cat <&0; })"
+echo "2:$(echo q | cat <&0 2>/dev/null)"
+exec 3<f; echo "3:$(while read -r l; do printf '%s ' "$l"; done <&3)"; exec 3<&-
+exec 3<f; echo "4:$({ cat; } <&3 | tr '\n' ' ')"; exec 3<&-
+exec 3<f; echo "5:$( ( cat ) <&3 | tr '\n' ' ')"; exec 3<&-
+exec 3<f; : <&3; echo "6:$?"; exec 3<&-
+echo "7:$( { echo a >&2; } 2>&01 )"
+fd=3; exec 3<f; echo "8:$({ cat; } <&$fd | tr '\n' ' ')"; exec 3<&-
+exec 3<f; echo "9:$(echo q | cat <&$fd | tr '\n' ' ')"; exec 3<&-
+exec 3<f; echo "10:$(eval cat <&3 | tr '\n' ' ')"; exec 3<&-
+exec 3<f; { read -r a; } <&3; read -r b <&3; echo "11:$a/$b"; exec 3<&-
+echo "12:$(echo hi 1>&1 2>&2 <&00)"
+echo "13:$(echo q | { X=1 cat <&0 >&1; } | tr a-z A-Z)"
+echo "14:$(g() { X=1 cat <&0; }; echo q | g)"
+exec 3<f; echo "15:$( { eval cat <&3; } < /dev/null | tr '\n' ' ')"; exec 3<&-
+exec 3<f; echo "16:$( { eval cat <&$fd; } < /dev/null | tr '\n' ' ')"; exec 3<&-
+} 2>&1
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+1:q
+2:q
+3:f1 f2
+4:f1 f2
+5:f1 f2
+6:0
+7:a
+8:f1 f2
+9:f1 f2
+10:f1 f2
+11:f1/f2
+12:hi
+13:Q
+14:q
+15:f1 f2
+16:f1 f2
+rc=0
+
+==== STDERR ====
+

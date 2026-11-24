@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 120
+stdout-length: 4
+stderr-length: 58
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; printf '%s\n' 'a$b' ab '*a' '{1}a' 'a{1,2' 'x)' aa > in; sed 's/[:space:]/X/' in; echo "s=$?"
+==== STDOUT ====
+s=4
+
+==== STDERR ====
+sed: character class syntax is [[:space:]], not [:space:]
+

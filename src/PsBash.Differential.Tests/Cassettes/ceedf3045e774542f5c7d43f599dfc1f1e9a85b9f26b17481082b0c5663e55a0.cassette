@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 144
+stdout-length: 44
+stderr-length: 78
+==== SCRIPT ====
+echo abc | sed 'y/b/\t/' | od -c; echo abc | sed 'y/abc/\x41\x42\x43/'; echo abc | sed 'y/abc/\x41\x4/'; echo "s=$?"; echo 'aqb' | sed 'y/\q/Z/'
+==== STDOUT ====
+0000000   a  \t   c  \n
+0000004
+ABC
+s=1
+aZb
+
+==== STDERR ====
+sed: -e expression #1, char 14: strings for `y' command are different lengths
+

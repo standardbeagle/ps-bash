@@ -1,0 +1,23 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 234
+stdout-length: 18
+stderr-length: 150
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; printf '%s\n' 'a$b' ab '*a' '{1}a' 'a{1,2' 'x)' aa > in; grep -E -c 'a{1,2' in; grep -E -c 'x)' in; grep -E 'a{2,1}' in; echo "s=$?"; grep -E -c '*a' in; echo "s=$?"; grep -E -c '+a' in; grep -E -c 'b|?a' in
+==== STDOUT ====
+1
+1
+s=2
+6
+s=0
+6
+6
+
+==== STDERR ====
+grep: Invalid content of \{\}
+grep: warning: * at start of expression
+grep: warning: + at start of expression
+grep: warning: ? at start of expression
+

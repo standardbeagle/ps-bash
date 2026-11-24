@@ -1,0 +1,34 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 698
+stdout-length: 144
+stderr-length: 0
+==== SCRIPT ====
+f(){ builtin declare dd=$1; declare "$2"; typeset "t=$3"; echo "in[$dd][$e][$t]"; }; f a 'e=b' c
+declare -p dd e t 2>/dev/null; echo "p=$?"
+e1(){ c='declare d1=p'; eval "$c"; echo "in1[$d1]"; }; e1; echo "out1[${d1-unset}]"
+e2(){ c='typeset -i d2=1+2'; eval "$c"; echo "in2[$d2]"; }; e2; echo "out2[${d2-unset}]"
+printf 'declare sx=1\n' > lib; s1(){ . ./lib; echo "ins[$sx]"; }; s1; echo "outs[${sx-unset}]"
+w1(){ dc=declare; $dc wv=1; command declare cv=2; declare -- dv=3; echo "inw[$wv][$cv][$dv]"; }; w1
+echo "outw[${wv-unset}][${cv-unset}][${dv-unset}]"
+c='declare tl=9'; eval "$c"; echo "toplevel[$tl]"
+n1(){ c='declare nn=1'; ( eval "$c"; echo "sub[$nn]" ); echo "after[${nn-unset}]"; }; n1
+
+==== STDOUT ====
+in[a][b][c]
+p=1
+in1[p]
+out1[unset]
+in2[3]
+out2[unset]
+ins[1]
+outs[unset]
+inw[1][2][3]
+outw[unset][unset][unset]
+toplevel[9]
+sub[1]
+after[unset]
+
+==== STDERR ====
+

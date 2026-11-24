@@ -1,0 +1,30 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 493
+stdout-length: 22
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+timeout 20 bash -c 'exec head -c 5 < /dev/zero' | wc -c
+timeout 20 bash -c 'X=1 exec head -c 5 < /dev/zero' | wc -c
+timeout 20 bash -c 'eval "head -c 5" < /dev/zero' | wc -c
+timeout 20 bash -c 'cat /dev/zero 2>/dev/null | exec head -c 5' | wc -c
+timeout 20 bash -c 'cat /dev/zero 2>/dev/null | command exec head -c 5' | wc -c
+timeout 20 bash -c '( exec head -c 5 < /dev/zero; echo after ) | wc -c'
+echo "rc=$?"
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+5
+5
+5
+5
+5
+5
+rc=0
+rc=0
+
+==== STDERR ====
+

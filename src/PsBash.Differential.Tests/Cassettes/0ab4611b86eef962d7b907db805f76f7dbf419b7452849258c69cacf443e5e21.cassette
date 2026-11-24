@@ -1,0 +1,21 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 256
+stdout-length: 84
+stderr-length: 0
+==== SCRIPT ====
+h() { :; }; v=1; h=2; unset v -f h; echo "st=$? v=[${v-unset}] h=[${h-unset}]"; type -t h
+w=1; unset -- -v w; echo "st=$? w=[${w-unset}]"
+x=1; unset -n -- x; echo "st=$? x=[${x-unset}]"
+k() { :; }; k=1; unset -- -f k; echo "st=$? k=[${k-unset}]"; type -t k
+==== STDOUT ====
+st=0 v=[unset] h=[unset]
+function
+st=0 w=[unset]
+st=0 x=[1]
+st=0 k=[unset]
+function
+
+==== STDERR ====
+

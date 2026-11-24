@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 264
+stdout-length: 26
+stderr-length: 0
+==== SCRIPT ====
+printf 'a/b\nc\nd|e\nAB\nab\n' | sed -n '/ab/Ip'; printf 'a/b\nc\nd|e\nAB\nab\n' | sed -n '\,ab, I p'; printf 'a/b\nc\nd|e\nAB\nab\n' | sed -n '/AB/I,/D/Ip'; printf 'a\nb\n' | sed -n 'N;/^b/Mp'; printf 'a\nb\n' | sed -n 'N;/^b/p'; printf 'a\nb\n' | sed -n 'N;/b/p'
+==== STDOUT ====
+AB
+ab
+AB
+ab
+AB
+ab
+a
+b
+a
+b
+
+==== STDERR ====
+

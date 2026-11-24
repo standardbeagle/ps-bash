@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 183
+stdout-length: 33
+stderr-length: 0
+==== SCRIPT ====
+echo abc | sed 's/b/[\n]/'; echo abc | sed 's/b/[\q]/'; echo abc | sed 's/b/\x26/'; echo abc | sed 's/b/\d065\o102/'; echo 'a b' | sed 's/\t*b/X/'; printf 'a\tb\n' | sed 's/\t/<TAB>/'
+==== STDOUT ====
+a[
+]c
+a[q]c
+a&c
+aABc
+a X
+a<TAB>b
+
+==== STDERR ====
+

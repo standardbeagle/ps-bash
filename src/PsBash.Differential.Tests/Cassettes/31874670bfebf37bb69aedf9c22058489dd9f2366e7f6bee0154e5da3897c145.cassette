@@ -1,0 +1,26 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 1
+script-length: 261
+stdout-length: 126
+stderr-length: 108
+==== SCRIPT ====
+declare -n a=ya; ya=1; unset -vn a; declare -p a ya
+declare -n b=yb; yb=1; unset -nv b; declare -p b yb
+declare -n c=yc; yc=1; unset -fn c; declare -p c yc
+declare -n d=yd; yd=1; unset -nf d; declare -p d yd
+declare -n e=ye; ye=1; unset -n -n e; declare -p e ye
+==== STDOUT ====
+declare -- ya="1"
+declare -- yb="1"
+declare -n c="yc"
+declare -- yc="1"
+declare -n d="yd"
+declare -- yd="1"
+declare -- ye="1"
+
+==== STDERR ====
+bash: line 1: declare: a: not found
+bash: line 2: declare: b: not found
+bash: line 5: declare: e: not found
+

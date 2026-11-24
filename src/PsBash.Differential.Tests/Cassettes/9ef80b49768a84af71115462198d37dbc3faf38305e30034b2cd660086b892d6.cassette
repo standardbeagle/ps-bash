@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 147
+stdout-length: 12
+stderr-length: 147
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; printf 'x\na</c>\ny\n' > f; sed '/a\(/d' f; echo "s=$?"; sed -E '/a(/d' f; echo "s=$?"; sed -n '1,/a\(/p' f; echo "s=$?"
+==== STDOUT ====
+s=1
+s=1
+s=1
+
+==== STDERR ====
+sed: -e expression #1, char 5: Unmatched ( or \(
+sed: -e expression #1, char 4: Unmatched ( or \(
+sed: -e expression #1, char 7: Unmatched ( or \(
+

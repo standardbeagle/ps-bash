@@ -1,0 +1,27 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 427
+stdout-length: 30
+stderr-length: 330
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; printf ':\n' > f1; sed -f f1 /dev/null; echo "s=$?"; printf 'p\ns/a/b/w\n' > f2; sed -f f2 /dev/null; echo "s=$?"; printf 'p\n{\np\n' > f3; sed -f f3 /dev/null; echo "s=$?"; printf '#n\nk\n' > f4; sed -f f4 /dev/null; echo "s=$?"; printf 'p\nk' > f5; sed -f f5 /dev/null; echo "s=$?"; printf 'p\n\n' > f6; printf 'x\n' | sed -f f6 -e '//p'; echo "s=$?"; printf 'x\n' | sed -e '//p' -f f6; echo "s=$?"
+==== STDOUT ====
+s=1
+s=1
+s=1
+s=1
+s=1
+x
+s=1
+s=1
+
+==== STDERR ====
+sed: file f1 line 1: ":" lacks a label
+sed: file f2 line 3: missing filename in r/R/w/W commands
+sed: file f3 line 2: unmatched `{'
+sed: file f4 line 2: unknown command: `k'
+sed: file f5 line 2: unknown command: `k'
+sed: -e expression #1, char 0: no previous regular expression
+sed: file f6 line 3: no previous regular expression
+

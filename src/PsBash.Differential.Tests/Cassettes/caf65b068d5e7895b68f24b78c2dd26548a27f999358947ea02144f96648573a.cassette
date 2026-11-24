@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 110
+stdout-length: 16
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; printf 'x\na</c>\ny\n' > f; sed -n '\,a</c>,p' f; sed -n '\|a</c>|p' f; echo "s=$?"
+==== STDOUT ====
+a</c>
+a</c>
+s=0
+
+==== STDERR ====
+

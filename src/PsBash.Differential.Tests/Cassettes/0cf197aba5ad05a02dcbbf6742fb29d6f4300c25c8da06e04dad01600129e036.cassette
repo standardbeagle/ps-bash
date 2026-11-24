@@ -1,0 +1,26 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 327
+stdout-length: 28
+stderr-length: 415
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; printf '%s\n' 'a$b' ab '*a' '{1}a' 'a{1,2' 'x)' aa > in; sed 's/a\{1/x/' in; echo "s=$?"; sed 's/[[:foo:]]/x/' in; echo "s=$?"; sed 's/a**/x/' in; echo "s=$?"; sed 's/\{1\}/x/' in; echo "s=$?"; sed -E 's/a{1,2/x/' in; echo "s=$?"; sed -E 's/*a/x/' in; echo "s=$?"; sed 's/[[.ab.]]/x/' in; echo "s=$?"
+==== STDOUT ====
+s=1
+s=1
+s=1
+s=1
+s=1
+s=1
+s=1
+
+==== STDERR ====
+sed: -e expression #1, char 9: Unmatched \{
+sed: -e expression #1, char 14: Invalid character class name
+sed: -e expression #1, char 8: Invalid preceding regular expression
+sed: -e expression #1, char 10: Invalid preceding regular expression
+sed: -e expression #1, char 10: Unmatched \{
+sed: -e expression #1, char 7: Invalid preceding regular expression
+sed: -e expression #1, char 13: Invalid collation character
+

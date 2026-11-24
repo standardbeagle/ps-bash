@@ -103,7 +103,9 @@ public class StderrMergeOrderDifferentialTests
     [InlineData("perl", "perl -e 'print join(\"|\",@ARGV),\"\\n\"' -- -foo:bar --x=1 '' 'a b' 2>&1; echo rc=$?")]
     [InlineData("pwsh", "pwsh -NoProfile -NonInteractive -Command '[Console]::Error.Write(\"x`n\"); exit 7' 2>&1; echo rc=$?")]
     [InlineData("pwsh", "printf 'a\\nb\\n' | pwsh -NoProfile -NonInteractive -Command '$input | % { [Console]::Out.Write(\"in:$_`n\"); [Console]::Error.Write(\"err:$_`n\") }' 2>&1; echo rc=$?")]
-    [InlineData("pwsh", "pwsh -NoProfile -NonInteractive -Command '[Console]::Out.Write(($args -join \"|\") + \"`n\")' -foo:bar --x=1 '' 'a b' 2>&1; echo rc=$?")]
+    // -File, not -Command: -Command folds the trailing words into its command text, so pwsh never saw them as
+    // arguments and the case froze a ParserError (whose ANSI-only last line pwsh writes or not by host).
+    [InlineData("pwsh", "d=$(mktemp -d); printf '%s\\n' '[Console]::Out.Write(($args -join \"|\") + \"`n\")' > \"$d/a.ps1\"; pwsh -NoProfile -NonInteractive -File \"$d/a.ps1\" -foo:bar --x=1 '' 'a b' 2>&1; echo rc=$?; rm -rf \"$d\"")]
     // ps-bash's not-found message has no "line N:" prefix (a separate gap): compare the message's tail.
     [InlineData("", "x=$(no_such_cmd_zz 2>&1); echo \"rc=$? ${x##*: }\"")]
     public Task Merged_Program_KeepsStatusInputAndArguments(string program, string script)

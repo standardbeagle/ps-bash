@@ -1,0 +1,47 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 706
+stdout-length: 96
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+cat > t.sh <<'EOF'
+{
+printf 'f1\nf2\n' > f
+printf 'read -r v; echo "s=$v"\n' > s
+echo "1:$(echo q | command exec cat)"
+echo "2:$(command exec cat < f | tr '\n' ' ')"
+echo "3:$(echo q | builtin exec cat)"
+echo "4:$(command eval cat < f | tr '\n' ' ')"
+echo "5:$(echo q | command source ./s)"
+echo "6:$(command . ./s < f)"
+echo "7:$(echo q | command eval 'read -r v; echo "e=$v"')"
+echo "8:$( ( command exec cat; echo notreached ) < f | tr '\n' ' ')"
+command -v exec; echo "9:$?"
+echo "10:$(builtin source ./s <<< hs)"
+echo "11:$(command eval cat <<< hd)"
+echo "12:$(builtin eval cat < f | tr '\n' ' ')"
+echo "13:$(command -- . ./s < f)"
+} 2>&1
+EOF
+{ bash t.sh; echo "rc=$?"; } 2>&1
+==== STDOUT ====
+1:q
+2:f1 f2
+3:q
+4:f1 f2
+5:s=q
+6:s=f1
+7:e=q
+8:f1 f2
+exec
+9:0
+10:s=hs
+11:hd
+12:f1 f2
+13:s=f1
+rc=0
+
+==== STDERR ====
+

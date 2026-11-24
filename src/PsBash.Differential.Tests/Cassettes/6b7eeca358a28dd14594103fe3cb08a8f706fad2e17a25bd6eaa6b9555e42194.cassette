@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 1
+script-length: 219
+stdout-length: 18
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; printf '%s\n' 'a$b' ab '*a' '{1}a' 'a{1,2' 'x)' aa > in; grep 'a$b' in; echo "s=$?"; grep -c '*a' in; grep -c '\{1\}a' in; grep -c 'a**' in; grep -c '\(^a$\)\|^ab' in; grep -c 'x\{1\}\{2\}' in
+==== STDOUT ====
+a$b
+s=0
+1
+1
+7
+1
+0
+
+==== STDERR ====
+

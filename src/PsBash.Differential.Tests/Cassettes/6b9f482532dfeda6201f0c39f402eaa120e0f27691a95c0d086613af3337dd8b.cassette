@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 96
+stdout-length: 32
+stderr-length: 0
+==== SCRIPT ====
+printf 'a/b\nc\nd|e\nAB\nab\n' | sed 'y/\//|/'; printf 'a/b\nc\nd|e\nAB\nab\n' | sed 'y,a\,,xy,'
+==== STDOUT ====
+a|b
+c
+d|e
+AB
+ab
+x/b
+c
+d|e
+AB
+xb
+
+==== STDERR ====
+

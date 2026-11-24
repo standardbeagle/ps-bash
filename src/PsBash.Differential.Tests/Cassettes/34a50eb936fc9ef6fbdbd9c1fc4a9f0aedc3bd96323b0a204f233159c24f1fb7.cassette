@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 162
+stdout-length: 18
+stderr-length: 0
+==== SCRIPT ====
+printf 'a/b\nc\nd|e\nAB\nab\n' | sed -n '/a\/b/,/c/p'; printf 'a/b\nc\nd|e\nAB\nab\n' | sed -n '\,a/b,,\|c|p'; printf 'a/b\nc\nd|e\nAB\nab\n' | sed -n '2,\,d|e,p'
+==== STDOUT ====
+a/b
+c
+a/b
+c
+c
+d|e
+
+==== STDERR ====
+

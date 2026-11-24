@@ -1,0 +1,21 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 218
+stdout-length: 22
+stderr-length: 0
+==== SCRIPT ====
+printf 'a\nb\n' | sed -n 'N;/a.b/p'; printf 'a\nb\n' | sed -n 'N;/a$/p'; printf 'a\nb\n' | sed -n 'N;/a$/Mp'; printf 'a\nb\n' | sed 'N;s/[^x]/_/g'; printf 'a\nb\n' | sed 'N;s/./_/Mg'; printf 'a\nb\n' | sed 'N;s/$/</Mg'
+==== STDOUT ====
+a
+b
+a
+b
+___
+_
+_
+a<
+b<
+
+==== STDERR ====
+

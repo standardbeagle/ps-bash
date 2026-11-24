@@ -1,0 +1,21 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 127
+stdout-length: 20
+stderr-length: 0
+==== SCRIPT ====
+printf 'a\nb\nc\nd\n' | sed -n '1~2N;1p'; echo "s=$?"; printf 'a\nb\nc\nd\n' | sed 'N;='; printf 'a\nb\nc\nd\n' | sed -n 'N;4p'
+==== STDOUT ====
+s=0
+2
+a
+b
+4
+c
+d
+c
+d
+
+==== STDERR ====
+

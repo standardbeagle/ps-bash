@@ -1,0 +1,59 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1495
+stdout-length: 287
+stderr-length: 0
+==== SCRIPT ====
+g1(){ x='gg=1'; declare -g "$x"; c='declare -g gh=2'; eval "$c"; declare "$1"; }; g1 'lv=3'
+echo "g[${gg-unset}][${gh-unset}][${lv-unset}]"
+x1(){ v='xv=3'; declare -x "$v"; env | grep -c '^xv='; }; x1; echo "x[${xv-unset}]"; env | grep -c '^xv='
+in1(){ declare "$1"; echo "inner[$nv]"; }
+out1(){ nv=outer; in1 'nv=inner'; echo "outerafter[$nv]"; }; out1; echo "top[${nv-unset}]"
+d3(){ declare "$1"; d4 "$2"; echo "d3[$dn]"; }; d4(){ declare "$1"; echo "d4[$dn]"; }; d3 dn=3 dn=4; echo "dtop[${dn-unset}]"
+l3(){ local "$1"; l4 "$2"; echo "l3[$ln]"; }; l4(){ local "$1"; echo "l4[$ln]"; }; l3 ln=3 ln=4; echo "ltop[${ln-unset}]"
+p1(){ c='local pa+=x'; eval "$c"; eval "$c"; p2; echo "p1[$pa]"; }; p2(){ c='local pa+=y'; eval "$c"; echo "p2[$pa]"; }
+pa=top; p1; echo "ptop[$pa]"
+w2(){ local wl=a; w3; echo "w2[$wl]"; }; w3(){ dc=declare; $dc wl=b; echo "w3[$wl]"; }; w2; echo "wtop[${wl-unset}]"
+r1(){ c='declare -r ro=1'; eval "$c"; echo "inr[$ro]"; }; r1; echo "outr[${ro-unset}]"; ro=2 2>/dev/null && echo "rw[$ro]"
+a1(){ c='declare s+=x'; eval "$c"; eval "$c"; echo "ina[$s]"; }; s=top; a1; echo "outa[$s]"
+k1(){ c='declare kv=$kv-in'; eval "$c"; echo "ink[$kv]"; }; kv=top; k1; echo "outk[$kv]"
+u1(){ c='declare uv'; eval "$c"; uv=set; echo "inu[$uv]"; }; uv=top; u1; echo "outu[$uv]"
+i1(){ c='declare -i iv=2*3'; eval "$c"; echo "ini[$iv]"; }; i1; echo "outi[${iv-unset}]"
+ap=a; declare ap+=x; an=3; declare -i an+=2; au=ab; declare -u au+=cd; typeset -x ax+=q; echo "ap[$ap][$an][$au][$ax]"
+
+==== STDOUT ====
+g[1][2][unset]
+1
+x[unset]
+0
+inner[inner]
+outerafter[outer]
+top[outer]
+d4[4]
+d3[3]
+dtop[unset]
+l4[4]
+l3[3]
+ltop[unset]
+p2[y]
+p1[xx]
+ptop[top]
+w3[b]
+w2[a]
+wtop[unset]
+inr[1]
+outr[unset]
+rw[2]
+ina[xx]
+outa[top]
+ink[top-in]
+outk[top]
+inu[set]
+outu[top]
+ini[6]
+outi[unset]
+ap[ax][5][ABCD][q]
+
+==== STDERR ====
+

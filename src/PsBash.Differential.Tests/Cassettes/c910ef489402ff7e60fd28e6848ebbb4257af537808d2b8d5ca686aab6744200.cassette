@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 210
+stdout-length: 26
+stderr-length: 280
+==== SCRIPT ====
+sed 's/a/b/gg' /dev/null; echo "s=$?"; sed 's/a/b/pp' /dev/null; echo "s=$?"; sed 's/a/b/2g3' /dev/null; echo "s=$?"; sed 's/a/b/0' /dev/null; echo "s=$?"; echo aaaa | sed 's/a/b/g3'; echo aaaa | sed 's/a/b/12'
+==== STDOUT ====
+s=1
+s=1
+s=1
+s=1
+aabb
+aaaa
+
+==== STDERR ====
+sed: -e expression #1, char 8: multiple `g' options to `s' command
+sed: -e expression #1, char 8: multiple `p' options to `s' command
+sed: -e expression #1, char 9: multiple number options to `s' command
+sed: -e expression #1, char 7: number option to `s' command may not be zero
+

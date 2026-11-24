@@ -1,0 +1,32 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 368
+stdout-length: 40
+stderr-length: 552
+==== SCRIPT ====
+sed r /dev/null; echo "s=$?"; sed 'p;r' /dev/null; echo "s=$?"; sed 's/a/b/w' /dev/null; echo "s=$?"; sed ':' /dev/null; echo "s=$?"; sed 'p;:' /dev/null; echo "s=$?"; sed -e p -e r /dev/null; echo "s=$?"; sed -e p -e '{p' /dev/null; echo "s=$?"; sed -e '{p' -e p /dev/null; echo "s=$?"; sed -e p -e '}' /dev/null; echo "s=$?"; sed -e p -e 'p;}' /dev/null; echo "s=$?"
+==== STDOUT ====
+s=1
+s=1
+s=1
+s=1
+s=1
+s=1
+s=1
+s=1
+s=1
+s=1
+
+==== STDERR ====
+sed: -e expression #1, char 1: missing filename in r/R/w/W commands
+sed: -e expression #1, char 3: missing filename in r/R/w/W commands
+sed: -e expression #1, char 7: missing filename in r/R/w/W commands
+sed: -e expression #1, char 1: ":" lacks a label
+sed: -e expression #1, char 3: ":" lacks a label
+sed: -e expression #2, char 1: missing filename in r/R/w/W commands
+sed: -e expression #2, char 0: unmatched `{'
+sed: -e expression #1, char 0: unmatched `{'
+sed: -e expression #2, char 1: unexpected `}'
+sed: -e expression #2, char 3: unexpected `}'
+

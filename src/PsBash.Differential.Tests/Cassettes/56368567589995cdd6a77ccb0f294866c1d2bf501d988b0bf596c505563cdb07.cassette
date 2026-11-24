@@ -1,0 +1,33 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 156
+stdout-length: 84
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; printf '%s\n' 'a$b' ab '*a' '{1}a' 'a{1,2' 'x)' aa > in; sed -E 's/a**/X/' in; sed -E 's/(a)*{2}/Y/' in; sed -E 's/a{1}{2}/Z/' in
+==== STDOUT ====
+X$b
+Xb
+X*a
+X{1}a
+X{1,2
+Xx)
+X
+Y$b
+Yb
+Y*a
+Y{1}a
+Y{1,2
+Yx)
+Y
+a$b
+ab
+*a
+{1}a
+a{1,2
+x)
+Z
+
+==== STDERR ====
+
