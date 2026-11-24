@@ -27,6 +27,7 @@ internal static class HostCommands
             "restart" => await RestartAsync(ParseDeadline(args.AsSpan(2)), ct).ConfigureAwait(false),
             "gc" => GcOrphans(ParseGcFlags(args.AsSpan(2))),
             "list" or "ls" => ListHosts(),
+            "drain" => await DrainAsync(args.AsSpan(2).ToArray(), ct).ConfigureAwait(false),
             "-h" or "--help" or "help" => Help(),
             _ => Unknown(args[1]),
         };
@@ -387,6 +388,47 @@ internal static class HostCommands
         }
     }
 
+    /// <summary>
+    /// <c>host drain --host PID=unix:ENDPOINT ... [--deadline-ms N]</c>: retire each listed host as soon as it runs no
+    /// command (HostDrain), waiting up to the deadline (default 10 minutes). One line per host: retired, gone,
+    /// replaced, busy or unresponsive. Exit 0 when none is left, 3 when some are still busy or unresponsive at the
+    /// deadline (the caller decides whether to kill them). install-local.ps1 runs it after swapping the binaries.
+    /// </summary>
+    private static async Task<int> DrainAsync(string[] args, CancellationToken ct)
+    {
+        var targets = new List<HostDrain.Target>();
+        int deadlineMs = 600_000;
+        for (int i = 0; i < args.Length; i++)
+        {
+            string? value = null;
+            if (args[i] is "--host" && i + 1 < args.Length) value = args[++i];
+            else if (args[i].StartsWith("--host=", StringComparison.Ordinal)) value = args[i]["--host=".Length..];
+            else if (args[i] is "--deadline-ms" && i + 1 < args.Length && int.TryParse(args[i + 1], out var d)) { deadlineMs = d; i++; continue; }
+            else if (args[i].StartsWith("--deadline-ms=", StringComparison.Ordinal) && int.TryParse(args[i]["--deadline-ms=".Length..], out var e)) { deadlineMs = e; continue; }
+            else
+            {
+                Console.Error.WriteLine($"ps-bash host drain: unexpected argument '{args[i]}'");
+                return 2;
+            }
+
+            int eq = value.IndexOf('=');
+            if (eq <= 0 || !int.TryParse(value.AsSpan(0, eq), out var pid))
+            {
+                Console.Error.WriteLine($"ps-bash host drain: --host takes PID=scheme:endpoint, got '{value}'");
+                return 2;
+            }
+            var (scheme, endpoint) = IpcTransportFactory.ResolveEndpoint(value[(eq + 1)..]);
+            targets.Add(new HostDrain.Target(pid, scheme, endpoint));
+        }
+
+        var results = await HostDrain.DrainAsync(
+            targets, TimeSpan.FromMilliseconds(deadlineMs), TimeSpan.FromSeconds(1),
+            pid => HostOwnership.ProbeProcess(pid).Alive, HostDrain.SidecarPid,
+            r => Console.WriteLine($"{r.State.ToString().ToLowerInvariant()} pid={r.Target.Pid} endpoint={r.Target.Scheme}:{r.Target.Endpoint}"),
+            ct).ConfigureAwait(false);
+        return results.Any(r => r.State is HostDrain.State.Busy or HostDrain.State.Unresponsive) ? 3 : 0;
+    }
+
     private static int ParseDeadline(ReadOnlySpan<string> args)
     {
         var deadlineMs = HostProtocol.DefaultShutdownDeadlineMs;
@@ -427,6 +469,7 @@ internal static class HostCommands
         Console.Error.WriteLine("       ps-bash host restart [--deadline-ms N]");
         Console.Error.WriteLine("       ps-bash host list             # every host on this machine (alias: ls)");
         Console.Error.WriteLine("       ps-bash host gc [--force] [--dry-run]");
+        Console.Error.WriteLine("       ps-bash host drain --host PID=unix:ENDPOINT ... [--deadline-ms N]  # retire each once idle");
     }
 
     private static string? ResolveHostBinary()

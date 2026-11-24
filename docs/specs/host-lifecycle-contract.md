@@ -299,6 +299,35 @@ If any identity or executable check is inconclusive, the process is unsafe to
 touch. The launcher may clean stale endpoint artifacts only when artifact
 ownership is proven; it must not kill the process.
 
+## Retiring a host never interrupts a command
+
+A host runs one command at a time under its execution lease. To retire a host
+that still speaks the current protocol (an older build after an install),
+`HostRetire` first **claims** that lease with a command of its own
+(`Start-Sleep`, sent with an environment block so a busy host refuses it with
+exit 76 instead of queueing it). Only once the host has STARTED the claim is it
+told to shut down; the claim's connection then closes. The only command the
+shutdown can end is the claim. A busy host is left alone:
+
+- **Launcher.** An older-build host that answers our health payload is retired
+  only when the claim succeeds. When it is busy the launcher leaves it running;
+  its command is refused BUSY there and spills to another slot, and a later
+  launcher retires the host once it is idle. A host on another protocol still
+  takes the graceful-shutdown-then-kill path.
+- **Install.** `install-local.ps1` records the old build's daemon hosts before
+  it swaps the binaries, then runs `ps-bash host drain --host PID=ENDPOINT ...`,
+  which retries each busy host every second until it is idle, up to
+  `PSBASH_INSTALL_DRAIN_MS` (default 10 minutes). A host whose process exited,
+  or whose endpoint another host now owns, is skipped. Hosts still busy at the
+  deadline are stopped, and the script names what each was running (its child
+  processes). Interactive hosts and private `--launcher-pid` hosts are never
+  touched.
+
+REGRESSION: the install shut down the canonical host and force-killed every
+other daemon host, and the first new-build launcher to reach each older-build
+slot host shut it down and killed it. Either way, agents' long commands ended
+with exit 125.
+
 ## Concurrency
 
 Multiple clients may race to start, observe, or upgrade the host. They coordinate
