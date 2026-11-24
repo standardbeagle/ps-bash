@@ -31,6 +31,9 @@ internal sealed class ExecOverflowTicket : IDisposable
     /// <summary>Which of the session's tickets this is (0-based); it names the overflow slot the command runs on.</summary>
     public int Index { get; }
 
+    /// <summary>False for the unguarded ticket a runtime directory without lock files gives: another launcher may hold the same one.</summary>
+    public bool Exclusive => Volatile.Read(ref _stream) is not null;
+
     public static int Max()
         => int.TryParse(Environment.GetEnvironmentVariable("PSBASH_EXEC_OVERFLOW_MAX"), out var n) && n >= 0
             ? Math.Min(n, Ceiling) : DefaultMax;

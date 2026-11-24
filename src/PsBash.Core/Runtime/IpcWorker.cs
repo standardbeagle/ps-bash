@@ -207,7 +207,7 @@ public sealed class IpcWorker : IWorker
         int first = FirstSlotPastEnclosingHost(enclosingHostEndpoint);
         if (first > IpcTransportFactory.MaxExecSlots)
         {
-            await MoveToPrivateHostAsync(ct).ConfigureAwait(false);
+            await MoveToOverflowOrPrivateHostAsync(ct).ConfigureAwait(false);
             return;
         }
         _slot = first;
@@ -218,6 +218,32 @@ public sealed class IpcWorker : IWorker
     /// <summary>The first executor slot a launcher inside the host serving <paramref name="enclosingHostEndpoint"/> tries.</summary>
     internal static int FirstSlotPastEnclosingHost(string enclosingHostEndpoint)
         => IpcTransportFactory.SlotIndexOf(enclosingHostEndpoint) + 1;
+
+    /// <summary>
+    /// A nested launcher found every executor slot busy (they may be its own ancestor chain, so it must not wait on
+    /// them): run on a warm overflow slot of the session when a ticket is free, else on a private host. A ticket is
+    /// exclusive, so its slot is never an ancestor's: an ancestor on an overflow slot holds that slot's ticket.
+    /// REGRESSION (private-host churn): a nested launcher (a script's `bash r.sh`, `awk system()`) went straight to a
+    /// private host, ~3 CPU-seconds of cold start each; with ~7 agents keeping the slots busy that was most of the
+    /// private hosts still started after overflow slots existed (15 of 25 in 25 minutes).
+    /// </summary>
+    private async Task MoveToOverflowOrPrivateHostAsync(CancellationToken ct)
+    {
+        if (ExecOverflowTicket.TryAcquire(_scheme, _baseEndpoint, ExecOverflowTicket.Max()) is { } ticket)
+        {
+            if (ticket.Exclusive)
+            {
+                _overflowTicket = ticket;
+                _slot = IpcTransportFactory.OverflowSlot(ticket.Index);
+                (_scheme, _endpoint) = IpcTransportFactory.ResolveSlotEndpoint(_scheme, _baseEndpoint, _slot);
+                if (!AssumeSlotHostsReachableForTest)
+                    await EnsureHostReachableAsync(ct).ConfigureAwait(false);
+                return;
+            }
+            ticket.Dispose();   // unguarded (no lock files): its slot could be an ancestor's
+        }
+        await MoveToPrivateHostAsync(ct).ConfigureAwait(false);
+    }
 
     /// <summary>Every slot is busy (or held by our own ancestor chain): run on a private per-invocation host instead.</summary>
     private async Task MoveToPrivateHostAsync(CancellationToken ct)
@@ -908,10 +934,11 @@ public sealed class IpcWorker : IWorker
         int next = _slot + 1;
         if (next > IpcTransportFactory.MaxExecSlots)
         {
-            // Every slot is busy. Nested: they are our ancestor chain, so a private host is the only safe place left.
+            // Every slot is busy. Nested: they may be our ancestor chain, so waiting on them is unsafe; an overflow slot
+            // of our own ticket is not, and a private host is the last resort.
             if (nested)
             {
-                await MoveToPrivateHostAsync(ct).ConfigureAwait(false);
+                await MoveToOverflowOrPrivateHostAsync(ct).ConfigureAwait(false);
                 return;
             }
             // Contended: overflow once the slots stayed busy for the grace (short commands free one well inside it, so

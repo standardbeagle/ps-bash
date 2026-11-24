@@ -277,6 +277,43 @@ public sealed class IpcWorkerExecutorSlotTests
         Assert.Equal(IpcTransportFactory.OverflowSlot(1), IpcTransportFactory.SlotIndexOf(endpoint));
     }
 
+    // REGRESSION (private-host churn): a launcher nested in a slot host's command (a script's `bash r.sh`) that found
+    // every slot busy started a private host for its one command, ~3 CPU-seconds each: most of the private hosts left
+    // on a desktop running ~7 agents. It must not wait on the slots (they may be its own ancestors), and it does not
+    // wait the overflow grace either, but an overflow slot of its own ticket is never an ancestor's.
+    [Fact]
+    public async Task EverySlotBusy_NestedLauncher_RunsOnAWarmOverflowSlot_AtOnce()
+    {
+        await using var session = await AllBusySession.StartAsync();
+        await using var worker = session.Worker();
+        worker.InsideEnclosingHostForTest = true;
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var output = await WithEnv([("PSBASH_EXEC_OVERFLOW_MS", "600000"), ("PSBASH_EXEC_OVERFLOW_MAX", "2")],
+            () => worker.QueryAsync("echo x", cts.Token));
+
+        Assert.Contains("ran-on-" + Path.GetFileName(session.Overflow[0].Endpoint), output);
+        Assert.Equal(0, session.Private.Commands);
+    }
+
+    // With every ticket held (an ancestor may hold one) the private host is still the safe last resort.
+    [Fact]
+    public async Task EverySlotBusy_NestedLauncher_EveryTicketHeld_RunsOnAPrivateHost()
+    {
+        await using var session = await AllBusySession.StartAsync();
+        using var held = ExecOverflowTicket.TryAcquire("unix", session.Base, 1);
+        Assert.NotNull(held);
+        await using var worker = session.Worker();
+        worker.InsideEnclosingHostForTest = true;
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var output = await WithEnv([("PSBASH_EXEC_OVERFLOW_MS", "0"), ("PSBASH_EXEC_OVERFLOW_MAX", "1")],
+            () => worker.QueryAsync("echo x", cts.Token));
+
+        Assert.Contains("ran-on-" + Path.GetFileName(session.Private.Endpoint), output);
+        foreach (var host in session.Overflow) Assert.Equal(0, host.Commands);
+    }
+
     // Memory: a burst of short commands frees a slot inside the grace, so it must start no host.
     [Fact]
     public async Task EverySlotBusy_InsideTheGrace_GoesRoundAgain_StartsNoHost()
@@ -331,7 +368,7 @@ public sealed class IpcWorkerExecutorSlotTests
     [InlineData("/r/host.sock", 1)]                                // inside the base host: slot 1 first
     [InlineData("/r/host.sock-x1", 2)]
     [InlineData("/r/host.sock-x5", 6)]
-    [InlineData("/r/host.sock-x6", 7)]                               // past MaxExecSlots: a private host
+    [InlineData("/r/host.sock-x6", 7)]                               // past MaxExecSlots: an overflow slot, else a private host
     [InlineData("/r/psbash-slot-0123456789ABCDEF-x2", 1)]            // hashed slot is its own base: its first slot
     public void FirstSlotPastEnclosingHost_SkipsTheHostRunningOurParent(string enclosingHostEndpoint, int expected)
         => Assert.Equal(expected, IpcWorker.FirstSlotPastEnclosingHost(enclosingHostEndpoint));
