@@ -27,3 +27,7 @@ src/PsBash.Module/*.dll
 
 # tman run logs, locks and failure digests (per-clone)
 /.tman/
+# tman's per-clone alias shims (`./test` runs `tman run --alias test`)
+/test
+/test.ps1
+/test.cmd
