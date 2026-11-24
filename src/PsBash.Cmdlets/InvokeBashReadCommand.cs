@@ -640,7 +640,7 @@ public sealed class InvokeBashReadCommand : BashCmdlet
     /// rejection. A valid identifier starts with a letter or underscore and
     /// contains only letters, digits, and underscores.
     /// </summary>
-    private static bool IsValidIdentifier(string name)
+    internal static bool IsValidIdentifier(string name)
     {
         if (string.IsNullOrEmpty(name)) return false;
         // Quick metacharacter scan — these would re-parse as PowerShell.

@@ -95,7 +95,27 @@ public sealed class InvokeBashTrapCommand : BashCmdlet
 
         // -p print mode: list current handlers (same shape as no-args).
         // -l listing mode: enumerate well-known signal names.
-        if (P.IsPresent || args.Length == 0)
+        bool printMode = P.IsPresent;
+        if (!printMode && args.Length > 0 && args[0] == "-p") { printMode = true; args = args[1..]; }
+        if (printMode && args.Length > 0 && args[0] == "--") args = args[1..];
+        if (printMode && args.Length > 0)
+        {
+            // `trap -p SIG...`: the traps of those signals, in the order named. A word that is no signal is bash's
+            // "invalid signal specification", status 1, and the others are still printed. REGRESSION: the operands were
+            // ignored, so every trap was listed and a bad signal returned 0.
+            var dict = GetTrapDict();
+            foreach (var word in args)
+            {
+                if (NormalizeSignal(word.Trim()) is not { } sig)
+                {
+                    FileSystemHelpers.WriteBuiltinError(this, $"trap: {word}: invalid signal specification");
+                    continue;
+                }
+                if (dict is not null && dict.Contains(sig)) EmitHandler(sig, dict[sig]?.ToString() ?? "");
+            }
+            return;
+        }
+        if (printMode || args.Length == 0)
         {
             EmitHandlerList();
             return;
@@ -278,17 +298,20 @@ public sealed class InvokeBashTrapCommand : BashCmdlet
             entries.Add((order, key, entry.Value?.ToString() ?? ""));
         }
         entries.Sort((a, b) => a.Order != b.Order ? a.Order.CompareTo(b.Order) : string.CompareOrdinal(a.Signal, b.Signal));
-        foreach (var (order, signal, action) in entries)
-        {
-            // The nameless 32/33 are listed as numbers (`trap -- 'x' 32`), every other signal as SIGNAME.
-            bool numeric = signal.Length > 0 && signal.All(char.IsAsciiDigit);
-            var shown = (order is >= 1 and < 1000 || order == 2000) && !numeric ? "SIG" + signal : signal;
-            var obj = new PSObject();
-            obj.TypeNames.Insert(0, "PsBash.TrapOutput");
-            obj.Properties.Add(new PSNoteProperty("Signal", signal));
-            obj.Properties.Add(new PSNoteProperty("Action", action));
-            obj.Properties.Add(new PSNoteProperty("BashText", $"trap -- '{action.Replace("'", "'\\''")}' {shown}"));
-            WriteObject(obj);
-        }
+        foreach (var (_, signal, action) in entries) EmitHandler(signal, action);
+    }
+
+    /// <summary>One <c>trap -- 'ACTION' SIGNAL</c> line, as <c>trap -p</c> prints it.</summary>
+    private void EmitHandler(string signal, string action)
+    {
+        // The pseudo signals are listed bare, the nameless 32/33 as numbers (`trap -- 'x' 32`), every other signal as SIGNAME.
+        bool numeric = signal.Length > 0 && signal.All(char.IsAsciiDigit);
+        var shown = PseudoSignals.Contains(signal) || numeric ? signal : "SIG" + signal;
+        var obj = new PSObject();
+        obj.TypeNames.Insert(0, "PsBash.TrapOutput");
+        obj.Properties.Add(new PSNoteProperty("Signal", signal));
+        obj.Properties.Add(new PSNoteProperty("Action", action));
+        obj.Properties.Add(new PSNoteProperty("BashText", $"trap -- '{action.Replace("'", "'\\''")}' {shown}"));
+        WriteObject(obj);
     }
 }

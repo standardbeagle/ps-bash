@@ -31,7 +31,10 @@ namespace PsBash.Cmdlets;
 /// ignored <c>-d</c> (it always split on <c>\n</c>). The cmdlet preserves the
 /// "accepted but ignored" contract for parity — the default delimiter is
 /// always <c>\n</c>; the value is consumed and dropped.</item>
+/// <item><c>-u FD</c>: read from descriptor FD (<see cref="BashFdTable"/>) instead of the pipeline; a closed one is
+/// bash's "FD: invalid file descriptor: Bad file descriptor", status 1.</item>
 /// </list>
+/// Every value is checked as bash checks it (status 1, bash's message), and the array is the first operand.
 ///
 /// Colliding flags declared as explicit parameters (playbook collision table):
 /// <list type="bullet">
@@ -61,10 +64,11 @@ public sealed class InvokeBashMapfileCommand : BashCmdlet
     /// explicitly because the bare token <c>-O</c> prefix-matches the
     /// PowerShell common parameters <c>-OutVariable</c> / <c>-OutBuffer</c>
     /// under <see cref="PSCmdlet"/> parameter binding. An exact param-name
-    /// match beats a common-parameter prefix match.
+    /// match beats a common-parameter prefix match. A string, checked as bash checks it: as an int, <c>-O x</c>
+    /// was a parameter-binding error instead of bash's "x: invalid array origin".
     /// </summary>
     [Parameter]
-    public int? O { get; set; }
+    public string? O { get; set; }
 
     /// <summary>
     /// <c>-d DELIM</c> — record delimiter. The psm1 oracle accepted but
@@ -139,103 +143,130 @@ public sealed class InvokeBashMapfileCommand : BashCmdlet
         if (FileSystemHelpers.TryRejectBuiltinOptions(this, BashName == "readarray" ? "readarray" : "mapfile", args,
                 "dnOstuCc", "dnOsuCc")) return;
 
-        // Defaults match the psm1 oracle.
-        int? count = null;
-        int origin = O ?? 0;
-        bool originGiven = O is not null;
-        int skip = 0;
-        bool stripTrailing = false;
+        string name = BashName == "readarray" ? "readarray" : "mapfile";
+        long? count = null;
+        long origin = 0, skip = 0;
+        bool originGiven = false, stripTrailing = false;
         char delim = '\n';
-        string varName = "MAPFILE";
+        int? fromFd = null;
 
-        // Manual scan recovers joined short forms (-nN / -OORIGIN / -dDELIM)
-        // and value-flag pairs the binder did not consume. The explicit -O
-        // and -D parameters above are also honored (set the locals first).
+        // Each option value is checked as bash checks it, in order, and a bad one is bash's message, status 1.
+        // REGRESSION: `mapfile -u 9` (a closed fd), `-u x`, `-n x`, `-O -1`, `-c 0` and a bad array name were ignored
+        // (status 0); -u was never read, so its value became the array name.
+        bool Fail(string message)
+        {
+            FileSystemHelpers.WriteBuiltinError(this, $"{name}: {message}");
+            return false;
+        }
+        bool Apply(char letter, string value)
+        {
+            long n;
+            switch (letter)
+            {
+                case 'd':
+                    delim = value.Length == 0 ? '\0' : value[0];
+                    return true;
+                case 'n':
+                    if (!BashNumber(value, 0, uint.MaxValue, out n)) return Fail($"{value}: invalid line count");
+                    count = n;
+                    return true;
+                case 's':
+                    if (!BashNumber(value, 0, uint.MaxValue, out n)) return Fail($"{value}: invalid line count");
+                    skip = n;
+                    return true;
+                case 'O':
+                    if (!BashNumber(value, 0, uint.MaxValue, out n)) return Fail($"{value}: invalid array origin");
+                    origin = n;
+                    originGiven = true;
+                    return true;
+                case 'c':
+                    return BashNumber(value, 1, uint.MaxValue, out _) || Fail($"{value}: invalid callback quantum");
+                case 'u':
+                    if (!BashNumber(value, 0, int.MaxValue, out n)) return Fail($"{value}: invalid file descriptor specification");
+                    int fd = (int)n;
+                    // A name for the shell's stdin (`exec 5<&0; mapfile -u 5`) reads stdin, as `-u 0` does (read -u alike).
+                    if (fd > 2 && BashFdTable.ReadsShellStdin(fd)) fd = 0;
+                    else if (fd > 2 && !BashFdTable.IsOpen(fd)) return Fail($"{fd}: invalid file descriptor: Bad file descriptor");
+                    fromFd = fd;
+                    return true;
+                default:
+                    // -C CALLBACK: taken, not run (a ps-bash gap).
+                    return true;
+            }
+        }
+
+        // The binder takes -O and -d when they are words of their own (they collide with -OutVariable / -Debug); the rest
+        // is bash's internal_getopt: option words up to `--` or the first operand, a value letter taking the rest of its
+        // word or the next word (TryRejectBuiltinOptions refused every other letter).
         if (D is not null) delim = D.Length == 0 ? '\0' : D[0];
+        if (O is not null && !Apply('O', O)) return;
         int i = 0;
-        while (i < args.Length)
+        for (; i < args.Length; i++)
         {
             var a = args[i];
-            if (a == "-t") { stripTrailing = true; i++; continue; }
-            if (a == "-n" && i + 1 < args.Length)
+            if (a == "--") { i++; break; }
+            if (a.Length < 2 || a[0] != '-') break;
+            for (int k = 1; k < a.Length; k++)
             {
-                if (int.TryParse(args[i + 1], out var n)) count = n;
-                i += 2; continue;
-            }
-            if (a.StartsWith("-n") && a.Length > 2)
-            {
-                if (int.TryParse(a.Substring(2), out var n)) count = n;
-                i++; continue;
-            }
-            if (a == "-O" && i + 1 < args.Length)
-            {
-                if (int.TryParse(args[i + 1], out var oVal)) origin = oVal;
-                originGiven = true;
-                i += 2; continue;
-            }
-            if (a.StartsWith("-O") && a.Length > 2)
-            {
-                if (int.TryParse(a.Substring(2), out var oVal)) origin = oVal;
-                originGiven = true;
-                i++; continue;
-            }
-            if (a == "-s" && i + 1 < args.Length)
-            {
-                if (int.TryParse(args[i + 1], out var s)) skip = s;
-                i += 2; continue;
-            }
-            if (a.StartsWith("-s") && a.Length > 2)
-            {
-                if (int.TryParse(a.Substring(2), out var s)) skip = s;
-                i++; continue;
-            }
-            // -d DELIM and -dDELIM: consumed but the resulting value is
-            // not used (oracle parity — always split on \n).
-            if (a == "-d" && i + 1 < args.Length) { delim = args[i + 1].Length == 0 ? '\0' : args[i + 1][0]; i += 2; continue; }
-            if (a.StartsWith("-d") && a.Length > 2) { delim = a[2]; i++; continue; }
-
-            // Non-flag = destination variable name. Matches the oracle's
-            // "last non-flag wins" contract. Reject inputs containing
-            // PowerShell scriptblock metacharacters defensively (Directive
-            // 12) — emit a bash-style error and skip the assignment.
-            if (!a.StartsWith('-'))
-            {
-                if (a.Contains('$') || a.Contains('(') || a.Contains(';') ||
-                    a.Contains('{') || a.Contains('`') || a.Contains('"'))
+                char c = a[k];
+                if (c == 't') { stripTrailing = true; continue; }
+                string? value = k + 1 < a.Length ? a[(k + 1)..] : i + 1 < args.Length ? args[++i] : null;
+                if (value is null)
                 {
-                    FileSystemHelpers.WriteBashError(
-                        this, $"mapfile: `{a}': not a valid identifier");
+                    FileSystemHelpers.WriteBuiltinUsageError(this, name, $"{name}: -{c}: option requires an argument");
                     return;
                 }
-                varName = a;
+                if (!Apply(c, value)) return;
+                break;
             }
-            i++;
         }
 
-        // Cut the rebuilt byte stream at the delimiter like bash: empty records are kept, an unterminated tail is the
-        // last element, and without -t every element keeps its delimiter.
-        var lines = new List<string>();
-        string stream = _stream.ToString();
-        _stream.Clear();
-        int startAt = 0;
-        while (startAt < stream.Length)
+        // The array is the first operand (bash ignores any after it), MAPFILE without one; a name that is not an identifier
+        // (`a[1]`, `a b`, `$(…)`) is refused before anything is read. The check also keeps PowerShell metacharacters out
+        // of the variable name (Directive 12).
+        string varName = i < args.Length ? args[i] : "MAPFILE";
+        if (!InvokeBashReadCommand.IsValidIdentifier(varName))
         {
-            int cut = stream.IndexOf(delim, startAt);
-            if (cut < 0) { lines.Add(UpToNul(stream[startAt..])); break; }
-            // A NUL delimiter can never be stored in a variable, so it is always dropped.
-            lines.Add(UpToNul(stripTrailing || delim == '\0' ? stream[startAt..cut] : stream[startAt..(cut + 1)]));
-            startAt = cut + 1;
+            Fail($"`{varName}': not a valid identifier");
+            return;
         }
 
-        // -s N: skip the first N lines (cmdlet addition; oracle did not
-        // implement, but the playbook task spec requires).
-        if (skip > 0 && skip < lines.Count) lines.RemoveRange(0, skip);
-        else if (skip >= lines.Count) lines.Clear();
-
-        // -n N: cap to first N lines.
-        if (count.HasValue && lines.Count > count.Value)
+        // -n 0 is every line.
+        long? limit = count is > 0 ? count : null;
+        List<string> lines;
+        if (fromFd is int ufd && ufd > 2)
         {
-            lines = lines.GetRange(0, count.Value);
+            // -u N: the records come from that descriptor, and only those taken are consumed (`readarray -u 3 -n 1 a;
+            // read -u 3 b` gives b the second line). The pipeline (the shell's stdin) is not read.
+            _stream.Clear();
+            try { lines = ReadDescriptor(ufd, delim, stripTrailing, skip, limit); }
+            catch (InvalidOperationException ex)
+            {
+                Fail(ex.Message);
+                return;
+            }
+        }
+        else
+        {
+            // Cut the rebuilt byte stream at the delimiter like bash: empty records are kept, an unterminated tail is the
+            // last element, and without -t every element keeps its delimiter.
+            lines = new List<string>();
+            string stream = _stream.ToString();
+            _stream.Clear();
+            int startAt = 0;
+            while (startAt < stream.Length)
+            {
+                int cut = stream.IndexOf(delim, startAt);
+                if (cut < 0) { lines.Add(UpToNul(stream[startAt..])); break; }
+                // A NUL delimiter can never be stored in a variable, so it is always dropped.
+                lines.Add(UpToNul(stripTrailing || delim == '\0' ? stream[startAt..cut] : stream[startAt..(cut + 1)]));
+                startAt = cut + 1;
+            }
+
+            // -s N: skip the first N lines; -n N: then at most N.
+            if (skip >= lines.Count) lines.Clear();
+            else if (skip > 0) lines.RemoveRange(0, (int)skip);
+            if (limit is long max && lines.Count > max) lines = lines.GetRange(0, (int)max);
         }
 
         // Without -O bash clears the array first. With -O it keeps the elements already there and assigns the
@@ -262,5 +293,32 @@ public sealed class InvokeBashMapfileCommand : BashCmdlet
 
         // The array variable in the scope that owns it, else a global (BashVariableLookup.SetArray).
         BashVariableLookup.SetArray(SessionState, varName, result);
+    }
+
+    /// <summary>bash's <c>legal_number</c> (blanks around it, a sign) within <paramref name="min"/>..<paramref name="max"/>.</summary>
+    private static bool BashNumber(string text, long min, long max, out long n)
+        => long.TryParse(text,
+               System.Globalization.NumberStyles.AllowLeadingSign | System.Globalization.NumberStyles.AllowLeadingWhite
+               | System.Globalization.NumberStyles.AllowTrailingWhite,
+               System.Globalization.CultureInfo.InvariantCulture, out n)
+           && n >= min && n <= max;
+
+    /// <summary>
+    /// <c>mapfile -u FD</c>: records read one at a time from the descriptor (<see cref="BashFdTable.ReadRecord"/>), so a
+    /// <c>-n</c> limit leaves the rest there; the first <paramref name="skip"/> are dropped. As on the pipeline, a CRLF
+    /// line is a line. Throws <see cref="InvalidOperationException"/> when the descriptor is not open for reading.
+    /// </summary>
+    private static List<string> ReadDescriptor(int fd, char delim, bool strip, long skip, long? limit)
+    {
+        var lines = new List<string>();
+        for (long seen = 0; limit is not long max || lines.Count < max; seen++)
+        {
+            string? record = BashFdTable.ReadRecord(fd, delim, -1, out bool terminated);
+            if (record is null) break;
+            if (seen < skip) continue;
+            if (delim == '\n' && terminated && record.EndsWith('\r')) record = record[..^1];
+            lines.Add(UpToNul(strip || delim == '\0' || !terminated ? record : record + delim));
+        }
+        return lines;
     }
 }

@@ -3512,6 +3512,34 @@ function Invoke-BashWait {
     }
 }
 
+# The operands of `jobs` (after its options; `--` ends them, as does the first word that is not an option).
+function Get-BashJobsOperands([string[]]$Arguments) {
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $a = $Arguments[$i]
+        if ($a -eq '--') { $i++; break }
+        if ($a.Length -gt 1 -and $a.StartsWith('-')) { $i++; continue }
+        break
+    }
+    if ($i -lt $Arguments.Count) { $Arguments[$i..($Arguments.Count - 1)] }
+}
+
+# The jobs one `jobs` operand names (bash get_job_spec): N and %N are job number N, %% / %+ / %- the current and previous
+# job (Find-BashBgJob, the resolver kill / wait / fg use), %name / name a job whose command starts with name, %?text one
+# whose command contains text. More than one match is bash's "ambiguous job spec".
+function Find-BashJobsOperand([string]$Word, $All) {
+    $spec = if ($Word.StartsWith('%')) { $Word } else { "%$Word" }
+    $job = Find-BashBgJob $spec
+    if ($null -ne $job) { return $job }
+    $name = $spec.Substring(1)
+    if ($name -in '', '%', '+', '-' -or $name -match '^\d+$') { return }
+    $byText = @($All | Where-Object {
+            $t = if ($_.PSObject.Properties['Text'] -and $_.Text) { [string]$_.Text } else { '' }
+            if ($name.StartsWith('?')) { $t.Contains($name.Substring(1)) } else { $t.StartsWith($name, [System.StringComparison]::Ordinal) }
+        })
+    $byText
+}
+
 function Invoke-BashJobs {
     <#
     .SYNOPSIS
@@ -3522,18 +3550,35 @@ function Invoke-BashJobs {
     if ($Arguments -contains '--help') { return Show-BashHelp 'jobs' }
 
     # jobs' options are -l -n -p -r -s -x; any other is bash's usage error, status 2 (`jobs -Q` listed the jobs, status 0).
-    $optErr = [PsBash.Cmdlets.BashRuntime]::BuiltinOptionError('jobs', $Arguments, 'lnprsx', '', [PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0))
+    $prefix = [PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0)
+    $optErr = [PsBash.Cmdlets.BashRuntime]::BuiltinOptionError('jobs', $Arguments, 'lnprsx', '', $prefix)
     if ($null -ne $optErr) { Write-BashHostStderr $optErr; $global:LASTEXITCODE = 2; return }
     $global:LASTEXITCODE = 0
-
-    if ($script:BashBgJobs.Count -eq 0) {
-        return
-    }
 
     # -p: only each job's process id (its $! value), one line per job.
     $pidsOnly = @($Arguments | Where-Object { $_ -match '^-[lnprs]*p[lnprs]*$' }).Count -gt 0
     $all = @($script:BashBgJobs)
-    foreach ($job in $all) {
+    # Operands name the jobs to list. One that names no job is bash's "jobs: SPEC: no such job", status 1; the jobs
+    # that exist are still listed. REGRESSION: the operands were never looked at, so `jobs %9` listed every job and
+    # returned 0. `jobs -x cmd args` runs a command, its words are not jobspecs.
+    $words = @(Get-BashJobsOperands $Arguments)
+    if ($null -ne $words -and $words.Count -gt 0 -and -not ($Arguments -contains '-x')) {
+        $picked = [System.Collections.Generic.List[object]]::new()
+        foreach ($w in $words) {
+            $found = @(Find-BashJobsOperand $w $all)
+            if ($found.Count -ne 1) {
+                $why = if ($found.Count -eq 0) { 'no such job' } else { 'ambiguous job spec' }
+                Write-BashHostStderr ($prefix + "jobs: ${w}: $why"); $global:LASTEXITCODE = 1; continue
+            }
+            if (-not $picked.Contains($found[0])) { $picked.Add($found[0]) }
+        }
+        $show = @($picked)
+    } else {
+        $show = $all
+    }
+    if ($show.Count -eq 0) { return }
+
+    foreach ($job in $show) {
         if ($pidsOnly) { New-BashObject -BashText "$($job.Id)`n"; continue }
         $status = if ($job.AsyncResult.IsCompleted) { 'Done' } else { 'Running' }
         # [N] is the job's number (%N), which stays its own while earlier jobs leave the table.

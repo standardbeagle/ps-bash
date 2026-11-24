@@ -671,8 +671,31 @@ internal static class FileSystemHelpers
 
     /// <summary>The text of <see cref="WriteBuiltinInvalidOption"/> (pure).</summary>
     internal static string BuiltinInvalidOptionMessage(string prefix, string builtin, string option)
-        => $"{prefix}{builtin}: {option}: invalid option"
-           + (InvokeBashHelpCommand.Topics.TryGetValue(builtin, out var topic) ? $"\n{builtin}: usage: {topic.Synopsis}" : "");
+        => prefix + BuiltinUsageMessage(builtin, $"{builtin}: {option}: invalid option");
+
+    /// <summary>
+    /// A builtin's failure, as bash's <c>builtin_error</c> reports it: the shell's diagnostic prefix (<c>bash: line 1: </c>),
+    /// then <paramref name="message"/> (<c>dirs: 5: directory stack index out of range</c>), and status
+    /// <paramref name="status"/>. A builtin's bad-argument path ends here or in <see cref="WriteBuiltinUsageError"/>.
+    /// REGRESSION: <c>dirs +5</c>, <c>jobs %9</c>, <c>mapfile -u 9</c> had no failure path at all (status 0, silent), and
+    /// <see cref="WriteBashError"/> drops the prefix bash prints before a builtin's error.
+    /// </summary>
+    public static void WriteBuiltinError(PSCmdlet cmdlet, string message, int status = 1)
+    {
+        WriteStderr(cmdlet, ShellDiagnostic.Prefix(cmdlet.SessionState) + message);
+        SetLastExitCode(cmdlet, status);
+    }
+
+    /// <summary>
+    /// A builtin's usage error (bash <c>builtin_error</c> + <c>builtin_usage</c>): <see cref="WriteBuiltinError"/> with
+    /// <c>NAME: usage: SYNOPSIS</c> after <paramref name="message"/>, status 2 (<c>dirs: +x: invalid number</c>).
+    /// </summary>
+    public static void WriteBuiltinUsageError(PSCmdlet cmdlet, string builtin, string message)
+        => WriteBuiltinError(cmdlet, BuiltinUsageMessage(builtin, message), 2);
+
+    /// <summary><paramref name="message"/> and the builtin's usage line, the synopsis <c>help -s</c> prints (pure).</summary>
+    internal static string BuiltinUsageMessage(string builtin, string message)
+        => message + (InvokeBashHelpCommand.Topics.TryGetValue(builtin, out var topic) ? $"\n{builtin}: usage: {topic.Synopsis}" : "");
 
     /// <summary>
     /// How bash's <c>internal_getopt</c> names a bad option word: <c>--</c> for any <c>--NAME</c> (a builtin has no long

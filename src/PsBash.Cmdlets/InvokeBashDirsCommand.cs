@@ -54,27 +54,37 @@ public sealed class InvokeBashDirsCommand : BashCmdlet
             return;
         }
 
-        // `dirs` takes only +N / -N (and `-l`); any other operand is an error (status 1).
-        bool longForm = false;
+        // bash's dirs: the words -l -c -v -p (each on its own), `--` ends the scan, a +N / -N word picks one entry (the
+        // last one wins); a +/- word that is not a number is "invalid number" and any other word "invalid option", each with
+        // the usage line, status 2. An index outside the stack is status 1 (DirectoryStack).
+        bool longForm = false, clear = C.IsPresent, verbose = V.IsPresent, perLine = P.IsPresent;
+        string? indexWord = null;
+        bool fromLeft = false;
+        long index = 0;
         foreach (var a in args)
         {
-            if (a == "-l") { longForm = true; continue; }
-            if (a == "--") continue;
-            bool numbered = a.Length > 1 && a[0] is '+' or '-' && a.Skip(1).All(char.IsAsciiDigit);
-            if (numbered) continue;
-            if (a.Length > 1 && a[0] == '-')
+            if (a == "-l") longForm = true;
+            else if (a == "-c") clear = true;
+            else if (a == "-v") verbose = true;
+            else if (a == "-p") perLine = true;
+            else if (a == "--") break;
+            else if (a.Length > 0 && a[0] is '+' or '-')
             {
-                FileSystemHelpers.WriteBashError(this, $"dirs: {a}: invalid option");
-                FileSystemHelpers.WriteBashError(this, "dirs: usage: dirs [-clpv] [+N] [-N]");
-                FileSystemHelpers.SetLastExitCode(this, 2);
+                if (!DirectoryStack.TryParseIndex(a, out fromLeft, out index))
+                {
+                    FileSystemHelpers.WriteBuiltinUsageError(this, "dirs", $"dirs: {a}: invalid number");
+                    return;
+                }
+                indexWord = a;
+            }
+            else
+            {
+                FileSystemHelpers.WriteBuiltinUsageError(this, "dirs", $"dirs: {a}: invalid option");
                 return;
             }
-            FileSystemHelpers.WriteBashError(this, $"dirs: {a}: invalid number");
-            FileSystemHelpers.SetLastExitCode(this, 1);
-            return;
         }
 
-        if (C.IsPresent)
+        if (clear)
         {
             // Drain the location stack without moving the current directory (Pop-Location moves it).
             string? keep = SessionState.Path.CurrentFileSystemLocation?.Path;
@@ -90,14 +100,27 @@ public sealed class InvokeBashDirsCommand : BashCmdlet
 
         var entries = StackEntries(this, longForm);
 
-        if (V.IsPresent)
+        if (indexWord is not null)
+        {
+            int p = DirectoryStack.Position(fromLeft, index, entries.Count - 1);
+            if (p < 0)
+            {
+                // dirs names the index without its sign (bash `sh_erange (word + 1)`), unlike pushd and popd.
+                FileSystemHelpers.WriteBuiltinError(this, "dirs: " + DirectoryStack.RangeError(entries.Count - 1, indexWord[1..]));
+                return;
+            }
+            WriteObject(BashRuntime.NewBashObject(verbose ? $"{p,2}  {entries[p]}" : entries[p]));
+            return;
+        }
+
+        if (verbose)
         {
             for (int i = 0; i < entries.Count; i++)
             {
                 WriteObject(BashRuntime.NewBashObject($"{i,2}  {entries[i]}"));
             }
         }
-        else if (P.IsPresent)
+        else if (perLine)
         {
             foreach (var entry in entries)
             {
@@ -113,18 +136,7 @@ public sealed class InvokeBashDirsCommand : BashCmdlet
     /// <summary>The directory stack, current directory first (bash's order); a leading $HOME shows as ~ unless <paramref name="longForm"/>.</summary>
     internal static List<string> StackEntries(PSCmdlet cmdlet, bool longForm)
     {
-        // Get-Location -Stack is top-first (most recently pushed-from directory first) @T bash's order,
-        // after the current directory.
-        var entries = new List<string>();
-        foreach (var item in cmdlet.InvokeCommand.InvokeScript("(Get-Location).Path"))
-        {
-            if (item?.BaseObject is string c) { entries.Add(c); break; }
-        }
-        foreach (var item in cmdlet.InvokeCommand.InvokeScript(@"@(Get-Location -Stack | ForEach-Object { $_.Path })"))
-        {
-            if (item?.BaseObject is string s) entries.Add(s);
-        }
-
+        var entries = BashShellState.ReadDirectoryStack(cmdlet.SessionState);
         string? home = longForm ? null : BashRuntime.MapPath(BashVariableStore.Get("HOME") ?? "");
         Present(entries, home, OperatingSystem.IsWindows());
         return entries;

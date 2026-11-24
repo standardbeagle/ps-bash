@@ -401,18 +401,13 @@ public static class BashShellState
             if (!SameStack(stackNow, saved.Stack))
             {
                 // `( pushd sub )` / `( popd )`: rebuild the stack the parent had. Rare, so the slow cmdlets are fine.
-                for (int n = stackNow.Count; n > 0; n--) path.PopLocation(null);
-                for (int k = saved.Stack.Length - 1; k >= 0; k--)
-                {
-                    path.SetLocation(WildcardPattern.Escape(saved.Stack[k]));
-                    path.PushCurrentLocation(null);
-                }
                 moved = true;
+                SetDirectoryStack(session, [saved.Location, .. saved.Stack]);
             }
-            if (moved || !string.Equals(path.CurrentLocation.Path, saved.Location, StringComparison.Ordinal))
+            else if (!string.Equals(path.CurrentLocation.Path, saved.Location, StringComparison.Ordinal))
             {
-                path.SetLocation(WildcardPattern.Escape(saved.Location));
                 moved = true;
+                path.SetLocation(WildcardPattern.Escape(saved.Location));
             }
         }
         catch (Exception) { /* a removed directory: see the summary */ }
@@ -424,6 +419,41 @@ public static class BashShellState
         session.PSVariable.Set("global:__PsBashCwd", saved.ProviderPath);
         // $PWD is the script-visible shell form (C:/x, docs/specs/paths.md), as every cd writes it.
         BashVariableStore.Set("PWD", BashRuntime.ToShellPath(saved.ProviderPath));
+    }
+
+    /// <summary>
+    /// The directory stack as <c>dirs</c> orders it (<see cref="DirectoryStack"/>): the current location, then
+    /// PowerShell's location stack, top first. The paths are PowerShell's (<c>C:\x</c>); <c>dirs</c> presents them.
+    /// </summary>
+    internal static List<string> ReadDirectoryStack(SessionState session)
+    {
+        var path = session.Path;
+        var list = new List<string> { path.CurrentLocation.Path };
+        foreach (var entry in path.LocationStack(null)) list.Add(entry.Path);
+        return list;
+    }
+
+    /// <summary>
+    /// Makes PowerShell's location stack hold <paramref name="list"/> in <see cref="ReadDirectoryStack"/>'s order and the
+    /// location its first entry. The location stack can only push the current location, so the stack is emptied and
+    /// rebuilt from the bottom. A stacked directory that no longer exists cannot be pushed again and drops out; the new
+    /// location must exist (the caller checked it), else this throws. Shared by subshell restore and pushd / popd.
+    /// </summary>
+    internal static void SetDirectoryStack(SessionState session, IReadOnlyList<string> list)
+    {
+        var path = session.Path;
+        for (int n = path.LocationStack(null).Count; n > 0; n--)
+        {
+            // PopLocation moves to the entry it pops: one that was removed throws after leaving the stack.
+            try { path.PopLocation(null); } catch (Exception) { }
+        }
+        for (int k = list.Count - 1; k >= 1; k--)
+        {
+            try { path.SetLocation(WildcardPattern.Escape(list[k])); }
+            catch (Exception) { continue; }
+            path.PushCurrentLocation(null);
+        }
+        path.SetLocation(WildcardPattern.Escape(list[0]));
     }
 
     private static bool SameStack(PathInfoStack now, string[] saved)

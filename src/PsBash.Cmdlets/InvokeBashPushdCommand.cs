@@ -19,9 +19,10 @@ namespace PsBash.Cmdlets;
 /// <c>pushd</c>/<c>popd</c>/<c>dirs</c> all see the same stack — exactly
 /// what the oracle did.
 ///
-/// <para>Flag surface: a single <c>+N</c> positional, or a single directory
-/// path operand, or no operands (defaults to "."). No PowerShell common
-/// parameter prefix collision — all tokens flow through <c>Arguments</c>.</para>
+/// <para>Flag surface: <c>-n</c>, then a <c>+N</c> / <c>-N</c> rotation or one directory operand; no operand swaps
+/// the top two entries. The stack arithmetic is <see cref="DirectoryStack"/>; a rotation or swap rebuilds the
+/// location stack (<see cref="BashShellState.SetDirectoryStack"/>). No PowerShell common parameter prefix
+/// collision — all tokens flow through <c>Arguments</c>.</para>
 ///
 /// <para><c>--help</c> delegates to psm1 <c>Show-BashHelp</c> via parameter-bound
 /// <see cref="CommandInvocationIntrinsics.InvokeScript(string, object[])"/>.</para>
@@ -53,64 +54,84 @@ public sealed class InvokeBashPushdCommand : BashCmdlet
             return;
         }
 
-        // Option / operand validation (bash): `--` ends options, only `-n` is a valid option, one operand at most.
-        var operands = new List<string>();
-        bool optionsDone = false;
-        foreach (var a in args)
+        // bash's pushd (pushd.def): -n keeps the directory, `--` ends the options, a lone `-` is an operand, and any other
+        // +/- word is a stack index (not a number: "invalid number" with the usage line, status 2; outside the stack:
+        // status 1, DirectoryStack). The first operand ends the scan.
+        bool noCd = false;
+        string? rotateWord = null;
+        int rotateTo = 0, i = 0;
+        for (; i < args.Length; i++)
         {
-            if (!optionsDone && a == "--") { optionsDone = true; continue; }
-            if (!optionsDone && a.Length > 1 && a[0] == '-' && !char.IsAsciiDigit(a[1]))
+            var a = args[i];
+            if (a == "-n") { noCd = true; continue; }
+            if (a == "--") { i++; break; }
+            if (a == "-" || !(a.Length > 0 && a[0] is '+' or '-')) break;
+            if (!DirectoryStack.TryParseIndex(a, out bool fromLeft, out long n))
             {
-                if (a == "-n") continue;
-                FileSystemHelpers.WriteBashError(this, $"pushd: {a}: invalid option");
-                FileSystemHelpers.WriteBashError(this, "pushd: usage: pushd [-n] [+N | -N | dir]");
-                FileSystemHelpers.SetLastExitCode(this, 2);
+                FileSystemHelpers.WriteBuiltinUsageError(this, "pushd", $"pushd: {a}: invalid number");
                 return;
             }
-            operands.Add(a);
+            int offset = BashShellState.ReadDirectoryStack(SessionState).Count - 1;
+            rotateTo = DirectoryStack.Position(fromLeft, n, offset);
+            if (rotateTo < 0)
+            {
+                FileSystemHelpers.WriteBuiltinError(this, "pushd: " + DirectoryStack.RangeError(offset, a));
+                return;
+            }
+            rotateWord = a;
         }
-        if (operands.Count > 1)
-        {
-            FileSystemHelpers.WriteBashError(this, "pushd: too many arguments");
-            FileSystemHelpers.SetLastExitCode(this, 1);
-            return;
-        }
-        args = operands.ToArray();
 
-        // +N rotation: oracle's `^\+(\d+)$` match.
-        if (args.Length > 0 && System.Text.RegularExpressions.Regex.IsMatch(args[0], @"^\+(\d+)$"))
+        if (args.Length == 0)
         {
-            var m = System.Text.RegularExpressions.Regex.Match(args[0], @"^\+(\d+)$");
-            var n = BashRuntime.ParseCountClamped(m.Groups[1].Value);
-
-            // Replicate the oracle slice byte-for-byte: get stack, pick Nth,
-            // pop (N+1) entries, push the target. The delegation script reads
-            // its arg via $args[0] so user input cannot reach the script body.
-            var before = LogicalLocation(this);
-            InvokeCommand.InvokeScript(
-                @"param($n)
-                $stack = @(Get-Location -Stack)
-                if ($n -ge 0 -and $n -lt $stack.Count) {
-                    $target = $stack[$n]
-                    for ($i = 0; $i -le $n; $i++) { Pop-Location -Stack -ErrorAction SilentlyContinue }
-                    Push-Location -Path $target.Path
-                }",
-                n);
-            SyncProcessWorkingDirectory(this, before);
-            InvokeBashDirsCommand.PrintStack(this);
+            // No operand: the top two swap (bash: "no other directory" when nothing is pushed).
+            var list = BashShellState.ReadDirectoryStack(SessionState);
+            if (list.Count < 2)
+            {
+                FileSystemHelpers.WriteBuiltinError(this, "pushd: no other directory");
+                return;
+            }
+            ChangeStack(DirectoryStack.Swap(list), print: true);
             return;
         }
 
-        // Default: push current location and chdir to the given path (or '.').
-        // The path token is bound as a positional $args[0] so a path containing
-        // ; / $() / scriptblock chars stays a literal path (Directive 12).
-        var path = args.Length > 0 ? args[0] : ".";
+        if (rotateWord is not null)
+        {
+            // +N / -N: that entry comes first and becomes the directory; with -n the directory stays (and the entry that
+            // would have replaced it drops out, as in bash). +0 is the directory itself.
+            if (rotateTo == 0)
+            {
+                if (!noCd) InvokeBashDirsCommand.PrintStack(this);
+                return;
+            }
+            var list = BashShellState.ReadDirectoryStack(SessionState);
+            ChangeStack(noCd ? DirectoryStack.RotateInPlace(list, rotateTo) : DirectoryStack.Rotate(list, rotateTo), print: !noCd);
+            return;
+        }
+
+        // `pushd -n`, `pushd --`: no operand left, nothing to do.
+        if (i >= args.Length) return;
+        if (args.Length - i > 1)
+        {
+            FileSystemHelpers.WriteBuiltinError(this, "pushd: too many arguments");
+            return;
+        }
+
+        // Push the current location and chdir to the operand. The path is bound as a positional $args[0] so a path
+        // containing ; / $() / scriptblock chars stays a literal path (Directive 12).
+        var path = args[i];
         // A bare `/tmp` (or `/tmp/x` built at run time) is the temp dir, as for `cd`; the emitter only rewrites literal `/tmp/…` words.
         string target = path.StartsWith('/') ? BashRuntime.MapPath(path) : path;
-        if (!System.IO.Directory.Exists(System.IO.Path.GetFullPath(target, Environment.CurrentDirectory)))
+        string full = System.IO.Path.GetFullPath(target, Environment.CurrentDirectory);
+        if (!System.IO.Directory.Exists(full))
         {
-            FileSystemHelpers.WriteBashError(this, $"pushd: {path}: " + (System.IO.File.Exists(System.IO.Path.GetFullPath(target, Environment.CurrentDirectory)) ? "Not a directory" : "No such file or directory"));
-            FileSystemHelpers.SetLastExitCode(this, 1);
+            FileSystemHelpers.WriteBuiltinError(this, $"pushd: {path}: " + (System.IO.File.Exists(full) ? "Not a directory" : "No such file or directory"));
+            return;
+        }
+        if (noCd)
+        {
+            // -n DIR: DIR goes on top of the stack, the directory stays. bash keeps the word as typed; PowerShell's
+            // location stack holds full paths, so a relative DIR is shown resolved.
+            ChangeStack(DirectoryStack.InsertBelowCurrent(BashShellState.ReadDirectoryStack(SessionState), full), print: true);
             return;
         }
         try
@@ -125,9 +146,43 @@ public sealed class InvokeBashPushdCommand : BashCmdlet
         catch (System.Management.Automation.RuntimeException ex)
         {
             // Surface a bash-style error rather than a raw PS exception.
-            FileSystemHelpers.WriteBashError(this, $"pushd: {path}: {ex.Message}");
-            FileSystemHelpers.SetLastExitCode(this, 1);
+            FileSystemHelpers.WriteBuiltinError(this, $"pushd: {path}: {ex.Message}");
         }
+    }
+
+    private void ChangeStack(List<string> list, bool print)
+    {
+        if (!ApplyStack(this, "pushd", list)) return;
+        if (print) InvokeBashDirsCommand.PrintStack(this);
+    }
+
+    /// <summary>
+    /// Makes the directory stack <paramref name="list"/> (<see cref="DirectoryStack"/> order) and moves the whole bash
+    /// working directory to its first entry (<see cref="SyncProcessWorkingDirectory"/>). A first entry that no longer
+    /// exists is bash's cd failure: status 1, the stack as it was. Shared by <see cref="InvokeBashPopdCommand"/>.
+    /// </summary>
+    internal static bool ApplyStack(PSCmdlet cmdlet, string builtin, List<string> list)
+    {
+        bool exists;
+        try { exists = System.IO.Directory.Exists(cmdlet.SessionState.Path.GetUnresolvedProviderPathFromPSPath(list[0])); }
+        catch (Exception) { exists = false; }
+        if (!exists)
+        {
+            FileSystemHelpers.WriteBuiltinError(cmdlet, $"{builtin}: {PsBash.Core.BashPath.ToShell(list[0])}: No such file or directory");
+            return false;
+        }
+        var before = LogicalLocation(cmdlet);
+        try
+        {
+            BashShellState.SetDirectoryStack(cmdlet.SessionState, list);
+        }
+        catch (Exception ex) when (ex is RuntimeException or IOException or UnauthorizedAccessException)
+        {
+            FileSystemHelpers.WriteBuiltinError(cmdlet, $"{builtin}: {PsBash.Core.BashPath.ToShell(list[0])}: {ex.Message}");
+            return false;
+        }
+        SyncProcessWorkingDirectory(cmdlet, before);
+        return true;
     }
 
     /// <summary>

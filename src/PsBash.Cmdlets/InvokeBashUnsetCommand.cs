@@ -187,6 +187,14 @@ public sealed class InvokeBashUnsetCommand : BashCmdlet
             string name = args[i];
             // A name bash cannot hold (`unset x -f`: -f is an operand here) unsets nothing, silently (bash 5.2).
             if (name.StartsWith('-')) continue;
+            // `unset -v NAME` of a name no variable can have is bash's "not a valid identifier", status 1, and the other
+            // names are still unset. Without -v such a name may be a function's, so it is skipped silently (bash 5.2).
+            // REGRESSION: `unset -v 1a` was silent, status 0.
+            if (explicitVar && !functionMode && !namerefMode && !IsVariableName(name))
+            {
+                FileSystemHelpers.WriteBuiltinError(this, $"unset: `{name}': not a valid identifier");
+                continue;
+            }
             // A variable by its store name (`unset path` removes the bash variable path, never PATH: BashNameCase); a
             // function, and every message, by the name as written.
             string store = functionMode ? name : PsBash.Core.BashNameCase.ToStore(name);
@@ -266,6 +274,14 @@ public sealed class InvokeBashUnsetCommand : BashCmdlet
                 BashShellState.TakeAttributes(store);
             }
         }
+    }
+
+    /// <summary>A name <c>unset -v</c> takes: an identifier, or one with a subscript (<c>a[1]</c>, <c>m[k]</c>).</summary>
+    internal static bool IsVariableName(string name)
+    {
+        int open = name.IndexOf('[');
+        if (!InvokeBashReadCommand.IsValidIdentifier(open < 0 ? name : name[..open])) return false;
+        return open < 0 || (name.Length > open + 2 && name[^1] == ']');
     }
 
     /// <summary>
