@@ -114,6 +114,14 @@ pid is gone **or now belongs to a different process** (start time differs: PID r
 `IdleShutdown.ShortenTimeout(5 s)`: the host exits 5 s after the last command ends. The host log
 records `session anchor <pid>:<ticks> exited; idle 5s with no connection`.
 
+The host records its anchor in its sidecar (`sessionAnchor`). A launcher nested in a host's command
+joins that host's session, and a slot it spawns there is anchored on the same session
+(`IpcTransportFactory.EnclosingHostAnchor`), not on the enclosing host: the slot serves the whole
+session's commands, so it must not die with a sibling slot. Only a host that records no session (a
+private host, `PSBASH_SESSION`, an older build) anchors what it starts on itself. REGRESSION: slots
+were anchored on the sibling that ran the nested command (chains like x6 -> x5 -> base); when the
+install's drain retired an idle x2, the x3 anchored on it hung up an agent's command (exit 125).
+
 A command still running 10 s after the anchor is gone (`SessionAnchorWatcher.HangupGrace`) is **hung
 up**: the watcher cancels the host, which stops the command and exits. The log records `session
 anchor <pid>:<ticks> exited; hung up N command(s) still running 10s later`. Nobody waits for such a
@@ -318,7 +326,12 @@ shutdown can end is the claim. A busy host is left alone:
   it swaps the binaries, then runs `ps-bash host drain --host PID=ENDPOINT ...`,
   which retries each busy host every second until it is idle, up to
   `PSBASH_INSTALL_DRAIN_MS` (default 10 minutes). A host whose process exited,
-  or whose endpoint another host now owns, is skipped. Hosts still busy at the
+  or whose endpoint another host now owns, is skipped. A host anchored on one
+  being drained (`--session-anchor=<its pid>:...`) dies with it, so it is drained
+  too, and the edge is passed as `--anchored PID=ANCHOR_PID`: the drain claims
+  the anchor's lease while the dependent lives (no command starts there, and a
+  launcher spills past it instead of retiring it) and shuts it down through that
+  claim once the dependent is gone. Hosts still busy at the
   deadline are stopped, and the script names what each was running (its child
   processes). Interactive hosts and private `--launcher-pid` hosts are never
   touched.
