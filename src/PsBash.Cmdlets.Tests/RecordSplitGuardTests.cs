@@ -49,8 +49,6 @@ public class RecordSplitGuardTests
             = "jq halt_error text written to stderr (the writer adds the newline)",
         ["InvokeBashSedCommand.cs: if (!string.IsNullOrEmpty(res.Stderr)) FileSystemHelpers.WriteStderr(this, res.Stderr.TrimEnd('\\n', '\\r'));"]
             = "a child's stderr text forwarded to stderr",
-        ["InvokeBashSedCommand.cs: raw = raw.TrimEnd('\\n');"]
-            = "sed -f SCRIPT file text; trailing blank script lines are no-op commands",
         ["InvokeBashTputCommand.cs: if (spawn.Stderr.Length > 0) FileSystemHelpers.WriteStderr(this, spawn.Stderr.TrimEnd('\\n', '\\r'));"]
             = "the system tput's diagnostic forwarded to stderr (the writer adds the newline)",
         ["InvokeBashXanCommand.cs: string body = sb.ToString().TrimEnd('\\r', '\\n');"]
