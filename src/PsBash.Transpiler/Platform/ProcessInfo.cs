@@ -78,6 +78,39 @@ public static partial class ProcessInfo
     }
 
     /// <summary>
+    /// Linux: when <paramref name="pid"/> started, in UTC ticks, from the kernel's own record — <c>btime</c> of
+    /// <c>/proc/stat</c> (boot, whole seconds since the epoch) plus <c>starttime</c> of <c>/proc/{pid}/stat</c> (clock
+    /// ticks after boot, <c>sysconf(_SC_CLK_TCK)</c> a second). Null off Linux, or when the process is gone or unreadable.
+    /// <para>
+    /// .NET's <c>Process.StartTime</c> adds that same <c>starttime</c> to a boot time each process derives for itself
+    /// from two clocks read a moment apart, so two processes reading ONE live process disagree by up to ~1 ms. A
+    /// start time recorded in one process and checked in another (a daemon's session anchor) then never matched, and
+    /// every Linux daemon took its live session for gone a second after it started. These inputs are the same numbers
+    /// in every process, so the sum is too.
+    /// </para>
+    /// </summary>
+    public static long? LinuxStartTimeUtcTicks(int pid)
+    {
+        if (!OperatingSystem.IsLinux() || pid <= 0) return null;
+        try
+        {
+            if (ReadAscii($"/proc/{pid}/stat", StatMaxBytes) is not { } stat
+                || !TryParseProcStartTime(System.Text.Encoding.ASCII.GetBytes(stat), out ulong startClockTicks)) return null;
+            if (ReadAscii("/proc/stat", StatusMaxBytes) is not { } system || ParseBootTimeSeconds(system) is not { } btime)
+                return null;
+            long hz = sysconf(SC_CLK_TCK);
+            return hz > 0 ? StartTimeUtcTicks(btime, startClockTicks, hz) : null;
+        }
+        catch (Exception ex) when (ex is EntryPointNotFoundException or DllNotFoundException) { return null; }
+    }
+
+    /// <summary><c>_SC_CLK_TCK</c> for <c>sysconf(3)</c> on Linux (glibc and musl <c>bits/confname.h</c>).</summary>
+    private const int SC_CLK_TCK = 2;
+
+    [LibraryImport("libc")]
+    private static partial long sysconf(int name);
+
+    /// <summary>
     /// Parent pid of THIS process, or null when unknown. On Windows it reads its own handle (no process lookup by id,
     /// which enumerates every process): the launcher asks once per command for <c>$PPID</c>.
     /// </summary>
@@ -279,6 +312,49 @@ public static partial class ProcessInfo
         result = new ProcStat((char)state[0], ppid, pgrp);
         return true;
     }
+
+    /// <summary>
+    /// <c>starttime</c> of a <c>/proc/{pid}/stat</c> record: field 22 (clock ticks after boot), the 20th field after the
+    /// LAST <c>')'</c> that closes <c>comm</c>.
+    /// </summary>
+    public static bool TryParseProcStartTime(ReadOnlySpan<byte> stat, out ulong startClockTicks)
+    {
+        startClockTicks = 0;
+        int close = stat.LastIndexOf((byte)')');
+        if (close < 0) return false;
+        var rest = stat[(close + 1)..];
+        ReadOnlySpan<byte> field = default;
+        for (int i = 0; i < 20; i++)
+            if (!NextField(ref rest, out field)) return false;
+        if (field.Length > 20) return false;
+        ulong v = 0;
+        foreach (var b in field)
+        {
+            if (b < (byte)'0' || b > (byte)'9') return false;
+            v = v * 10 + (ulong)(b - '0');
+        }
+        startClockTicks = v;
+        return true;
+    }
+
+    /// <summary>The <c>btime</c> line of <c>/proc/stat</c>: boot time, whole seconds since the Unix epoch; null when absent.</summary>
+    public static long? ParseBootTimeSeconds(string procStatText)
+    {
+        foreach (var line in procStatText.Split('\n'))
+            if (line.StartsWith("btime ", StringComparison.Ordinal)
+                && long.TryParse(line.AsSpan(6).Trim(), System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out long seconds))
+                return seconds;
+        return null;
+    }
+
+    /// <summary>Boot time plus a start offset in clock ticks, as UTC <see cref="DateTime"/> ticks. Integer math only, so
+    /// equal inputs give an equal result in every process.</summary>
+    public static long StartTimeUtcTicks(long bootTimeSeconds, ulong startClockTicks, long clockTicksPerSecond)
+        => DateTime.UnixEpoch.Ticks
+           + bootTimeSeconds * TimeSpan.TicksPerSecond
+           + (long)(startClockTicks / (ulong)clockTicksPerSecond) * TimeSpan.TicksPerSecond
+           + (long)(startClockTicks % (ulong)clockTicksPerSecond) * TimeSpan.TicksPerSecond / clockTicksPerSecond;
 
     /// <summary>
     /// Decodes a macOS <c>struct proc_bsdinfo</c> as <c>proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, buf, 136)</c> fills it

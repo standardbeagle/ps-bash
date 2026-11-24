@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using PsBash.Core.Platform;
 using PsBash.Core.Runtime.Processes;
+using PsBash.Testing;
 using Xunit;
 
 namespace PsBash.Core.Tests.Platform;
@@ -234,6 +235,66 @@ public class ProcessInfoTests
     {
         Skip.IfNot(OperatingSystem.IsWindows(), "Unix answer pinned by ProcessUmask_ProbeDirectory_AgreesWithTheKernelsMask");
         Assert.Equal(0x12, ProcessInfo.ProcessUmask());
+    }
+
+    // ---------------------------------------------------------------- start time (Linux)
+
+    [Fact]
+    public void ParseProcStartTime_ReadsField22_AfterTheLastParen()
+    {
+        // pid (comm) state ppid pgrp session tty tpgid flags minflt cminflt majflt cmajflt utime stime cutime cstime
+        // priority nice threads itreal STARTTIME vsize ...
+        var stat = "4242 (a) (b)) S 1 4242 4242 0 -1 4194304 10 0 0 0 1 2 0 0 20 0 1 0 987654 12345 ..."u8;
+        Assert.True(ProcessInfo.TryParseProcStartTime(stat, out var start));
+        Assert.Equal(987654UL, start);
+    }
+
+    [Theory]
+    [InlineData("4242 (sleep) S 1 2 3")]   // record ends before field 22
+    [InlineData("4242 sleep S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20")] // no ')' closes comm
+    [InlineData("4242 (sleep) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 x9 20")] // starttime not a number
+    public void ParseProcStartTime_Malformed_IsFalse(string stat)
+        => Assert.False(ProcessInfo.TryParseProcStartTime(Encoding.ASCII.GetBytes(stat), out _));
+
+    [Fact]
+    public void ParseBootTimeSeconds_ReadsTheBtimeLine()
+    {
+        Assert.Equal(1764000000L, ProcessInfo.ParseBootTimeSeconds("cpu  1 2 3\nintr 5\nbtime 1764000000\nprocesses 9\n"));
+        Assert.Null(ProcessInfo.ParseBootTimeSeconds("cpu  1 2 3\nprocesses 9\n"));
+    }
+
+    [Fact]
+    public void StartTimeUtcTicks_AddsClockTicksToBootTime()
+        => Assert.Equal(
+            new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(1000).AddSeconds(12).AddMilliseconds(340).Ticks,
+            ProcessInfo.StartTimeUtcTicks(1000, 1234, 100));
+
+    // REGRESSION: StartTicksOf was Process.StartTime, which on Linux adds the kernel's starttime to a boot time each
+    // process works out from two clocks, so the launcher's and the daemon's reading of one live anchor differed by up
+    // to ~1 ms, never matched, and every daemon took its live session for gone (exiting 5 s after its last command).
+    // The oracle is the kernel itself, read by a separate shell process: btime + starttime / CLK_TCK.
+    [SkippableFact]
+    public async Task StartTicksOf_OnLinux_IsTheKernelsRecord_SameInEveryProcess()
+    {
+        Skip.IfNot(OperatingSystem.IsLinux(), "only Linux derives Process.StartTime from a per-process boot time");
+        using var child = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("sleep", "120") { UseShellExecute = false })!;
+        try
+        {
+            var kernel = await ProcessSpawn.RunAsync("sh", new[] { "-c",
+                $"read -r s < /proc/{child.Id}/stat; s=${{s##*) }}; set -- $s; shift 19; " +
+                "echo \"$(awk '/^btime /{print $2}' /proc/stat) $1 $(getconf CLK_TCK)\"" }, Wait);
+            Assert.Equal(0, kernel.ExitCode);
+            var parts = kernel.Stdout.Trim().Split(' ');
+            long expected = ProcessInfo.StartTimeUtcTicks(long.Parse(parts[0]), ulong.Parse(parts[1]), long.Parse(parts[2]));
+
+            Assert.Equal(expected, PsBash.Core.Runtime.Ipc.ProcessIdentity.StartTicksOf(child));
+            Assert.True(PsBash.Core.Runtime.Ipc.ProcessIdentity.Of(child.Id).IsRunning());
+        }
+        finally
+        {
+            child.Kill();
+            await child.WaitForExitAsync();
+        }
     }
 
     [DllImport("libc")] private static extern uint getuid();

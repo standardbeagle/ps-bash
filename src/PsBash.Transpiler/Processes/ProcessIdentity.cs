@@ -16,8 +16,16 @@ public readonly record struct ProcessIdentity(int Pid, long StartTimeUtcTicks)
     /// <summary>The host argument name that carries a session anchor.</summary>
     public const string SessionAnchorArg = "--session-anchor";
 
-    /// <summary>Start time of <paramref name="process"/> in UTC ticks — the one formula every identity uses.</summary>
-    public static long StartTicksOf(Process process) => process.StartTime.ToUniversalTime().Ticks;
+    /// <summary>
+    /// Start time of <paramref name="process"/> in UTC ticks — the one formula every identity uses. It must give the
+    /// same number in every process that asks: an identity recorded by a launcher is checked by a daemon. On Linux that
+    /// is the kernel's record (<see cref="PsBash.Core.Platform.ProcessInfo.LinuxStartTimeUtcTicks"/>), not
+    /// <c>Process.StartTime</c>, which differs by up to ~1 ms between processes there. Windows and macOS report an
+    /// absolute start time the OS stores, the same for every reader.
+    /// </summary>
+    public static long StartTicksOf(Process process)
+        => (OperatingSystem.IsLinux() ? PsBash.Core.Platform.ProcessInfo.LinuxStartTimeUtcTicks(process.Id) : null)
+           ?? process.StartTime.ToUniversalTime().Ticks;
 
     /// <summary>
     /// The identity of <paramref name="pid"/>, a child this process just started. Never throws: an unreadable start

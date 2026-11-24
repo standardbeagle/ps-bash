@@ -55,7 +55,7 @@ public class PendingHostSpawnTests : IDisposable
 
         var read = PendingHostSpawn.TryRead(_endpoint);
 
-        Assert.Equal(new ProcessIdentity(self.Id, self.StartTime.ToUniversalTime().Ticks), read);
+        Assert.Equal(new ProcessIdentity(self.Id, ProcessIdentity.StartTicksOf(self)), read);
         Assert.True(read!.Value.IsRunning());
     }
 

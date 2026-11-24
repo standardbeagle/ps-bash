@@ -16,7 +16,7 @@ branch, a variadic `ioctl` whose third argument Apple arm64 reads from the stack
 | `OsSignals` | signal numbers, wait-status decoding, the runtime-owned signal | `Core.Tests/Platform/OsSignalsTests` (`OsSignalsGuardTests`) |
 | `PosixStat` | `stat`/`lstat`/`fstat` and the `struct stat` layout per target | `Core.Tests/PlatformDependencyGuardTests`, `PosixStatTests` |
 | `SystemTools` | the OS's own `stat`/`id`/`ps`/`sysctl`, `/bin/sh`, host-bash candidates | `PlatformDependencyGuardTests` |
-| `ProcessInfo` | parent pid, zombie, process-group members, real uid, umask | `Core.Tests/PlatformProbeGuardTests` |
+| `ProcessInfo` | parent pid, zombie, process-group members, real uid, umask, Linux start time | `Core.Tests/PlatformProbeGuardTests` |
 | `TerminalIoctl`, `TermiosLayout` | the one `ioctl` declaration (winsize), termios offsets | `PlatformProbeGuardTests` |
 | `UnixSocketPath` | the AF_UNIX `sun_path` budget (103 macOS/FreeBSD, 107 Linux/Windows) | `UnixSocketPathTests` |
 | `KernelIdentity` | `uname(2)` and the `struct utsname` layout (65-byte fields Linux, 256 Darwin) — what `uname` prints off Windows; Windows keeps the MSYS identity | `KernelIdentityTests`, `PlatformDependencyGuardTests.UnameCall_LivesOnlyInPlatform` |
@@ -89,6 +89,13 @@ first, because callers choose GNU or BSD flags by OS and Homebrew's GNU `stat` o
 
 Linux `/proc`, macOS libproc (`proc_pidinfo`, `proc_listpids`), Windows `NtQueryInformationProcess`. Table and
 struct offsets: `background-jobs.md` §6.1a.
+
+A process's start time (`ProcessIdentity.StartTicksOf`, the key of every cross-process identity) is, on Linux,
+`LinuxStartTimeUtcTicks`: `/proc/stat` `btime` + `/proc/{pid}/stat` field 22 / `sysconf(_SC_CLK_TCK)`. Not
+`Process.StartTime`: .NET adds that field to a boot time each process derives from two clocks, so two processes
+reading one live process differ by up to ~1 ms and a launcher's anchor never matched in its daemon. Windows and
+macOS store an absolute start time, the same for every reader. A clock step (`settimeofday`) moves `btime`, so an
+identity taken before it no longer matches after it.
 
 ## Terminal — `TerminalIoctl`, `TermiosLayout`
 

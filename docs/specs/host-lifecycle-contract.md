@@ -110,7 +110,8 @@ the automatic session anchor (no `PSBASH_IPC_ENDPOINT`, no `PSBASH_SESSION`, top
 nested), the spawning launcher passes that anchor to the host as
 `--session-anchor=<pid>:<startTicks>` (`ProcessIdentity.SessionAnchorArg`,
 `IpcWorker.SpawnAndWaitAsync`). The host's `SessionAnchorWatcher` polls it every second; once the
-pid is gone **or now belongs to a different process** (start time differs: PID reuse), it calls
+pid is gone **or now belongs to a different process** (start time differs: PID reuse; start times come from
+`ProcessIdentity.StartTicksOf`, equal in every process, see `platform-dependencies.md` §Process information), it calls
 `IdleShutdown.ShortenTimeout(5 s)`: the host exits 5 s after the last command ends. The host log
 records `session anchor <pid>:<ticks> exited; idle 5s with no connection`.
 
