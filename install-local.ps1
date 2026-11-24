@@ -49,18 +49,34 @@ $destDir = "$env:USERPROFILE\.local\bin"
 # -c), so each one is retired here rather than left to idle out. Not touched: --interactive hosts (a user's open
 # terminal; it may be the parent of this very script), private --launcher-pid hosts (each exits with its one command),
 # and dev-build hosts under the repo's src/*/bin (a test run's).
+#
+# A host anchored on one of those (--session-anchor=<its pid>:..., a slot a nested launcher spawned) exits, hanging up
+# its command, once that one is gone, so it is drained too, and the drain retires it before the host it is anchored on
+# (holding that one meanwhile). REGRESSION: the drain retired an idle slot host while a slot anchored on it ran an
+# agent's command; that command ended with exit 125 and the install still said none was interrupted.
 $destHostPath = Join-Path $destDir 'ps-bash-host.exe'
-$oldHosts = @(Get-CimInstance Win32_Process -Filter "Name='ps-bash-host.exe'" -ErrorAction SilentlyContinue |
-    Where-Object {
-        $_.ExecutablePath -and
-        [string]::Equals($_.ExecutablePath, $destHostPath, [StringComparison]::OrdinalIgnoreCase) -and
-        $_.CommandLine -notmatch '--interactive' -and
-        $_.CommandLine -notmatch '--launcher-pid'
-    } |
+$daemonHosts = @(Get-CimInstance Win32_Process -Filter "Name='ps-bash-host.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -notmatch '--interactive' -and $_.CommandLine -notmatch '--launcher-pid' } |
     ForEach-Object {
         $endpoint = if ($_.CommandLine -match '--ipc-endpoint=(?:"([^"]+)"|(\S+))') { if ($Matches[1]) { $Matches[1] } else { $Matches[2] } }
-        [pscustomobject]@{ Pid = [int]$_.ProcessId; Endpoint = $endpoint }
+        $anchorPid = if ($_.CommandLine -match '--session-anchor[= ](\d+):') { [int]$Matches[1] } else { $null }
+        [pscustomobject]@{
+            Pid = [int]$_.ProcessId; Endpoint = $endpoint; AnchorPid = $anchorPid
+            Ours = $_.ExecutablePath -and [string]::Equals($_.ExecutablePath, $destHostPath, [StringComparison]::OrdinalIgnoreCase)
+        }
     })
+$drainPids = @{}
+$daemonHosts | Where-Object Ours | ForEach-Object { $drainPids[$_.Pid] = $true }
+do {
+    $grew = $false
+    foreach ($h in $daemonHosts) {
+        if (-not $drainPids.ContainsKey($h.Pid) -and $null -ne $h.AnchorPid -and $drainPids.ContainsKey($h.AnchorPid)) {
+            $drainPids[$h.Pid] = $true
+            $grew = $true
+        }
+    }
+} while ($grew)
+$oldHosts = @($daemonHosts | Where-Object { $drainPids.ContainsKey($_.Pid) })
 
 # NTFS trick: a locked file cannot be deleted or overwritten, but it CAN be
 # renamed — existing handles keep pointing at the old file by its file record.
@@ -143,7 +159,10 @@ if ($oldHosts.Count -gt 0) {
     $leftBusy = @()
     if ($withEndpoint.Count -gt 0) {
         Write-Host "Draining $($withEndpoint.Count) old ps-bash-host process(es): each is retired once its command finishes (up to $([int]($drainMs / 1000)) s)..." -ForegroundColor DarkGray
-        $drainArgs = @('host', 'drain', '--deadline-ms', "$drainMs") + @($withEndpoint | ForEach-Object { '--host'; "$($_.Pid)=$($_.Endpoint)" })
+        $drainArgs = @('host', 'drain', '--deadline-ms', "$drainMs") + @($withEndpoint | ForEach-Object {
+            '--host'; "$($_.Pid)=$($_.Endpoint)"
+            if ($null -ne $_.AnchorPid -and $drainPids.ContainsKey($_.AnchorPid)) { '--anchored'; "$($_.Pid)=$($_.AnchorPid)" }
+        })
         $drainOut = & (Join-Path $destDir 'ps-bash.exe') @drainArgs 2>&1
         $drainOut | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
         $leftBusy = @($drainOut | ForEach-Object { if ("$_" -match '^(busy|unresponsive) pid=(\d+)') { [int]$Matches[2] } })
