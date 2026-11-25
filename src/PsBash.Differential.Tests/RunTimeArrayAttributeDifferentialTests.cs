@@ -26,7 +26,9 @@ public class RunTimeArrayAttributeDifferentialTests
         + "ga=(top); k(){ declare -a \"ga=(inner)\"; echo \"k: ${ga[*]}\"; }; k; echo \"after: ${ga[*]}\"\n"
         + "n(){ declare -n \"$1\"; rr=changed; }; y=orig; n 'rr=y'; echo \"y=$y\"; declare -p rr 2>&1\n"
         + "q(){ declare -a \"$1\"; inner; declare -p qa; }; inner(){ qa[5]=five; }; qa=(outer); q 'qa=(x)'; declare -p qa\n"
-        + "mm(){ declare -a \"$1\" \"$2\"; m1+=(z); declare -p m1 m2; }; mm 'm1=(a)' 'm2=(b c)'; declare -p m1 m2 2>&1\n"
+        // Not m2: Windows reads $m2 as the environment's M2 (intentional-differences.md, names differing only in
+        // case), and the GitHub Windows image sets M2 (Maven), so the after-call listing showed it.
+        + "mm(){ declare -a \"$1\" \"$2\"; m1+=(z); declare -p m1 mb; }; mm 'm1=(a)' 'mb=(b c)'; declare -p m1 mb 2>&1\n"
         + "cv(){ local -A cm; c='local -a cm'; eval \"$c\"; echo \"cs=$?\"; declare -p cm; }; cv 2>/dev/null\n"
         + "rd(){ local -a 'ra=(1)'; local -a 'ra=(2 3)'; declare -p ra; }; rd; declare -p ra 2>&1\n");
 

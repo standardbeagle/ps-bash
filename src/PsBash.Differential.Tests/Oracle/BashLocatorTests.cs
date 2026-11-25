@@ -151,7 +151,9 @@ public class BashLocatorTests
         await p.WaitForExitAsync();
 
         Assert.Equal("bash in\n", await stdout);
-        Assert.Equal("bash: line 1: unset: cannot simultaneously unset a function and a variable\n", await stderr);
+        // The prefix is the point; the line number is not (bash 3.2, macOS's /bin/bash, reports "line 0").
+        Assert.StartsWith("bash: line ", await stderr);
+        Assert.EndsWith(": unset: cannot simultaneously unset a function and a variable\n", await stderr);
         Assert.Equal(3, p.ExitCode);
     }
 

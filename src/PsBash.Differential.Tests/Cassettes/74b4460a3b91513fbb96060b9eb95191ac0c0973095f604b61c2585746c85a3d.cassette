@@ -12,7 +12,7 @@ h(){ eval 'local -A hm=([k]=v)'; eval 'declare -a ha=(7 8)'; hm[j]=w; ha+=(9); d
 ga=(top); k(){ declare -a "ga=(inner)"; echo "k: ${ga[*]}"; }; k; echo "after: ${ga[*]}"
 n(){ declare -n "$1"; rr=changed; }; y=orig; n 'rr=y'; echo "y=$y"; declare -p rr 2>&1
 q(){ declare -a "$1"; inner; declare -p qa; }; inner(){ qa[5]=five; }; qa=(outer); q 'qa=(x)'; declare -p qa
-mm(){ declare -a "$1" "$2"; m1+=(z); declare -p m1 m2; }; mm 'm1=(a)' 'm2=(b c)'; declare -p m1 m2 2>&1
+mm(){ declare -a "$1" "$2"; m1+=(z); declare -p m1 mb; }; mm 'm1=(a)' 'mb=(b c)'; declare -p m1 mb 2>&1
 cv(){ local -A cm; c='local -a cm'; eval "$c"; echo "cs=$?"; declare -p cm; }; cv 2>/dev/null
 rd(){ local -a 'ra=(1)'; local -a 'ra=(2 3)'; declare -p ra; }; rd; declare -p ra 2>&1
 
@@ -38,9 +38,9 @@ bash: line 6: declare: rr: not found
 declare -a qa=([0]="x" [5]="five")
 declare -a qa=([0]="outer")
 declare -a m1=([0]="a" [1]="z")
-declare -a m2=([0]="b" [1]="c")
+declare -a mb=([0]="b" [1]="c")
 bash: line 8: declare: m1: not found
-bash: line 8: declare: m2: not found
+bash: line 8: declare: mb: not found
 cs=1
 declare -A cm
 declare -a ra=([0]="2" [1]="3")

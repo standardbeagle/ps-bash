@@ -52,7 +52,9 @@ public class QuotedBuiltinNameDifferentialTests
     [SkippableFact]
     public Task RunTimeLocal_IsLocalWhateverTheQuoting() => Same(
         "f1() { \\local m=\"$1\"; echo \"in1[$m]\"; }; f1 \"a b*\"; echo \"out1[${m-unset}]\"\n"
-        + "f2() { builtin local m2=\"$1\"; echo \"in2[$m2]\"; }; f2 \"a b*\"; echo \"out2[${m2-unset}]\"\n"
+        // Not m2: Windows reads ${m2-unset} as the environment's M2 (names differing only in case are one variable
+        // there, intentional-differences.md), and the GitHub Windows image sets M2 (Maven).
+        + "f2() { builtin local mb=\"$1\"; echo \"in2[$mb]\"; }; f2 \"a b*\"; echo \"out2[${mb-unset}]\"\n"
         + "f3() { x='m3=a b*'; local \"$x\"; echo \"in3[$m3]\"; }; f3; echo \"out3[${m3-unset}]\"\n"
         + "f4() { builtin local \"m4=$1\"; echo \"in4[$m4]\"; }; f4 \"a'b c\"; echo \"out4[${m4-unset}]\"\n"
         + "f5() { \\local cmd=\"${1-__missing__}\"; echo \"in5[$cmd]\"; }; f5; echo \"out5[${cmd-unset}]\"\n"
