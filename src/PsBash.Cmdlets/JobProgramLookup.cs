@@ -28,6 +28,9 @@ internal static class JobProgramLookup
     /// </summary>
     [ThreadStatic] private static bool t_raw;
 
+    /// <summary>Whether a lookup in progress is <c>Invoke-BashNative</c>'s own (<see cref="Raw{T}"/>): hooks leave it alone.</summary>
+    internal static bool IsRaw => t_raw;
+
     public static void Install(CommandInvocationIntrinsics invoke)
     {
         ArgumentNullException.ThrowIfNull(invoke);

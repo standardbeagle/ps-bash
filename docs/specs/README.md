@@ -22,6 +22,7 @@ Nav starts at /CODE_MAP.md. Keep this index complete — a guard test fails on a
 - [frecency-jump.md](frecency-jump.md) — Frecency Directory Jump (zoxide-style `z` / `zi`)
 - [history-store-interface.md](history-store-interface.md) — IHistoryStore Interface Specification
 - [host-lifecycle-contract.md](host-lifecycle-contract.md) — Host Lifecycle Metadata and Ownership Contract
+- [host-terminal.md](host-terminal.md) — a terminal an in-process embedding lends to programs (`IHostTerminal`, the lookup hook, which programs go there)
 - [platform-dependencies.md](platform-dependencies.md) — Platform Dependencies (signals, struct stat, system tools, process info, ioctl: one home)
 - [spec-suite.md](spec-suite.md) — fast bash-conformance corpus + runner (built: in-host execution, Oils + Differential corpus under `spec/`; not yet a release gate)
 - [spec-gaps.md](spec-gaps.md) — known bash divergences (XFAIL cases) in the spec corpus, grouped by area

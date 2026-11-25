@@ -81,6 +81,8 @@ public class PipeStageUpstreamStopTests : IClassFixture<SharedPwshFixture>
         var allowed = new HashSet<string>(StringComparer.Ordinal)
         {
             "InvokeBashPipeStageCommand.cs", "InvokeBashNativeCommand.cs", "JobProgramLookup.cs",
+            // A stand-in like JobProgramLookup's: the steppable pipeline it hosts is Invoke-BashNative, which handles the stop.
+            "HostTerminalLookup.cs",
         };
         var dir = Path.Combine(RepoRoot(), "src", "PsBash.Cmdlets");
         var offenders = new List<string>();

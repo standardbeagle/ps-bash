@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Diagnostics;
 using System.Management.Automation;
+using System.Management.Automation.Runspaces;
 
 namespace PsBash.Cmdlets;
 
@@ -37,6 +38,13 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
     [AllowNull]
     public PSObject? InputObject { get; set; }
 
+    /// <summary>
+    /// The program may run on the host's terminal (<see cref="PsBash.Core.HostTerminal"/>): set by the lookup stand-in
+    /// (<see cref="HostTerminalLookup"/>) for a command word, never by the emitter.
+    /// </summary>
+    [Parameter]
+    public SwitchParameter HostTerminal { get; set; }
+
     private StreamingChildProcess? _child;
     private SteppablePipeline? _fallback;
     private bool _finished;
@@ -58,6 +66,8 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
         // In a background job a program is always started here: PowerShell would give it the process environment,
         // the foreground's scalars, not the job's (ScalarOverlay, background-jobs.md section 3).
         bool merge = StderrMerge.JoinsStdout(this);
+        if (standIn is null && info is ApplicationInfo onTerminal && TryRunOnHostTerminal(onTerminal.Path, args, merge))
+            return;
         if (standIn is null && info is ApplicationInfo app && !IsBatchFile(app.Path)
             && (merge || PsBash.Core.ScalarOverlay.Current is not null))
         {
@@ -78,6 +88,7 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
 
     protected override void ProcessRecord()
     {
+        if (_finished) return;
         if (_fallback is not null)
         {
             // Without upstream input the command runs once with none (a program keeps the inherited stdin).
@@ -99,6 +110,7 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
 
     protected override void EndProcessing()
     {
+        if (_finished && _child is null) return;
         if (_fallback is not null)
         {
             // No AdoptLastExitCode: PowerShell publishes the program's status after this returns, and it stands as a
@@ -119,6 +131,18 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
     {
         _child?.Dispose();
         _fallback?.Dispose();
+    }
+
+    /// <summary>
+    /// Runs the program on the host's terminal when this is a command word (<see cref="HostTerminal"/>) whose stderr is
+    /// not merged into a pipe and <see cref="HostTerminalLookup.TryRun"/> takes it. False: start it as before.
+    /// </summary>
+    private bool TryRunOnHostTerminal(string path, List<string> args, bool merge)
+    {
+        if (!HostTerminal || merge || IsBatchFile(path)) return false;
+        if (!HostTerminalLookup.TryRun(this, Name, path, args)) return false;
+        _finished = true;
+        return true;
     }
 
     private void StartProgram(string path, List<string> args, bool merge)
@@ -202,7 +226,7 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
         return child.Complete(cmdlet);
     }
 
-    private static ProcessStartInfo ProgramStartInfo(PSCmdlet cmdlet, string path, IEnumerable<string> args)
+    internal static ProcessStartInfo ProgramStartInfo(PSCmdlet cmdlet, string path, IEnumerable<string> args)
     {
         var psi = new ProcessStartInfo { FileName = path, UseShellExecute = false };
         foreach (var a in args) psi.ArgumentList.Add(a);

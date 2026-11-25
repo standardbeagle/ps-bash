@@ -92,6 +92,13 @@ internal static class InnerCommand
         if (target is ApplicationInfo file && PsBash.Core.ProgramFile.Plan(file.Path) is { } launch)
             invokeTarget = ScriptBlock.Create(launch.StandInScript(PsBash.Core.ProgramFile.Shown(name, file.Path)));
 
+        // `env X=1 htop`, `command vim`: a program this command runs is on the host's terminal when the command itself
+        // writes to the host (HostTerminal) - a bare statement, nothing piped in, stderr not merged.
+        if (invokeTarget is ApplicationInfo onTerminal && stdin.Count == 0 && !StderrMerge.JoinsStdout(cmdlet)
+            && !InvokeBashNativeCommand.IsBatchFile(onTerminal.Path)
+            && HostTerminalLookup.TryRun(cmdlet, name, onTerminal.Path, argv.Skip(1).ToArray()))
+            return;
+
         // `command prog 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4). In a
         // background job always through RunMerged: `& $c` would give it the process environment, not the job's scalars.
         if (invokeTarget is ApplicationInfo app && !InvokeBashNativeCommand.IsBatchFile(app.Path)
