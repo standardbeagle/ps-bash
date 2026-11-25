@@ -169,6 +169,13 @@ owns the console and is the one raw `Process.Start`.
 program: the body is emitted once, before any call site, so its programs are not routed through `Invoke-BashNative`
 and keep PowerShell's two pipes.
 
+**Known gap: an inherited merge.** A child is merged only when THIS shell's script merges (`StderrMerge.JoinsStdout`).
+A shell whose own fd 1 and fd 2 are one pipe because its PARENT merged (`{ bash t.sh; } 2>&1`, where t.sh runs
+`bash s.sh`) starts its children with two pipes, so their stdout/stderr order is decided by two reader threads. Under
+load the order flips (`ShellLanguageGapDifferentialTests.AssignmentError_UnderErrexitOrPosix_EndsTheShell` on a 4-core
+CI runner, v0.15.2). Fix direction: the launcher tells the host when its fd 1 and fd 2 are the same file (`fstat` dev/ino,
+Windows `GetFileInformationByHandle`), and that counts as a merge in force.
+
 **Guards.** `Core.Tests/ChildStdioGuardTests` (no raw `Process.Start` outside `ChildStdio` and named exemptions; every
 streaming spawn states its mode; every run-by-name cmdlet consults the merge), `Cmdlets.Tests/ChildStdioTests` (the
 primitive keeps write order), `Differential.Tests/StderrMergeOrderDifferentialTests` (child × merge form against bash).

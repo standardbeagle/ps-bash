@@ -1,13 +1,13 @@
 PSBASH-ORACLE-CASSETTE v1
 bash-version: 5.2.21(1)-release
 exit-code: 0
-script-length: 632
+script-length: 637
 stdout-length: 398
 stderr-length: 0
 ==== SCRIPT ====
 cd "$(mktemp -d)" || exit
 cat > t.sh <<'EOF'
-t() { printf '%s\n' "$1" > s.sh; bash s.sh; echo "rc=$?"; }
+t() { printf '%s\n' "$1" > s.sh; bash s.sh 2>&1; echo "rc=$?"; }
 t 'set -e; readonly r=1; f() { r=2; echo in; }; f; echo same
 echo next'
 t 'set -e

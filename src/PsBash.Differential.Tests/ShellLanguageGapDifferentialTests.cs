@@ -1245,11 +1245,13 @@ public class ShellLanguageGapDifferentialTests
     /// otherwise ignored (<c>q=2 || echo</c>, an <c>if</c> body); a subshell or <c>$( )</c> ends with 1 and that ends its
     /// caller. An arithmetic expansion error only drops its line. REGRESSION: the refusal dropped the line and the script
     /// went on.
+    /// The inner <c>bash s.sh</c> merges explicitly: a nested shell that only INHERITS a merge gets two pipes (stdio-messaging.md
+    /// §4 Known gap), and on a loaded 4-core runner its diagnostic landed after the next line's output.
     /// </summary>
     [SkippableFact]
     public Task AssignmentError_UnderErrexitOrPosix_EndsTheShell() => SameAsScript(
         """
-        t() { printf '%s\n' "$1" > s.sh; bash s.sh; echo "rc=$?"; }
+        t() { printf '%s\n' "$1" > s.sh; bash s.sh 2>&1; echo "rc=$?"; }
         t 'set -e; readonly r=1; f() { r=2; echo in; }; f; echo same
         echo next'
         t 'set -e
