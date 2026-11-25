@@ -144,7 +144,7 @@ function Get-BashIndirectValue {
     }
     elseif ($null -eq $Ref -and $RefName) {
         $rv = [PsBash.Cmdlets.BashVariableLookup]::ArrayHolder($ExecutionContext.SessionState, $RefName)
-        if ($null -ne $rv) { $refSet = $true; $Ref = if ($rv -is [System.Collections.IDictionary]) { $rv['0'] } elseif ($rv -is [array]) { $rv[0] } else { $rv } }
+        if ($null -ne $rv) { $refSet = $true; $Ref = if ($rv -is [System.Collections.IDictionary]) { $rv['0'] } elseif ($rv -is [System.Collections.IList]) { $rv[0] } else { $rv } }
     }
     if ($null -eq $Ref -and $RefName -eq 'OPTIND') { $Ref = '1' }
     $n = [string]$Ref
@@ -1021,15 +1021,9 @@ function Write-BashFileRaw {
 # --- BashObject Factory ---
 
 function Add-BashArray {
+    # `a+=(x)`. The emitter calls BashIndexedArray.Append directly; this stays for scripts written against the module.
     param($Current, $Items)
-    if ($Current -is [PsBash.Cmdlets.BashSparseArray]) {
-        $n = $Current.NextIndex
-        foreach ($i in @($Items)) { $Current[$n] = $i; $n++ }
-        return $Current
-    }
-    if ($null -eq $Current) { return ,@($Items) }
-    # Block copy, not PowerShell's per-element array `+` (BashIndexedArray.Concat).
-    return ,[PsBash.Cmdlets.BashIndexedArray]::Concat($Current, $Items)
+    return ,[PsBash.Cmdlets.BashIndexedArray]::Append($Current, $Items)
 }
 
 function Set-BashElement {
@@ -1062,19 +1056,18 @@ function Set-BashElement {
         $__psbashTarget[$__psbashAt] = if ($__psbashAppend) { "$($__psbashTarget[$__psbashAt])$__psbashValue" } else { $__psbashValue }
         return $__psbashTarget
     }
-    $__psbashArr = [System.Collections.Generic.List[object]]::new()
-    if ($null -ne $__psbashTarget) { $__psbashArr.AddRange([object[]]@($__psbashTarget)) }
-    if ($__psbashIdx -lt 0) { $__psbashIdx += $__psbashArr.Count }
-    if ($__psbashIdx -lt 0) { Write-BashBadSubscript $__psbashWritten; return ,$__psbashArr.ToArray() }
-    if ($__psbashIdx -gt $__psbashArr.Count) {
-        # A gap: a dense PowerShell array cannot hold it, so the array becomes a sparse one.
-        $__psbashSp = [PsBash.Cmdlets.BashSparseArray]::FromList($__psbashArr)
+    # Dense: a persistent vector, so the write costs O(log32 n) and the caller's copy (a subshell's, a saved scope's)
+    # is left as it was. It used to copy the whole array per write, which made an `a[i]=v` loop O(n^2).
+    $__psbashVec = [PsBash.Cmdlets.BashIndexedArray]::ToVector($__psbashTarget)
+    if ($__psbashIdx -lt 0) { $__psbashIdx += $__psbashVec.Count }
+    if ($__psbashIdx -lt 0) { Write-BashBadSubscript $__psbashWritten; return ,$__psbashVec }
+    if ($__psbashIdx -gt $__psbashVec.Count) {
+        # A gap: a dense array cannot hold it, so the array becomes a sparse one.
+        $__psbashSp = [PsBash.Cmdlets.BashSparseArray]::FromList($__psbashVec)
         $__psbashSp[$__psbashIdx] = if ($__psbashAppend) { "$($__psbashValue)" } else { $__psbashValue }
         return $__psbashSp
     }
-    while ($__psbashArr.Count -le $__psbashIdx) { $__psbashArr.Add($null) }
-    $__psbashArr[[int]$__psbashIdx] = if ($__psbashAppend) { "$($__psbashArr[[int]$__psbashIdx])$__psbashValue" } else { $__psbashValue }
-    return ,$__psbashArr.ToArray()
+    return ,[PsBash.Cmdlets.BashIndexedArray]::SetElement($__psbashVec, $__psbashIdx, $__psbashValue, [bool]$__psbashAppend)
 }
 
 function Set-BashDisplayProperty {

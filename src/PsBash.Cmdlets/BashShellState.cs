@@ -578,6 +578,7 @@ public static class BashShellState
         return raw switch
         {
             object[] a => a.Clone(),
+            BashVector v => v,   // a value: no write can reach it, so the copy may share it
             Hashtable h => h.Clone(),   // shallow, keeps the table's key comparer (and BashAssoc's type)
             Dictionary<string, string> sd => new Dictionary<string, string>(sd, sd.Comparer),   // the alias table
             BashSparseArray sp => sp.Copy(),   // keeps its holes (a Hashtable copy is no indexed array)

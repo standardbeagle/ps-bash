@@ -5409,9 +5409,10 @@ public static partial class PsEmitter
                 bool kindAtRunTime = pair.Op == AssignOp.Equal && !wordsArePairs && !cmd.IsAssoc && !cmd.IsDeclare
                     && _context == TranspileContext.Eval;
                 sb.Append(arrTarget);
-                // `a+=(x)` goes through Add-BashArray: a sparse array appends after its highest subscript,
-                // which PowerShell's own `+=` cannot do on a dictionary.
-                sb.Append(pair.Op == AssignOp.PlusEqual ? " = Add-BashArray " + PsBuild.ArrayAppendBase(arrTarget, ScalarValueOf(ResolveNameref(pair.Name), braced: true)) + " @("
+                // `a+=(x)` calls BashIndexedArray.Append directly (no script function per append): a sparse array appends
+                // after its highest subscript, which PowerShell's own `+=` cannot do on a dictionary, and a dense one
+                // becomes a BashVector, so an append loop is amortized O(1) per append, not an O(n) copy each.
+                sb.Append(pair.Op == AssignOp.PlusEqual ? " = [PsBash.Cmdlets.BashIndexedArray]::Append(" + PsBuild.ArrayAppendBase(arrTarget, ScalarValueOf(ResolveNameref(pair.Name), braced: true)) + ", @("
                     : wordsArePairs ? " = [PsBash.Cmdlets.BashAssoc]::FromWords(@("
                     : kindAtRunTime ? " = [PsBash.Cmdlets.BashAssoc]::ListOrPairs(" + arrTarget + ", @("
                     : " = @(");
@@ -5435,7 +5436,7 @@ public static partial class PsEmitter
                     // for a "$x" element and produced unbalanced quotes for $'a\'b' elements.
                     sb.Append(EmitAssignmentValue(elem));
                 }
-                sb.Append(wordsArePairs || kindAtRunTime ? "))" : ")");
+                sb.Append(wordsArePairs || kindAtRunTime || pair.Op == AssignOp.PlusEqual ? "))" : ")");
                 continue;
             }
 
@@ -12206,7 +12207,7 @@ public static partial class PsEmitter
                 // Always a subexpression: bare `$a.Count` glued to a literal (`len=${#a[@]}`) expands only `$a`.
                 // A scalar (`s=abc`, an env var) is a one-element array: `${#s[@]}` is 1.
                 if (lenArr.AsSpan(1).IndexOfAnyExcept(VarNameChars) < 0 && bvs.Name.Length > 0)
-                    return $"$(if ({lenArr} -is [System.Collections.IDictionary]) {{ {lenArr}.Count }} elseif ($null -ne {lenArr}) {{ @({lenArr}).Count }} elseif ($null -ne {EmitSimpleVar(bvs.Name)}) {{ 1 }} else {{ 0 }})";
+                    return $"$(if ({lenArr} -is [System.Collections.IDictionary]) {{ {lenArr}.Count }} elseif ({lenArr} -is [System.Collections.ICollection]) {{ {lenArr}.Count }} elseif ($null -ne {lenArr}) {{ @({lenArr}).Count }} elseif ($null -ne {EmitSimpleVar(bvs.Name)}) {{ 1 }} else {{ 0 }})";
                 return $"$({lenArr}.Count)";
             }
             // ${#a[N]}: the length of ONE element (a string), not of the array.

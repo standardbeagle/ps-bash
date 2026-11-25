@@ -153,7 +153,7 @@ public static class BashStateSnapshot
         {
             if (item.BaseObject is not PSVariable pv || !IsUserVariable(pv)) continue;
             var raw = pv.Value is PSObject p ? p.BaseObject : pv.Value;
-            if (raw is object[] or IDictionary) yield return (pv.Name, raw);
+            if (raw is object[] or BashVector or IDictionary) yield return (pv.Name, raw);
         }
     }
 

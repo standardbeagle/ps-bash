@@ -424,18 +424,18 @@ public class BashTranspilerReviewRegressionTests
     // own - push() { st+=("$1"); } must reach the caller (VarFrameStack.ArraySlot decides at run time).
     // The slot is looked up once per write statement (`$__psbSlot`), not once for the target and again for the base.
     [Theory]
-    [InlineData("push() { st+=(\"$1\"); }; push a", "$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'st'); $__psbSlot.Value = Add-BashArray ($__psbSlot.Value ?? ${env:st}) @(")]
+    [InlineData("push() { st+=(\"$1\"); }; push a", "$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'st'); $__psbSlot.Value = [PsBash.Cmdlets.BashIndexedArray]::Append(($__psbSlot.Value ?? ${env:st}), @(")]
     [InlineData("f() { a=(x y); }; f", "$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a'); $__psbSlot.Value = @(")]
     [InlineData("f() { a[2]=z; }; f", "$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a'); if ($null -eq $__psbSlot.Value -and $null -ne $env:a) { $__psbSlot.Value = @($env:a) }; $__psbSlot.Value = Set-BashElement ($__psbSlot.Value)")]
     // A function defined inside a subshell too (the slot is then the subshell's, at run time). REGRESSION: it wrote `$a`,
     // a variable of its own, so `( f() { a=(x y); }; f; echo "${a[*]}" )` printed the old value.
     [InlineData("( f() { a=(x y); }; f )", "$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a'); $__psbSlot.Value = @(")]
-    [InlineData("g() { ( f() { a+=(z); }; f ); }; g", "$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a'); $__psbSlot.Value = Add-BashArray (")]
+    [InlineData("g() { ( f() { a+=(z); }; f ); }; g", "$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a'); $__psbSlot.Value = [PsBash.Cmdlets.BashIndexedArray]::Append((")]
     public void Transpile_ArrayWrittenInFunction_TargetsTheCallersSlot(string bash, string expected)
         => Assert.Contains(expected, BashTranspiler.Transpile(bash + "\ndeclare -p"));
 
     [Theory]
-    [InlineData("f() { local st=(a); st+=(b); }; f", "$st = Add-BashArray ($st ?? ${env:st}) @(")]
+    [InlineData("f() { local st=(a); st+=(b); }; f", "$st = [PsBash.Cmdlets.BashIndexedArray]::Append(($st ?? ${env:st}), @(")]
     public void Transpile_LocalOrSubshellArrayWrite_StaysLocal(string bash, string expected)
     {
         var ps = BashTranspiler.Transpile(bash);
@@ -449,8 +449,8 @@ public class BashTranspilerReviewRegressionTests
     // Set-BashElement had already changed the shell's table in place, so 9 survived the subshell.
     [Theory]
     [InlineData("declare -A d=([a]=1); ( d[a]=9 )", "$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'd'); $__psbSlot.Value = Set-BashElement ($__psbSlot.Value)")]
-    [InlineData("sp=([3]=x); echo q | { read -r w; sp+=(\"$w\"); }", "$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'sp'); $__psbSlot.Value = Add-BashArray (")]
-    [InlineData("f() { ( st+=(b) ); }; f", "$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'st'); $__psbSlot.Value = Add-BashArray (")]
+    [InlineData("sp=([3]=x); echo q | { read -r w; sp+=(\"$w\"); }", "$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'sp'); $__psbSlot.Value = [PsBash.Cmdlets.BashIndexedArray]::Append((")]
+    [InlineData("f() { ( st+=(b) ); }; f", "$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'st'); $__psbSlot.Value = [PsBash.Cmdlets.BashIndexedArray]::Append((")]
     [InlineData("( a=(x y) )", "$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'a'); $__psbSlot.Value = @(")]
     public void Transpile_SubshellArrayWrite_GoesThroughTheJournaledSlot(string bash, string expected)
         => Assert.Contains(expected, BashTranspiler.Transpile(bash));
@@ -924,7 +924,7 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_LocalNamerefToAnArray_AppendsToTheCallersArray()
     {
         var ps = BashTranspiler.Transpile("addto() { local -n a=$1; a+=(\"$2\"); }\nl=(a)\naddto l c");
-        Assert.Contains("$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'l'); $__psbSlot.Value = Add-BashArray ($__psbSlot.Value ?? ${env:l}) @(", ps);
+        Assert.Contains("$__psbSlot = [PsBash.Cmdlets.VarFrameStack]::ArraySlot($ExecutionContext.SessionState, 'l'); $__psbSlot.Value = [PsBash.Cmdlets.BashIndexedArray]::Append(($__psbSlot.Value ?? ${env:l}), @(", ps);
     }
 
     [Fact]

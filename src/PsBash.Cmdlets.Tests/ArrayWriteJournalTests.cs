@@ -83,7 +83,7 @@ public class ArrayWriteJournalTests
     [Fact]
     public void ASparseArrayAppendedInPlace_IsPutBackAsItWas()
     {
-        // `sp=([5]=x); g() { sp+=(y); }; ( g )`: Add-BashArray appends to the sparse array itself.
+        // `sp=([5]=x); g() { sp+=(y); }; ( g )`: BashIndexedArray.Append appends to the sparse array itself.
         var sparse = new BashSparseArray();
         sparse[5L] = "x";
         var sp = new PSVariable("sp", sparse);

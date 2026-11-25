@@ -144,7 +144,7 @@ public class NamerefNoTargetEmitterTests
     // drops the nameref and assigns r's own array. REGRESSION: the array went to the (absent) target.
     [Theory]
     [InlineData("typeset -n r; r=(x y)", "$r = @(")]
-    [InlineData("typeset -n r; r+=(x y)", "$r = Add-BashArray (")]
+    [InlineData("typeset -n r; r+=(x y)", "$r = [PsBash.Cmdlets.BashIndexedArray]::Append((")]
     [InlineData("declare -n r; r=$1; r=(x y)", "$r = @(")]
     public void Transpile_ArrayAssignmentToARunTimeNameref_DropsATargetlessReferenceFirst(string bash, string write)
     {

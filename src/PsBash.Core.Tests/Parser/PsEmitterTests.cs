@@ -5150,7 +5150,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo ${#arr[@]}");
         Assert.Contains("ConvertTo-BashWords", result);
-        Assert.Contains("$(if ($arr -is [System.Collections.IDictionary]) { $arr.Count } elseif ($null -ne $arr) { @($arr).Count } elseif ($null -ne $env:arr) { 1 } else { 0 })", result);
+        Assert.Contains("$(if ($arr -is [System.Collections.IDictionary]) { $arr.Count } elseif ($arr -is [System.Collections.ICollection]) { $arr.Count } elseif ($null -ne $arr) { @($arr).Count } elseif ($null -ne $env:arr) { 1 } else { 0 })", result);
     }
 
     [Fact]
@@ -5784,7 +5784,7 @@ public class PsEmitterTests
     public void Transpile_ArrayAppend_EmitsPlusEquals()
     {
         var result = PsEmitter.Transpile("Fruits+=('Watermelon')");
-        Assert.Contains("$Fruits = Add-BashArray ($Fruits ?? ${env:Fruits}) @('Watermelon')", result);
+        Assert.Contains("$Fruits = [PsBash.Cmdlets.BashIndexedArray]::Append(($Fruits ?? ${env:Fruits}), @('Watermelon'))", result);
     }
 
     [Theory]

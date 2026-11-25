@@ -636,7 +636,7 @@ public static class PsBuild
     /// otherwise <paramref name="scalarWrite"/>, the ordinary scalar assignment, runs.
     /// </summary>
     public static string WriteElementZeroOrScalar(string arrayVar, string value, bool append, string scalarWrite)
-        => "if (" + arrayVar + " -is [array] -or " + arrayVar + " -is [System.Collections.IDictionary]) { " + arrayVar
+        => "if (" + arrayVar + " -is [System.Collections.IList] -or " + arrayVar + " -is [System.Collections.IDictionary]) { " + arrayVar
            + " = Set-BashElement " + TargetArg(arrayVar) + " '0' (" + value + ")" + (append ? " -Append" : "") + " } else { " + scalarWrite + " }";
 
     /// <summary>
@@ -1761,7 +1761,7 @@ public static class PsBuild
     {
         string held = "$__psbLk.Value";
         string other = "[PsBash.Cmdlets.BashAssoc]::" + (assoc ? "IsIndexedValue(" : "IsAssocValue(") + held + ")";
-        string same = assoc ? "[PsBash.Cmdlets.BashAssoc]::IsAssocValue(" + held + ")" : "(" + held + " -is [array])";
+        string same = assoc ? "[PsBash.Cmdlets.BashAssoc]::IsAssocValue(" + held + ")" : "(" + held + " -is [System.Collections.IList])";
         return "$__psbLk = Get-Variable -Name " + SingleQuote(name) + " -Scope 0 -ErrorAction Ignore; "
             + "if ($null -eq $__psbLk) { [PsBash.Cmdlets.VarFrameStack]::LocalAttributes(" + SingleQuote(name) + ") }; "
             + "if ($null -ne $__psbLk -and " + other + ") { "

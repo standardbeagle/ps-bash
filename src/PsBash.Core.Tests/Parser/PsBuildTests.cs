@@ -161,7 +161,7 @@ public class PsBuildTests
     [Fact]
     public void WriteElementZeroOrScalar_WritesElementZeroOfAnArray()
     {
-        Assert.Equal("if ($a -is [array] -or $a -is [System.Collections.IDictionary]) { $a = Set-BashElement $a '0' (\"z\") } else { $env:a = \"z\" }",
+        Assert.Equal("if ($a -is [System.Collections.IList] -or $a -is [System.Collections.IDictionary]) { $a = Set-BashElement $a '0' (\"z\") } else { $env:a = \"z\" }",
             PsBuild.WriteElementZeroOrScalar("$a", "\"z\"", append: false, "$env:a = \"z\""));
         Assert.Contains("'0' (\"z\") -Append", PsBuild.WriteElementZeroOrScalar("$a", "\"z\"", append: true, "$env:a += \"z\""));
     }

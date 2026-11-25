@@ -87,7 +87,7 @@ public static class BashJobRunspaces
             // A function's local array arrives here too (`local -a la=(..)`): copied as an array. Made a string, `${la[1]}`
             // in the job indexed the joined text's characters.
             foreach (System.Collections.DictionaryEntry e in vars)
-                globals[LanguagePrimitives.ConvertTo<string>(e.Key)] = (e.Value is PSObject p ? p.BaseObject : e.Value) is object[] or System.Collections.IDictionary
+                globals[LanguagePrimitives.ConvertTo<string>(e.Key)] = (e.Value is PSObject p ? p.BaseObject : e.Value) is object[] or BashVector or System.Collections.IDictionary
                     ? BashShellState.CloneMutable(e.Value)
                     : LanguagePrimitives.ConvertTo<string>(e.Value) ?? "";
         }

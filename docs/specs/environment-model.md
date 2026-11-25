@@ -115,7 +115,13 @@ resolves through ONE chain.**
 | Kind | Storage | Scoping |
 |---|---|---|
 | scalar (`x=1`, `read x`, `for x`, `printf -v x`, `getopts`, `(( x = 1 ))`, `let`, `declare x`) | `BashVariableStore` (`$env:x`) | `local x`: the caller's value parked in `$__lsd_x` / `VarFrameStack`, restored on return (dynamic, as bash) |
-| indexed / sparse / associative array | a PowerShell variable (`$a`: `object[]`, `BashSparseArray`, `BashAssoc`) | PowerShell scopes; `local -a` is the function's lexical variable |
+| indexed / sparse / associative array | a PowerShell variable (`$a`: `object[]` or `BashVector`, `BashSparseArray`, `BashAssoc`) | PowerShell scopes; `local -a` is the function's lexical variable |
+
+A dense array is an `object[]` as a literal makes it (`a=(x y)`) and a `BashVector` once a script appends to it or
+writes an element (`BashIndexedArray.Append` / `SetElement`). The vector is persistent: each write returns a new one
+and leaves the old one as it was, so a subshell's, a saved scope's or a job's copy shares it safely (no clone).
+Append is amortized O(1), element read and write O(log32 n). Code that tests for a dense array tests `IList`,
+never `-is [array]` / `is object[]`.
 
 The class this closes: a scalar held in BOTH (a PowerShell variable beside `$env:x`). PowerShell resolves a variable
 through its own dynamic scope chain, which is not bash's, and readers disagreed on the order. The bug that found it:
