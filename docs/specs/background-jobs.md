@@ -89,8 +89,10 @@ Non-goals
    (`PsBuild.SetShellScalar`), is never copied too. A copy shadowed the job's own assignment: in
    `for i in 1; do { i=7; echo $i; } & wait; done` the job printed `1`. Guard: `Core.Tests/JobScalarCaptureTests`.
 
-   Not covered: **a `.cmd` / `.bat`** keeps PowerShell's launcher (its argument quoting is the one cmd.exe parses
-   right), so it gets the process environment: the shell's current values, not the job's. **Command lookup** uses the
+   A `.cmd` / `.bat` is started the same way, through `cmd.exe` with the command line `BatchFile` builds
+   (`program-files.md` §Batch files), so it gets the job's values too.
+
+   Not covered: **command lookup** uses the
    process `PATH`: a job's `PATH=dir:$PATH` reaches its children's environment but does not change which program a
    name resolves to. Shell options (`shopt`, `set -o`) and `readonly` stay process-wide (`BashShellState.Restore`).
    Guards: `Core.Tests/BashVariableStoreGuardTests` (no direct `Environment` access for a bash variable in Cmdlets,

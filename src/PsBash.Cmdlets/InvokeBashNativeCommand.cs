@@ -17,9 +17,14 @@ namespace PsBash.Cmdlets;
 /// inherit the process stdin, as PowerShell would), and sets <c>$LASTEXITCODE</c>.
 /// </para>
 /// <para>
-/// Otherwise — NAME is a function, alias, cmdlet or script, the stage downstream splits stderr off again
-/// (<c>2&gt;&amp;1 &gt;/dev/null</c>), or a Windows batch file (whose argument quoting only PowerShell's own launcher gets
-/// right) — the command runs exactly as without this cmdlet: as a steppable pipeline of <c>&amp; NAME ARGS</c>.
+/// It also starts the program itself, merged or not, in a background job and in a session that holds secrets
+/// (<see cref="OwnsEnvironment"/>), and for a Windows batch file, which PowerShell's launcher hands to <c>cmd.exe</c>
+/// with its arguments unescaped (<see cref="PsBash.Core.Runtime.Processes.BatchFile"/>).
+/// </para>
+/// <para>
+/// Otherwise — NAME is a function, alias, cmdlet or script, or the stage downstream splits stderr off again
+/// (<c>2&gt;&amp;1 &gt;/dev/null</c>) — the command runs exactly as without this cmdlet: as a steppable pipeline of
+/// <c>&amp; NAME ARGS</c>.
 /// </para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashNative")]
@@ -68,8 +73,8 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
         bool merge = StderrMerge.JoinsStdout(this);
         if (standIn is null && info is ApplicationInfo onTerminal && TryRunOnHostTerminal(onTerminal.Path, args, merge))
             return;
-        if (standIn is null && info is ApplicationInfo app && !IsBatchFile(app.Path)
-            && (merge || OwnsEnvironment))
+        // A batch file always: PowerShell's launcher passes its arguments to cmd.exe unescaped (PsBash.Core.Runtime.Processes.BatchFile).
+        if (standIn is null && info is ApplicationInfo app && (merge || OwnsEnvironment || IsBatchFile(app.Path)))
         {
             StartProgram(app.Path, args, merge);
             return;
@@ -139,7 +144,7 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
     /// </summary>
     private bool TryRunOnHostTerminal(string path, List<string> args, bool merge)
     {
-        if (!HostTerminal || merge || IsBatchFile(path)) return false;
+        if (!HostTerminal || merge) return false;
         if (!HostTerminalLookup.TryRun(this, Name, path, args)) return false;
         _finished = true;
         return true;
@@ -147,9 +152,10 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
 
     private void StartProgram(string path, List<string> args, bool merge)
     {
-        var psi = ProgramStartInfo(this, path, args);
         try
         {
+            // Inside the try: a batch file's command line refuses an argument cmd.exe cannot pass on (a line break).
+            var psi = ProgramStartInfo(this, path, args);
             // Piped input is fed to it; otherwise it reads the process stdin, as a program PowerShell starts does.
             // Not merged, its stderr goes through this cmdlet's error stream (StreamingChildProcess).
             bool piped = MyInvocation.ExpectingInput;
@@ -184,19 +190,24 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
     /// <summary>
     /// For a cmdlet that runs a command by name (<c>env</c>, <c>xargs</c>, <c>find -exec</c>, <c>command</c>): the program
     /// path to run through <see cref="RunMerged"/> when the cmdlet's stderr goes down the pipeline
-    /// (<see cref="StderrMerge.Redirected"/>: merged, or split off to a file or <c>/dev/null</c>) or the cmdlet runs in a
-    /// background job (its environment is the job's scalars, <see cref="JobProgramLookup"/>), and
+    /// (<see cref="StderrMerge.Redirected"/>: merged, or split off to a file or <c>/dev/null</c>), the cmdlet runs in a
+    /// background job or a session holding secrets (<see cref="OwnsEnvironment"/>), or the program is a batch file
+    /// (<see cref="PsBash.Core.Runtime.Processes.BatchFile"/>), and
     /// <paramref name="name"/> is a program the OS starts as it is; null otherwise (run it by name as before, where the
     /// lookup hook gives a <c>#!</c> script or a document <see cref="PsBash.Core.ProgramFile"/>'s stand-in).
     /// </summary>
     internal static string? MergedProgramPath(PSCmdlet cmdlet, string name)
     {
         // In a background job always: PowerShell would start it with the process environment, not the job's scalars.
-        if (string.IsNullOrEmpty(name) || (!StderrMerge.Redirected(cmdlet) && !OwnsEnvironment)) return null;
+        if (string.IsNullOrEmpty(name)) return null;
+        bool ours = StderrMerge.Redirected(cmdlet) || OwnsEnvironment;
+        // Off Windows there is no batch file: no lookup unless the program is ours to start anyway.
+        if (!ours && !OperatingSystem.IsWindows()) return null;
         try
         {
-            return JobProgramLookup.Raw(() => cmdlet.InvokeCommand.GetCommand(name, CommandTypes.All)) is ApplicationInfo app && !IsBatchFile(app.Path)
+            return JobProgramLookup.Raw(() => cmdlet.InvokeCommand.GetCommand(name, CommandTypes.All)) is ApplicationInfo app
                    && PsBash.Core.ProgramFile.Plan(app.Path) is null
+                   && (ours || IsBatchFile(app.Path))
                 ? app.Path
                 : null;
         }
@@ -237,7 +248,17 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
     internal static ProcessStartInfo ProgramStartInfo(PSCmdlet cmdlet, string path, IEnumerable<string> args)
     {
         var psi = new ProcessStartInfo { FileName = path, UseShellExecute = false };
-        foreach (var a in args) psi.ArgumentList.Add(a);
+        if (IsBatchFile(path))
+        {
+            // cmd.exe parses a batch file's command line itself: the C runtime quoting of ArgumentList does not hold
+            // there. Throws for an argument cmd.exe cannot pass on (a line break), before anything starts.
+            psi.FileName = PsBash.Core.Platform.SystemTools.WindowsCommandProcessor;
+            psi.Arguments = PsBash.Core.Runtime.Processes.BatchFile.Arguments(path, args as IReadOnlyList<string> ?? args.ToList());
+        }
+        else
+        {
+            foreach (var a in args) psi.ArgumentList.Add(a);
+        }
         // The session's location, not the process cwd (one host process may run several sessions).
         try
         {
@@ -276,7 +297,5 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
         }
     }
 
-    internal static bool IsBatchFile(string path) =>
-        OperatingSystem.IsWindows()
-        && (path.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".bat", StringComparison.OrdinalIgnoreCase));
+    internal static bool IsBatchFile(string path) => PsBash.Core.Runtime.Processes.BatchFile.Is(path);
 }

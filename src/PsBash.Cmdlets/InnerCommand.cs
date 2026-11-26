@@ -95,14 +95,16 @@ internal static class InnerCommand
         // `env X=1 htop`, `command vim`: a program this command runs is on the host's terminal when the command itself
         // writes to the host (HostTerminal) - a bare statement, nothing piped in, stderr not merged.
         if (invokeTarget is ApplicationInfo onTerminal && stdin.Count == 0 && !StderrMerge.JoinsStdout(cmdlet)
-            && !InvokeBashNativeCommand.IsBatchFile(onTerminal.Path)
             && HostTerminalLookup.TryRun(cmdlet, name, onTerminal.Path, argv.Skip(1).ToArray()))
             return;
 
         // `command prog 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4). In a
-        // background job always through RunMerged: `& $c` would give it the process environment, not the job's scalars.
-        if (invokeTarget is ApplicationInfo app && !InvokeBashNativeCommand.IsBatchFile(app.Path)
-            && (StderrMerge.JoinsStdout(cmdlet) || PsBash.Core.ScalarOverlay.Current is not null))
+        // background job or a session holding secrets always through RunMerged: `& $c` would give it the process
+        // environment, not the job's scalars or the session's granted secrets (no lookup hook sees a CommandInfo run
+        // directly). A batch file always: PowerShell's launcher passes its arguments to cmd.exe unescaped (BatchFile).
+        if (invokeTarget is ApplicationInfo app
+            && (StderrMerge.JoinsStdout(cmdlet) || InvokeBashNativeCommand.OwnsEnvironment
+                || InvokeBashNativeCommand.IsBatchFile(app.Path)))
         {
             try
             {

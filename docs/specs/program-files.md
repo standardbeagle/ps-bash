@@ -61,6 +61,52 @@ The launcher checks FILE through one primitive, `PsBash.Shell.ScriptFile`, on th
 
 Guard: `Shell.Tests/ScriptFileTests.Launcher_ChecksTheScriptFileOnlyThroughScriptFile`.
 
+## Batch files
+
+**A Windows `.cmd` / `.bat` (`npm`, `npx`, `yarn`, `pnpm`, `mvn`) is always started by ps-bash, through
+`%SystemRoot%\System32\cmd.exe` with the command line `PsBash.Core.Runtime.Processes.BatchFile.Arguments` builds.**
+A batch file runs in `cmd.exe`, which parses its command line again. Outside double quotes, `&`, `|`, `<` and `>` start
+another command and `^` escapes, and `%NAME%` expands everywhere. Neither PowerShell's launcher nor C runtime quoting
+(`CreateProcess`, `ProcessStartInfo.ArgumentList`) accounts for that (CVE-2024-24576, "BatBadBut"). Measured with
+PowerShell 7.6 starting `tool.cmd`:
+
+| bash word | what the batch file got |
+|---|---|
+| `'a&b'` | `a`, then `cmd` ran `b` |
+| `'a\|b'` | output piped into `b` |
+| `'a^b'` | `ab` |
+| `'%PATH%'` | the expanded PATH |
+| `''` | nothing (dropped) |
+
+The escaping is the one Rust's standard library adopted for that CVE:
+
+- An argument is double-quoted unless every character is an ASCII letter or digit or one of `#$*+-./:?@\_`. An empty
+  argument, and one ending in `\`, is always quoted.
+- Inside the quotes, a `"` is doubled, and so are the backslashes before it. A `%` gets `%cd:~,%` after it: that
+  zero-length substring of `%cd%` expands to nothing and keeps a `%NAME%` pair from reading as a variable.
+- An argument holding a line break or NUL is refused, because `cmd.exe` would end the command there. `Invoke-BashNative`
+  reports it as `NAME: an argument with a line break cannot be passed to a batch file`, 126.
+- `/d` skips the AutoRun registry commands, `/v:OFF` keeps `!NAME!` literal, and `/e:ON` is what makes `%cd:~,%` work.
+  `cmd.exe` is the system directory's copy, never `%ComSpec%`, which a script can set.
+
+So a script's `%1` is the word, quoted when it needed quotes, and a program the script hands `%*` (npm.cmd's
+`node npm-cli.js %*`) gets each word exactly. A word with a `"` reaches such a program with C runtime meaning
+(`""` inside quotes is one `"`).
+
+Sites:
+
+- The command-lookup hooks put `PsBuild.NativeProgramStandIn` in place of a batch file: the host's
+  (`GetVerbFallbackGuard`), a background job's (`JobProgramLookup`), and an embedding's (`HostTerminalLookup`, once
+  `ShellSecretsSession.Install` or `HostTerminalLookup.Install` ran).
+- `Invoke-BashNative` starts a batch file itself whether or not its stderr is merged, and
+  `InvokeBashNativeCommand.ProgramStartInfo` builds the `cmd.exe` line. That covers `RunMerged` and
+  `MergedProgramPath` (`env`, `xargs`, `find -exec`, `time`), `command`, and the host terminal.
+- `nohup`: `DetachedProcess` starts `cmd.exe` with the same line.
+
+Because ps-bash starts it, a batch file now gets its environment from `BashVariableStore.ApplyTo`: a background job's
+scalars and a session's granted secrets (`environment-model.md` §7, §13). A runspace with none of these hooks (a bare
+SDK runspace, Pester's) that runs `& tool.cmd` directly still goes through PowerShell's launcher.
+
 ## Cost
 
 A `#!` sh script costs one nested ps-bash launcher, a new process plus a host start, exactly like `bash FILE`. The spec

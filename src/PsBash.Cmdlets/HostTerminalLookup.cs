@@ -38,31 +38,18 @@ public static class HostTerminalLookup
         {
             previous?.Invoke(sender, e);
             if (JobProgramLookup.IsRaw || e.CommandScriptBlock is not null || e.Command is not ApplicationInfo app) return;
+            if (ProgramFile.Plan(app.Path) is not null) return;
             // A session that holds secrets starts its programs here too: PowerShell's native-command processor copies the
             // process environment, which never has them, so `python app.py` would not get its granted key (ShellSecrets).
-            if (HostTerminal.For(Runspace.DefaultRunspace) is null && PsBash.Core.ShellSecrets.Current is null) return;
-            if (InvokeBashNativeCommand.IsBatchFile(app.Path) || ProgramFile.Plan(app.Path) is not null) return;
+            // A batch file in any runspace: that processor passes its arguments to cmd.exe unescaped (BatchFile).
+            if (HostTerminal.For(Runspace.DefaultRunspace) is null && PsBash.Core.ShellSecrets.Current is null
+                && !InvokeBashNativeCommand.IsBatchFile(app.Path)) return;
             e.CommandScriptBlock = s_standIns.GetOrAdd(app.Path, static path => ScriptBlock.Create(StandIn(path)));
         }
     }
 
-    /// <summary>
-    /// The program at <paramref name="path"/> through <c>Invoke-BashNative</c>. Piped input is passed record by record (a
-    /// steppable pipeline), as <see cref="JobProgramLookup.StandIn"/> does, and never reaches the terminal; without input
-    /// the cmdlet may take the terminal. A failing status fails the command for PowerShell's <c>$?</c> too, so
-    /// <c>vim x &amp;&amp; next</c> in a PowerShell-mode line behaves as it does with the program itself.
-    /// </summary>
-    internal static string StandIn(string path)
-    {
-        var p = PsBash.Core.Parser.PsBuild.SingleQuote(path);
-        const string argv = PsBash.Core.Parser.PsBuild.ArgvSplat;
-        return "begin { " + PsBash.Core.Parser.PsBuild.ArgvLiterals
-               + "; if ($MyInvocation.ExpectingInput) { $__psbtS = { Invoke-BashNative -- " + p
-               + " " + argv + " }.GetSteppablePipeline(); $__psbtS.Begin($true) } }\n"
-               + "process { if ($__psbtS) { $__psbtS.Process($_) } }\n"
-               + "end { if ($__psbtS) { $__psbtS.End() } else { Invoke-BashNative -HostTerminal -- " + p + " " + argv + " }\n"
-               + "  if ($global:LASTEXITCODE -is [int] -and $global:LASTEXITCODE -ne 0) { [PsBash.Cmdlets.HostTerminalLookup]::FailCommand($ExecutionContext) } }";
-    }
+    /// <summary>The program at <paramref name="path"/> through <c>Invoke-BashNative</c> (<see cref="PsBash.Core.Parser.PsBuild.NativeProgramStandIn"/>).</summary>
+    internal static string StandIn(string path) => PsBash.Core.Parser.PsBuild.NativeProgramStandIn(path);
 
     /// <summary>
     /// Runs the program at <paramref name="path"/> on the host's terminal and sets <c>$LASTEXITCODE</c>, when

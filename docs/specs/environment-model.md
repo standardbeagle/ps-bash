@@ -89,12 +89,12 @@ against bash.
 
 **A program PowerShell itself starts inherits the whole process environment, unexported variables included.** That
 is a plain `prog args` with no stderr merge, in any position (statement, `$( )`, pipeline stage, `&`, `exec prog`,
-`env prog`, `command prog`, `xargs prog`, `find -exec prog`, `time prog`), and `.cmd` / `.bat`. PowerShell's
+`env prog`, `command prog`, `xargs prog`, `find -exec prog`, `time prog`). PowerShell's
 native-command processor copies the process environment and has no hook. Programs started with `2>&1` / `&>` / `|&`,
-and every nested shell, are not affected. In an in-process background job none of this applies except `.cmd` /
-`.bat`: the job runspace's lookup hook starts every other program through `Invoke-BashNative` and `ChildStdio`, from
-the job's own store (`background-jobs.md` §3). A `.cmd` / `.bat` there gets the process environment, which is the
-shell's current values, not the job's launch-time ones.
+and every nested shell, are not affected. Neither is a Windows `.cmd` / `.bat`: ps-bash always starts it itself
+(`program-files.md` §Batch files). In an in-process background job none of this applies: the job runspace's lookup
+hook starts every program through `Invoke-BashNative` and `ChildStdio`, from the job's own store
+(`background-jobs.md` §3).
 
 Removing the unexported variables from the process environment around the launch is not a fix: a thread-mode
 background job reads `$env:NAME` from the same process while the program starts, and would see the variable
@@ -382,8 +382,8 @@ so the command sees what bash's `env` hands a program: `BashVariableStore` / `Sh
 `InvokeBashNativeCommand.MergedProgramPath`: `ScalarOverlay.Current` is set). Nothing the command writes reaches the
 shell.
 
-Limits, the same as an in-process job's (§7, `background-jobs.md` §3): a `.cmd` / `.bat` and PowerShell code reading
-`$env:NAME` in the wrapper's runspace see the process environment; a program name is looked up on the host's `PATH`,
+Limits, the same as an in-process job's (§7, `background-jobs.md` §3): PowerShell code reading `$env:NAME` in the
+wrapper's runspace sees the process environment; a program name is looked up on the host's `PATH`,
 not the command's (`env -i ls` finds `ls` on Windows, where there is no `/bin` to fall back on; `env PATH=/x prog`
 still finds `prog` on the host's `PATH`). A later stage of the same pipeline runs on the same runspace and sees the
 command's store while the command writes to it.
@@ -497,8 +497,8 @@ Rules:
 - **Jobs.** An in-process job takes a copy at its `&` (`ScalarOverlay.Capture`), so the job's writes stay its own.
   - **Gap:** a `PSBASH_BG_MODE=process` job host is a separate process and gets no secrets (`BashStateSnapshot`
     carries scalars only). This fails closed.
-  - **Gap:** on Windows, a `.cmd` / `.bat` keeps PowerShell's launcher and the process environment (§7), so it gets no
-    secrets either.
+  - A Windows `.cmd` / `.bat` is started by ps-bash too (`program-files.md` §Batch files), so it gets the granted
+    secrets like any other program.
 - **Listing.** `env`, `printenv`, `set`, `declare -p` (also by name, since the line is made to be shown or read back),
   `declare -x`, `export -p` and `Get-ChildItem Env:` show the name with `ShellSecrets.Mask` (`‹secret›`).
   `BashVariableStore.EnumerateListed` does the listing and `BashVariableStore.Listed` masks single values.

@@ -112,6 +112,11 @@ public class ShellSecretsTests
 
         // A program PowerShell would start itself (no stderr merge) still gets its environment from ps-bash.
         Assert.Equal($"g={Value} h=", Bash(pwsh, probe));
+        // Run by name (`command`, `env`): the cmdlet starts the program, which no lookup hook sees. REGRESSION: it went
+        // to PowerShell's launcher, which gave it the process environment and so no secret.
+        Assert.Equal($"g={Value} h=", Bash(pwsh, $"command {probe}"));
+        Assert.Equal($"g={Value} h=", Bash(pwsh, $"env {probe}"));
+        Assert.Equal($"g={Value} h=", Bash(pwsh, $"env X=1 {probe}"));
         // `export NAME` does not grant.
         Assert.Equal($"g={Value} h=", Bash(pwsh, $"export {held}; {probe}"));
         // `NAME=v cmd` passes it to that command only.

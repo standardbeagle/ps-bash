@@ -2151,6 +2151,25 @@ public static class PsBuild
     /// <summary>The splat of <see cref="ArgvLiterals"/>.</summary>
     public const string ArgvSplat = "@__psbash_argv";
 
+    /// <summary>
+    /// The script a command-lookup hook puts in place of the program at <paramref name="path"/> so that ps-bash starts
+    /// it (<c>Invoke-BashNative</c>), not PowerShell's native-command processor: its environment is then built by
+    /// <c>BashVariableStore.ApplyTo</c> and a batch file's command line by <c>BatchFile</c>. Piped input is passed record
+    /// by record (a steppable pipeline) and never reaches a terminal; without input the cmdlet may take the host's
+    /// terminal (<c>-HostTerminal</c>). A failing status fails the command for PowerShell's <c>$?</c> too, so
+    /// <c>prog x &amp;&amp; next</c> in a PowerShell-mode line behaves as it does with the program itself.
+    /// </summary>
+    public static string NativeProgramStandIn(string path)
+    {
+        var p = SingleQuote(path);
+        return "begin { " + ArgvLiterals
+               + "; if ($MyInvocation.ExpectingInput) { $__psbtS = { Invoke-BashNative -- " + p
+               + " " + ArgvSplat + " }.GetSteppablePipeline(); $__psbtS.Begin($true) } }\n"
+               + "process { if ($__psbtS) { $__psbtS.Process($_) } }\n"
+               + "end { if ($__psbtS) { $__psbtS.End() } else { Invoke-BashNative -HostTerminal -- " + p + " " + ArgvSplat + " }\n"
+               + "  if ($global:LASTEXITCODE -is [int] -and $global:LASTEXITCODE -ne 0) { [PsBash.Cmdlets.HostTerminalLookup]::FailCommand($ExecutionContext) } }";
+    }
+
     public static string ForwardStageInputIfAny(string command) => ForwardStageInputIfAny(command, "");
 
     /// <summary>

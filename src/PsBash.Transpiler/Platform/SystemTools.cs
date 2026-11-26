@@ -21,6 +21,10 @@ public static class SystemTools
     /// <c>posix_spawn</c> of a script look).</summary>
     public const string PosixShell = "/bin/sh";
 
+    /// <summary>Windows: <c>cmd.exe</c> in the system directory, what a batch file runs in. Never <c>%ComSpec%</c>,
+    /// which any script can set.</summary>
+    public static string WindowsCommandProcessor => Path.Combine(Environment.SystemDirectory, "cmd.exe");
+
     /// <summary>The host's own bash by absolute path, then <see cref="PosixShell"/> for a host with no bash at all
     /// (Alpine). Absolute only: a PATH search could find a ps-bash installed AS <c>bash</c>.</summary>
     public static IReadOnlyList<string> HostShellCandidates { get; } =

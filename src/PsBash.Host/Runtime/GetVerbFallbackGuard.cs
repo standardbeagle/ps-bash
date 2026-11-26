@@ -42,8 +42,16 @@ internal static class GetVerbFallbackGuard
         invoke.PostCommandLookupAction = (sender, e) =>
         {
             RecordHashed(e);
-            if (e.Command is not ApplicationInfo app || ProgramFile.Plan(app.Path) is not { } launch) return;
-            e.CommandScriptBlock = ScriptBlock.Create(launch.StandInScript(ProgramFile.Shown(e.CommandName, app.Path)));
+            if (e.Command is not ApplicationInfo app) return;
+            if (ProgramFile.Plan(app.Path) is { } launch)
+            {
+                e.CommandScriptBlock = ScriptBlock.Create(launch.StandInScript(ProgramFile.Shown(e.CommandName, app.Path)));
+                return;
+            }
+            // A batch file (npm, npx, yarn): PowerShell's launcher hands cmd.exe its arguments unescaped, so `tool 'a&b'`
+            // ran `b`. ps-bash starts it with the command line BatchFile builds (program-files.md §Batch files).
+            if (PsBash.Core.Runtime.Processes.BatchFile.Is(app.Path))
+                e.CommandScriptBlock = ScriptBlock.Create(PsBash.Core.Parser.PsBuild.NativeProgramStandIn(app.Path));
         };
     }
 

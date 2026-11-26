@@ -159,8 +159,18 @@ public static class DetachedProcess
     private static DetachedChild StartWindows(string exe, IReadOnlyList<string> args, string cwd, string outPath, bool append, string? errPath, bool errAppend)
     {
         var cmd = new StringBuilder();
-        AppendQuoted(cmd, exe);
-        foreach (var a in args) { cmd.Append(' '); AppendQuoted(cmd, a); }
+        if (PsBash.Core.Runtime.Processes.BatchFile.Is(exe))
+        {
+            // cmd.exe parses a batch file's command line itself; C runtime quoting lets `&`, `|` and `%NAME%` through.
+            string shell = PsBash.Core.Platform.SystemTools.WindowsCommandProcessor;
+            AppendQuoted(cmd, shell);
+            cmd.Append(' ').Append(PsBash.Core.Runtime.Processes.BatchFile.Arguments(exe, args));
+        }
+        else
+        {
+            AppendQuoted(cmd, exe);
+            foreach (var a in args) { cmd.Append(' '); AppendQuoted(cmd, a); }
+        }
 
         IntPtr nul = InvalidHandle, outH = InvalidHandle, errH = InvalidHandle, attrList = IntPtr.Zero, handleArray = IntPtr.Zero;
         IntPtr envBlock = IntPtr.Zero;

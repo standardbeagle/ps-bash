@@ -11,8 +11,8 @@ namespace PsBash.Cmdlets;
 /// the foreground's scalars. A job's scalars are its own (<see cref="ScalarOverlay"/>, section 3 of
 /// <c>docs/specs/background-jobs.md</c>), so <c>x=a; { sleep 1; printenv x; } &amp; export x=b</c> printed b.
 /// <c>Invoke-BashNative</c> starts it through <see cref="ChildStdio"/>, whose environment is built by
-/// <see cref="BashVariableStore.ApplyTo"/> from the job's store. A <c>.cmd</c> / <c>.bat</c> keeps PowerShell's
-/// launcher (its argument quoting is the only one cmd.exe parses right) and so the process environment.
+/// <see cref="BashVariableStore.ApplyTo"/> from the job's store; a <c>.cmd</c> / <c>.bat</c> through <c>cmd.exe</c> with
+/// the command line <see cref="PsBash.Core.Runtime.Processes.BatchFile"/> builds.
 /// </para>
 /// <para>
 /// A program file the OS cannot start as it is gets <see cref="ProgramFile"/>'s stand-in, as the host's own hook gives
@@ -42,7 +42,7 @@ internal static class JobProgramLookup
                 e.CommandScriptBlock = ScriptBlock.Create(launch.StandInScript(ProgramFile.Shown(e.CommandName, app.Path)));
                 return;
             }
-            if (ScalarOverlay.Current is null || InvokeBashNativeCommand.IsBatchFile(app.Path)) return;
+            if (ScalarOverlay.Current is null) return;
             e.CommandScriptBlock = ScriptBlock.Create(StandIn(app.Path));
         };
     }
