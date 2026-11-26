@@ -437,6 +437,11 @@ public static class IpcTransportFactory
                 scheme == "pipe"
                     ? $"{sourceName} value '{spec}': the named-pipe transport was removed; use 'unix:<socket path>'."
                     : $"{sourceName} value '{spec}' has unknown scheme '{scheme}'. Expected unix.");
+        // REGRESSION: an override longer than sun_path crashed the launcher (unhandled ArgumentOutOfRangeException
+        // from UnixDomainSocketEndPoint, core dump) instead of naming the input.
+        if (endpoint.Length > UnixSocketPathBudget())
+            throw new InvalidEndpointException(
+                $"{sourceName} value '{spec}': the socket path is {endpoint.Length} characters; AF_UNIX allows {UnixSocketPathBudget()}.");
 
         result = (scheme, endpoint);
         return true;

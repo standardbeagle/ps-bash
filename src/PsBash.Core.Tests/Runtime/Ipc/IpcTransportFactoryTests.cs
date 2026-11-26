@@ -303,6 +303,19 @@ public class IpcTransportFactoryTests : IDisposable
     }
 
     [Fact]
+    public void ResolveEndpoint_EnvSocketPathPastSunPath_ThrowsNamingTheInput()
+    {
+        // REGRESSION: a too-long override reached UnixDomainSocketEndPoint and crashed the launcher.
+        var fits = "/" + new string('a', IpcTransportFactory.UnixSocketPathBudget() - 1);
+        Assert.Equal(fits, IpcTransportFactory.ResolveEndpoint("unix:" + fits).Endpoint);
+
+        SetEnv("unix:" + fits + "b");
+        var ex = Assert.Throws<InvalidEndpointException>(() => IpcTransportFactory.ResolveEndpoint());
+        Assert.Contains(IpcTransportFactory.EndpointEnvVar, ex.Message);
+        Assert.Contains($"AF_UNIX allows {IpcTransportFactory.UnixSocketPathBudget()}", ex.Message);
+    }
+
+    [Fact]
     public void ResolveEndpoint_MalformedEnvVar_ThrowsWithEnvVarName()
     {
         SetEnv("garbage-no-colon");
