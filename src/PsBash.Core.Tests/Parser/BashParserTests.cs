@@ -487,6 +487,26 @@ public class BashParserTests
         Assert.Contains("unexpected token `)'", ex.Message);
     }
 
+    // bash: a `|` with no command before it is "syntax error near unexpected token `|'" (status 2); it was accepted as
+    // an empty first stage, so `| tac` on its own line (oils here-doc "line continuation, then pipe") ran.
+    [Theory]
+    [InlineData("| cat", "|")]
+    [InlineData("echo a\n| cat", "|")]
+    [InlineData("|& cat", "|&")]
+    [InlineData("! | cat", "|")]
+    [InlineData("cat <<EOF \\\n1\n2\nEOF\n| tac", "|")]
+    public void Parse_PipeWithNoCommandBeforeIt_IsASyntaxError(string src, string token)
+    {
+        var ex = Assert.Throws<ParseException>(() => Parse(src));
+        Assert.Contains("unexpected token `" + token + "'", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("echo a |\n cat")]
+    [InlineData("{ echo a; } | cat")]
+    [InlineData("< /dev/null | cat")]
+    public void Parse_PipeAfterACommand_StillParses(string src) => Parse(src);
+
     [Theory]
     [InlineData("read -u 3 3<<EOF\nhi\nEOF", 3, 3)]
     [InlineData("read -u 7 7<<-EOF\n\thi\nEOF", 7, 3)]

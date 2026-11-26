@@ -406,6 +406,7 @@ public sealed partial class BashParser
             Advance();
         }
 
+        int firstStart = _pos;
         var first = ParseCompoundOrSimple();
         if (Peek().Kind is not BashTokenKind.Pipe and not BashTokenKind.PipeAmp)
         {
@@ -414,6 +415,11 @@ public sealed partial class BashParser
                     [first], ImmutableArray<string>.Empty, Negated: true);
             return first;
         }
+
+        // A `|` with no command before it (`| tac` at the start of a line, `! | x`): bash's syntax error, status 2. It
+        // used to become an empty first stage, so the line ran.
+        if (_pos == firstStart)
+            throw MakeError($"syntax error near unexpected token `{Peek().Value}'", Peek().Position, "ParsePipeline");
 
         var commands = ImmutableArray.CreateBuilder<Command>();
         var ops = ImmutableArray.CreateBuilder<string>();
