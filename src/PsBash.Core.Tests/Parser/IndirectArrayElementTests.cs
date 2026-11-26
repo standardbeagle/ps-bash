@@ -20,8 +20,8 @@ public class IndirectArrayElementTests
     [Fact] public void Transpile_ArraySlice_ReadsDictionaryValuesNotTheWrapper()
     {
         var ps = T("echo \"${a[@]: -1}\"");
-        Assert.Contains("IDictionary", ps);
-        Assert.Contains(".Values", ps);
+        // The slice reads a dictionary's values in BashIndexedArray.Slice (BashVectorTests.Slice_*).
+        Assert.Contains("[PsBash.Cmdlets.BashIndexedArray]::Slice($a, -1, $null)", ps);
     }
 
     [Fact] public void Transpile_IndirectKeysForm_StillListsKeys() => Assert.Contains(".Keys", T("echo \"${!a[@]}\""));

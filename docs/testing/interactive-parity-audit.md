@@ -259,13 +259,12 @@ QA audit sections per qa-rubric Directive 10 template.
 - 2 differential tests: until basic loop, while continue skips iteration
 
 **KNOWN BUGS / RISKS**:
-- `while true` emits `$__psbash_iter` guard but infinite loops are a valid pattern; users must set `PSBASH_MAX_ITERATIONS` to avoid the limit firing — documented workaround but not tested
+- (fixed) loops had a 100000-pass limit (`PSBASH_MAX_ITERATIONS`); removed, as bash has none
 - `while read line` pipeline path (`ForEach-Object`) does not propagate the producer's exit code to `$?` after the pipeline; bash propagates the last command's exit code — semantic gap
 
 **PRIORITY GAPS** (top 3 max):
 1. Zero-iteration while: add a differential test for `while false; do echo body; done` — body must not execute and exit code must be 1 (from the failed condition)
 2. `while read` CRLF stripping: extend `Transpile_WhileRead_StripsTrailingNewlineBeforeSplit` to verify `\r\n` input also produces clean lines (currently only `\n` is tested)
-3. Infinite-loop guard documentation test: add a test that sets `PSBASH_MAX_ITERATIONS=5` and verifies the loop throws after 5 iterations (currently the guard is tested only for the default value)
 
 ---
 

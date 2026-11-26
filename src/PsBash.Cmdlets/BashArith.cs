@@ -18,9 +18,30 @@ public static class BashArith
     public static long Evaluate(string expression, Func<string, long> read, Action<string, long> write,
         Func<string, string?>? readRaw = null)
     {
-        var tokens = NewTokenMap();
-        ArithmeticSyntax syntax = ParseOrThrow(expression, tokens);
+        var (syntax, tokens) = Parsed(expression);
         return EvaluateCore(syntax, tokens, read, write, readRaw);
+    }
+
+    // A loop evaluates the same few expressions (`i<N`, `i++`, `s+i`) on every pass; parsing each one once saves the
+    // parse and its allocations per pass. The tree and its token map are never written after the parse, so threads
+    // (background jobs) share them. Bounded: a script that builds new expression text per pass (`$(( $x * 2 ))` with
+    // the value spliced in) cannot grow it without limit; past the bound it is emptied and refills with what is hot.
+    private const int ParseCacheMax = 2048;
+    private const int ParseCacheMaxLength = 512;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (ArithmeticSyntax, Dictionary<ArithmeticExpr, int>)> ParseCache
+        = new(StringComparer.Ordinal);
+
+    private static (ArithmeticSyntax Syntax, Dictionary<ArithmeticExpr, int> Tokens) Parsed(string expression)
+    {
+        if (ParseCache.TryGetValue(expression, out var hit)) return hit;
+        var tokens = NewTokenMap();
+        var parsed = (ParseOrThrow(expression, tokens), tokens);   // a parse error is thrown, never cached
+        if (expression.Length <= ParseCacheMaxLength)
+        {
+            if (ParseCache.Count >= ParseCacheMax) ParseCache.Clear();
+            ParseCache[expression] = parsed;
+        }
+        return parsed;
     }
 
     /// <summary>Evaluates already-parsed syntax, allowing all arithmetic consumers to share one parse.</summary>
@@ -73,6 +94,8 @@ public static class BashArith
     {
         if (source.Length > MaxExpandedSourceLength)
             throw new BashArithException("expanded arithmetic source exceeded maximum length");
+        // Only `$1x`-shaped text expands; most expressions have no `$` at all, and need no regex or set.
+        if (source.IndexOf('$') < 0 || !UnbracedDigitSuffix.IsMatch(source)) return source;
         string current = source;
         var seen = new HashSet<string>(StringComparer.Ordinal) { current };
         for (int depth = 0; depth < 32; depth++)

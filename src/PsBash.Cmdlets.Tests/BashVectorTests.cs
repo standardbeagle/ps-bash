@@ -135,6 +135,40 @@ public class BashVectorTests
         Assert.True(perWrite < 1400, $"an element write allocated {perWrite} bytes");
     }
 
+    // `${a[@]:offset:length}` with bash's clamping (each expected value is bash 5.3's for a=(a b c d)).
+    [Theory]
+    [InlineData(1L, 2L, "b c")]
+    [InlineData(2L, null, "c d")]
+    [InlineData(-1L, null, "d")]
+    [InlineData(-5L, null, "")]     // before the first element: nothing
+    [InlineData(10L, null, "")]
+    [InlineData(3L, 9L, "d")]
+    public void Slice_SelectsAsBash_FromAnArrayAndAVector(long offset, long? length, string expected)
+    {
+        var literal = new object?[] { "a", "b", "c", "d" };
+        Assert.Equal(expected, string.Join(" ", BashIndexedArray.Slice(literal, offset, length)));
+        Assert.Equal(expected, string.Join(" ", BashIndexedArray.Slice(BashVector.From(literal), offset, length)));
+    }
+
+    [Fact]
+    public void Slice_OfADictionary_IsItsValues_OfAScalar_ItsOneElement_OfNull_Nothing()
+    {
+        var table = new System.Collections.Specialized.OrderedDictionary { ["k"] = "v", ["j"] = "w" };
+        Assert.Equal(new object?[] { "w" }, BashIndexedArray.Slice(table, 1, null));
+        Assert.Equal(new object?[] { "s" }, BashIndexedArray.Slice("s", 0, 1));
+        Assert.Empty(BashIndexedArray.Slice(null, 0, null));
+    }
+
+    [Fact]
+    public void Slice_OfALargeVector_CopiesOnlyTheSelection()
+    {
+        var v = Build(100_000);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 1000; i++) BashIndexedArray.Slice(v, i * 97, 1);
+        long perSlice = (GC.GetAllocatedBytesForCurrentThread() - before) / 1000;
+        Assert.True(perSlice < 200, $"a one-element slice allocated {perSlice} bytes");
+    }
+
     [Fact]
     public void Append_FromAnObjectArray_OrScalar_OrNull_FlattensLikeConcat()
     {
@@ -188,4 +222,13 @@ public class BashVectorScriptTests : IClassFixture<SharedPwshFixture>
     [InlineData("f() { local -a l=(o); l+=(i); echo ${#l[@]}; }; f; a=(m); a+=(n); a=z; echo \"${a[@]}\"", "2\nz n")]
     [InlineData("s=world; s+=(x); echo \"${s[@]}\" ${#s[@]}", "world x 2")]
     public void AGrownArray_ReadsAsBash(string bash, string expected) => Assert.Equal(expected, Run(bash));
+
+    // REGRESSION: a slice bound that was an arithmetic expression (`${a[@]:i:1}`) was dropped: the whole array.
+    [Theory]
+    [InlineData("a=(a b c d); i=1; echo \"${a[@]:i:2}\" \"${a[@]:i+2}\"", "b c d")]
+    [InlineData("a=(a b c d); i=1; x=${a[@]:i:1}; echo \"[$x]\"", "[b]")]
+    [InlineData("a=(a b c d); i=1; echo \"[${a[@]:10}]\" \"[${a[@]: -1}]\" \"[${a[@]:i:0}]\"", "[] [d] []")]
+    [InlineData("declare -A m=([k]=v); echo \"${m[@]:0}\"", "v")]
+    [InlineData("b=(); for ((j=0;j<40;j++)); do b+=($j); done; echo \"${b[@]:35:3}\" \"${b[@]: -2}\"", "35 36 37 38 39")]
+    public void ASlice_ReadsAsBash(string bash, string expected) => Assert.Equal(expected, Run(bash));
 }

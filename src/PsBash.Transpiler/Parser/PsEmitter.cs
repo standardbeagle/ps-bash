@@ -406,18 +406,14 @@ public static partial class PsEmitter
     /// </summary>
     public static TranspileContext Context => _context;
 
-    private const int DefaultMaxIterations = 100_000;
-
+    // A `for x in` loop records that it ran a pass, for its zero-pass status (PsBuild.ZeroIterationStatus). No loop has
+    // a pass limit: bash has none, and a `while read` over a long file or a server's `while true` must not stop.
+    // REGRESSION: every loop threw "loop iteration limit exceeded" after 100000 passes (PSBASH_MAX_ITERATIONS).
     private static string IterVar(int depth) => depth == 0 ? "$__psbash_iter" : $"$__psbash_iter{depth}";
 
     private static string IterGuardPrefix(int depth) => IterVar(depth) + " = 0; ";
 
-    private static string IterGuardCheck(int depth)
-    {
-        var varName = depth == 0 ? "$__psbash_iter" : $"$__psbash_iter{depth}";
-        return $"if (++{varName} -gt ($env:PSBASH_MAX_ITERATIONS ?? {DefaultMaxIterations})) " +
-               $"{{ throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? {DefaultMaxIterations})))\" }}; ";
-    }
+    private static string IterMark(int depth) => IterVar(depth) + " = 1; ";
 
     /// <summary>
     /// Commands that have PowerShell built-in aliases. When the active
@@ -2267,7 +2263,7 @@ public static partial class PsEmitter
                 sb.Append(") { ");
             }
 
-            sb.Append(IterGuardCheck(depth));
+            sb.Append(IterMark(depth));
             sb.Append(DebugAt(forIn.Line)); // trap DEBUG: before each iteration, with the `for` line
             // The loop variable is an ordinary shell variable: the body's functions see it and it keeps its last value after the loop.
             // `for r in a b` where r is a nameref: each word becomes its target (bash), so from here on the body and what
@@ -2575,7 +2571,7 @@ public static partial class PsEmitter
                 // A failed clause (`for ((i=1/0;;))`, `for ((;1/0;))`) ends the loop with status 1.
                 string failed = ForArithFailedVar(forArith, depth);
                 var sb = new StringBuilder();
-                sb.Append(IterGuardPrefix(depth)).Append(st).Append(" = 0; ");
+                sb.Append(st).Append(" = 0; ");
                 if (failed.Length > 0) sb.Append(failed).Append(" = $false; ");
                 sb.Append(label).Append("for (");
                 sb.Append(EmitForArithClause(forArith.Init, forArith.Line, failed));
@@ -2585,7 +2581,6 @@ public static partial class PsEmitter
                 sb.Append("; ");
                 sb.Append(EmitForArithClause(forArith.Step, forArith.Line, failed));
                 sb.Append(") { ");
-                sb.Append(IterGuardCheck(depth));
                 sb.Append(st).Append(" = 0; ");
                 sb.Append(EmitBody(forArith.Body));
                 sb.Append("; ").Append(st).Append(" = $global:LASTEXITCODE }; ").Append(PsBuild.SetStatusTo(st));
@@ -2623,8 +2618,7 @@ public static partial class PsEmitter
         if (forArith.Init is not null) sb.Append(DebugAt(line));
         if (init.Length > 0) sb.Append(init).Append("; ");
         sb.Append(first).Append(" = $true; ");
-        sb.Append(IterGuardPrefix(depth)).Append(label).Append("while ($true) { ");
-        sb.Append(IterGuardCheck(depth));
+        sb.Append(label).Append("while ($true) { ");
         sb.Append("if (-not ").Append(first).Append(") { ");
         if (forArith.Step is not null)
             sb.Append(DebugAt(line)).Append(EmitForArithClause(forArith.Step, line, failed)).Append("; ");
@@ -2686,14 +2680,13 @@ public static partial class PsEmitter
         try
         {
             var sb = new StringBuilder();
-            sb.Append(IterGuardPrefix(depth));
 
             // `while true` / `until false`: the condition never ends the loop; it only sets the status the body starts with.
             if (!IsHoistedCondition(whileCmd.Cond) && whileCmd.Cond is Command.Simple { Words.Length: 1 } constant
                 && constant.EnvPairs.IsEmpty && constant.Redirects.IsEmpty
                 && IsConstantStatusBuiltin(constant, out var succeeds) && succeeds != whileCmd.IsUntil)
             {
-                sb.Append(label).Append("while ($true) { ").Append(IterGuardCheck(depth));
+                sb.Append(label).Append("while ($true) { ");
                 sb.Append(PsBuild.SetStatus(succeeds ? 0 : 1)).Append("; ").Append(EmitBody(whileCmd.Body)).Append(" }");
                 return ApplyCompoundRedirects(sb.ToString(), whileCmd.Redirects);
             }
@@ -2704,7 +2697,6 @@ public static partial class PsEmitter
             // saved per pass (0 before it, so a `continue` leaves 0) and restored when the condition ends the loop.
             string st = "$__psbash_wst" + depth;
             sb.Append(st).Append(" = 0; ").Append(label).Append("while ($true) { ");
-            sb.Append(IterGuardCheck(depth));
             if (IsHoistedCondition(whileCmd.Cond))
             {
                 sb.Append(EmitHoistedCondition(whileCmd.Cond));
@@ -12759,6 +12751,9 @@ public static partial class PsEmitter
     {
         if (!op.StartsWith(":"))
             return null;
+        // `${a[@]:-w}` / `:+` / `:=` / `:?` are the value operators, not a slice (`${a[@]: -1}` is one: the blank).
+        if (op.Length > 1 && op[1] is '-' or '+' or '=' or '?')
+            return null;
         var body = op[1..].Trim();
         var parts = SplitSlice(body);
         // A bound is an integer or a variable (`${a[@]:$i}`, `${@:$#}`, `${a[@]:$i:$n}`): its value is read at run time.
@@ -12769,7 +12764,11 @@ public static partial class PsEmitter
             if (text.Length == 0) return "0";
             if (int.TryParse(text, out int n)) return n.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var m = System.Text.RegularExpressions.Regex.Match(text, @"^\$(?:\{(\w+|#)\}|(\w+|#))$");
-            return m.Success ? "[int](" + ZeroDefault(EmitSimpleVar(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value, strict: true)) + ")" : null;
+            if (m.Success) return "[int](" + ZeroDefault(EmitSimpleVar(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value, strict: true)) + ")";
+            // Any other bound is an arithmetic expression (`${a[@]:i:1}`, `${a[@]:i+1:n-1}`), as for a string slice.
+            // REGRESSION: it returned null, and the caller dropped the slice, giving the whole array.
+            if (text.IndexOfAny(['`', '"', '\'', '\\']) >= 0 || text.Contains("$(")) return null;
+            return "[int](Invoke-BashArith " + PsBuild.SingleQuote(text) + ")";
         }
         if (Bound(parts[0]) is not { } offset)
             return null;
@@ -12792,6 +12791,9 @@ public static partial class PsEmitter
         // yields @() whenever the resulting count is <= 0 so no reversed range forms.
         // A sparse or associative table is a dictionary: slice its VALUES, not the one-element wrapper `@($table)` makes.
         // A SPARSE array's offset is a subscript (the elements at index >= offset), not a position among the values.
+        // An array (not the positional list, which starts at $0): one C# call that reads only the selected elements.
+        if (!positional)
+            return "$([PsBash.Cmdlets.BashIndexedArray]::Slice(" + arrayVar + ", " + offset + ", " + (length ?? "$null") + "))";
         var sb = new StringBuilder("& { $__psbS = ");
         sb.Append(arrayVar);
         sb.Append("; if ($__psbS -is [PsBash.Cmdlets.BashSparseArray]) { $__psbS.Slice(").Append(offset).Append(", ")

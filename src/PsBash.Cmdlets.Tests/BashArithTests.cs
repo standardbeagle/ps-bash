@@ -23,6 +23,25 @@ public class BashArithTests
             (name, v) => vars[name] = v);
     }
 
+    // The parse is cached per expression text: the cached tree must read the CURRENT values each time, keep its
+    // side effects, and still name the error token when it fails again.
+    [Fact]
+    public void Evaluate_SameTextTwice_ReadsCurrentValues_AndReportsTheSameErrorToken()
+    {
+        var vars = new Dictionary<string, long> { ["i"] = 1 };
+        Assert.Equal(2, Eval("i+1", vars));
+        vars["i"] = 41;
+        Assert.Equal(42, Eval("i+1", vars));
+        Assert.Equal(41, Eval("i++", vars));
+        Assert.Equal(42, Eval("i++", vars));
+        Assert.Equal(43, vars["i"]);
+        for (int pass = 0; pass < 2; pass++)
+        {
+            var ex = Assert.Throws<BashArith.BashArithException>(() => Eval("7 / (i-43) + 1", vars));
+            Assert.Equal("7 / (i-43) + 1: division by 0 (error token is \"(i-43) + 1\")", ex.Describe("7 / (i-43) + 1"));
+        }
+    }
+
     [Theory]
     // additive / multiplicative / integer division (truncate toward zero)
     [InlineData("2+3", 5)]
@@ -388,4 +407,5 @@ public class InvokeBashArithmeticRawReaderTests : IClassFixture<SharedPwshFixtur
 
         Assert.Equal("6", Assert.Single(result).ToString());
     }
+
 }

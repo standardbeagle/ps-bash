@@ -1025,7 +1025,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
 
     /// <summary>
     /// The stderr line for an error that ended the script: one <c>ps-bash: </c> prefix. Emitted code that throws its own
-    /// message may carry it already (the loop iteration limit). REGRESSION: that printed "ps-bash: ps-bash: ...".
+    /// message may carry it already. REGRESSION: that printed "ps-bash: ps-bash: ...".
     /// </summary>
     internal static string ErrorLine(string message)
         => message.StartsWith("ps-bash:", StringComparison.Ordinal) ? message : "ps-bash: " + message;

@@ -80,6 +80,8 @@ internal sealed class HostMemoryGuard : IDisposable
     private HostMemoryGuard(CancellationTokenSource toCancel)
     {
         _toCancel = toCancel;
+        Interlocked.Increment(ref s_running);
+        Interlocked.Increment(ref s_generation);
         if (LimitBytes > 0)
             _timer = new Timer(_ => Check(), null, PollInterval, PollInterval);
     }
@@ -113,7 +115,100 @@ internal sealed class HostMemoryGuard : IDisposable
     public void Dispose()
     {
         _timer?.Dispose();
+        Interlocked.Decrement(ref s_running);
         // The command buffered a lot to get here; give it back before the next one starts.
-        if (Breached) GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+        if (Breached) { GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: true, compacting: true); NoteTrimmed(); }
+        else ScheduleIdleTrim();
+    }
+
+    // ── Idle trim ────────────────────────────────────────────────────────────────────────────────────────────────
+    // A command that built a big array or string leaves the GC holding the memory it grew to: a warm host can sit
+    // idle for hours at its high-water mark, on a machine other sessions share. When the managed heap has grown by
+    // IdleTrimGrowthBytes since the last trim, the host gives it back once it has been idle for IdleTrimDelay: one
+    // aggressive compacting collection, which also returns the freed pages to the OS. A command that starts first
+    // cancels it, so a busy host never pays for it; a host that only runs small commands never grows enough to start one.
+
+    /// <summary>Heap growth since the last trim that makes an idle host trim. Test seam.</summary>
+    internal static long IdleTrimGrowthBytes { get; set; } = 64L << 20;
+
+    /// <summary>
+    /// Heap growth since the last trim that makes the host trim as soon as a command ends, idle or not. The floor
+    /// moves to what the trim left, so a host whose commands really keep that much pays once, not per command. Test seam.
+    /// </summary>
+    internal static long BusyTrimGrowthBytes { get; set; } = 128L << 20;
+
+    /// <summary>How long the host must stay idle before it trims. Test seam.</summary>
+    internal static TimeSpan IdleTrimDelay { get; set; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>The managed heap's committed bytes. Test seam.</summary>
+    internal static Func<long> ReadCommitted { get; set; } = static () => GC.GetGCMemoryInfo().TotalCommittedBytes;
+
+    /// <summary>The trim itself. Test seam.</summary>
+    internal static Action Trim { get; set; } = static () =>
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+
+    private static int s_running;
+    private static long s_generation;
+    private static long s_trimmedAt = -1;   // committed bytes after the last trim; -1 = take the first reading as the floor
+    private static Timer? s_idleTimer;
+    private static readonly object s_trimLock = new();
+
+    private static void NoteTrimmed()
+    {
+        try { Volatile.Write(ref s_trimmedAt, ReadCommitted()); } catch { }
+    }
+
+    private static void ScheduleIdleTrim()
+    {
+        long committed;
+        try { committed = ReadCommitted(); } catch { return; }
+        long floor = Volatile.Read(ref s_trimmedAt);
+        if (floor < 0) { Interlocked.CompareExchange(ref s_trimmedAt, committed, -1); return; }
+        if (committed - floor < IdleTrimGrowthBytes) return;
+        if (committed - floor >= BusyTrimGrowthBytes && Volatile.Read(ref s_running) == 0)
+        {
+            // Back-to-back commands never leave the host idle, and each leaves dead objects behind that only a full
+            // collection frees: 400 small commands took the heap from ~80 MB to ~300 MB, of which 62 MB was live.
+            lock (s_trimLock)
+            {
+                s_idleTimer?.Dispose();
+                s_idleTimer = null;
+                try { Trim(); } catch { return; }
+                NoteTrimmed();
+            }
+            return;
+        }
+        long generation = Volatile.Read(ref s_generation);
+        lock (s_trimLock)
+        {
+            s_idleTimer?.Dispose();
+            s_idleTimer = new Timer(_ => IdleTrim(generation), null, IdleTrimDelay, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    /// <summary>Trim when no command has started since the one that scheduled it, and none is running.</summary>
+    internal static void IdleTrim(long generation)
+    {
+        lock (s_trimLock)
+        {
+            s_idleTimer?.Dispose();
+            s_idleTimer = null;
+            if (Volatile.Read(ref s_running) != 0 || Volatile.Read(ref s_generation) != generation) return;
+            try { Trim(); } catch { return; }
+            NoteTrimmed();
+        }
+    }
+
+    /// <summary>How many commands have started (tests pass it to <see cref="IdleTrim"/>).</summary>
+    internal static long Generation => Volatile.Read(ref s_generation);
+
+    /// <summary>A trim is scheduled (tests).</summary>
+    internal static bool TrimPending { get { lock (s_trimLock) return s_idleTimer is not null; } }
+
+    /// <summary>Forget the trim state (tests).</summary>
+    internal static void ResetIdleTrim()
+    {
+        lock (s_trimLock) { s_idleTimer?.Dispose(); s_idleTimer = null; }
+        s_running = 0; s_generation = 0; s_trimmedAt = -1;
     }
 }

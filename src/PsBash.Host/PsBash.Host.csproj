@@ -23,6 +23,10 @@
          mid-member and then delete their compressed input as if decoding succeeded. -->
     <RuntimeHostConfigurationOption Include="System.IO.Compression.UseStrictValidation" Value="true" />
     <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="9" />
+    <!-- A string a script builds (`s="$s,$i"`, `out+=$line`) passes 85 KB fast, and each pass makes a new one that dies
+         at once. On the large-object heap only a full GC frees them, so a 20k-pass loop took 18.8 s (bash: 6.8 s); kept
+         in gen0 up to 8 MB they die cheaply there: 3.8 s (measured, build3). -->
+    <RuntimeHostConfigurationOption Include="System.GC.LOHThreshold" Value="8388608" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="PsBash.Host.Tests" />

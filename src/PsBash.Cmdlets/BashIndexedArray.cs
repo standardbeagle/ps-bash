@@ -53,6 +53,38 @@ public static class BashIndexedArray
     /// <c>@(@($current) + @($items))</c> as an <c>object[]</c>, with PowerShell's flattening (<see cref="Flatten"/>):
     /// the rule <see cref="Append"/> uses.
     /// </summary>
+    /// <summary>
+    /// <c>${a[@]:offset}</c> / <c>${a[@]:offset:length}</c> (<paramref name="length"/> null): the elements bash selects,
+    /// reading only those. A dense array (an <c>object[]</c>, a <see cref="BashVector"/>) is indexed directly, so a loop
+    /// taking one element per pass (<c>${a[@]:i:1}</c>) is O(1) per pass, not a copy of the array. A negative offset
+    /// counts from the end and one before the first element selects nothing; a negative length selects nothing. A
+    /// sparse array's offset is a SUBSCRIPT (<see cref="BashSparseArray.Slice"/>); an associative array slices its
+    /// values; a scalar is a one-element array.
+    /// </summary>
+    public static object?[] Slice(object? source, long offset, long? length)
+    {
+        if (source is PSObject pso) source = pso.BaseObject;
+        if (source is BashSparseArray sparse) return sparse.Slice(offset, length is { } l ? Math.Max(0, l) : -1);
+        IList list = source switch
+        {
+            null => Array.Empty<object?>(),
+            IDictionary dict => new ArrayList(dict.Values),
+            IList l => l,
+            _ => new[] { source },
+        };
+        int count = list.Count;
+        long o = offset;
+        if (o < 0) { o += count; if (o < 0) o = count; }
+        o = Math.Clamp(o, 0, count);
+        long n = length ?? count - o;
+        n = Math.Min(Math.Max(n, 0), count - o);
+        if (n <= 0) return Array.Empty<object?>();
+        var result = new object?[n];
+        if (list is object?[] arr) Array.Copy(arr, o, result, 0, n);
+        else for (int i = 0; i < n; i++) result[i] = list[(int)(o + i)];
+        return result;
+    }
+
     public static object?[] Concat(object? current, object? items) => ToVector(current).AppendRange(Flatten(items)).ToArray();
 
     // What @($v) contributes, by PowerShell's own enumeration rule: null adds nothing, a string or dictionary is one value.

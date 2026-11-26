@@ -983,20 +983,21 @@ public class AgentPatternEndToEndTests
         Assert.Contains("correct", stdout);
     }
 
-    // ── Loop iteration cap ───────────────────────────────────────────────────
+    // ── No loop pass limit ───────────────────────────────────────────────────
 
+    // bash has no loop pass limit. REGRESSION: every loop threw "loop iteration limit exceeded" after
+    // PSBASH_MAX_ITERATIONS passes (100000 by default), which ended a `while read` over a long file.
     [SkippableFact]
-    public async Task WhileTrue_IterCapPreventsInfiniteLoop()
+    public async Task WhileLoop_RunsPastTheOldPassLimit()
     {
+        var psi = PsBashTestProcess.Create(["-c", "i=0; while ((i < 150)); do i=$((i+1)); done; for x in $(seq 150); do n=$x; done; echo $i $n"]);
+        psi.Environment["PSBASH_MAX_ITERATIONS"] = "100";   // the old cap's override: now ignored
 
-        // Set a very low cap so the test completes quickly
-        var psi = PsBashTestProcess.Create(["-c", "i=0; while true; do i=$((i+1)); done; echo $i"]);
-        psi.Environment["PSBASH_MAX_ITERATIONS"] = "100";
+        var (exitCode, stdout, stderr) = await ProcessRunHelper.RunAsync(psi);
 
-        var (_, stdout, stderr) = await ProcessRunHelper.RunAsync(psi);
-
-        // Should have hit the iteration cap and thrown
-        Assert.Contains("loop iteration limit exceeded", stdout + stderr);
+        Assert.Equal(0, exitCode);
+        Assert.Equal("150 150", stdout.Trim());
+        Assert.DoesNotContain("limit exceeded", stderr);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

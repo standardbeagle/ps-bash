@@ -388,7 +388,7 @@ public class BashTranspilerReviewRegressionTests
     [InlineData("echo \"${!#}\"", "$__pp")]
     [InlineData("n=2; echo \"${!n}\"", "$__pp")]
     [InlineData("echo \"${@:$#}\"", "$__psbO")]
-    [InlineData("echo \"${a[@]:$i:2}\"", "$__psbN")]
+    [InlineData("echo \"${a[@]:$i:2}\"", "[PsBash.Cmdlets.BashIndexedArray]::Slice($a, [int](")]
     [InlineData("echo \"${m[@]:-none}\"", ".Count -gt 1 -or (")]
     [InlineData("echo \"${m[@]:+yes}\"", ".Count -gt 1 -or (")]
     public void Transpile_IndirectPositionalVariableSliceAndArrayDefault_AreRuntimeEvaluated(string bash, string expected)
@@ -1136,7 +1136,7 @@ public class BashTranspilerReviewRegressionTests
     // Oracle: `${a[@]: -5}` of 4 elements is empty (the offset reaches before the first element).
     [Fact]
     public void Transpile_ArraySliceNegativeOffsetBeforeStart_IsEmpty()
-        => Assert.Contains("if ($__psbO -lt 0) { $__psbO = $__psbA.Count } }", BashTranspiler.Transpile("echo \"${a[@]: -5}\""));
+        => Assert.Contains("[PsBash.Cmdlets.BashIndexedArray]::Slice($a, -5, $null)", BashTranspiler.Transpile("echo \"${a[@]: -5}\""));   // empty: BashVectorTests.Slice_*
 
     // Oracle: `unalias NAME` removes the alias; the shared alias cmdlet needs -u to tell the two apart.
     [Fact]

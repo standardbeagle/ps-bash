@@ -121,6 +121,98 @@ public class StuckCommandTests : IDisposable
         }
     }
 
+    [Fact]
+    public void BusyTrim_RunsWhenACommandEndsFarAboveTheFloor_ThenOnlyAfterAsMuchMoreGrowth()
+    {
+        var priorCommitted = HostMemoryGuard.ReadCommitted;
+        var priorTrim = HostMemoryGuard.Trim;
+        var priorDelay = HostMemoryGuard.IdleTrimDelay;
+        var priorLimit = HostMemoryGuard.LimitBytes;
+        try
+        {
+            HostMemoryGuard.ResetIdleTrim();
+            HostMemoryGuard.LimitBytes = 0;
+            HostMemoryGuard.IdleTrimDelay = TimeSpan.FromHours(1);
+            long committed = 200L << 20;
+            int trims = 0;
+            HostMemoryGuard.ReadCommitted = () => committed;
+            HostMemoryGuard.Trim = () => { trims++; committed -= 100L << 20; };
+            using (HostMemoryGuard.Watch(new CancellationTokenSource())) { }   // floor 200 MB
+
+            // Back to back, never idle: 200 MB over the floor trims as the command ends, no timer.
+            committed += 200L << 20;
+            using (HostMemoryGuard.Watch(new CancellationTokenSource())) { }
+            Assert.Equal(1, trims);
+            Assert.False(HostMemoryGuard.TrimPending);
+
+            // The trim left 300 MB, the new floor: 100 MB more is an idle trim's worth, not a busy one.
+            committed += 100L << 20;
+            using (HostMemoryGuard.Watch(new CancellationTokenSource())) { }
+            Assert.Equal(1, trims);
+            Assert.True(HostMemoryGuard.TrimPending);
+        }
+        finally
+        {
+            HostMemoryGuard.ReadCommitted = priorCommitted;
+            HostMemoryGuard.Trim = priorTrim;
+            HostMemoryGuard.IdleTrimDelay = priorDelay;
+            HostMemoryGuard.LimitBytes = priorLimit;
+            HostMemoryGuard.ResetIdleTrim();
+        }
+    }
+
+    // An idle host gives back what a big command grew the heap to; a host running small commands never trims, and a
+    // command that starts before the trim runs cancels it.
+    [Theory]
+    [InlineData(10L << 20, false)]   // grew 10 MB since the last trim: nothing to give back
+    [InlineData(100L << 20, true)]   // grew 100 MB: trim once idle
+    public void IdleTrim_RunsOnlyAfterTheHeapGrew_AndOnlyWhileIdle(long growth, bool expectTrim)
+    {
+        var priorCommitted = HostMemoryGuard.ReadCommitted;
+        var priorTrim = HostMemoryGuard.Trim;
+        var priorDelay = HostMemoryGuard.IdleTrimDelay;
+        var priorLimit = HostMemoryGuard.LimitBytes;
+        try
+        {
+            HostMemoryGuard.ResetIdleTrim();
+            HostMemoryGuard.LimitBytes = 0;                         // no usage polling
+            HostMemoryGuard.IdleTrimDelay = TimeSpan.FromHours(1);   // the test runs the trim itself
+            long committed = 200L << 20;
+            int trims = 0;
+            HostMemoryGuard.ReadCommitted = () => committed;
+            HostMemoryGuard.Trim = () => { trims++; committed = 150L << 20; };
+            using (HostMemoryGuard.Watch(new CancellationTokenSource())) { }   // the first command sets the floor
+            Assert.False(HostMemoryGuard.TrimPending);
+
+            committed += growth;
+            using (HostMemoryGuard.Watch(new CancellationTokenSource())) { }
+            Assert.Equal(expectTrim, HostMemoryGuard.TrimPending);
+            if (!expectTrim) return;
+
+            // A command started since: the scheduled trim is stale and does nothing.
+            long scheduledAt = HostMemoryGuard.Generation;
+            using (HostMemoryGuard.Watch(new CancellationTokenSource()))
+                HostMemoryGuard.IdleTrim(scheduledAt);
+            Assert.Equal(0, trims);
+
+            // Idle since the last command: trim once, and the trimmed size is the new floor.
+            HostMemoryGuard.IdleTrim(HostMemoryGuard.Generation);
+            Assert.Equal(1, trims);
+            Assert.False(HostMemoryGuard.TrimPending);
+            committed += 10L << 20;
+            using (HostMemoryGuard.Watch(new CancellationTokenSource())) { }
+            Assert.False(HostMemoryGuard.TrimPending);
+        }
+        finally
+        {
+            HostMemoryGuard.ReadCommitted = priorCommitted;
+            HostMemoryGuard.Trim = priorTrim;
+            HostMemoryGuard.IdleTrimDelay = priorDelay;
+            HostMemoryGuard.LimitBytes = priorLimit;
+            HostMemoryGuard.ResetIdleTrim();
+        }
+    }
+
     [Theory]
     [InlineData(500L, false)]   // reclaimed memory (garbage / committed-but-free pages) never kills a command
     [InlineData(5000L, true)]   // memory that survives a full collection is the command's: stop it
