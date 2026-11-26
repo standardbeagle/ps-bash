@@ -104,7 +104,7 @@ public sealed class InvokeBashDeclareCommand : BashCmdlet
     private void PrintBareVariables()
     {
         var env = new Dictionary<string, string>(PsBash.Core.ShellExports.NameComparer);
-        foreach (var (name, value) in BashVariableStore.Enumerate()) env[name] = value;
+        foreach (var (name, value) in BashVariableStore.EnumerateListed()) env[name] = value;   // a secret lists masked
         var keys = new List<string>(env.Keys);
         // `set` lists a nameref as NAME=TARGET; one with no target yet has no value to list (bash prints nothing).
         foreach (var nr in BashShellState.NamerefNames())
@@ -164,7 +164,7 @@ public sealed class InvokeBashDeclareCommand : BashCmdlet
     {
         var result = new List<(string, object?)>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var (k, value) in BashVariableStore.Enumerate())
+        foreach (var (k, value) in BashVariableStore.EnumerateListed())   // a secret lists masked
             if ((!k.StartsWith("__", StringComparison.Ordinal) || PsBash.Core.BashNameCase.IsMangled(k)) && seen.Add(k)) result.Add((k, value));
         try
         {

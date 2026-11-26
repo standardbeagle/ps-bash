@@ -128,7 +128,7 @@ public class ChildEnvironmentGuardTests
     [Fact]
     public void AnEmulatedProgram_ReadsOnlyExportedVariables()
     {
-        var read = new Regex(@"BashVariableStore\.(Get|Enumerate)\s*[(,;)]", RegexOptions.Compiled);
+        var read = new Regex(@"BashVariableStore\.(Get|Enumerate|EnumerateListed)\s*[(,;)]", RegexOptions.Compiled);
         var offenders = new List<string>();
         var readers = new HashSet<string>(StringComparer.Ordinal) { "BashVariableStore.cs" };
         foreach (var (name, text) in Sources("PsBash.Cmdlets"))

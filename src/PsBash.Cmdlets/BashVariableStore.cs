@@ -42,6 +42,8 @@ public static class BashVariableStore
     public static string? Get(string name)
     {
         name = BashNameCase.ToStore(name);
+        // The session's secrets first: they are never in the process environment (ShellSecrets).
+        if (ShellSecrets.Current is { } secrets && secrets.TryGet(name, out var secret)) return secret;
         return ScalarOverlay.Current is { } job ? job.Get(name) : Environment.GetEnvironmentVariable(name);
     }
 
@@ -52,6 +54,8 @@ public static class BashVariableStore
     public static void Set(string name, string? value)
     {
         name = BashNameCase.ToStore(name);
+        // A secret's name stays in its session: the write replaces (or, unset, drops) the session's value.
+        if (ShellSecrets.Current is { } secrets && secrets.TryAssign(name, value)) return;
         if (ScalarOverlay.Current is { } job) job.Set(name, value);
         else Environment.SetEnvironmentVariable(name, value);
     }
@@ -80,6 +84,28 @@ public static class BashVariableStore
             yield return new KeyValuePair<string, string>(BashNameCase.FromEnvironment(key), e.Value as string ?? string.Empty);
         }
     }
+
+    /// <summary>
+    /// Every bash variable for a LISTING (<c>set</c>, <c>declare -p</c>, <c>Get-ChildItem Env:</c>): <see cref="Enumerate"/>,
+    /// with the session's secrets listed under their names and <see cref="ShellSecrets.Mask"/> for the value, so a
+    /// habitual <c>env | grep KEY</c> does not paint a key into the screen, a transcript or a log. Never for a copy of
+    /// the values (a subshell's save, a job's state): <see cref="Enumerate"/> is that.
+    /// </summary>
+    public static IEnumerable<KeyValuePair<string, string>> EnumerateListed()
+    {
+        var secrets = ShellSecrets.Current;
+        foreach (var kv in Enumerate())
+            if (secrets is null || !secrets.Contains(BashNameCase.ToStore(kv.Key))) yield return kv;
+        if (secrets is null) yield break;
+        foreach (var name in secrets.Names)
+            yield return new KeyValuePair<string, string>(BashNameCase.FromEnvironment(name), ShellSecrets.Mask);
+    }
+
+    /// <summary>Whether <paramref name="name"/> is one of the session's secrets (<see cref="ShellSecrets"/>).</summary>
+    public static bool IsSecret(string name) => ShellSecrets.Current is { } secrets && secrets.Contains(BashNameCase.ToStore(name));
+
+    /// <summary><paramref name="value"/> as a listing prints <paramref name="name"/>'s: <see cref="ShellSecrets.Mask"/> for a secret.</summary>
+    public static string Listed(string name, string value) => IsSecret(name) ? ShellSecrets.Mask : value;
 
     /// <summary>
     /// THE child-environment primitive: <paramref name="startInfo"/>'s environment becomes what a child of the shell
@@ -133,12 +159,19 @@ public static class BashVariableStore
     /// with <see cref="EndTempExport"/> in the binding's <c>finally</c>; the pairs nest per runspace.
     /// </summary>
     public static void TempExport(params string[] names)
-        => VarFrameStack.Current.PushTempExport(names, PsBash.Core.ShellExports.BeginTemp(names));
+    {
+        // `NAME=v cmd` passes a secret the session holds on to that command, as bash exports NAME for it.
+        ShellSecrets.Current?.BeginTempGrant(names);
+        VarFrameStack.Current.PushTempExport(names, PsBash.Core.ShellExports.BeginTemp(names));
+    }
 
     /// <summary>The command of the innermost <see cref="TempExport"/> ended: its names have their attribute back.</summary>
     public static void EndTempExport()
     {
         if (VarFrameStack.Current.PopTempExport() is { } frame)
+        {
             PsBash.Core.ShellExports.EndTemp(frame.Names, frame.Was);
+            ShellSecrets.Current?.EndTempGrant(frame.Names);
+        }
     }
 }

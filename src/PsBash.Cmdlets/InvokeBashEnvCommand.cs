@@ -261,7 +261,7 @@ public sealed class InvokeBashEnvCommand : BashCmdlet
         {
             // Under the bash name: a diverted `path` (stored __psbash_cv_0_PATH, BashNameCase) prints as path=...
             foreach (var (k, v) in BashVariableStore.EnumerateExported())
-                dict[PsBash.Core.BashNameCase.ToBash(k)] = v;
+                dict[PsBash.Core.BashNameCase.ToBash(k)] = BashVariableStore.Listed(k, v);   // a secret lists masked
         }
         foreach (var u in unset) dict.Remove(u);
         foreach (var (n, v) in assignments) dict[n] = v;

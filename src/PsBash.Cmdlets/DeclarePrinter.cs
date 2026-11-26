@@ -33,6 +33,8 @@ internal static class DeclarePrinter
         // An array as the caller's scope sees it (inside a subshell / function block it is a local), else the shell
         // variable.
         object? val = BashVariableLookup.ArrayHolder(cmdlet.SessionState, name) ?? BashVariableStore.Get(name);
+        // `declare -p KEY` prints a line made to be read back or shown: a secret's value is masked (ShellSecrets).
+        if (val is string && BashVariableStore.IsSecret(name)) val = PsBash.Core.ShellSecrets.Mask;
         if (val is null)
         {
             // `readonly nv` / `declare -i nv` / `declare nv` with no value: the name exists, unset, with its attributes

@@ -69,7 +69,7 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
         if (standIn is null && info is ApplicationInfo onTerminal && TryRunOnHostTerminal(onTerminal.Path, args, merge))
             return;
         if (standIn is null && info is ApplicationInfo app && !IsBatchFile(app.Path)
-            && (merge || PsBash.Core.ScalarOverlay.Current is not null))
+            && (merge || OwnsEnvironment))
         {
             StartProgram(app.Path, args, merge);
             return;
@@ -174,6 +174,14 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
     }
 
     /// <summary>
+    /// Whether a program started now must get its environment from ps-bash (<see cref="BashVariableStore.ApplyTo"/>)
+    /// rather than from PowerShell's launcher, which copies the process environment: in a background job (its scalars
+    /// are its own store) and in a session that holds secrets (they are never in the process environment).
+    /// </summary>
+    internal static bool OwnsEnvironment
+        => PsBash.Core.ScalarOverlay.Current is not null || PsBash.Core.ShellSecrets.Current is not null;
+
+    /// <summary>
     /// For a cmdlet that runs a command by name (<c>env</c>, <c>xargs</c>, <c>find -exec</c>, <c>command</c>): the program
     /// path to run through <see cref="RunMerged"/> when the cmdlet's stderr goes down the pipeline
     /// (<see cref="StderrMerge.Redirected"/>: merged, or split off to a file or <c>/dev/null</c>) or the cmdlet runs in a
@@ -184,7 +192,7 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
     internal static string? MergedProgramPath(PSCmdlet cmdlet, string name)
     {
         // In a background job always: PowerShell would start it with the process environment, not the job's scalars.
-        if (string.IsNullOrEmpty(name) || (!StderrMerge.Redirected(cmdlet) && PsBash.Core.ScalarOverlay.Current is null)) return null;
+        if (string.IsNullOrEmpty(name) || (!StderrMerge.Redirected(cmdlet) && !OwnsEnvironment)) return null;
         try
         {
             return JobProgramLookup.Raw(() => cmdlet.InvokeCommand.GetCommand(name, CommandTypes.All)) is ApplicationInfo app && !IsBatchFile(app.Path)

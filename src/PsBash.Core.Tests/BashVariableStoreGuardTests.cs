@@ -232,7 +232,9 @@ public class BashVariableStoreGuardTests
     public void AJobRunspace_ServesEnvFromTheJobStore_AndStartsProgramsThroughTheStore()
     {
         var runspaces = Src("PsBash.Cmdlets", "BashJobRunspaces.cs");
-        Assert.Contains("typeof(JobEnvironmentProvider)", runspaces, StringComparison.Ordinal);
+        // The Env: drive swap is shared with an embedding's secret-holding session (ShellSecretsSession).
+        Assert.Contains("ShellSecretsSession.UseShellEnvironmentDrive(", runspaces, StringComparison.Ordinal);
+        Assert.Contains("typeof(JobEnvironmentProvider)", Src("PsBash.Cmdlets", "ShellSecretsSession.cs"), StringComparison.Ordinal);
         Assert.Contains("JobProgramLookup.Install(", runspaces, StringComparison.Ordinal);
         Assert.Contains("ScalarOverlay.Capture()", runspaces, StringComparison.Ordinal);
         // Only there: the shell's own runspace keeps PowerShell's launcher and its own lookup hook.

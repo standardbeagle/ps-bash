@@ -46,6 +46,10 @@ public sealed class ScalarOverlay
     private readonly Dictionary<string, string> _values;
     internal ShellExports.Table Exports { get; }
 
+    /// <summary>The session's secrets as this store's code sees them (<see cref="ShellSecrets"/>): a job's copy taken at
+    /// its <c>&amp;</c>, a command's own environment's passed-on ones; null for none.</summary>
+    public ShellSecrets? Secrets { get; private init; }
+
     private ScalarOverlay(Dictionary<string, string> values, ShellExports.Table exports)
     {
         _values = values;
@@ -70,7 +74,7 @@ public sealed class ScalarOverlay
         {
             lock (from.Gate) values = new Dictionary<string, string>(from._values, ShellExports.NameComparer);
         }
-        return new ScalarOverlay(values, ShellExports.CopyTable(from));
+        return new ScalarOverlay(values, ShellExports.CopyTable(from)) { Secrets = ShellSecrets.Current?.Copy(passedOnOnly: false) };
     }
 
     /// <summary>
@@ -92,12 +96,14 @@ public sealed class ScalarOverlay
         ArgumentNullException.ThrowIfNull(assignments);
         var values = new Dictionary<string, string>(ShellExports.NameComparer);
         if (!ignoreEnvironment)
-            foreach (var (name, value) in ShellExports.Enumerate()) values[name] = value;
+            foreach (var (name, value) in ShellExports.EnumerateStore()) values[name] = value;
+        // The secrets the command gets are the ones a child would; `env -i` gives it none (ShellSecrets).
+        var secrets = ignoreEnvironment ? null : ShellSecrets.Current?.Copy(passedOnOnly: true);
         // Bash names (`env -u path`, `env path=x cmd`): the store's keys are store names (BashNameCase, section 12).
-        foreach (var name in unset) values.Remove(BashNameCase.ToStore(name));
-        foreach (var (name, value) in assignments) values[BashNameCase.ToStore(name)] = value;
+        foreach (var name in unset) { values.Remove(BashNameCase.ToStore(name)); secrets?.Remove(name); }
+        foreach (var (name, value) in assignments) { values[BashNameCase.ToStore(name)] = value; secrets?.Remove(name); }
         var exports = new ShellExports.Table { Exported = new HashSet<string>(values.Keys, ShellExports.NameComparer) };
-        return new ScalarOverlay(values, exports);
+        return new ScalarOverlay(values, exports) { Secrets = secrets };
     }
 
     /// <summary>The job running in <paramref name="owner"/> (its runspace) uses this store from now on.</summary>

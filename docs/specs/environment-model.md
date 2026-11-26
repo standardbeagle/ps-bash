@@ -452,3 +452,58 @@ Guards: `Core.Tests/BashNameCaseTests` (`EveryAstRecordWithAVariableName_IsCover
 name must map it; `EmitterVariableNameTables_CompareByStoreName`: every name-keyed emitter table is built with
 `VarNameKeys`; the primitive and message tests); `Differential.Tests/ReservedNameCaseTests` (bash oracle; the
 native-spelling cases are Windows-only facts checked against Git Bash).
+
+## 13. A session's secrets (`ShellSecrets`)
+
+An embedding that hosts several sessions in one process (BeagleTerm's session server) cannot put a credential in a
+shell variable: every scalar lives in the process environment (§1), which every runspace of the process shares. A key
+written as `$env:OPENAI_API_KEY` in one session would be readable from all of them. `PsBash.Core.ShellSecrets`
+(`Transpiler/ShellSecrets.cs`) holds such values per runspace instead, and they never reach
+`Environment.SetEnvironmentVariable`. Without a registration nothing changes.
+
+Host side (`Cmdlets/ShellSecretsSession.cs`):
+
+1. `ShellSecretsSession.UseShellEnvironmentDrive(iss)` before the runspace opens: its `Env:` drive becomes the shell
+   store (`JobEnvironmentProvider`, the provider a job runspace has), so `$env:KEY` reads the session's value.
+2. After importing the module, once per runspace, `ShellSecretsSession.Install($ExecutionContext.InvokeCommand)`. This is
+   the `HostTerminalLookup` hook, which chains any action installed before it. In a session that holds secrets it
+   starts every program through `Invoke-BashNative`, which builds the environment with `ApplyTo`. Otherwise PowerShell's
+   native-command processor would start it with a copy of the process environment, which has no secrets. This also
+   closes the §7 gap for such sessions. `Invoke-BashNative` itself starts the program (it does not hand it to `&`)
+   whenever `InvokeBashNativeCommand.OwnsEnvironment` is true: in a job, or in a session that holds secrets.
+3. `secrets.Set(name, value, granted)`, `Remove`, then `ShellSecrets.Register(runspace, secrets)` / `Unregister`.
+
+Rules:
+
+- **Reading.** `BashVariableStore.Get` resolves the session's secret before the job store and the process environment.
+  So `$KEY`, `${KEY}`, `$env:KEY`, `printenv KEY` and `Get-Item Env:KEY` read the value in that session. Another
+  session's runspace reads its own secrets, or nothing.
+- **Writing.** A script's assignment to a secret's name replaces the session's value, and `unset` drops it. Neither
+  touches the process environment. `local`, `NAME=v cmd` and subshells save and restore through the same store. A
+  subshell's change ends with the subshell (`BashShellState.Snapshot.Secrets`). PowerShell runs `$env:KEY = v` as
+  `ClearContent` and then a write, so the provider clears a secret to empty instead of unsetting it. Otherwise the
+  write would find the name gone and land in the process environment. The host's next `Set` wins, as in a
+  rotation.
+- **Children.** `ShellExports` is where every child environment is built, so it adds the secrets that are passed on and
+  removes the others. That holds for `RemoveUnexported` (every `ApplyTo` site), `Enumerate` (`env`, `nohup`'s Windows
+  block, `jq`'s `$ENV`), `Get` and `IsExported`. A secret is passed on by grant, never by the export table:
+  - `granted` secrets go to every child;
+  - `export NAME` grants nothing;
+  - `NAME=v cmd` passes it to that command only (`BashVariableStore.TempExport`);
+  - `env -i cmd` gives it to nobody, and `env -u NAME cmd` takes it away (`ScalarOverlay.ForCommand`).
+
+  A same-named variable another session put in the shared environment is removed from the child, because it is not
+  this session's to give.
+- **Jobs.** An in-process job takes a copy at its `&` (`ScalarOverlay.Capture`), so the job's writes stay its own.
+  - **Gap:** a `PSBASH_BG_MODE=process` job host is a separate process and gets no secrets (`BashStateSnapshot`
+    carries scalars only). This fails closed.
+  - **Gap:** on Windows, a `.cmd` / `.bat` keeps PowerShell's launcher and the process environment (§7), so it gets no
+    secrets either.
+- **Listing.** `env`, `printenv`, `set`, `declare -p` (also by name, since the line is made to be shown or read back),
+  `declare -x`, `export -p` and `Get-ChildItem Env:` show the name with `ShellSecrets.Mask` (`‹secret›`).
+  `BashVariableStore.EnumerateListed` does the listing and `BashVariableStore.Listed` masks single values.
+  `BashVariableStore.Enumerate` stays the store alone, unmasked, because subshells and job snapshots copy values from it.
+
+Not protected: a program granted a secret can print it or pass it on, and any process running as the same user can
+read it from that program's `/proc/PID/environ`. The host redacts output (BeagleTerm `docs/design/secrets/SPEC.md`
+§7.1). Tests: `Cmdlets.Tests/ShellSecretsTests`.

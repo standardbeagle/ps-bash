@@ -147,6 +147,9 @@ public static class ShellExports
     /// <summary>Whether <paramref name="name"/> has the export attribute (set or not).</summary>
     public static bool IsExported(string name)
     {
+        // A session's secret is passed on by grant, never by the table (ShellSecrets): `export NAME` grants nothing.
+        if (ShellSecrets.Current is { } secrets && secrets.Contains(BashNameCase.ToStore(name)))
+            return secrets.IsPassedOn(BashNameCase.ToStore(name));
         var scope = new Scope(ScalarOverlay.Current);
         lock (scope.Gate)
         {
@@ -227,6 +230,8 @@ public static class ShellExports
     public static string? Get(string name)
     {
         name = BashNameCase.ToStore(name);
+        if (ShellSecrets.Current is { } secrets && secrets.Contains(name))
+            return secrets.IsPassedOn(name) && secrets.TryGet(name, out var secret) ? secret : null;
         var scope = new Scope(ScalarOverlay.Current);
         lock (scope.Gate)
         {
@@ -235,8 +240,19 @@ public static class ShellExports
         }
     }
 
-    /// <summary>The environment a child process gets: every exported variable that is set.</summary>
+    /// <summary>The environment a child process gets: every exported variable that is set, and the session's secrets
+    /// that are passed on (<see cref="ShellSecrets"/>), with their values.</summary>
     public static List<KeyValuePair<string, string>> Enumerate()
+    {
+        var result = EnumerateStore();
+        if (ShellSecrets.Current is not { } secrets) return result;
+        result.RemoveAll(kv => secrets.Contains(kv.Key));
+        result.AddRange(secrets.PassedOn());
+        return result;
+    }
+
+    /// <summary>The exported variables of the shell's store alone, without the session's secrets.</summary>
+    internal static List<KeyValuePair<string, string>> EnumerateStore()
     {
         var result = new List<KeyValuePair<string, string>>();
         var scope = new Scope(ScalarOverlay.Current);
@@ -277,6 +293,7 @@ public static class ShellExports
         if (scope.Overlay is not null)
         {
             ReplaceWithJobExports(childEnvironment, scope);
+            scope.Overlay.Secrets?.ApplyTo(childEnvironment);
             return;
         }
         List<string>? drop = null;
@@ -291,8 +308,10 @@ public static class ShellExports
                 (drop ??= new List<string>()).Add(kv.Key);
             }
         }
-        if (drop is null) return;
-        foreach (var name in drop) childEnvironment.Remove(name);
+        if (drop is not null)
+            foreach (var name in drop) childEnvironment.Remove(name);
+        // Last: the session's secrets, which are never in the process environment (ShellSecrets).
+        ShellSecrets.Current?.ApplyTo(childEnvironment);
     }
 
     private static void ReplaceWithJobExports(IDictionary<string, string?> childEnvironment, Scope scope)

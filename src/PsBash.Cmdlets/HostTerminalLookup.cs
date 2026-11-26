@@ -38,7 +38,9 @@ public static class HostTerminalLookup
         {
             previous?.Invoke(sender, e);
             if (JobProgramLookup.IsRaw || e.CommandScriptBlock is not null || e.Command is not ApplicationInfo app) return;
-            if (HostTerminal.For(Runspace.DefaultRunspace) is null) return;
+            // A session that holds secrets starts its programs here too: PowerShell's native-command processor copies the
+            // process environment, which never has them, so `python app.py` would not get its granted key (ShellSecrets).
+            if (HostTerminal.For(Runspace.DefaultRunspace) is null && PsBash.Core.ShellSecrets.Current is null) return;
             if (InvokeBashNativeCommand.IsBatchFile(app.Path) || ProgramFile.Plan(app.Path) is not null) return;
             e.CommandScriptBlock = s_standIns.GetOrAdd(app.Path, static path => ScriptBlock.Create(StandIn(path)));
         }

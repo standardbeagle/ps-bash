@@ -46,7 +46,8 @@ public sealed class JobEnvironmentProvider : ContainerCmdletProvider, IContentCm
         if (!string.IsNullOrEmpty(name)) BashVariableStore.Set(name, value);
     }
 
-    private static List<KeyValuePair<string, string>> All() => [.. BashVariableStore.Enumerate()];
+    // A listing: a session's secret is listed masked; by name ($env:KEY, Get-Item Env:KEY) it is read (ShellSecrets).
+    private static List<KeyValuePair<string, string>> All() => [.. BashVariableStore.EnumerateListed()];
 
     private static string Name(string path) => path.TrimStart('\\', '/');
 
@@ -110,7 +111,13 @@ public sealed class JobEnvironmentProvider : ContainerCmdletProvider, IContentCm
     public object? GetContentReaderDynamicParameters(string path) => null;
     public IContentWriter GetContentWriter(string path) => new Writer(Name(path));
     public object? GetContentWriterDynamicParameters(string path) => null;
-    public void ClearContent(string path) => Write(Name(path), null);
+    // `$env:X = v` is ClearContent then the writer. A secret is cleared to empty, not unset: unset drops it from the
+    // session, and the write that follows would then land in the shared process environment (ShellSecrets).
+    public void ClearContent(string path)
+    {
+        var name = Name(path);
+        Write(name, BashVariableStore.IsSecret(name) ? "" : null);
+    }
     public object? ClearContentDynamicParameters(string path) => null;
 
     private sealed class Reader(string name) : IContentReader

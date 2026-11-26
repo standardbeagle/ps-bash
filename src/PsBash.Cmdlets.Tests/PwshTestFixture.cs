@@ -191,6 +191,14 @@ public static class PwshTestFixture
         return CreateInternal();
     }
 
+    /// <summary><see cref="Create()"/>, with <paramref name="configure"/> applied to the session state before the runspace
+    /// opens (an embedding's own setup, such as <c>ShellSecretsSession.UseShellEnvironmentDrive</c>).</summary>
+    public static PowerShell Create(Action<InitialSessionState> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        return CreateInternal(AppContext.BaseDirectory, configure);
+    }
+
     // Runs one load step; any terminating exception or error record aborts with the step named.
     // `tolerateErrorRecords`: the psm1 is run as a SCRIPT body (see step 1), so its module-scope
     // probes of $PSScriptRoot emit a fixed set of benign non-terminating "Path is empty string"
@@ -236,7 +244,7 @@ public static class PwshTestFixture
     /// (<paramref name="baseDir"/> is a parameter so the fail-fast paths are testable against
     /// a deliberately broken directory.)
     /// </summary>
-    internal static PowerShell CreateInternal(string baseDir)
+    internal static PowerShell CreateInternal(string baseDir, Action<InitialSessionState>? configure = null)
     {
         var missing = RequiredModuleFiles.Where(f => !File.Exists(Path.Combine(baseDir, f))).ToArray();
         if (missing.Length > 0)
@@ -262,6 +270,7 @@ public static class PwshTestFixture
         // throws PlatformNotSupportedException during runspace.Open().
         if (OperatingSystem.IsWindows())
             iss.ExecutionPolicy = Microsoft.PowerShell.ExecutionPolicy.Bypass;
+        configure?.Invoke(iss);
 
         var runspace = RunspaceFactory.CreateRunspace(iss);
         runspace.Open();

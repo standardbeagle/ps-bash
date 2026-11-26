@@ -357,6 +357,10 @@ public static class BashShellState
         /// <summary>The arrays outside the body that it writes (<see cref="BashVariableLookup.ArrayWriteJournal"/>):
         /// each is put back when it ends.</summary>
         internal BashVariableLookup.ArrayWriteJournal? ArrayWrites { get; init; }
+
+        /// <summary>The session's secrets at the subshell's start (<see cref="PsBash.Core.ShellSecrets.Save"/>): a
+        /// subshell's assignment to a secret's name ends with it, as any variable's does.</summary>
+        internal object? Secrets { get; init; }
     }
 
     /// <summary>The working directory a subshell must put back (see <see cref="SaveWorkingDirectory"/>).</summary>
@@ -456,7 +460,8 @@ public static class BashShellState
         return new Snapshot(env, globals, InvokeBashShoptCommand.SnapshotOptions(),
             IsTrue(session.PSVariable.GetValue("global:__BashXtrace")), SaveTables(), SaveAliasFunctions(session),
             VarFrameStack.Current.Save(), PsBash.Core.ShellExports.Save(), SaveWorkingDirectory(session))
-        { Umask = InvokeBashUmaskCommand.ShellMask, ArrayWrites = BashVariableLookup.OpenJournal(session) };
+        { Umask = InvokeBashUmaskCommand.ShellMask, ArrayWrites = BashVariableLookup.OpenJournal(session),
+          Secrets = PsBash.Core.ShellSecrets.Current?.Save() };
     }
 
     /// <summary>
@@ -489,6 +494,7 @@ public static class BashShellState
         }
 
         PsBash.Core.ShellExports.Restore(saved.Exports);
+        if (saved.Secrets is not null) PsBash.Core.ShellSecrets.Current?.RestoreFrom(saved.Secrets);
         if (inJob) return RestoreRunspaceGlobals(session, saved);
         InvokeBashShoptCommand.RestoreOptions(saved.Shopt);
         // A `readonly`, an attribute or a nameref made inside the body ends with it, like the variable it describes.

@@ -66,7 +66,7 @@ public sealed class InvokeBashPrintenvCommand : BashCmdlet
             // Under the bash name (BashNameCase): a diverted `path` prints as path=...
             var all = new List<KeyValuePair<string, string>>();
             foreach (var (k, v) in BashVariableStore.EnumerateExported())
-                all.Add(new KeyValuePair<string, string>(PsBash.Core.BashNameCase.ToBash(k), v));
+                all.Add(new KeyValuePair<string, string>(PsBash.Core.BashNameCase.ToBash(k), BashVariableStore.Listed(k, v)));   // a secret lists masked; by name it is read
             all.Sort(static (x, y) => StringComparer.Ordinal.Compare(x.Key, y.Key));
             if (nul)
             {
