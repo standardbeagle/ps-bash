@@ -200,7 +200,7 @@ public class BashRuntimeTests
     [Fact]
     public void NewBashObject_NoTrailingNewline_PreservesTrailingNewlineVerbatim()
     {
-        // Regression (parity-followups-2026-06-17): a noTrailingNewline object
+        // Regression (parity-followups-2026-06-17 oracle sweep; write-up in git history): a noTrailingNewline object
         // means "emit these bytes EXACTLY"; the old unconditional NormalizeBashText
         // stripped the trailing \n, so `printf '%s\n' b` → "b" not "b\n", and the
         // newline vanished whenever a following frame got concatenated.

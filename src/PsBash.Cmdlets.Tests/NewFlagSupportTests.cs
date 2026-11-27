@@ -217,7 +217,7 @@ public class NewFlagSupportTests : IClassFixture<SharedPwshFixture>, IDisposable
         // single NoTrailingNewline object that carries its bytes VERBATIM — the
         // trailing \n the format produced is preserved (regression: it was
         // silently stripped, so `printf '%s\n' b; echo c` printed "bc" instead
-        // of "b"/"c" on two lines — see parity-followups-2026-06-17).
+        // of "b"/"c" on two lines — see the parity-followups-2026-06-17 write-up in git history).
         var lines = RunLines("Invoke-BashPrintf '%s\\n' a b c");
         Assert.Single(lines);
         Assert.Equal("a\nb\nc\n", lines[0]);

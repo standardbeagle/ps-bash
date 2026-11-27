@@ -40,8 +40,8 @@ Move an older unmarked installation aside before upgrading. Upgrades retain the 
 package in a unique `.previous-*` directory; existing backups are preserved.
 
 <picture>
-  <source srcset="docs/assets/demo.webp" type="image/webp">
-  <img src="docs/assets/demo.gif" alt="ps-bash demo showing typed pipeline objects" width="800">
+  <source srcset="site/assets/demo.webp" type="image/webp">
+  <img src="site/assets/demo.gif" alt="ps-bash demo showing typed pipeline objects" width="800">
 </picture>
 
 ## What's new in v0.15.0
