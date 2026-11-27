@@ -2301,7 +2301,7 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_ArrayKeys_BareArg_UsesArraySubexprNotDollarSubexpr()
     {
-        // Regression (parity-followups-2026-06-17): as a BARE argument the
+        // Regression (parity-followups-2026-06-17 oracle sweep; write-up in git history): as a BARE argument the
         // indices expansion must use `@(...)`, not `$(...)`. A `$(...)` that
         // yields an empty collection still binds ONE $null positional argument,
         // so `echo ${!arr[@]}` on an empty array crashed the cmdlet
