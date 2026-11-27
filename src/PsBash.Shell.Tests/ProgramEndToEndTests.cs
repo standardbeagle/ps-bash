@@ -610,6 +610,32 @@ public class ProgramEndToEndTests
         }
     }
 
+    /// <summary>
+    /// A batch file run by command word in the host (npm, npx): the host's lookup hook hands it to
+    /// <c>Invoke-BashNative</c>, whose own lookup the hook answered with the same stand-in, so the cmdlet started itself
+    /// over until "call depth overflow" and the status was 0. It runs once, gets <c>a&amp;b</c> as one literal word
+    /// (CVE-2024-24576), and its status comes back. Spec program-files.md §Batch files.
+    /// </summary>
+    [SkippableFact]
+    public async Task BatchFile_ByCommandWord_RunsOnce_GetsItsWordLiterally_AndItsStatus()
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "batch files are Windows-only");
+        string dir = Directory.CreateTempSubdirectory("psbash-bat-e2e").FullName;
+        try
+        {
+            string tool = Path.Combine(dir, "tool.cmd");
+            File.WriteAllText(tool, "@echo off\r\necho [%1]\r\nexit /b 3\r\n");
+            var (code, stdout, stderr) = await RunShellAsync(["-c", $"'{tool}' 'a&echo PWNED'; echo \"rc=$?\""],
+                timeout: TimeSpan.FromSeconds(60));
+            var lines = stdout.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            Assert.DoesNotContain("call depth", stderr + stdout);
+            // %1 keeps the quotes cmd.exe needs around a word with `&`; the word itself arrives whole.
+            Assert.Equal(["[\"a&echo PWNED\"]", "rc=3"], lines);
+            Assert.Equal(0, code);
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
     // M3: .sh file execution ─────────────────────────────────────────────────
 
     private static string WriteTempScript(string content)

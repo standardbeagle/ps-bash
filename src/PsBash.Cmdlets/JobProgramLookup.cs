@@ -22,21 +22,12 @@ namespace PsBash.Cmdlets;
 /// </summary>
 internal static class JobProgramLookup
 {
-    /// <summary>
-    /// Set while <c>Invoke-BashNative</c> looks a name up itself: it needs the program, not its stand-in, and starts
-    /// it through <see cref="ChildStdio"/> anyway.
-    /// </summary>
-    [ThreadStatic] private static bool t_raw;
-
-    /// <summary>Whether a lookup in progress is <c>Invoke-BashNative</c>'s own (<see cref="Raw{T}"/>): hooks leave it alone.</summary>
-    internal static bool IsRaw => t_raw;
-
     public static void Install(CommandInvocationIntrinsics invoke)
     {
         ArgumentNullException.ThrowIfNull(invoke);
         invoke.PostCommandLookupAction = static (_, e) =>
         {
-            if (t_raw || e.Command is not ApplicationInfo app) return;
+            if (CommandLookupRaw.Active || e.Command is not ApplicationInfo app) return;
             if (ProgramFile.Plan(app.Path) is { } launch)
             {
                 e.CommandScriptBlock = ScriptBlock.Create(launch.StandInScript(ProgramFile.Shown(e.CommandName, app.Path)));
@@ -61,14 +52,5 @@ internal static class JobProgramLookup
                + " " + argv + " }.GetSteppablePipeline(); $__psbjS.Begin($true) } }\n"
                + "process { if ($__psbjS) { $__psbjS.Process($_) } }\n"
                + "end { if ($__psbjS) { $__psbjS.End() } else { Invoke-BashNative -- " + p + " " + argv + " } }";
-    }
-
-    /// <summary><paramref name="lookup"/> with this hook off (the caller gets the program itself).</summary>
-    internal static T Raw<T>(Func<T> lookup)
-    {
-        bool was = t_raw;
-        t_raw = true;
-        try { return lookup(); }
-        finally { t_raw = was; }
     }
 }

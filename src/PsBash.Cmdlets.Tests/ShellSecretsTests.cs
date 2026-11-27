@@ -145,4 +145,38 @@ public class ShellSecretsTests
         Assert.Equal("[]", Bash(pwsh, $"/bin/sh -c 'echo \"[${name}]\"'"));
         Assert.Equal("[]", Bash(pwsh, $"echo \"[${name}]\""));
     }
+
+    [Fact]
+    public void ASessionWithSecrets_RunsItsJobsInThisProcess_EvenWhenAHostProcessIsAskedFor()
+    {
+        // A job in a host process of its own would have to be handed the values; an in-process job takes its copy at
+        // its `&`. Without secrets the choice is the configured one.
+        var secrets = new ShellSecrets();
+        Assert.True(BashBgJobTable.WantsOwnProcess(isolated: false, "process", secrets));   // none held yet
+        secrets.Set(Unique("JOB"), Value);
+        Assert.False(BashBgJobTable.WantsOwnProcess(isolated: false, "process", secrets));
+        Assert.False(BashBgJobTable.WantsOwnProcess(isolated: true, null, secrets));
+        Assert.True(BashBgJobTable.WantsOwnProcess(isolated: true, null, null));
+        Assert.False(BashBgJobTable.WantsOwnProcess(isolated: true, "inproc", null));
+    }
+
+    /// <summary>
+    /// A job that can change shell state (`x=1`: one a host process of its own would run by default) reads its copy of
+    /// the session's secret, and its own write to it stays in the job.
+    /// </summary>
+    [Fact]
+    public void AJobThatChangesShellState_ReadsTheSecret_AndItsWriteStaysInTheJob()
+    {
+        // The fixture runs the psm1 as a script body, so it cannot name itself for the job runspaces to import.
+        BashJobRunspaces.WarmAhead(Path.Combine(AppContext.BaseDirectory, "PsBash.psm1"));
+        var name = Unique("JOBRW");
+        var secrets = new ShellSecrets();
+        secrets.Set(name, Value);
+        using var pwsh = Session(secrets);
+
+        var output = Bash(pwsh, $"{{ x=1; echo \"${name}\"; {name}=changed; echo \"${name}\"; }} & wait; echo \"${name}\"");
+        Assert.True(pwsh.Streams.Error.Count == 0, string.Join(" | ", pwsh.Streams.Error.Select(e => e.ToString())));
+        Assert.Equal($"{Value}\nchanged\n{Value}", output);
+        Assert.Null(Environment.GetEnvironmentVariable(name));
+    }
 }

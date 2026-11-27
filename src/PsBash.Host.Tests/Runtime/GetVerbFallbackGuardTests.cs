@@ -1,3 +1,5 @@
+using System.Management.Automation;
+using PsBash.Core;
 using PsBash.Host.Runtime;
 using Xunit;
 
@@ -27,4 +29,28 @@ public class GetVerbFallbackGuardTests
     [InlineData("", false)]
     public void CanBeRetried_IsAWordWithNoVerbOrPathSeparator(string name, bool expected)
         => Assert.Equal(expected, GetVerbFallbackGuard.CanBeRetried(name));
+
+    /// <summary>
+    /// <c>Invoke-BashNative</c>'s own lookup (<see cref="CommandLookupRaw"/>) gets the program itself, never the guard's
+    /// stand-in: the stand-in calls <c>Invoke-BashNative</c>, so answering its lookup with the stand-in again started the
+    /// cmdlet over until the call depth overflowed (any <c>.cmd</c> run by command word in the host). A <c>#!</c> file
+    /// the OS cannot start as it is takes the same branch on every platform; an ordinary lookup still gets the stand-in.
+    /// </summary>
+    [Fact]
+    public void ARawLookup_GetsTheProgramItself_NotTheStandIn()
+    {
+        string dir = Directory.CreateTempSubdirectory("psbash-guard").FullName;
+        try
+        {
+            string tool = Path.Combine(dir, "tool");
+            File.WriteAllText(tool, "#!/bin/sh\necho hi\n");
+            using var pwsh = PowerShell.Create();
+            var invoke = pwsh.Runspace.SessionStateProxy.InvokeCommand;
+            GetVerbFallbackGuard.Install(invoke);
+
+            Assert.IsNotType<ApplicationInfo>(invoke.GetCommand(tool, CommandTypes.Application));
+            Assert.IsType<ApplicationInfo>(CommandLookupRaw.Run(() => invoke.GetCommand(tool, CommandTypes.Application)));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
 }

@@ -69,6 +69,23 @@ public class BatchFileLaunchTests
     }
 
     /// <summary>
+    /// A plain module session (<c>Import-Module PsBash</c>, then <c>Invoke-BashSource</c>): no embedding installed a lookup
+    /// hook, so the module's own import must; without it the command word went to PowerShell's launcher.
+    /// </summary>
+    [SkippableFact]
+    public void ABatchFile_InAPlainModuleSession_GetsEachWordLiterally()
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "batch files are Windows-only");
+        var (dir, tool) = MakeTool();
+        try
+        {
+            using var pwsh = PwshTestFixture.Create();
+            Assert.Equal(Expected + "\nstatus=3", Bash(pwsh, $"'{tool}' {BashWords}; echo \"status=$?\""));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    /// <summary>
     /// A cmdlet's own child (rg, tput, psav, ...) through <see cref="BashRuntime.RunChildProcess(string, IReadOnlyList{string}?, TimeSpan?)"/>:
     /// <c>JobProcess</c> handed a <c>.cmd</c> to <c>CreateProcess</c>, whose C runtime quoting left <c>a&amp;b</c> live.
     /// </summary>

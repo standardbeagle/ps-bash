@@ -117,8 +117,12 @@ Sites:
   `%COMSPEC% /d /c call x.cmd args`: `a&b` ran `b`, and `call` expanded `%NAME%` a second time.
 
 Because ps-bash starts it, a batch file now gets its environment from `BashVariableStore.ApplyTo`: a background job's
-scalars and a session's granted secrets (`environment-model.md` §7, §13). A runspace with none of these hooks (a bare
-SDK runspace, Pester's) that runs `& tool.cmd` directly still goes through PowerShell's launcher.
+scalars and a session's granted secrets (`environment-model.md` §7, §13). Each hook leaves `Invoke-BashNative`'s own lookup alone (`CommandLookupRaw`): the stand-in calls that cmdlet, so the
+host's hook answering its lookup with the stand-in again restarted it until "call depth overflow" (v0.15.5, any `.cmd`
+by command word in the host). Importing the module installs the
+`HostTerminalLookup` hook on Windows, so a plain `Import-Module PsBash` session (`Invoke-BashSource`, a sourced function
+running `npm`) gets the same start. Only a runspace that never imported it (a bare SDK runspace with the cmdlets alone)
+runs `& tool.cmd` through PowerShell's launcher.
 
 ## Cost
 

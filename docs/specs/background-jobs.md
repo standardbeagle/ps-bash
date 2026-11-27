@@ -468,6 +468,7 @@ Shipped (uncommitted at time of writing):
   parent/child assignments are isolated both ways. `JobHostSpares` keeps up to 2 warm hosts (adaptive, 60 s expiry),
   pre-warmed when a command contains `Invoke-BashBackground`.
 - **Opt-in, default NOT flipped**: `PSBASH_BG_MODE=process` selects it; the default stays `inproc`.
+  A session holding secrets (`environment-model.md` §13) never starts one: its jobs stay in-process.
   `scripts/bench-warm.ps1` (Debug build copied to a scratch dir, loaded machine, p50 ms, inproc -> process), after the
   prelude fix below: `sleep 1 & wait` 1391 -> 1484 (bar: fg `sleep 1` 1292 + 50), `{ :; } & wait` 320 -> 2595
   (min 388: bimodal, a miss when back-to-back jobs outrun the ~2 s spare refill), back-to-back echo 276 -> 278,

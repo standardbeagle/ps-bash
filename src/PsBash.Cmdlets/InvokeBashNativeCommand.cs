@@ -59,7 +59,7 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
         // The one lookup of NAME (the host's command-lookup hook counts it as a use, as running it would).
         CommandInfo? info;
         // A job runspace's hook would hand back the stand-in that calls this cmdlet (JobProgramLookup): look past it.
-        try { info = JobProgramLookup.Raw(() => InvokeCommand.GetCommand(Name, CommandTypes.All)); }
+        try { info = PsBash.Core.CommandLookupRaw.Run(() => InvokeCommand.GetCommand(Name, CommandTypes.All)); }
         catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex)) { info = null; }
 
         var args = FlattenArguments(Arguments);
@@ -205,7 +205,7 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
         if (!ours && !OperatingSystem.IsWindows()) return null;
         try
         {
-            return JobProgramLookup.Raw(() => cmdlet.InvokeCommand.GetCommand(name, CommandTypes.All)) is ApplicationInfo app
+            return PsBash.Core.CommandLookupRaw.Run(() => cmdlet.InvokeCommand.GetCommand(name, CommandTypes.All)) is ApplicationInfo app
                    && PsBash.Core.ProgramFile.Plan(app.Path) is null
                    && (ours || IsBatchFile(app.Path))
                 ? app.Path

@@ -42,7 +42,9 @@ internal static class GetVerbFallbackGuard
         invoke.PostCommandLookupAction = (sender, e) =>
         {
             RecordHashed(e);
-            if (e.Command is not ApplicationInfo app) return;
+            // Invoke-BashNative's own lookup (the stand-in below calls it): it needs the program itself. Answering it
+            // with the stand-in again started the cmdlet over until the call depth overflowed.
+            if (PsBash.Core.CommandLookupRaw.Active || e.Command is not ApplicationInfo app) return;
             if (ProgramFile.Plan(app.Path) is { } launch)
             {
                 e.CommandScriptBlock = ScriptBlock.Create(launch.StandInScript(ProgramFile.Shown(e.CommandName, app.Path)));

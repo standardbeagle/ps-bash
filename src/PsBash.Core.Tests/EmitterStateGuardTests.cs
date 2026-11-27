@@ -48,6 +48,7 @@ public class EmitterStateGuardTests
         ["NestingGuard.t_onLargeStack"] = "a fact about the thread (set on the large-stack worker OnLargeStack starts), not about a unit",
         ["NestingGuard.t_stackExhausted"] = "cleared by WithStackFallback before the work it wraps, which may be several units or part of one",
         ["CommandHashTable._probeDepth"] = "run-time command lookup (hash), not emission: raised and lowered by each CommandHashTable.ProbeScope (using)",
+        ["CommandLookupRaw.t_raw"] = "run-time command lookup (Invoke-BashNative's own), not emission: set and restored by each CommandLookupRaw.Run (finally)",
         ["ShellVariables.t_launcherParent"] = "shell startup's own value, set and cleared in one call's finally; never read by the emitter",
     };
 

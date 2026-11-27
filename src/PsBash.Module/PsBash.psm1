@@ -3298,6 +3298,12 @@ function Start-BashBgJob {
 # reaper, one per runspace. A re-import replaces it with the new module's.
 $global:__psbashBgJobTable = [PsBash.Cmdlets.BashBgJobTable]::new($script:BashBgJobs, $script:BashBgModulePath, ${function:Start-BashBgProcessJob}, ${function:Remove-BashBgFinished})
 
+# A Windows batch file (npm, npx, yarn) is started by ps-bash in every runspace that imports the module, not only in the
+# ps-bash host: PowerShell's own launcher hands cmd.exe its arguments unescaped, so a bash function sourced with
+# Invoke-BashSource that ran `npm run x "$arg"` would let `a&calc` run calc (CVE-2024-24576; program-files.md
+# §Batch files). The hook chains any lookup action installed before it and leaves every other program to PowerShell.
+if ($IsWindows) { [PsBash.Cmdlets.HostTerminalLookup]::Install($ExecutionContext.InvokeCommand) }
+
 function Invoke-BashWait {
     <#
     .SYNOPSIS

@@ -37,8 +37,17 @@ public static class HostTerminalLookup
         public void Run(object? sender, CommandLookupEventArgs e)
         {
             previous?.Invoke(sender, e);
-            if (JobProgramLookup.IsRaw || e.CommandScriptBlock is not null || e.Command is not ApplicationInfo app) return;
-            if (ProgramFile.Plan(app.Path) is not null) return;
+            // Every lookup comes here, the module's own cmdlets and aliases too: only a program reaches ForProgram, the
+            // first code to touch the transpiler assembly (PsBash.Core), so importing the module and running a cmdlet
+            // or alias does not load it (tests/PsBash.Tests.ps1 "before anything has loaded the transpiler").
+            if (e.CommandScriptBlock is not null || e.Command is not ApplicationInfo app) return;
+            ForProgram(e, app);
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static void ForProgram(CommandLookupEventArgs e, ApplicationInfo app)
+        {
+            if (CommandLookupRaw.Active || ProgramFile.Plan(app.Path) is not null) return;
             // A session that holds secrets starts its programs here too: PowerShell's native-command processor copies the
             // process environment, which never has them, so `python app.py` would not get its granted key (ShellSecrets).
             // A batch file in any runspace: that processor passes its arguments to cmd.exe unescaped (BatchFile).

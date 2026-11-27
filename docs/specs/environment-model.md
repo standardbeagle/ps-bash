@@ -495,8 +495,9 @@ Rules:
   A same-named variable another session put in the shared environment is removed from the child, because it is not
   this session's to give.
 - **Jobs.** An in-process job takes a copy at its `&` (`ScalarOverlay.Capture`), so the job's writes stay its own.
-  - **Gap:** a `PSBASH_BG_MODE=process` job host is a separate process and gets no secrets (`BashStateSnapshot`
-    carries scalars only). This fails closed.
+  - A session that holds secrets runs every job in its own process, even under `PSBASH_BG_MODE=process` or for a job
+    that would otherwise get a host of its own (`BashBgJobTable.WantsOwnProcess`). The values never leave the process
+    that holds them: a job host would have to be sent them, and `BashStateSnapshot` carries scalars only.
   - A Windows `.cmd` / `.bat` is started by ps-bash too (`program-files.md` §Batch files), so it gets the granted
     secrets like any other program.
 - **Listing.** `env`, `printenv`, `set`, `declare -p` (also by name, since the line is made to be shown or read back),

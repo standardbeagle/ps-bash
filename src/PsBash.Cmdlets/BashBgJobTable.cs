@@ -55,13 +55,22 @@ public sealed class BashBgJobTable
     /// The job goes to a host process of its own (section 11): <c>PSBASH_BG_MODE=process</c>, or an <c>-Isolated</c> job
     /// unless <c>PSBASH_BG_MODE=inproc</c>, and only where the host provides the launcher type (not a plain module import).
     /// <c>PSBASH_*</c> is host configuration, read from the process environment (BashVariableStore).
+    /// <para>
+    /// A session that holds secrets (<see cref="PsBash.Core.ShellSecrets"/>) runs its jobs in this process: an in-process
+    /// job takes its copy of them at its <c>&amp;</c> (<see cref="PsBash.Core.ScalarOverlay.Capture"/>), while a host
+    /// process of its own would have to be handed the values, which never leave the process holding them.
+    /// </para>
     /// </summary>
     internal static bool RunsInOwnProcess(bool isolated)
+        => WantsOwnProcess(isolated, Environment.GetEnvironmentVariable("PSBASH_BG_MODE"), PsBash.Core.ShellSecrets.Current)
+           && JobProcessTypeExists();
+
+    /// <summary>The decision of <see cref="RunsInOwnProcess"/>, before asking whether the launcher type exists.</summary>
+    internal static bool WantsOwnProcess(bool isolated, string? mode, PsBash.Core.ShellSecrets? secrets)
     {
-        var mode = Environment.GetEnvironmentVariable("PSBASH_BG_MODE");
-        bool wanted = string.Equals(mode, "process", StringComparison.OrdinalIgnoreCase)
+        if (secrets is { Names.Count: > 0 }) return false;
+        return string.Equals(mode, "process", StringComparison.OrdinalIgnoreCase)
             || (isolated && !string.Equals(mode, "inproc", StringComparison.OrdinalIgnoreCase));
-        return wanted && JobProcessTypeExists();
     }
 
     private static bool _jobProcessTypeFound;
