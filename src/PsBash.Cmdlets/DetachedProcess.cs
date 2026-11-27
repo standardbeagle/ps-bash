@@ -49,14 +49,16 @@ public static class DetachedProcess
         var psi = new ProcessStartInfo(PsBash.Core.Platform.SystemTools.PosixShell) { WorkingDirectory = cwd, UseShellExecute = false };
         var op = append ? ">>" : ">";
         psi.ArgumentList.Add("-c");
+        // The file names go in as positional parameters, never the environment: they were OUT / ERR, which a script's
+        // own exported OUT overrode (the output went to a file the script named) and the `unset` then took from the child.
         psi.ArgumentList.Add(string.IsNullOrEmpty(errPath)
-            ? $"trap '' HUP; o=\"$OUT\"; unset OUT; exec \"$@\" </dev/null {op}\"$o\" 2>&1"
-            : $"trap '' HUP; o=\"$OUT\"; e=\"$ERR\"; unset OUT ERR; exec \"$@\" </dev/null {op}\"$o\" 2{(errAppend ? ">>" : ">")}\"$e\"");
+            ? $"trap '' HUP; o=\"$1\"; shift; exec \"$@\" </dev/null {op}\"$o\" 2>&1"
+            : $"trap '' HUP; o=\"$1\"; e=\"$2\"; shift 2; exec \"$@\" </dev/null {op}\"$o\" 2{(errAppend ? ">>" : ">")}\"$e\"");
         psi.ArgumentList.Add("nohup");
+        psi.ArgumentList.Add(outPath);
+        if (!string.IsNullOrEmpty(errPath)) psi.ArgumentList.Add(errPath);
         psi.ArgumentList.Add(exe);
         foreach (var a in args) psi.ArgumentList.Add(a);
-        psi.Environment["OUT"] = outPath;
-        if (!string.IsNullOrEmpty(errPath)) psi.Environment["ERR"] = errPath;
         BashVariableStore.ApplyTo(psi); // the exported variables only
         var p = Process.Start(psi) ?? throw new InvalidOperationException("could not start " + exe);
         return new DetachedChild(p.Id, p, IntPtr.Zero);

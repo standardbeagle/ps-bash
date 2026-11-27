@@ -97,7 +97,7 @@ public sealed class InvokeBashNohupCommand : BashCmdlet
             // A file the OS cannot start as it is (a #! script on Windows, a file with no execute bit): its interpreter
             // runs it, a shell's through the ps-bash launcher, as the kernel would; anything else is GNU's 126.
             var (program, interpreterArgs) = launch.CommandLine(InvokeBashBashCommand.ResolvePsBashExecutable(this),
-                ExecutableLookup.PathDirectories(cwd));
+                ExecutableLookup.PathDirectories());
             if (program is null)
             {
                 bool missing = launch.Runnable;
@@ -198,7 +198,7 @@ public sealed class InvokeBashNohupCommand : BashCmdlet
             if (!Path.IsPathRooted(p)) p = Path.Combine(cwd, p);
             return File.Exists(p) ? p : null;
         }
-        return ExecutableLookup.Find(name, ExecutableLookup.PathDirectories(cwd));
+        return ExecutableLookup.Find(name, ExecutableLookup.PathDirectories());
     }
 
     /// <summary>A name ps-bash itself runs (mapped command, builtin, function, alias) as opposed to a typo.</summary>

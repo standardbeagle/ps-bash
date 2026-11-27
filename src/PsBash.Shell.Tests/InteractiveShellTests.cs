@@ -191,8 +191,12 @@ public class AliasExpansionTests
     }
 }
 
+[Collection(ProcessEnvironmentCollection.Name)] // the PATHEXT cases put their directory on PATH
 public class ResolveCommandTests
 {
+    private static PsBash.Testing.ProcessEnv OnPath(string dir) =>
+        PsBash.Testing.ProcessEnv.Set("PATH", dir + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH"));
+
     [Fact]
     public void ResolveCommand_AbsolutePath_ExistingFile_ReturnsPath()
     {
@@ -234,52 +238,29 @@ public class ResolveCommandTests
         Assert.Null(result);
     }
 
+    /// <summary>
+    /// A bare name is never looked up in the working directory: bash's execvp searches $PATH only (`zzplant` with an
+    /// executable ./zzplant is "command not found", 127). The REPL searched the working directory first, so typing `git`
+    /// inside a cloned repo that ships an executable `git` (or `git.cmd`) ran the repo's file. Oracle: bash 5.2,
+    /// checked by hand (a REPL fast path, below the transpiled surface the differential suite drives).
+    /// </summary>
     [Fact]
-    public void ResolveCommand_ResolvesInWorkingDir()
+    public void ResolveCommand_NeverRunsAProgramPlantedInTheWorkingDir()
     {
         using var tmp = new TempDir();
-        // Use extensionless file on Unix, .cmd on Windows for cross-platform coverage
+        const string name = "psbash-planted-cmd-5821";
         if (OperatingSystem.IsWindows())
         {
-            var scriptPath = Path.Combine(tmp.Path, "test-script.cmd");
-            File.WriteAllText(scriptPath, "@echo hi\n");
-            var result = InteractiveShell.ResolveCommand("test-script", tmp.Path);
-            Assert.NotNull(result);
-            Assert.True(File.Exists(result));
-            Assert.EndsWith("test-script.cmd", result, StringComparison.OrdinalIgnoreCase);
+            File.WriteAllText(Path.Combine(tmp.Path, name + ".cmd"), "@echo planted\r\n");
+            File.WriteAllText(Path.Combine(tmp.Path, name + ".exe"), "");
         }
         else
         {
-            var scriptPath = Path.Combine(tmp.Path, "test-script");
-            File.WriteAllText(scriptPath, "#!/bin/sh\necho hi\n");
+            var scriptPath = Path.Combine(tmp.Path, name);
+            File.WriteAllText(scriptPath, "#!/bin/sh\necho planted\n");
             File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-            var result = InteractiveShell.ResolveCommand("test-script", tmp.Path);
-            Assert.NotNull(result);
-            Assert.True(File.Exists(result));
         }
-    }
-
-    [Fact]
-    public void ResolveCommand_WithWorkDir_SearchesWorkDirFirst()
-    {
-        using var tmp = new TempDir();
-        if (OperatingSystem.IsWindows())
-        {
-            var scriptPath = Path.Combine(tmp.Path, "unique-test-cmd-1234.cmd");
-            File.WriteAllText(scriptPath, "@echo hi\n");
-            var result = InteractiveShell.ResolveCommand("unique-test-cmd-1234", tmp.Path);
-            Assert.NotNull(result);
-            Assert.True(File.Exists(result));
-        }
-        else
-        {
-            var scriptPath = Path.Combine(tmp.Path, "unique-test-cmd-1234");
-            File.WriteAllText(scriptPath, "#!/bin/sh\necho hi\n");
-            File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-            var result = InteractiveShell.ResolveCommand("unique-test-cmd-1234", tmp.Path);
-            Assert.NotNull(result);
-            Assert.True(File.Exists(result));
-        }
+        Assert.Null(InteractiveShell.ResolveCommand(name, tmp.Path));
     }
 
     [SkippableFact]
@@ -287,6 +268,7 @@ public class ResolveCommandTests
     {
         Skip.IfNot(OperatingSystem.IsWindows(), "PATHEXT .cmd is Windows-only");
         using var tmp = new TempDir();
+        using var path = OnPath(tmp.Path);
         var cmdPath = Path.Combine(tmp.Path, "myapp.cmd");
         File.WriteAllText(cmdPath, "@echo hi\n");
         var result = InteractiveShell.ResolveCommand("myapp", tmp.Path);
@@ -298,6 +280,7 @@ public class ResolveCommandTests
     {
         Skip.IfNot(OperatingSystem.IsWindows(), "PATHEXT .ps1 is Windows-only");
         using var tmp = new TempDir();
+        using var path = OnPath(tmp.Path);
         var ps1Path = Path.Combine(tmp.Path, "myapp.ps1");
         File.WriteAllText(ps1Path, "Write-Host hi\n");
         var result = InteractiveShell.ResolveCommand("myapp", tmp.Path);
@@ -309,6 +292,7 @@ public class ResolveCommandTests
     {
         Skip.IfNot(OperatingSystem.IsWindows(), "PATHEXT priority is Windows-only");
         using var tmp = new TempDir();
+        using var path = OnPath(tmp.Path);
         File.WriteAllText(Path.Combine(tmp.Path, "myapp.cmd"), "@echo cmd\n");
         File.WriteAllText(Path.Combine(tmp.Path, "myapp.exe"), "fake");
         var result = InteractiveShell.ResolveCommand("myapp", tmp.Path);
@@ -316,19 +300,38 @@ public class ResolveCommandTests
         Assert.EndsWith(".exe", result, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// The REPL's direct launch of a .cmd (npm, npx at the prompt): `%COMSPEC% /d /c call x.cmd a&amp;b` ran `b`, and
+    /// `call` expanded `%NAME%` a second time (CVE-2024-24576). Each word must reach the program the batch file runs.
+    /// Hand-written: bash has no batch files; its guarantee, that a quoted word arrives unchanged, is the one pinned.
+    /// </summary>
     [SkippableFact]
-    public void BuildDirectProcessStartInfo_CmdFile_UsesCmdHost()
+    public void BuildDirectProcessStartInfo_CmdFile_PassesEachArgumentLiterally()
     {
         Skip.IfNot(OperatingSystem.IsWindows(), "Windows command scripts require cmd.exe");
+        string? pwsh = PsBash.Core.ExecutableLookup.Find("pwsh", (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator));
+        Skip.If(pwsh is null, "pwsh is not on PATH");
         using var tmp = new TempDir();
+        File.WriteAllText(Path.Combine(tmp.Path, "argv.ps1"), "foreach ($a in $args) { '<' + $a + '>' }\n");
         var cmdPath = Path.Combine(tmp.Path, "myapp.cmd");
+        File.WriteAllText(cmdPath, "@echo off\r\n\"" + pwsh + "\" -NoProfile -NonInteractive -File \"%~dp0argv.ps1\" %*\r\n");
+        string[] words = ["one", "two words", "a&b", "a|b", "%PATH%", "x\"y", ""];
 
-        var psi = InteractiveShell.BuildDirectProcessStartInfo(cmdPath, ["one", "two words"], tmp.Path);
+        var psi = InteractiveShell.BuildDirectProcessStartInfo(cmdPath, words, tmp.Path);
 
         Assert.False(psi.UseShellExecute);
         Assert.Equal(tmp.Path, psi.WorkingDirectory);
-        Assert.EndsWith("cmd.exe", psi.FileName, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(["/d", "/c", "call", cmdPath, "one", "two words"], psi.ArgumentList.ToArray());
+        Assert.Equal(PsBash.Core.Platform.SystemTools.WindowsCommandProcessor, psi.FileName);
+        psi.RedirectStandardOutput = true;
+        psi.RedirectStandardError = true;
+        psi.StandardOutputEncoding ??= System.Text.Encoding.UTF8;
+        psi.StandardErrorEncoding ??= System.Text.Encoding.UTF8;
+        using var p = Process.Start(psi)!;
+        string stdout = p.StandardOutput.ReadToEnd();
+        string stderr = p.StandardError.ReadToEnd();
+        Assert.True(p.WaitForExit(60_000));
+        Assert.Equal("", stderr);
+        Assert.Equal(words.Select(w => "<" + w + ">"), stdout.Split("\r\n", StringSplitOptions.RemoveEmptyEntries));
     }
 
     [SkippableFact]

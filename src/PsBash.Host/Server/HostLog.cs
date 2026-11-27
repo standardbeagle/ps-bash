@@ -64,7 +64,13 @@ internal static class HostLog
             var line = FormatLine(DateTime.UtcNow, Environment.ProcessId, _endpoint, Version, message) + Environment.NewLine;
             lock (Gate)
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                // The log quotes errors and stuck commands: the user's alone. ~/.psbash itself is narrowed to 0700; a
+                // directory PSBASH_HOST_LOG names is the user's choice and only created.
+                var dir = Path.GetDirectoryName(path)!;
+                if (PathOverride is null && Environment.GetEnvironmentVariable("PSBASH_HOST_LOG") is not { Length: > 0 })
+                    PsBash.Core.Runtime.PrivateUserFiles.EnsureDirectory(dir);
+                else
+                    Directory.CreateDirectory(dir);
                 try
                 {
                     var info = new FileInfo(path);
@@ -72,6 +78,7 @@ internal static class HostLog
                         File.Move(path, path + ".1", overwrite: true);
                 }
                 catch { /* another host rotated it first, or it is held: append anyway */ }
+                PsBash.Core.Runtime.PrivateUserFiles.EnsureFile(path);
                 File.AppendAllText(path, line);
             }
         }

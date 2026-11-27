@@ -23,6 +23,7 @@ public sealed class SqliteFrecencyStore : IFrecencyStore, IDisposable
     public SqliteFrecencyStore(string dbPath)
     {
         _dbPath = dbPath;
+        PsBash.Core.Runtime.PrivateUserFiles.EnsureDatabase(dbPath); // where the user has been: 0600, as the history
         var builder = new SqliteConnectionStringBuilder
         {
             DataSource = dbPath,

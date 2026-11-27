@@ -47,6 +47,13 @@ Guard: `Core.Tests/ProgramFileGuardTests` checks that every product file naming 
 reason because it never starts the file (`type`, `hash`, `test -x`, completion). Behavior against bash:
 `Differential.Tests/ScriptFileExecutionDifferentialTests`.
 
+**A bare name is looked up in `$PATH` only, never the working directory** (`ExecutableLookup.PathDirectories`), as
+bash's execvp does: `zzplant` beside an executable `./zzplant` is `command not found`, 127. The REPL's direct launch
+and `nohup` (the program, and a `#!` script's interpreter) used to search the working directory first, so a cloned repo
+holding an executable `git` or `git.cmd` ran it when the user typed `git`. Tests:
+`Shell.Tests/ResolveCommandTests.ResolveCommand_NeverRunsAProgramPlantedInTheWorkingDir`,
+`Cmdlets.Tests/NohupTests.A_program_in_the_working_directory_is_not_run_by_bare_name`.
+
 ## Opening a script file (`ps-bash FILE`, `bash FILE`)
 
 The launcher checks FILE through one primitive, `PsBash.Shell.ScriptFile`, on the run path and the `-n` path alike
@@ -102,6 +109,12 @@ Sites:
   `InvokeBashNativeCommand.ProgramStartInfo` builds the `cmd.exe` line. That covers `RunMerged` and
   `MergedProgramPath` (`env`, `xargs`, `find -exec`, `time`), `command`, and the host terminal.
 - `nohup`: `DetachedProcess` starts `cmd.exe` with the same line.
+- Every child started through `JobProcess` (all of `ChildStdio`: `RunChildProcess`, streaming children, a cmdlet's own
+  tool such as `rg`, `tput`, `psav`): `JobProcess.CommandLineFor` turns a `.cmd` / `.bat` into the `cmd.exe` line, and
+  refuses a pre-quoted `RawArguments` for one. Nothing hands `CreateProcess` a batch file as it is.
+- A direct `Process.Start` (the `less` pager, the REPL's direct launch `InteractiveShell.BuildDirectProcessStartInfo`,
+  an assist provider) calls `BatchFile.Prepare`, which rewrites its `ArgumentList` start the same way. The REPL used
+  `%COMSPEC% /d /c call x.cmd args`: `a&b` ran `b`, and `call` expanded `%NAME%` a second time.
 
 Because ps-bash starts it, a batch file now gets its environment from `BashVariableStore.ApplyTo`: a background job's
 scalars and a session's granted secrets (`environment-model.md` §7, §13). A runspace with none of these hooks (a bare

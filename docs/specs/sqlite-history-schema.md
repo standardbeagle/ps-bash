@@ -16,6 +16,12 @@ The SQLite database is stored at:
 
 On Windows, `~` expands to `%USERPROFILE%`. The `.psbash` directory is created automatically on first run.
 
+**Permissions (POSIX).** A command line holds whatever was typed on it, tokens included, so the history is what bash's
+`~/.bash_history` is: mode 0600 (bash 5.2). `PsBash.Core.Runtime.PrivateUserFiles` creates `~/.psbash` 0700 and
+`history.db`, `frecency.db`, the legacy `.psbash_history` and `host.log` 0600, before anything is written to them, and
+narrows ones an earlier version left at 0775 / 0644 (with any `-wal` / `-shm`). SQLite gives new `-wal` / `-shm` files
+the database file's mode. On Windows the profile directory's ACL is the boundary and nothing changes.
+
 ---
 
 ## 2. Schema Definition

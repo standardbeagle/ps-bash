@@ -181,6 +181,15 @@ internal sealed class CommandAssistProviderRunner(CommandAssistConfig config)
             else psi.Environment[key] = RenderTemplate(value, request, cwd);
         }
 
+        // A provider configured as a .cmd (an npm-installed CLI): the prompt holds the user's own text, so it goes
+        // through cmd.exe escaped for it (BatchFile, CVE-2024-24576), never re-parsed as cmd syntax.
+        try { PsBash.Core.Runtime.Processes.BatchFile.Prepare(psi); }
+        catch (ArgumentException ex)
+        {
+            throw new CommandAssistProviderException(
+                $"AI provider '{provider.Name}' is a batch file and cannot be passed this prompt: {ex.Message}");
+        }
+
         using var process = new Process { StartInfo = psi };
         try
         {

@@ -1794,6 +1794,7 @@ internal sealed class LegacyFileHistoryStore : IHistoryStore
             var dir = Path.GetDirectoryName(_historyPath);
             if (dir is not null)
                 Directory.CreateDirectory(dir);
+            PsBash.Core.Runtime.PrivateUserFiles.EnsureFile(_historyPath); // 0600, as bash's ~/.bash_history
             File.WriteAllLines(_historyPath, _history);
         }
         catch (Exception) { /* routine: legacy file history is best-effort */ }

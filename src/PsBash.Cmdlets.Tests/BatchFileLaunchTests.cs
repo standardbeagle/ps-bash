@@ -68,6 +68,24 @@ public class BatchFileLaunchTests
         finally { Directory.Delete(dir, recursive: true); }
     }
 
+    /// <summary>
+    /// A cmdlet's own child (rg, tput, psav, ...) through <see cref="BashRuntime.RunChildProcess(string, IReadOnlyList{string}?, TimeSpan?)"/>:
+    /// <c>JobProcess</c> handed a <c>.cmd</c> to <c>CreateProcess</c>, whose C runtime quoting left <c>a&amp;b</c> live.
+    /// </summary>
+    [SkippableFact]
+    public void ACmdletsChild_ThatIsABatchFile_GetsEachWordLiterally()
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "batch files are Windows-only");
+        var (dir, tool) = MakeTool();
+        try
+        {
+            var result = BashRuntime.RunChildProcess(tool.Replace('/', '\\'), Words);
+            Assert.Equal(Expected, result.Stdout.Replace("\r", "").TrimEnd('\n'));
+            Assert.Equal(3, result.ExitCode);
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
     [SkippableFact]
     public void ALineBreakInAnArgument_IsRefused_NotRunAsASecondLine()
     {

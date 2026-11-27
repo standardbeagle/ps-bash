@@ -91,14 +91,13 @@ public class ExecutableLookupTests : IDisposable
     }
 
     [Fact]
-    public void PathDirectories_PutsFirstDirAheadOfPath_AndDropsEmptyEntries()
+    public void PathDirectories_IsPathOnly_AndDropsEmptyEntries()
     {
-        var a = Dir(); var b = Dir(); var first = Dir();
+        var a = Dir(); var b = Dir();
         using var env = ProcessEnv.Set("PATH", string.Join(Path.PathSeparator, a, "", " ", b));
-        Assert.Equal(new[] { first, a, b }, ExecutableLookup.PathDirectories(first).Where(d => !string.IsNullOrWhiteSpace(d)));
         Assert.Equal(new[] { a, b }, ExecutableLookup.PathDirectories());
         Make(b, "tool", true);
-        Same(Path.Combine(b, Name("tool")), ExecutableLookup.Find("tool", ExecutableLookup.PathDirectories(first)));
+        Same(Path.Combine(b, Name("tool")), ExecutableLookup.Find("tool", ExecutableLookup.PathDirectories()));
     }
 
     // A script writes PATH with `:` (`PATH=_tmp:$PATH`); on Windows each separating colon becomes `;`, a drive colon stays.

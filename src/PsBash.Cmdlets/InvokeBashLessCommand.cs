@@ -197,6 +197,14 @@ public sealed class InvokeBashLessCommand : BashCmdlet
             // Raw Process.Start (interactive pager — exempt from RunChildProcess),
             // so the bash-variable materialization seam must be applied here too.
             BashVariableStore.ApplyTo(psi);
+            // A less.cmd shim: through cmd.exe with each argument escaped for it (BatchFile, CVE-2024-24576).
+            try { PsBash.Core.Runtime.Processes.BatchFile.Prepare(psi); }
+            catch (ArgumentException ex)
+            {
+                FileSystemHelpers.WriteBashError(this, "less: " + ex.Message);
+                FileSystemHelpers.SetLastExitCode(this, 126);
+                return;
+            }
 
             using var proc = Process.Start(psi);
             if (proc == null)

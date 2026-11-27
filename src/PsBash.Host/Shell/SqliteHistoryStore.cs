@@ -24,6 +24,8 @@ public sealed class SqliteHistoryStore : IHistoryStore, IDisposable
             Path.GetDirectoryName(dbPath) ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".psbash_history");
 
+        // Command lines hold whatever was typed (tokens too): 0600, as bash's ~/.bash_history.
+        PsBash.Core.Runtime.PrivateUserFiles.EnsureDatabase(dbPath);
         var builder = new SqliteConnectionStringBuilder
         {
             DataSource = dbPath,

@@ -79,7 +79,8 @@ public static class InteractiveShell
             var historyHomeDir = Environment.GetEnvironmentVariable("PSBASH_HOME")
                 ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             psbashDir = Path.Combine(historyHomeDir, ".psbash");
-            Directory.CreateDirectory(psbashDir);
+            // 0700: the history, frecency and host log inside are the user's alone (PrivateUserFiles).
+            PsBash.Core.Runtime.PrivateUserFiles.EnsureDirectory(psbashDir);
             _historyStore = new SqliteHistoryStore(Path.Combine(psbashDir, "history.db"));
         }
         catch (Exception ex)
@@ -725,9 +726,10 @@ public static class InteractiveShell
         if (Path.IsPathRooted(cmdName))
             return File.Exists(cmdName) ? cmdName : null;
 
-        // A bare name is searched like execvp (shared with every other PATH lookup): working directory first, then $PATH,
-        // skipping directories and files that are not runnable. A PowerShell script (name.ps1) is tried last on Windows.
-        var dirs = ExecutableLookup.PathDirectories(workDir).ToArray();
+        // A bare name is searched like execvp (shared with every other PATH lookup): $PATH only, never the working
+        // directory, skipping directories and files that are not runnable. A PowerShell script (name.ps1) is tried last
+        // on Windows.
+        var dirs = ExecutableLookup.PathDirectories().ToArray();
         return ExecutableLookup.Find(cmdName, dirs)
             ?? (OperatingSystem.IsWindows() ? ExecutableLookup.Find(cmdName + ".ps1", dirs) : null);
     }
@@ -743,20 +745,6 @@ public static class InteractiveShell
         var ext = Path.GetExtension(resolvedCmd);
         ProcessStartInfo psi;
         if (OperatingSystem.IsWindows()
-            && (ext.Equals(".cmd", StringComparison.OrdinalIgnoreCase)
-                || ext.Equals(".bat", StringComparison.OrdinalIgnoreCase)))
-        {
-            psi = new ProcessStartInfo(Environment.GetEnvironmentVariable("COMSPEC") ?? "cmd.exe")
-            {
-                UseShellExecute = false,
-                WorkingDirectory = workDir,
-            };
-            psi.ArgumentList.Add("/d");
-            psi.ArgumentList.Add("/c");
-            psi.ArgumentList.Add("call");
-            psi.ArgumentList.Add(resolvedCmd);
-        }
-        else if (OperatingSystem.IsWindows()
                  && ext.Equals(".ps1", StringComparison.OrdinalIgnoreCase))
         {
             psi = new ProcessStartInfo(ResolvePowerShellHost())
@@ -783,6 +771,9 @@ public static class InteractiveShell
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
 
+        // A .cmd / .bat: the system cmd.exe with each argument escaped for it (BatchFile). `%COMSPEC% /c call x.cmd a&b`
+        // ran `b`, and `call` expanded `%NAME%` in the arguments a second time (CVE-2024-24576).
+        PsBash.Core.Runtime.Processes.BatchFile.Prepare(psi);
         return psi;
     }
 

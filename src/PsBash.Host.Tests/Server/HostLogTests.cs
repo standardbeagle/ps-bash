@@ -37,6 +37,17 @@ public class HostLogTests : IDisposable
         Assert.Contains(" ep=- ", HostLog.FormatLine(DateTime.UtcNow, 1, null, "v", "m"));
     }
 
+    /// <summary>The log quotes errors and stuck commands: 0600, never the umask's 0644 (PrivateUserFiles).</summary>
+    [SkippableFact]
+    [Trait("Platform", "Unix")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public void Write_CreatesTheLogReadableByTheUserOnly()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "POSIX file modes");
+        HostLog.Write("hello");
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(LogPath));
+    }
+
     [Fact]
     public void Write_AppendsTaggedLine_ForThisProcess()
     {

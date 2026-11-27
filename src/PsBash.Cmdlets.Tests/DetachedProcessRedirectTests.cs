@@ -82,3 +82,35 @@ public class DetachedProcessRedirectTests : IDisposable
         Assert.Equal("E2\n", Text(P("m3")));
     }
 }
+
+/// <summary>
+/// <c>nohup</c> on Unix starts <c>sh -c</c> to set its redirects. It handed sh the file names in <c>OUT</c> / <c>ERR</c>
+/// and unset them, so the child lost an exported <c>OUT</c> of its own (bash: <c>export OUT=v; nohup sh -c 'echo $OUT'</c>
+/// prints <c>v</c>). Hand-written: the primitive below the shell, with the variable in the process environment.
+/// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
+public class DetachedProcessEnvironmentTests : IDisposable
+{
+    private readonly string _dir = Directory.CreateTempSubdirectory("psbash-detached-env-").FullName;
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_dir, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+    }
+
+    [SkippableFact]
+    [Trait("Platform", "Unix")]
+    public void TheChild_KeepsItsOwnOutAndErr_AndTheRedirectsGoWhereNohupSaid()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "the sh -c redirect wrapper is the Unix path");
+        string decoy = Path.Combine(_dir, "decoy");
+        using var env = PsBash.Testing.ProcessEnv.Set(("OUT", decoy), ("ERR", decoy));
+        string o = Path.Combine(_dir, "o"), e = Path.Combine(_dir, "e");
+        using (var child = DetachedProcess.SpawnChild("/bin/sh", ["-c", "echo \"OUT=$OUT\"; echo \"ERR=$ERR\" >&2"], _dir, o, false, e))
+        using (var stop = new CancellationTokenSource(TimeSpan.FromSeconds(60)))
+            Assert.Equal(0, child.Wait(stop.Token));
+        Assert.Equal("OUT=" + decoy + "\n", File.ReadAllText(o));
+        Assert.Equal("ERR=" + decoy + "\n", File.ReadAllText(e));
+        Assert.False(File.Exists(decoy));
+    }
+}

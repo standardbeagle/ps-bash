@@ -29,11 +29,14 @@ public static class ExecutableLookup
         catch (Exception) { return false; }
     }
 
-    /// <summary>The directories of $PATH (empty entries dropped), preceded by <paramref name="firstDir"/> when given
-    /// (the shell's working directory, searched before PATH).</summary>
-    public static IEnumerable<string> PathDirectories(string? firstDir = null)
+    /// <summary>
+    /// The directories of $PATH (empty entries dropped), and nothing else. bash's lookup (execvp) never searches the
+    /// working directory for a bare name: <c>git</c> inside a cloned repo holding an executable <c>git</c> must not run it.
+    /// The REPL and <c>nohup</c> used to search the working directory first, so a repo could plant a program (or a
+    /// script's interpreter) that ran as soon as the user typed its name.
+    /// </summary>
+    public static IEnumerable<string> PathDirectories()
     {
-        if (!string.IsNullOrEmpty(firstDir)) yield return firstDir;
         var path = Environment.GetEnvironmentVariable("PATH") ?? "";
         foreach (var dir in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             yield return dir;

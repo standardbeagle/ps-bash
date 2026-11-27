@@ -30,6 +30,22 @@ public class HistoryStoreTests : IDisposable
         catch { }
     }
 
+    /// <summary>
+    /// Command lines hold whatever was typed, tokens too: the database and its WAL are 0600, as bash's
+    /// ~/.bash_history (bash 5.2 writes it 0600). They were the umask's 0644, readable by every local user.
+    /// </summary>
+    [SkippableFact]
+    [Trait("Platform", "Unix")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public async Task TheDatabaseAndItsWal_AreReadableByTheUserOnly()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "POSIX file modes");
+        await _store.RecordAsync(new HistoryEntry { Command = "export TOKEN=x", Cwd = "/", Timestamp = DateTime.UtcNow, SessionId = "s" });
+        const UnixFileMode Private = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        Assert.Equal(Private, File.GetUnixFileMode(_dbPath));
+        if (File.Exists(_dbPath + "-wal")) Assert.Equal(Private, File.GetUnixFileMode(_dbPath + "-wal"));
+    }
+
     [Fact]
     public async Task RecordAsync_EntryAdded_CanRetrieve()
     {

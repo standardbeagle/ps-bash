@@ -15,12 +15,31 @@ public sealed unsafe partial class JobProcess
     private ManualResetEvent? _exitEvent;
     private RegisteredWaitHandle? _exitWait;
 
+    /// <summary>
+    /// The <c>CreateProcess</c> command line for <paramref name="spec"/>. A batch file is never handed to
+    /// <c>CreateProcess</c> as it is: Windows would run it through <c>cmd.exe</c> with the C runtime quoting, which leaves
+    /// <c>&amp;</c>, <c>|</c> and <c>%NAME%</c> live (CVE-2024-24576). It is started through the system <c>cmd.exe</c>
+    /// with <see cref="BatchFile.Arguments"/> instead, and a pre-quoted <see cref="JobProcessStart.RawArguments"/> for
+    /// one is refused, since nothing here can tell whether it was escaped for <c>cmd.exe</c>.
+    /// </summary>
+    internal static string CommandLineFor(JobProcessStart spec)
+    {
+        if (BatchFile.HasBatchExtension(spec.FileName))
+        {
+            if (spec.RawArguments is { Length: > 0 })
+                throw new ArgumentException($"a batch file takes a list of arguments, not a command line: {spec.FileName}");
+            return WindowsCommandLine.Build(PsBash.Core.Platform.SystemTools.WindowsCommandProcessor, [])
+                + " " + BatchFile.Arguments(spec.FileName, spec.Arguments);
+        }
+        return spec.RawArguments is { Length: > 0 } raw
+            ? WindowsCommandLine.Build(spec.FileName, []) + " " + raw
+            : WindowsCommandLine.Build(spec.FileName, spec.Arguments);
+    }
+
     [SupportedOSPlatform("windows")]
     private static JobProcess StartWindows(JobProcessStart spec)
     {
-        string commandLine = spec.RawArguments is { Length: > 0 } raw
-            ? WindowsCommandLine.Build(spec.FileName, []) + " " + raw
-            : WindowsCommandLine.Build(spec.FileName, spec.Arguments);
+        string commandLine = CommandLineFor(spec);
         var cmdLine = Marshal.StringToHGlobalUni(commandLine);
         var envBlock = BuildEnvironmentBlock(spec.Environment, spec.EnvironmentIsComplete);
         var nulName = Marshal.StringToHGlobalUni("NUL");

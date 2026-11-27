@@ -29,9 +29,31 @@ public static class BatchFile
     private const string Inert = @"#$*+-./:?@\_";
 
     /// <summary>True on Windows for a <c>.cmd</c> / <c>.bat</c> path: <c>cmd.exe</c> runs it (<see cref="Arguments"/>).</summary>
-    public static bool Is(string path) =>
-        OperatingSystem.IsWindows()
-        && (path.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".bat", StringComparison.OrdinalIgnoreCase));
+    public static bool Is(string path) => OperatingSystem.IsWindows() && HasBatchExtension(path);
+
+    /// <summary>The path ends in <c>.cmd</c> / <c>.bat</c>, whatever this OS is (<see cref="Is"/> adds the OS).</summary>
+    internal static bool HasBatchExtension(string path) =>
+        path.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".bat", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// For a <see cref="System.Diagnostics.Process"/> start that does not go through <see cref="JobProcess"/> (an
+    /// interactive pager, the REPL's direct launch, an assist provider): when <paramref name="psi"/> names a batch file,
+    /// rewrite it to start the system <c>cmd.exe</c> with <see cref="Arguments"/> built from its
+    /// <see cref="System.Diagnostics.ProcessStartInfo.ArgumentList"/>. Anything else is left as it is. Throws
+    /// <see cref="ArgumentException"/> as <see cref="Arguments"/> does, and for a batch file given a pre-quoted
+    /// <see cref="System.Diagnostics.ProcessStartInfo.Arguments"/> string, which cannot be checked.
+    /// </summary>
+    public static void Prepare(System.Diagnostics.ProcessStartInfo psi)
+    {
+        ArgumentNullException.ThrowIfNull(psi);
+        if (!Is(psi.FileName)) return;
+        if (!string.IsNullOrEmpty(psi.Arguments))
+            throw new ArgumentException($"a batch file takes a list of arguments, not a command line: {psi.FileName}", nameof(psi));
+        string line = Arguments(psi.FileName, [.. psi.ArgumentList]);
+        psi.ArgumentList.Clear();
+        psi.Arguments = line;
+        psi.FileName = PsBash.Core.Platform.SystemTools.WindowsCommandProcessor;
+    }
 
     /// <summary>
     /// The command line that follows <c>cmd.exe</c> to run <paramref name="script"/> with <paramref name="args"/>, each
