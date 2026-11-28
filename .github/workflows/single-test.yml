@@ -47,6 +47,10 @@ concurrency:
   group: single-test-${{ github.workflow }}-${{ github.run_id }}
   cancel-in-progress: false
 
+# The token reads the repo only; a job that writes (publish: release, NuGet OIDC) grants itself that scope.
+permissions:
+  contents: read
+
 jobs:
   # Compute the run matrix from the `platform` input here. A job-level `if` CANNOT
   # filter the matrix per platform: the `matrix` context does not exist until the

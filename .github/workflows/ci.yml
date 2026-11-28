@@ -21,6 +21,10 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# The token reads the repo only; a job that writes (publish: release, NuGet OIDC) grants itself that scope.
+permissions:
+  contents: read
+
 jobs:
   test:
     strategy:

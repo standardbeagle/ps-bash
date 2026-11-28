@@ -11,6 +11,10 @@ concurrency:
   group: cassette-audit
   cancel-in-progress: false
 
+# The token reads the repo only; a job that writes (publish: release, NuGet OIDC) grants itself that scope.
+permissions:
+  contents: read
+
 jobs:
   audit:
     runs-on: ubuntu-latest
